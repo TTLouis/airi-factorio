@@ -3,9 +3,8 @@ import type { ActorEntityBuildArgs, ActorMiningState, ActorShootingState, ActorS
 
 /**
  * Wraps a connected LuaPlayer behind the ControlledActor interface,
- * reproducing today's `game.connected_players[0]`-driven behavior exactly.
- * This is the regression baseline for the migration in control.ts/task_manager.ts
- * — it must not change observable behavior versus using the LuaPlayer directly.
+ * reproducing today's single-player control behavior while the NPC path is
+ * being introduced.
  */
 export class ConnectedPlayerActor implements ControlledActor {
   constructor(private readonly player: LuaPlayer) {}
@@ -76,6 +75,7 @@ export class ConnectedPlayerActor implements ControlledActor {
       name: this.player.name,
       position: this.player.position,
       has_character: this.player.character !== undefined,
+      actor_id: this.player.index,
     }
   }
 }

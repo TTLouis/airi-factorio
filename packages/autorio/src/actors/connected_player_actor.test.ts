@@ -84,6 +84,7 @@ describe('ConnectedPlayerActor', () => {
       name: 'Louis',
       position: { x: 1, y: 2 },
       has_character: true,
+      actor_id: 1,
     })
   })
 

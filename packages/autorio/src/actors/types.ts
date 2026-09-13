@@ -21,14 +21,15 @@ export interface ActorStatusSnapshot {
   name: string
   position: MapPositionStruct
   has_character: boolean
+  actor_id?: number
 }
 
 /**
  * The physical actor AIRI's control logic drives. `ConnectedPlayerActor`
- * wraps today's single connected LuaPlayer unchanged; a future
- * StandaloneCharacterActor will wrap an owned `character` entity with no
- * LuaPlayer behind it at all. Nothing in control.ts should depend on
- * LuaPlayer once migrated onto this interface.
+ * wraps today's single connected LuaPlayer unchanged; a standalone actor
+ * wraps an owned `character` entity with no LuaPlayer behind it at all.
+ * Nothing in control.ts should depend directly on LuaPlayer once migration
+ * is complete.
  */
 export interface ControlledActor {
   readonly is_valid: boolean
@@ -49,11 +50,8 @@ export interface ControlledActor {
   begin_crafting: (params: { count: number, recipe: string }) => void
 
   /**
-   * Whether a LuaPlayer-sourced event (e.g. on_player_crafted_item's
-   * player_index) originated from this actor, so crafting/mining progress
-   * is only ever attributed to the actor AIRI is actually controlling.
-   * An actor with no underlying LuaPlayer (e.g. a future standalone
-   * character) should always return false here.
+   * Whether a LuaPlayer-sourced event originated from this actor. Standalone
+   * characters have no LuaPlayer and therefore always return false.
    */
   owns_player_index: (player_index: number) => boolean
 

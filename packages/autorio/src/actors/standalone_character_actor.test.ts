@@ -144,6 +144,7 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
       name: 'AIRI',
       position: { x: 10, y: 20 },
       has_character: true,
+      actor_id: 42,
     })
   })
 })
