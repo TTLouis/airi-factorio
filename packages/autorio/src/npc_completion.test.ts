@@ -9,6 +9,10 @@ beforeEach(() => {
   ;(globalThis as any).game.connected_players = []
   ;(globalThis as any).storage.airi_actor_mode = 'player'
   ;(globalThis as any).storage.standalone_character_unit_number = undefined
+  ;(globalThis as any).serpent = {
+    line: (value: unknown) => JSON.stringify(value),
+    block: (value: unknown) => JSON.stringify(value),
+  }
 })
 
 function configureNpcWorld(resource?: Record<string, any>) {
