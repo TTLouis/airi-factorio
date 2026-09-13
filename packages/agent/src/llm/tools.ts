@@ -11,7 +11,33 @@ interface ToolFunction {
   fn: (args: any) => Promise<any>
 }
 
+async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations') {
+  const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
+  const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+  return response.data.output
+}
+
 export const tools: ToolFunction[] = [
+  {
+    name: 'getActorStatus',
+    description: 'Get AIRI\'s controlled actor mode, identity, position, validity, and connected-human count',
+    schema: z.object({}),
+    fn: async () => {
+      const output = await readRemoteStatus('autorio_actor')
+      logger.withFields({ output }).debug('Actor status')
+      return output
+    },
+  },
+  {
+    name: 'getTaskStatus',
+    description: 'Get AIRI\'s current Autorio task state, queue state, and controlled actor snapshot',
+    schema: z.object({}),
+    fn: async () => {
+      const output = await readRemoteStatus('autorio_operations')
+      logger.withFields({ output }).debug('Task status')
+      return output
+    },
+  },
   {
     name: 'getInventoryItems',
     description: 'Get the items in AIRI\'s controlled actor inventory',
