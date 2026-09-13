@@ -127,9 +127,37 @@ def run(client: Rcon, results: Path) -> None:
     second_status = json.loads(response)
     assert_true(second_status['actor']['actor_id'] == first_actor_id, 'actor resolution created or selected a different NPC')
 
+    # Actor diagnostics must work without a LuaPlayer.
+    response = command(lua_json(remote_call('autorio_operations', 'log_actor_info')))
+    assert_true(json.loads(response) is True, f'actor diagnostics failed in zero-player mode: {response!r}')
+
+    # Exercise the real control.ts on_tick dispatcher with the simplest bounded
+    # task. If control.ts still resolved game.connected_players[0], this task
+    # would remain stuck forever with zero connected players.
+    response = command(lua_json(remote_call('autorio_operations', 'wait', '3')))
+    wait_result = json.loads(response)
+    assert_true(wait_result[0] is True, f'could not start wait task: {wait_result!r}')
+
+    deadline = time.monotonic() + 5.0
+    operation_status = None
+    while time.monotonic() < deadline:
+        response = command(lua_json(remote_call('autorio_operations', 'status')))
+        operation_status = json.loads(response)
+        if operation_status['task_state'] == 'idle':
+            break
+        time.sleep(0.05)
+
+    assert_true(operation_status is not None, 'operation status was never returned')
+    assert_true(operation_status['task_state'] == 'idle', f'zero-player control loop did not complete wait task: {operation_status!r}')
+    assert_true(operation_status['actor']['actor_id'] == first_actor_id, f'control loop switched actors: {operation_status!r}')
+
+    response = command(lua_json(remote_call('autorio_actor', 'status')))
+    final_status = json.loads(response)
+    assert_true(final_status['connected_players'] == 0, f"a player appeared during NPC smoke test: {final_status!r}")
+
     results.mkdir(parents=True, exist_ok=True)
     (results / 'runner.json').write_text(json.dumps({'status': 'pass', 'transcript': transcript}, indent=2))
-    print(f'PASS: zero-player standalone NPC created with stable actor_id={first_actor_id}')
+    print(f'PASS: zero-player NPC control loop completed a task with stable actor_id={first_actor_id}')
 
 
 def main() -> int:
