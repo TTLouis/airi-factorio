@@ -1,5 +1,9 @@
 *.ipynb linguist-vendored
 
+# Shell scripts must use Unix line endings so Linux containers can execute
+# their shebangs even when the repository is checked out on Windows.
+*.sh text eol=lf
+
 # Must stay byte-identical across checkouts: build-payload.sh compresses this
 # file and checks the result against the exact bytes embedded in install.sh.
 deploy/pterodactyl/payload-src/installer.sh text eol=lf
