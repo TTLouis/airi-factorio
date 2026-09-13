@@ -112,10 +112,13 @@ def decode_json(response: str, context: str):
 
 def run(client: Rcon, results: Path) -> None:
     transcript: list[dict[str, object]] = []
+    results.mkdir(parents=True, exist_ok=True)
+    transcript_path = results / 'runner-transcript.json'
 
     def command(value: str) -> str:
         response = client.command(value)
         transcript.append({'command': value, 'response': response})
+        transcript_path.write_text(json.dumps({'transcript': transcript}, indent=2))
         return response
 
     # Factorio 2.0 requires the first Lua console command to be repeated before
@@ -178,7 +181,6 @@ def run(client: Rcon, results: Path) -> None:
     final_status = decode_json(response, 'autorio_actor.status (final)')
     assert_true(final_status['connected_players'] == 0, f"a player appeared during NPC smoke test: {final_status!r}")
 
-    results.mkdir(parents=True, exist_ok=True)
     (results / 'runner.json').write_text(json.dumps({'status': 'pass', 'transcript': transcript}, indent=2))
     print(f'PASS: zero-player NPC control loop completed a task with stable actor_id={first_actor_id}')
 
