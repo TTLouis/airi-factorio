@@ -1,8 +1,7 @@
-import type { MapPosition, MapPositionStruct } from 'factorio:prototype'
+import type { MapPositionStruct } from 'factorio:prototype'
 import type {
   BoundingBoxArray,
   CollisionMask,
-  EquipmentPosition,
   LuaEntity,
   LuaInventory,
   OnPlayerCraftedItemEvent,
@@ -14,131 +13,67 @@ import type {
 } from 'factorio:runtime'
 
 import type { ControlledActor } from './actors/types'
-import type { InventoryItem } from './utils/inventory'
-import { ConnectedPlayerActor } from './actors/connected_player_actor'
+import { get_controlled_actor } from './actors/actor_controller'
 import { new_task_manager } from './task_manager'
 import { create_tools_remote_interface } from './tools'
 import { TaskStates } from './types'
-import { get_inventory_items } from './utils/inventory'
+import { get_actor_inventory_items } from './utils/inventory'
 import { distance } from './utils/math'
 
 create_tools_remote_interface()
 
 let setup_complete = false
 
-// The single actor AIRI currently controls. Still backed by whichever
-// LuaPlayer is first in game.connected_players — same resolution as before
-// this file used ControlledActor — but every call site below now goes
-// through this instead of reading game.connected_players directly, so
-// swapping the resolution (e.g. to a StandaloneCharacterActor) later is a
-// one-function change.
-function get_controlled_actor(): ControlledActor | undefined {
-  const player = game.connected_players[0]
-  if (!player) {
-    return undefined
-  }
-  return new ConnectedPlayerActor(player)
-}
-
 export const task_manager = new_task_manager(get_controlled_actor)
 
-function log_player_info(player_id: number) {
-  // compact for lua array index
-  const player = game.connected_players[player_id - 1]
-  const log_data: {
-    name: string
-    position: MapPosition
-    force: string
-    inventory: InventoryItem[]
-    equipment: { name: string, position: EquipmentPosition }[]
-    nearby_entities: { name: string, position: MapPosition }[]
-    map_info: {
-      surface_name: string
-      daytime: number
-      wind_speed: number
-      wind_orientation: number
-    }
-    research: {
-      current_research: string
-      research_progress: number
-    }
-    technologies: string[]
-    crafting_queue: { name: string, count: number }[]
-    character_stats: {
-      health: number | undefined
-      health_max: number
-      mining_progress: number | undefined
-      mining_target: LuaEntity | undefined
-      vehicle: string
-    }
-  } = {
-    name: player.name,
-    position: player.position,
-    force: player.force.name,
-    inventory: [],
-    equipment: [],
-    nearby_entities: [],
-    map_info: {
-      surface_name: player.surface.name,
-      daytime: player.surface.daytime,
-      wind_speed: player.surface.wind_speed,
-      wind_orientation: player.surface.wind_orientation,
-    },
-    research: {
-      current_research: player.force.current_research?.name ?? 'None',
-      research_progress: player.force.research_progress,
-    },
-    technologies: [],
-    crafting_queue: [],
-    character_stats: {
-      health: undefined,
-      health_max: 0,
-      mining_progress: undefined,
-      mining_target: undefined,
-      vehicle: 'None',
-    },
+function log_actor_info() {
+  const actor = get_controlled_actor()
+  if (!actor) {
+    log('[AUTORIO] Cannot log actor info: no controlled actor')
+    return false
   }
 
-  log_data.inventory = get_inventory_items(player_id)
-
-  if (player.character?.grid) {
-    player.character.grid.equipment.forEach(({ name, position }) => {
-      log_data.equipment.push({ name, position })
-    })
-  }
-
-  const nearby_entities = player.surface.find_entities_filtered({
-    position: player.position,
-    radius: 20,
-  })
-  nearby_entities.forEach(({ name, position }) => {
-    log_data.nearby_entities.push({ name, position })
-  })
-
-  for (const [name, tech] of pairs(player.force.technologies)) {
+  const technologies: string[] = []
+  for (const [name, tech] of pairs(actor.force.technologies)) {
     if (tech.researched) {
-      log_data.technologies.push(name)
+      technologies.push(name)
     }
   }
 
-  for (let i = 1; i < player.crafting_queue_size; i++) {
-    const item = player.crafting_queue?.[i]
-    if (item) {
-      log_data.crafting_queue.push({ name: item.recipe, count: item.count })
-    }
+  const nearby_entities = actor.surface.find_entities_filtered({
+    position: actor.position,
+    radius: 20,
+  }).map(({ name, position }) => ({ name, position }))
+
+  const character = actor.character
+  const log_data = {
+    actor: actor.status_snapshot(),
+    force: actor.force.name,
+    inventory: get_actor_inventory_items(actor),
+    nearby_entities,
+    map_info: {
+      surface_name: actor.surface.name,
+      daytime: actor.surface.daytime,
+      wind_speed: actor.surface.wind_speed,
+      wind_orientation: actor.surface.wind_orientation,
+    },
+    research: {
+      current_research: actor.force.current_research?.name ?? 'None',
+      research_progress: actor.force.research_progress,
+    },
+    technologies,
+    character_stats: character
+      ? {
+          health: character.health,
+          health_max: character.max_health,
+          mining_progress: character.mining_progress,
+          mining_target: character.mining_target,
+        }
+      : undefined,
   }
 
-  if (player.character) {
-    log_data.character_stats = {
-      health: player.character.health,
-      health_max: player.character.max_health,
-      mining_progress: player.character.mining_progress,
-      mining_target: player.character.mining_target,
-      vehicle: player.vehicle?.name ?? 'None',
-    }
-  }
-
-  log(`[AUTORIO] Player ${player.name} info: ${serpent.block(log_data)}`)
+  log(`[AUTORIO] Actor ${actor.status_snapshot().name} info: ${serpent.block(log_data)}`)
+  return true
 }
 
 remote.add_interface('autorio_operations', {
@@ -188,10 +123,10 @@ remote.add_interface('autorio_operations', {
     })
 
     if (to_entity) {
-      log(`[AUTORIO] New move_items task for ${item_name} from player's inventory to ${entity_name}`)
+      log(`[AUTORIO] New move_items task for ${item_name} from actor inventory to ${entity_name}`)
     }
     else {
-      log(`[AUTORIO] New move_items task for ${item_name} from ${entity_name} to player's inventory`)
+      log(`[AUTORIO] New move_items task for ${item_name} from ${entity_name} to actor inventory`)
     }
 
     return [true, 'Task started']
@@ -281,10 +216,18 @@ remote.add_interface('autorio_operations', {
     task_manager.cancel_all_tasks()
     return true
   },
-  log_player_info: (player_id: number) => {
-    log_player_info(player_id)
-    return true
+  status: () => {
+    const actor = get_controlled_actor()
+    return {
+      task_state: task_manager.player_state.task_state,
+      queue_empty: task_manager.is_task_queue_empty(),
+      actor: actor?.status_snapshot(),
+    }
   },
+  log_actor_info: () => log_actor_info(),
+  // Compatibility alias for older callers. The player id is intentionally ignored:
+  // diagnostics now always describe AIRI's selected ControlledActor.
+  log_player_info: (_player_id?: number) => log_actor_info(),
 })
 
 export function get_direction(start_position: MapPositionStruct, end_position: MapPositionStruct) {
@@ -373,7 +316,14 @@ script.on_event(defines.events.on_script_path_request_finished, (event: OnScript
   log(`[AUTORIO] Path calculation completed. Path length: ${event.path}`)
 })
 
-script.on_event(defines.events.on_player_mined_entity, (unused_event: OnPlayerMinedEntityEvent) => {
+script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEntityEvent) => {
+  const actor = get_controlled_actor()
+  if (!actor || !actor.owns_player_index(event.player_index)) {
+    // NPCs have no LuaPlayer mining event. Player events must never advance an
+    // NPC task, and other players must not advance the controlled player task.
+    return
+  }
+
   if (task_manager.player_state.task_state !== TaskStates.MINING) {
     return
   }
@@ -494,13 +444,13 @@ function state_walking_to_entity(actor: ControlledActor) {
   const nearest_entity = get_nearest_entity(actor, entities)
 
   log(`[AUTORIO] Nearest entity position: ${serpent.line(nearest_entity?.position)}`)
-  log(`[AUTORIO] Player position: ${serpent.line(actor.position)}`)
-  log(`[AUTORIO] Player bounding box: ${serpent.line(actor.character?.bounding_box)}`)
+  log(`[AUTORIO] Actor position: ${serpent.line(actor.position)}`)
+  log(`[AUTORIO] Actor bounding box: ${serpent.line(actor.character?.bounding_box)}`)
 
   if (nearest_entity && !task_manager.player_state.parameters_walk_to_entity.calculating_path && !task_manager.player_state.parameters_walk_to_entity.path) {
     const character = actor.character
     if (!character) {
-      log('[AUTORIO] Player character not found, aborting pathfinding')
+      log('[AUTORIO] Actor character not found, aborting pathfinding')
       return
     }
 
@@ -571,7 +521,7 @@ function state_mining(actor: ControlledActor) {
 
   const entities = actor.surface.find_entities_filtered({
     position: actor.position,
-    radius: 5, // but player can only mine entities within 2 tiles
+    radius: 5, // but the character can only mine entities within its normal reach
     name: task_manager.player_state.parameters_mine_entity.entity_name,
   })
 
@@ -595,10 +545,10 @@ function state_mining(actor: ControlledActor) {
 
 function state_placing(actor: ControlledActor) {
   if (!actor) {
-    log('[AUTORIO] Invalid player, ending PLACING task')
+    log('[AUTORIO] Invalid actor, ending PLACING task')
     task_manager.reset_task_state()
     task_manager.next_task()
-    return [false, 'Invalid player']
+    return [false, 'Invalid actor']
   }
 
   if (!task_manager.player_state.parameters_place_entity) {
@@ -610,10 +560,10 @@ function state_placing(actor: ControlledActor) {
   const inventory = actor.get_main_inventory()
 
   if (!inventory) {
-    log('[AUTORIO] Cannot access player inventory, ending PLACING task')
+    log('[AUTORIO] Cannot access actor inventory, ending PLACING task')
     task_manager.reset_task_state()
     task_manager.next_task()
-    return [false, 'Cannot access player inventory']
+    return [false, 'Cannot access actor inventory']
   }
 
   const entity_prototype = prototypes.entity[task_manager.player_state.parameters_place_entity.entity_name]
@@ -670,7 +620,7 @@ function state_placing(actor: ControlledActor) {
   return [false, 'Failed to place entity']
 }
 
-// TODO: Move items between specified entity and player inventory, give the entity name and position as parameters
+// TODO: Move items between specified entity and actor inventory, give the entity name and position as parameters
 export function state_moving_items(actor: ControlledActor) {
   const parameters = task_manager.player_state.parameters_move_items
 
@@ -686,9 +636,9 @@ export function state_moving_items(actor: ControlledActor) {
     force: actor.force,
   })
 
-  const player_inventory = actor.get_main_inventory()
-  if (!player_inventory) {
-    log('[AUTORIO] Cannot access player inventory, ending MOVING_ITEMS task')
+  const actor_inventory = actor.get_main_inventory()
+  if (!actor_inventory) {
+    log('[AUTORIO] Cannot access actor inventory, ending MOVING_ITEMS task')
     task_manager.reset_task_state()
     task_manager.next_task()
     return
@@ -697,9 +647,9 @@ export function state_moving_items(actor: ControlledActor) {
   let moved_total = 0
 
   if (parameters.to_entity) {
-    const [item_stack, unused_count] = player_inventory.find_item_stack(parameters.item_name)
+    const [item_stack, unused_count] = actor_inventory.find_item_stack(parameters.item_name)
     if (!item_stack) {
-      log('[AUTORIO] Item not found in player inventory, ending MOVING_ITEMS task')
+      log('[AUTORIO] Item not found in actor inventory, ending MOVING_ITEMS task')
       task_manager.reset_task_state()
       task_manager.next_task()
       return
@@ -733,7 +683,7 @@ export function state_moving_items(actor: ControlledActor) {
         log(`[AUTORIO] Moving ${to_move} ${parameters.item_name} to ${inventory.entity_owner?.name} inventory index ${inventory.index}`)
         const moved = inventory.insert({ name: parameters.item_name, count: to_move })
         if (moved > 0) {
-          player_inventory.remove({ name: parameters.item_name, count: moved })
+          actor_inventory.remove({ name: parameters.item_name, count: moved })
           moved_total += moved
 
           log(`[AUTORIO] Moved ${moved} ${parameters.item_name} to ${inventory.entity_owner?.name} inventory index ${inventory.index}`)
@@ -761,8 +711,8 @@ export function state_moving_items(actor: ControlledActor) {
           return
         }
 
-        if (!player_inventory.can_insert({ name: parameters.item_name })) {
-          log(`[AUTORIO] Cannot insert ${parameters.item_name} into player inventory, skipping`)
+        if (!actor_inventory.can_insert({ name: parameters.item_name })) {
+          log(`[AUTORIO] Cannot insert ${parameters.item_name} into actor inventory, skipping`)
           return
         }
 
@@ -771,7 +721,7 @@ export function state_moving_items(actor: ControlledActor) {
           return
         }
 
-        const inserted = player_inventory.insert({ name: parameters.item_name, count: removed })
+        const inserted = actor_inventory.insert({ name: parameters.item_name, count: removed })
         if (inserted < removed) {
           // move back the remaining items
           inventory.insert({ name: parameters.item_name, count: removed - inserted })
@@ -807,10 +757,10 @@ function check_can_craft(actor: ControlledActor, item_name: string, count: numbe
   }
 
   const ingredients = recipe.ingredients
-  const player_inventory = actor.get_main_inventory()
+  const actor_inventory = actor.get_main_inventory()
 
-  if (!player_inventory) {
-    log('[AUTORIO] Cannot access player inventory, ending CRAFTING task')
+  if (!actor_inventory) {
+    log('[AUTORIO] Cannot access actor inventory, ending CRAFTING task')
     return false
   }
 
@@ -818,7 +768,7 @@ function check_can_craft(actor: ControlledActor, item_name: string, count: numbe
 
   // TODO check dependencies
   for (const ingredient of ingredients) {
-    const item_count = player_inventory.get_item_count(ingredient.name)
+    const item_count = actor_inventory.get_item_count(ingredient.name)
 
     if (item_count < ingredient.amount * count) {
       not_enough_ingredients.push({ name: ingredient.name, amount: ingredient.amount * count - item_count })
@@ -938,7 +888,7 @@ function state_waiting() {
   task_manager.player_state.parameters_waiting.remaining_ticks -= 1
 }
 
-let no_player_found = false
+let no_actor_found = false
 
 script.on_event(defines.events.on_tick, (unused_event) => {
   if (!setup_complete) {
@@ -946,13 +896,14 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   }
 
   const actor = get_controlled_actor()
-  if (actor === undefined || actor.character === undefined) {
-    if (!no_player_found) {
-      log('[AUTORIO] No valid player found')
-      no_player_found = true
+  if (actor === undefined || actor.character === undefined || !actor.is_valid) {
+    if (!no_actor_found) {
+      log('[AUTORIO] No valid controlled actor found')
+      no_actor_found = true
     }
     return
   }
+  no_actor_found = false
 
   if (task_manager.player_state.task_state === TaskStates.IDLE) {
     return
@@ -988,11 +939,11 @@ script.on_event(defines.events.on_player_crafted_item, (event: OnPlayerCraftedIt
   const actor = get_controlled_actor()
   if (!actor || !actor.owns_player_index(event.player_index)) {
     // Not our controlled actor's craft (e.g. another connected player) — ignore it.
+    // Standalone NPC crafting completion is handled in the next migration pass.
     return
   }
 
-  // compact for lua array index
-  log(`[AUTORIO] Player ${game.connected_players[event.player_index - 1].name} crafted item: ${event.item_stack.name}`)
+  log(`[AUTORIO] Actor ${actor.status_snapshot().name} crafted item: ${event.item_stack.name}`)
 
   if (!task_manager.player_state.parameters_craft_item) {
     log('[AUTORIO] No parameters found when item crafted')
