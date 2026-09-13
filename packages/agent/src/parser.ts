@@ -1,6 +1,6 @@
 import type { StructuredOperation } from './llm/operations'
 import { z } from 'zod'
-import { renderStructuredOperations, structuredOperationsSchema } from './llm/operations'
+import { legacyOperationCommandSchema, renderStructuredOperations, structuredOperationsSchema } from './llm/operations'
 
 export interface ChatMessage {
   type: 'chat'
@@ -41,7 +41,7 @@ export interface LLMMessage {
 
 const llmMessageSchema = z.object({
   chatMessage: z.string().max(2000),
-  operationCommands: z.array(z.string().max(1000)).max(16).optional(),
+  operationCommands: z.array(legacyOperationCommandSchema).max(16).optional(),
   operations: structuredOperationsSchema.optional(),
   plan: z.array(z.string().max(500)).max(30),
   currentStep: z.number().int().min(0).max(30),
@@ -51,6 +51,22 @@ const llmMessageSchema = z.object({
     ctx.addIssue({
       code: 'custom',
       message: 'Response must contain exactly one of operationCommands or operations',
+    })
+  }
+
+  if (value.plan.length > 0 && value.currentStep >= value.plan.length) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['currentStep'],
+      message: 'currentStep must index an existing plan step',
+    })
+  }
+
+  if (value.plan.length === 0 && value.currentStep !== 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['currentStep'],
+      message: 'currentStep must be 0 when the plan is empty',
     })
   }
 })
