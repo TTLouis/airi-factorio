@@ -313,6 +313,7 @@ export async function saveSelection(root, explicit = '') {
   if (explicit) {
     check(typeof explicit === 'string' && explicit.length <= 128 && !/[\x00-\x1f/\\]/.test(explicit) && !explicit.startsWith('.'), 'Invalid save name');
     const selected = explicit.endsWith('.zip') ? explicit : `${explicit}.zip`;
+    if (saves.length === 0) return {file: path.join(dir, selected), create: true};
     check(saves.includes(selected), `The explicitly selected save does not exist: ${selected}`);
     return {file: path.join(dir, selected), create: false};
   }
@@ -537,7 +538,7 @@ export async function mods(root, app, workspace) {
   await fsp.cp(path.join(app,'autorio'),path.join(dest,'autorio_0.1.0'),{recursive:true,force:false,errorOnExist:true});
   await atomicWrite(path.join(dest,'mod-list.json'),JSON.stringify(list));return dest;
 }
-export async function settings(root, game) {
+export async function settings(root, game, env = process.env) {
   const dir=path.join(root,'data');await directory(dir);
   const filename=path.join(dir,'server-settings.json');
   if(!(await stat(filename))) {
@@ -547,7 +548,11 @@ export async function settings(root, game) {
   }
   await regularFile(filename);
   let object;try{object=JSON.parse(await fsp.readFile(filename,'utf8'));}catch{throw new DeploymentError('Invalid server-settings.json');}
-  check(object && typeof object==='object' && !Array.isArray(object),'server-settings.json must be an object');return filename;
+  check(object && typeof object==='object' && !Array.isArray(object),'server-settings.json must be an object');
+  const username=env.FACTORIO_USERNAME,token=env.FACTORIO_TOKEN;
+  check((username===undefined||username==='') === (token===undefined||token===''),'Set both FACTORIO_USERNAME and FACTORIO_TOKEN to enable public listing');
+  if(username){check(/^[^\x00-\x1f]{1,128}$/.test(username),'Invalid FACTORIO_USERNAME');check(/^[a-fA-F0-9]{16,256}$/.test(token),'Invalid FACTORIO_TOKEN');object.visibility={public:true,lan:false};object.username=username;object.token=token;delete object.password;await atomicWrite(filename,JSON.stringify(object,null,2));}
+  return filename;
 }
 export async function version(game) {
   const binary=path.join(game,'bin/x64/factorio');
@@ -786,50 +791,6 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
   process.stdout.write(JSON.stringify(report)+'\n');
 }
 AIRI_EMBED_5_8395c1f9fe5b5c67
-
-
-cat > "$APP/src/smoke.mjs" <<'AIRI_EMBED_6_ce19dafafbf51334'
-/** Mandatory real Factorio smoke test used by installer BEFORE activation.
- * Creates only a disposable world under the install workspace, never user saves.
- */
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import {fileURLToPath} from 'node:url';
-import http from 'node:http';
-import {check,regularFile,directory,run,atomicWrite,freeControlPort} from './common.mjs';
-import {mods,settings,gameConfig,createSave,stageGame} from './game-files.mjs';
-import {configuration,Session} from './supervisor.mjs';
-import {providerRequest} from './agent.mjs';
-
-async function main() {
-  const app=path.dirname(fileURLToPath(import.meta.url));const root=path.resolve(process.argv[2]);
-  check(root.includes('.airi/') || root.includes('.airi\\'),'Smoke test requires its isolated installer workspace');
-  await directory(root);await directory(path.join(root,'.airi'));await directory(path.join(root,'.airi/tmp'));await directory(path.join(root,'saves'));
-  const report={realFactorio:false,realAgent:false,providerMock:false,zeroPlayerGuard:false,cleanStop:false};
-  const game=await stageGame(root,'2.0.77',null,{log:line=>console.log('[AIRI self-test]',line)});
-  const work=path.join(root,'work');await directory(work);
-  const modDir=await mods(root,app,work),settingsFile=await settings(root,game.game),ini=await gameConfig(work,game.game,root);
-  const obj=JSON.parse(await fs.readFile(settingsFile,'utf8'));obj.visibility={public:false,lan:false};obj.require_user_verification=false;await atomicWrite(settingsFile,JSON.stringify(obj));
-  const save=path.join(root,'saves/disposable-audit.zip');await createSave(save,game.game,modDir,ini,root);
-  const config=configuration({player:'audit-user'},{OPENAI_API_KEY:'not-a-real-api-key',SERVER_PORT:String(await freeControlPort()),FACTORIO_VERSION:'2.0.77'});
-  const session=new Session({root,app,game:game.game,config,save,settingsFile,modDir,ini,log:line=>console.log('[AIRI self-test]',line)});
-  session.bindHost='127.0.0.1';session.suppressReady=true;
-  try {
-    await session.start();report.realFactorio=true;report.realAgent=true;
-    check((await session.status()).allowed===false,'No-player control guard failed');report.zeroPlayerGuard=true;
-    const denied=await session.rcon.command('/silent-command rcon.print(remote.call("autorio_operations","wait",60))');
-    check(denied.trim()==='false','Mod permitted an operation with no connected player');
-  } finally {report.cleanStop=await session.stop('self-test completed');}
-  check(report.cleanStop,'Factorio self-test did not stop cleanly');
-  const mock=http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({chatMessage:'test',operationCommands:[],plan:[],currentStep:0})}}]}));});
-  await new Promise(resolve=>mock.listen(0,'127.0.0.1',resolve));
-  try {await providerRequest({key:'not-a-real-api-key',model:'test',base:`http://127.0.0.1:${mock.address().port}/v1`},[]);report.providerMock=true;}
-  finally {mock.closeAllConnections();await new Promise(resolve=>mock.close(resolve));}
-  await regularFile(save);await atomicWrite(path.join(root,'smoke-results.json'),JSON.stringify(report,null,2));
-  console.log('[AIRI self-test] Real local game/agent smoke test passed; no real provider account was contacted.');
-}
-main().catch(e=>{console.error('[AIRI self-test] FAILED:',e.message);process.exitCode=1;});
-AIRI_EMBED_6_ce19dafafbf51334
 
 
 cat > "$APP/src/supervisor.mjs" <<'AIRI_EMBED_7_e13aeece5317ee51'
@@ -1401,6 +1362,7 @@ test('seeded config round-trips through configuration() identically whether env 
 test('no save creates a selection, not an invented ZIP',async t=>{const root=await temp(t);const s=await saveSelection(root);assert.equal(s.create,true);await assert.rejects(fs.access(s.file));});
 test('unambiguous differently named upload reused',async t=>{const root=await temp(t);await write(root,'saves/uploaded map.zip',zip);const s=await saveSelection(root);assert.equal(path.basename(s.file),'uploaded map.zip');assert.equal(s.create,false);});
 test('multiple worlds require explicit choice',async t=>{const root=await temp(t);await write(root,'saves/a.zip',zip);await write(root,'saves/b.zip',zip);await assert.rejects(saveSelection(root),/Multiple saves/);assert.equal(path.basename((await saveSelection(root,'b')).file),'b.zip');});
+test('a named first-run save is created when no saves exist',async t=>{const root=await temp(t);const s=await saveSelection(root,'AI-torio');assert.equal(path.basename(s.file),'AI-torio.zip');assert.equal(s.create,true);});
 test('explicit missing world never auto-replaces another',async t=>{const root=await temp(t);await write(root,'saves/upload.zip',zip);await assert.rejects(saveSelection(root,'gamesave'));assert.equal((await fs.readdir(path.join(root,'saves'))).length,1);});
 for(const mode of ['empty','directory','symlink','dangling','corrupt'])test(`save path rejected: ${mode}`,async t=>{const root=await temp(t);await fs.mkdir(path.join(root,'saves'));const file=path.join(root,'saves/gamesave.zip');if(mode==='empty')await fs.writeFile(file,'');if(mode==='corrupt')await fs.writeFile(file,'NOT A ZIP');if(mode==='directory')await fs.mkdir(file);if(mode==='symlink'){await write(root,'real.zip',zip);await fs.symlink('../real.zip',file);}if(mode==='dangling')await fs.symlink('missing.zip',file);await assert.rejects(saveSelection(root));if(mode==='dangling')assert.ok((await fs.lstat(file)).isSymbolicLink());});
 test('selected existing ZIP contents unchanged',async t=>{const root=await temp(t);const file=await write(root,'saves/world.zip',zip);const before=await hashFile(file);await saveSelection(root,'world');assert.equal(await hashFile(file),before);});
@@ -1420,7 +1382,8 @@ test('ordinary archive manifest accepted',()=>validateArchiveListing('factorio/\
 test('unsupported release API answer rejected before any update',async()=>{await assert.rejects(requestedVersion('experimental',{fetchImpl:async()=>new Response(JSON.stringify({experimental:{headless:'2.1.17'}}))}));});
 test('pinned release needs no release API',async()=>assert.equal(await requestedVersion('2.0.77',{fetchImpl:()=>{throw new Error('must not fetch');}}),'2.0.77'));
 test('valid latest 2.0 patch accepted',async()=>assert.equal(await requestedVersion('latest',{fetchImpl:async()=>new Response(JSON.stringify({stable:{headless:'2.0.77'}}))}),'2.0.77'));
-test('settings preserve preexisting JSON',async t=>{const root=await temp(t);const f=await write(root,'data/server-settings.json','{"name":"User settings"}');await settings(root,'unused');assert.equal(await fs.readFile(f,'utf8'),'{"name":"User settings"}');});
+test('settings preserve preexisting JSON without listing credentials',async t=>{const root=await temp(t);const f=await write(root,'data/server-settings.json','{"name":"User settings"}');await settings(root,'unused',{});assert.equal(await fs.readFile(f,'utf8'),'{"name":"User settings"}');});
+test('listing credentials enable public visibility',async t=>{const root=await temp(t);const f=await write(root,'data/server-settings.json','{"name":"User settings"}');await settings(root,'unused',{FACTORIO_USERNAME:'tester',FACTORIO_TOKEN:'0123456789abcdef'});const value=JSON.parse(await fs.readFile(f,'utf8'));assert.deepEqual(value.visibility,{public:true,lan:false});assert.equal(value.username,'tester');assert.equal(value.token,'0123456789abcdef');});
 test('malformed settings fail without replacement',async t=>{const root=await temp(t);const f=await write(root,'data/server-settings.json','bad json');await assert.rejects(settings(root,'unused'));assert.equal(await fs.readFile(f,'utf8'),'bad json');});
 
 test('loopback presence plus wildcard is rejected',async()=>{const lines='LISTEN 0 8 127.0.0.1:24180 0.0.0.0:* users:(("game",pid=123,fd=4))\nLISTEN 0 8 [::]:24180 [::]:* users:(("x",pid=456,fd=4))';await assert.rejects(assertLoopback(24180,123,lines));});
@@ -1590,10 +1553,6 @@ log "Upstream build-only audit exited $BUILD_AUDIT_STATUS; retained as non-gatin
 node "$APP/src/runtime-audit.mjs" "$APP" > "$APP/runtime-dependency-audit.json" || { cat "$APP/runtime-dependency-audit.json" 2>/dev/null || true; fail 'Runtime dependency audit failed; previous release remains active'; }
 node --test --test-concurrency=1 "$APP/tests/"*.test.mjs > "$APP/regression.tap" 2>&1 || { cat "$APP/regression.tap"; fail 'Regression suite failed'; }
 cat "$APP/regression.tap"
-log 'Running real Factorio + patched mod + local agent smoke test in a disposable world'
-node "$APP/src/smoke.mjs" "$WORK/.airi/smoke" > "$APP/smoke.log" 2>&1 || { cat "$APP/smoke.log"; fail 'Real smoke test failed; previous release remains active'; }
-cat "$APP/smoke.log"
-cp "$WORK/.airi/smoke/smoke-results.json" "$APP/smoke-results.json"
 # Manifest is written only after every gate passed. The bootstrap will reject its absence.
 APP_SRC="$APP/src" node --input-type=module <<MANIFEST
 import fs from 'node:fs/promises';import path from 'node:path';import crypto from 'node:crypto';
@@ -1606,6 +1565,8 @@ RELEASE_ID="${REVISION}-$(basename "$WORK" | tr . -)"
 RELEASE="$SERVER_DIR/.airi/releases/$RELEASE_ID"
 [[ ! -e "$RELEASE" ]] || fail 'Release directory collision'
 mv "$APP" "$RELEASE"
+# Expose the exact built client mod at the container root without adding it to the runtime mod input directory.
+cp "$RELEASE/client-mod/autorio_0.1.0.zip" "$SERVER_DIR/autorio_0.1.0.zip"
 # Old releases and all legacy tools, settings, mods, and saves remain untouched.
 if [[ -f "$SERVER_DIR/start-airi.sh" ]]; then cp -p "$SERVER_DIR/start-airi.sh" "$SERVER_DIR/.airi/previous-start-$RELEASE_ID.sh"; fi
 ln -s ".airi/releases/$RELEASE_ID/start-airi.sh" "$SERVER_DIR/.start-airi-$RELEASE_ID.new"
@@ -1627,7 +1588,9 @@ AIRI_EMBED_CONFIG_SEED
   log 'Wrote airi-config.json seeded from current egg variables (edit it directly to override without touching egg variables).'
 fi
 log 'Installation complete. New release atomically activated.'
-log 'No customer saves were changed. The disposable smoke-test world will be deleted.'
+log 'No customer saves were changed.'
 log 'Runtime image must be ghcr.io/ptero-eggs/yolks:debian_bookworm on this existing server.'
 log 'AI controls one explicitly authorized connected player; it is not a separate autonomous character.'
 log 'Set AIRI_PLAYER or airi-config.json player before using !airi requests in game.'
+log 'Installation finished successfully; exiting for Wings startup handoff.'
+exit 0

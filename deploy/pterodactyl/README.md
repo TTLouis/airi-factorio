@@ -43,8 +43,9 @@ from this fork (`TTLouis/airi-factorio`, `AIRI_REF` near its top) and Node
 at install time — it's the
 installer for the Node supervisor + Factorio headless binary, structured as
 a transactional bootstrap: portable Node → pinned source → generated
-supervisor/agent modules written out via heredocs → smoke tests → release
-swap. Read it directly; it's no longer a blob you have to decode first.
+supervisor/agent modules written out via heredocs → syntax, runtime-dependency,
+and unit checks → release swap. Read it directly; it's no longer a blob you have
+to decode first.
 
 **Docker image (both install and runtime):**
 `ghcr.io/ptero-eggs/yolks:debian_bookworm`
