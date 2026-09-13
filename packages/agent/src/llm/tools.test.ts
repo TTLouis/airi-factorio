@@ -54,4 +54,19 @@ describe('agent observation tools', () => {
     })
     expect(result).toBe('{"ok":true}')
   })
+
+  it('escapes recipe item names before placing them in Lua', async () => {
+    await getTool('getRecipe').fn({ parameters: { item: "mod's-item" } })
+
+    expect(mocks.raw).toHaveBeenCalledWith({
+      body: {
+        input: '/c remote.call("autorio_tools", "get_recipe", \'mod\\\'s-item\')',
+      },
+    })
+  })
+
+  it('rejects control characters in recipe tool input before RCON execution', async () => {
+    await expect(getTool('getRecipe').fn({ parameters: { item: 'iron-plate\n/c game.clear()' } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
 })
