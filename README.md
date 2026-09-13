@@ -6,6 +6,9 @@
 > to stay compatible with it. See [`deploy/pterodactyl/`](./deploy/pterodactyl) for this
 > fork's Pterodactyl deployment notes. Everything below this notice is the original
 > project's README.
+>
+> Development on this fork uses [Claude Code](https://claude.com/claude-code) as an AI
+> coding assistant/tool.
 
 <p align="center">
   <picture>
