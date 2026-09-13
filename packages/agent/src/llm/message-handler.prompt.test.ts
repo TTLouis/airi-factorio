@@ -32,7 +32,9 @@ function modelPlan(overrides: Record<string, unknown> = {}) {
     chatMessage: 'Working on it.',
     plan: ['Wait briefly'],
     currentStep: 0,
-    operationCommands: ["remote.call('autorio_operations', 'wait', 3)"],
+    operations: [
+      { name: 'wait', args: { ticks: 3 } },
+    ],
     ...overrides,
   }
 }
@@ -48,7 +50,7 @@ describe('actual prompt/message harness', () => {
   it('sends the production prompt as the system message for a chat request', async () => {
     const handler = await createMessageHandler()
 
-    await handler.handleMessage({
+    const result = await handler.handleMessage({
       type: 'chat',
       username: 'Louis',
       message: 'wait a moment',
@@ -61,10 +63,16 @@ describe('actual prompt/message harness', () => {
     expect(messages[0]).toEqual({ role: 'system', content: prompt })
     expect(messages[1]).toEqual({ role: 'user', content: '[CHAT] wait a moment' })
     expect(options).toMatchObject({ maxRoundTrip: 10 })
+    expect(result?.operationCommands).toEqual(["remote.call('autorio_operations', 'wait', 3)"])
   })
 
-  it('keeps the same system prompt and appends the completion event on continuation', async () => {
+  it('keeps the structured model response in history and appends completion events', async () => {
     const handler = await createMessageHandler()
+
+    const firstResponse = JSON.stringify(modelPlan())
+    mocks.call.mockResolvedValueOnce({
+      choices: [{ message: { content: firstResponse } }],
+    })
 
     await handler.handleMessage({
       type: 'chat',
@@ -75,7 +83,7 @@ describe('actual prompt/message harness', () => {
     })
 
     mocks.call.mockResolvedValueOnce({
-      choices: [{ message: { content: JSON.stringify(modelPlan({ operationCommands: [] })) } }],
+      choices: [{ message: { content: JSON.stringify(modelPlan({ operations: [] })) } }],
     })
 
     await handler.handleMessage({
@@ -86,6 +94,7 @@ describe('actual prompt/message harness', () => {
     expect(mocks.call).toHaveBeenCalledTimes(2)
     const [messages] = mocks.call.mock.calls[1]
     expect(messages[0]).toEqual({ role: 'system', content: prompt })
+    expect(messages).toContainEqual({ role: 'assistant', content: firstResponse })
     expect(messages).toContainEqual({ role: 'user', content: '[MOD] All operations completed' })
     expect(messages.filter((message: { role: string }) => message.role === 'system')).toHaveLength(1)
   })
