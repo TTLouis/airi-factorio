@@ -8,6 +8,7 @@ function fake_character(overrides: Record<string, unknown> = {}) {
     position: { x: 10, y: 20 },
     surface: { name: 'nauvis' },
     force: { name: 'player' },
+    selected: undefined,
     mining_state: { mining: false },
     update_selected_entity: vi.fn(),
     get_main_inventory: vi.fn(() => 'main-inventory'),
@@ -109,7 +110,11 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
   })
 
   it('gets and sets mining/walking/shooting state directly on the character entity', () => {
-    const { actor, character } = create_actor({ mining_state: { mining: true, position: { x: 1, y: 1 } } })
+    const selected = { name: 'iron-ore' }
+    const { actor, character } = create_actor({
+      selected,
+      mining_state: { mining: true, position: { x: 1, y: 1 } },
+    })
 
     expect(actor.get_mining_state()).toEqual({ mining: true, position: { x: 1, y: 1 } })
 
@@ -121,6 +126,15 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
 
     actor.set_shooting_state({ state: 'shooting_enemies' as any, position: { x: 5, y: 5 } })
     expect((character as any).shooting_state).toEqual({ state: 'shooting_enemies', position: { x: 5, y: 5 } })
+  })
+
+  it('reports mining as effectively stopped when Factorio clears the selected entity', () => {
+    const { actor } = create_actor({
+      selected: undefined,
+      mining_state: { mining: true, position: { x: 1, y: 1 } },
+    })
+
+    expect(actor.get_mining_state()).toEqual({ mining: false })
   })
 
   it('never claims a LuaPlayer-sourced event, since it has no LuaPlayer behind it', () => {
