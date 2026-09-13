@@ -47,7 +47,8 @@ export interface ControlledActor {
   set_walking_state: (state: ActorWalkingState) => void
   set_shooting_state: (state: ActorShootingState) => void
 
-  begin_crafting: (params: { count: number, recipe: string }) => void
+  begin_crafting: (params: { count: number, recipe: string }) => number
+  get_crafting_queue_count: (recipe: string) => number
 
   /**
    * Whether a LuaPlayer-sourced event originated from this actor. Standalone
