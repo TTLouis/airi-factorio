@@ -1,6 +1,7 @@
 import { createLogg } from '@guiiai/logg'
 import { v2FactorioConsoleCommandRawPost } from 'factorio-rcon-api-client'
 import { z } from 'zod'
+import { factorioNameSchema, renderLuaString } from './operations'
 
 const logger = createLogg('tools').useGlobalConfig()
 
@@ -52,12 +53,17 @@ export const tools: ToolFunction[] = [
     name: 'getRecipe',
     description: 'Get the recipe for a given item for AIRI\'s controlled actor',
     schema: z.object({
-      item: z.string().describe('The item to get the recipe for'),
-    }),
+      item: factorioNameSchema.describe('The item to get the recipe for'),
+    }).strict(),
     fn: async ({ parameters }) => {
-      logger.withFields(parameters).debug('Try to get recipe for item')
+      const item = factorioNameSchema.parse(parameters.item)
+      logger.withFields({ item }).debug('Try to get recipe for item')
 
-      const response = await v2FactorioConsoleCommandRawPost({ body: { input: `/c remote.call("autorio_tools", "get_recipe", "${parameters.item}")` } })
+      const response = await v2FactorioConsoleCommandRawPost({
+        body: {
+          input: `/c remote.call("autorio_tools", "get_recipe", ${renderLuaString(item)})`,
+        },
+      })
       logger.withFields({ response: response.data.output }).debug('Recipe')
       return response.data.output
     },
