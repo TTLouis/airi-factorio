@@ -10,7 +10,7 @@ function fake_character(overrides: Record<string, unknown> = {}) {
     force: { name: 'player' },
     selected: undefined,
     mining_state: { mining: false },
-    mining_progress: 0,
+    character_mining_progress: 0,
     update_selected_entity: vi.fn(),
     get_main_inventory: vi.fn(() => 'main-inventory'),
     begin_crafting: vi.fn(),
@@ -114,7 +114,7 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
     const selected = { name: 'iron-ore' }
     const { actor, character } = create_actor({
       selected,
-      mining_progress: 0.5,
+      character_mining_progress: 0.5,
       mining_state: { mining: true, position: { x: 1, y: 1 } },
     })
 
@@ -133,7 +133,7 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
   it('reports mining as effectively stopped when Factorio clears the selected entity', () => {
     const { actor } = create_actor({
       selected: undefined,
-      mining_progress: 0.5,
+      character_mining_progress: 0.5,
       mining_state: { mining: true, position: { x: 1, y: 1 } },
     })
 
@@ -143,7 +143,7 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
   it('reports mining as effectively stopped when character mining progress returns to zero', () => {
     const { actor } = create_actor({
       selected: { name: 'iron-ore' },
-      mining_progress: 0,
+      character_mining_progress: 0,
       mining_state: { mining: true, position: { x: 1, y: 1 } },
     })
 

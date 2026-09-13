@@ -35,6 +35,7 @@ function configureNpcWorld(resource?: Record<string, any>) {
     force,
     selected: undefined,
     mining_state: { mining: false, position: { x: 0, y: 0 } },
+    character_mining_progress: 0,
     walking_state: { walking: false, direction: 'north' },
     shooting_state: { state: 'not_shooting', position: { x: 0, y: 0 } },
     crafting_queue: [],
@@ -92,7 +93,7 @@ function configureNpcWorld(resource?: Record<string, any>) {
 }
 
 describe('standalone NPC completion polling', () => {
-  it('counts real resource depletion and keeps mining across selection loss without LuaPlayer events', () => {
+  it('counts real resource depletion and restarts mining when character progress resets without selection loss', () => {
     const resource: Record<string, any> = {
       valid: true,
       name: 'iron-ore',
@@ -117,7 +118,7 @@ describe('standalone NPC completion polling', () => {
 
     const selections_after_start = character.update_selected_entity.mock.calls.length
     resource.amount = 9
-    character.selected = undefined
+    character.character_mining_progress = 0
     on_tick({})
     expect(task_manager.player_state.parameters_mine_entity?.count).toBe(1)
     expect(task_manager.player_state.task_state).toBe(TaskStates.MINING)
@@ -126,10 +127,38 @@ describe('standalone NPC completion polling', () => {
     expect(character.update_selected_entity.mock.calls.length).toBeGreaterThan(selections_after_start)
 
     resource.amount = 8
-    character.selected = undefined
+    character.character_mining_progress = 0
     on_tick({})
     expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
     expect(character.mining_state.mining).toBe(false)
+  })
+
+  it('also restarts mining when Factorio clears the selected entity', () => {
+    const resource: Record<string, any> = {
+      valid: true,
+      name: 'iron-ore',
+      type: 'resource',
+      position: { x: 1, y: 0 },
+      amount: 10,
+    }
+    const { character } = configureNpcWorld(resource)
+    const on_tick = get_handler('on_tick')
+
+    task_manager.add_task({
+      type: TaskStates.MINING,
+      entity_name: 'iron-ore',
+      count: 2,
+    })
+
+    on_tick({})
+    resource.amount = 9
+    character.selected = undefined
+    character.character_mining_progress = 0.5
+    on_tick({})
+
+    expect(task_manager.player_state.parameters_mine_entity?.count).toBe(1)
+    expect(character.selected).toBe(resource)
+    expect(character.mining_state.mining).toBe(true)
   })
 
   it('finishes standalone crafting when its own crafting queue drains', () => {

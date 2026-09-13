@@ -81,10 +81,12 @@ export class StandaloneCharacterActor implements ControlledActor {
     // Factorio mines the currently selected entity. A standalone scripted
     // character can retain `mining_state.mining = true` after a resource cycle
     // while its selection has been cleared or its real character mining
-    // progress has fallen back to zero. In either case it is not making mining
-    // progress anymore. Report that state as effectively stopped so control.ts
-    // reselects the persisted target and starts the next requested cycle.
-    if (state.mining && (!this.character_entity.selected || this.character_entity.mining_progress === 0)) {
+    // progress has fallen back to zero. In Factorio 2.0.x, LuaEntity's generic
+    // `mining_progress` field is mining-drill-only; character progress is
+    // exposed through the inherited LuaControl `character_mining_progress`.
+    // Treat either stopped condition as effectively idle so control.ts can
+    // reselect the persisted target and start the next requested cycle.
+    if (state.mining && (!this.character_entity.selected || this.character_entity.character_mining_progress === 0)) {
       return { mining: false }
     }
 
@@ -142,7 +144,7 @@ export class StandaloneCharacterActor implements ControlledActor {
           }
         : undefined,
       mining_state: this.character_entity.mining_state,
-      mining_progress: this.character_entity.mining_progress,
+      mining_progress: this.character_entity.character_mining_progress,
     }
   }
 }
