@@ -19,6 +19,11 @@ const nearbyEntitiesSchema = z.object({
   limit: z.number().int().min(1).max(100).default(50),
 }).strict()
 
+const entityStatusSchema = z.object({
+  name: factorioNameSchema,
+  radius: z.number().int().min(1).max(32).default(8),
+}).strict()
+
 async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
@@ -86,6 +91,18 @@ export const tools: ToolFunction[] = [
       const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_nearby_entities", ${parsed.radius}, ${name}, ${entityType}, ${parsed.limit})))`
       const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
       logger.withFields({ output: response.data.output, parameters: parsed }).debug('Nearby entities')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getEntityStatus',
+    description: 'Inspect the nearest local entity with an exact prototype name and return bounded inventory summaries. Use this to verify placed chests and nearby machines without dumping the map.',
+    schema: entityStatusSchema,
+    fn: async ({ parameters }) => {
+      const parsed = entityStatusSchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_entity_status", ${renderLuaString(parsed.name)}, ${parsed.radius})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Entity status')
       return response.data.output
     },
   },
