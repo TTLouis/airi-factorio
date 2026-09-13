@@ -137,6 +137,16 @@ def run(client: Rcon, results: Path) -> None:
         response = command(lua_json(remote_call('autorio_actor', 'status')))
         return decode_json(response, context)
 
+    def wait_for_idle(context: str, timeout: float = 10.0) -> dict:
+        deadline = time.monotonic() + timeout
+        last_status = None
+        while time.monotonic() < deadline:
+            last_status = operation_status(context)
+            if last_status['task_state'] == 'idle':
+                return last_status
+            time.sleep(0.05)
+        raise AssertionError(f'{context} did not return to idle: {last_status!r}')
+
     # Factorio 2.0 requires the first Lua console command to be repeated before
     # it disables achievements and actually executes Lua. RCON receives an empty
     # response for the rejected first attempt, which previously looked like a
@@ -181,16 +191,7 @@ def run(client: Rcon, results: Path) -> None:
     wait_result = decode_json(response, 'autorio_operations.wait')
     assert_true(wait_result[0] is True, f'could not start wait task: {wait_result!r}')
 
-    deadline = time.monotonic() + 5.0
-    wait_status = None
-    while time.monotonic() < deadline:
-        wait_status = operation_status('autorio_operations.status (wait)')
-        if wait_status['task_state'] == 'idle':
-            break
-        time.sleep(0.05)
-
-    assert_true(wait_status is not None, 'operation status was never returned')
-    assert_true(wait_status['task_state'] == 'idle', f'zero-player control loop did not complete wait task: {wait_status!r}')
+    wait_status = wait_for_idle('autorio_operations.status (wait)', 5.0)
     assert_true(wait_status['actor']['actor_id'] == first_actor_id, f'control loop switched actors: {wait_status!r}')
     assert_true(wait_status.get('queue_empty') is True, f'wait task left queued work behind: {wait_status!r}')
     assert_true(wait_status.get('queue_length') == 0, f'wait task status did not expose an empty bounded queue: {wait_status!r}')
@@ -217,16 +218,7 @@ def run(client: Rcon, results: Path) -> None:
     response = command(lua_text(remote_call('autorio_operations', 'walk_to_entity', repr('wooden-chest'), '50')))
     assert_true(response == 'true', f'could not start movement task: {response!r}')
 
-    deadline = time.monotonic() + 10.0
-    movement_status = None
-    while time.monotonic() < deadline:
-        movement_status = operation_status('autorio_operations.status (movement)')
-        if movement_status['task_state'] == 'idle':
-            break
-        time.sleep(0.05)
-
-    assert_true(movement_status is not None, 'movement operation status was never returned')
-    assert_true(movement_status['task_state'] == 'idle', f'NPC movement task did not return to idle: {movement_status!r}')
+    movement_status = wait_for_idle('autorio_operations.status (movement)', 10.0)
     assert_true(movement_status['actor']['actor_id'] == first_actor_id, f'movement switched actors: {movement_status!r}')
 
     moved_position = movement_status['actor']['position']
@@ -239,6 +231,90 @@ def run(client: Rcon, results: Path) -> None:
         f'NPC stopped too far from deterministic target: actor={moved_position!r}, target={target_position!r}',
     )
 
+    # NPC-native mining: remove the movement target and place a single resource
+    # entity inside AIRI's reach. The operation must complete without any
+    # LuaPlayer mining events, and both the resource amount and actor inventory
+    # must prove that three real mining cycles occurred.
+    mining_fixture = (
+        "/silent-command "
+        "local s=game.surfaces[1]; "
+        "for _,e in pairs(s.find_entities_filtered{name='wooden-chest'}) do e.destroy() end; "
+        "local a=s.find_entities_filtered{name='character'}[1]; "
+        "local ore=s.create_entity{name='iron-ore',position={x=10,y=0},amount=20}; "
+        "rcon.print(helpers.table_to_json({created=ore~=nil,amount=ore and ore.amount or nil,"
+        "inventory=a and a.get_item_count('iron-ore') or nil,actor_position=a and a.position or nil}))"
+    )
+    mining_before = decode_json(command(mining_fixture), 'mining fixture setup')
+    assert_true(mining_before['created'] is True, f'could not create deterministic ore target: {mining_before!r}')
+    assert_true(
+        squared_distance(mining_before['actor_position'], {'x': 10, 'y': 0}) <= 16.0,
+        f'NPC is outside deterministic mining reach setup: {mining_before!r}',
+    )
+
+    response = command(lua_text(remote_call('autorio_operations', 'mine_entity', repr('iron-ore'), '3')))
+    assert_true(response == 'true', f'could not start NPC mining task: {response!r}')
+
+    mining_status = wait_for_idle('autorio_operations.status (mining)', 12.0)
+    assert_true(mining_status['actor']['actor_id'] == first_actor_id, f'mining switched actors: {mining_status!r}')
+
+    mining_inspect = (
+        "/silent-command "
+        "local s=game.surfaces[1]; "
+        "local a=s.find_entities_filtered{name='character'}[1]; "
+        "local ore=s.find_entities_filtered{name='iron-ore',position={x=10,y=0},radius=0.25}[1]; "
+        "rcon.print(helpers.table_to_json({amount=ore and ore.amount or 0,"
+        "inventory=a and a.get_item_count('iron-ore') or 0,mining=a and a.mining_state.mining or false}))"
+    )
+    mining_after = decode_json(command(mining_inspect), 'mining result inspection')
+    assert_true(
+        mining_after['inventory'] >= mining_before['inventory'] + 3,
+        f'NPC mining did not add three iron ore to inventory: before={mining_before!r}, after={mining_after!r}',
+    )
+    assert_true(
+        mining_after['amount'] <= mining_before['amount'] - 3,
+        f'NPC mining did not consume three resource units: before={mining_before!r}, after={mining_after!r}',
+    )
+    assert_true(mining_after['mining'] is False, f'NPC remained in mining state after task completion: {mining_after!r}')
+
+    # NPC-native crafting: seed exact ingredients as deterministic test setup,
+    # then let the standalone character's real hand-crafting queue run. No
+    # on_player_crafted_item event exists for this actor, so completion must be
+    # observed from the character queue by Autorio itself.
+    crafting_fixture = (
+        "/silent-command "
+        "local a=game.surfaces[1].find_entities_filtered{name='character'}[1]; "
+        "local inv=a and a.get_main_inventory(); "
+        "local inserted=inv and inv.insert{name='iron-plate',count=4} or 0; "
+        "rcon.print(helpers.table_to_json({inserted=inserted,plates=a and a.get_item_count('iron-plate') or 0,"
+        "gears=a and a.get_item_count('iron-gear-wheel') or 0,queue=a and a.crafting_queue_size or 0}))"
+    )
+    crafting_before = decode_json(command(crafting_fixture), 'crafting fixture setup')
+    assert_true(crafting_before['inserted'] == 4, f'could not seed crafting ingredients: {crafting_before!r}')
+
+    response = command(lua_json(remote_call('autorio_operations', 'craft_item', repr('iron-gear-wheel'), '2')))
+    craft_result = decode_json(response, 'autorio_operations.craft_item')
+    assert_true(craft_result[0] is True, f'could not start NPC crafting task: {craft_result!r}')
+
+    crafting_status = wait_for_idle('autorio_operations.status (crafting)', 12.0)
+    assert_true(crafting_status['actor']['actor_id'] == first_actor_id, f'crafting switched actors: {crafting_status!r}')
+
+    crafting_inspect = (
+        "/silent-command "
+        "local a=game.surfaces[1].find_entities_filtered{name='character'}[1]; "
+        "rcon.print(helpers.table_to_json({plates=a and a.get_item_count('iron-plate') or 0,"
+        "gears=a and a.get_item_count('iron-gear-wheel') or 0,queue=a and a.crafting_queue_size or 0}))"
+    )
+    crafting_after = decode_json(command(crafting_inspect), 'crafting result inspection')
+    assert_true(
+        crafting_after['gears'] >= crafting_before['gears'] + 2,
+        f'NPC crafting did not produce two iron gears: before={crafting_before!r}, after={crafting_after!r}',
+    )
+    assert_true(
+        crafting_after['plates'] <= crafting_before['plates'] - 4,
+        f'NPC crafting did not consume expected iron plates: before={crafting_before!r}, after={crafting_after!r}',
+    )
+    assert_true(crafting_after['queue'] == 0, f'NPC crafting queue was not drained: {crafting_after!r}')
+
     final_status = actor_status('autorio_actor.status (final)')
     assert_true(final_status['connected_players'] == 0, f"a player appeared during NPC smoke test: {final_status!r}")
     assert_true(final_status['actor']['actor_id'] == first_actor_id, f"final actor identity changed: {final_status!r}")
@@ -249,10 +325,14 @@ def run(client: Rcon, results: Path) -> None:
         'initial_position': initial_position,
         'movement_target': target_position,
         'final_position': final_status['actor']['position'],
+        'mining_before': mining_before,
+        'mining_after': mining_after,
+        'crafting_before': crafting_before,
+        'crafting_after': crafting_after,
         'transcript': transcript,
     }, indent=2))
     print(
-        'PASS: zero-player NPC completed wait + movement '
+        'PASS: zero-player NPC completed wait + movement + mining + crafting '
         f'with stable actor_id={first_actor_id}, final_position={final_status["actor"]["position"]}'
     )
 
