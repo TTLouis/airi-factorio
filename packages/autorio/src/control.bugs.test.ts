@@ -169,7 +169,7 @@ describe('Player-sourced completion events are gated by actor identity', () => {
       name: 'player',
       get_spawn_position: () => ({ x: 0, y: 0 }),
     }
-    const character = {
+    const character: Record<string, any> = {
       valid: true,
       unit_number: 42,
       position: { x: 0, y: 0 },
@@ -184,7 +184,7 @@ describe('Player-sourced completion events are gated by actor identity', () => {
       find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
       create_entity: vi.fn(() => character),
     }
-    character.surface = surface as any
+    character.surface = surface
     ;(globalThis as any).game.surfaces[1] = surface
     ;(globalThis as any).game.forces = { player: force }
 
