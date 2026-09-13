@@ -69,9 +69,10 @@ export class StandaloneCharacterActor implements ControlledActor {
     return this.character_entity.get_main_inventory()
   }
 
-  update_selected_entity(_position: MapPositionStruct) {
-    // A standalone character has no LuaPlayer selection cursor. Mining is
-    // driven through its mining_state instead.
+  update_selected_entity(position: MapPositionStruct) {
+    // `character` entities inherit LuaControl, so selection works without a
+    // LuaPlayer and is required for normal mining_state-driven mining.
+    this.character_entity.update_selected_entity(position)
   }
 
   get_mining_state(): ActorMiningState {
@@ -91,7 +92,17 @@ export class StandaloneCharacterActor implements ControlledActor {
   }
 
   begin_crafting(params: { count: number, recipe: string }) {
-    this.character_entity.begin_crafting(params)
+    return this.character_entity.begin_crafting(params)
+  }
+
+  get_crafting_queue_count(recipe: string) {
+    let count = 0
+    for (const item of this.character_entity.crafting_queue ?? []) {
+      if (item.recipe === recipe) {
+        count += item.count
+      }
+    }
+    return count
   }
 
   owns_player_index(_player_index: number): boolean {
