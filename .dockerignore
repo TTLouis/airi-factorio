@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+.git
+.git/**
+test-results
+**/test-results
+dist
+**/dist
+.env
+.env.*
+*.log
