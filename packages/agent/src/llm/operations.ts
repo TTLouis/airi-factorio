@@ -69,6 +69,31 @@ export const structuredOperationsSchema = z.array(structuredOperationSchema).max
 
 export type StructuredOperation = z.infer<typeof structuredOperationSchema>
 
+const quotedSafeName = `['"][A-Za-z0-9_.:/-]+['"]`
+const positiveInteger = `[1-9][0-9]*`
+const separator = `\\s*,\\s*`
+const callStart = `^remote\\.call\\(\\s*['"]autorio_operations['"]${separator}`
+const callEnd = `\\s*\\)$`
+
+const legacyOperationPatterns = [
+  new RegExp(`${callStart}['"]walk_to_entity['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
+  new RegExp(`${callStart}['"]mine_entity['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
+  new RegExp(`${callStart}['"]place_entity['"]${separator}${quotedSafeName}${callEnd}`),
+  new RegExp(`${callStart}['"]move_items['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
+  new RegExp(`${callStart}['"]craft_item['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
+  new RegExp(`${callStart}['"]attack_nearest_enemy['"](?:${separator}${positiveInteger})?${callEnd}`),
+  new RegExp(`${callStart}['"]research_technology['"]${separator}${quotedSafeName}${callEnd}`),
+  new RegExp(`${callStart}['"]wait['"]${separator}${positiveInteger}${callEnd}`),
+]
+
+export function isLegacyOperationCommand(value: string): boolean {
+  return legacyOperationPatterns.some(pattern => pattern.test(value))
+}
+
+export const legacyOperationCommandSchema = z.string()
+  .max(1000)
+  .refine(isLegacyOperationCommand, 'Legacy operation command is not an approved Autorio call')
+
 export function parseStructuredOperations(value: unknown): StructuredOperation[] {
   return structuredOperationsSchema.parse(value)
 }
