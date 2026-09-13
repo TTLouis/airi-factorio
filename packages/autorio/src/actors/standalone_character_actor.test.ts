@@ -9,6 +9,7 @@ function fake_character(overrides: Record<string, unknown> = {}) {
     surface: { name: 'nauvis' },
     force: { name: 'player' },
     mining_state: { mining: false },
+    update_selected_entity: vi.fn(),
     get_main_inventory: vi.fn(() => 'main-inventory'),
     begin_crafting: vi.fn(),
     ...overrides,
