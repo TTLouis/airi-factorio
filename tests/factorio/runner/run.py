@@ -101,6 +101,15 @@ def assert_true(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def decode_json(response: str, context: str):
+    if not response:
+        raise RuntimeError(f'{context} returned an empty RCON response')
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f'{context} returned non-JSON RCON output: {response!r}') from exc
+
+
 def run(client: Rcon, results: Path) -> None:
     transcript: list[dict[str, object]] = []
 
@@ -109,12 +118,26 @@ def run(client: Rcon, results: Path) -> None:
         transcript.append({'command': value, 'response': response})
         return response
 
+    # Factorio 2.0 requires the first Lua console command to be repeated before
+    # it disables achievements and actually executes Lua. RCON receives an empty
+    # response for the rejected first attempt, which previously looked like a
+    # JSON parsing failure. Use a harmless, identical probe twice and require the
+    # expected marker before running any test commands.
+    lua_probe = '/silent-command rcon.print("AIRI_RCON_READY")'
+    probe_response = command(lua_probe)
+    if probe_response != 'AIRI_RCON_READY':
+        probe_response = command(lua_probe)
+    assert_true(
+        probe_response == 'AIRI_RCON_READY',
+        f'Factorio Lua console handshake failed over RCON: {probe_response!r}',
+    )
+
     response = command(lua_json(remote_call('autorio_actor', 'set_mode', repr('npc'))))
-    set_mode = json.loads(response)
+    set_mode = decode_json(response, 'autorio_actor.set_mode')
     assert_true(set_mode[0] is True, f'could not enable npc mode: {set_mode!r}')
 
     response = command(lua_json(remote_call('autorio_actor', 'status')))
-    status = json.loads(response)
+    status = decode_json(response, 'autorio_actor.status')
     assert_true(status['mode'] == 'npc', f"expected npc mode, got {status!r}")
     assert_true(status['connected_players'] == 0, f"NPC test unexpectedly has players: {status!r}")
     assert_true(status['actor'] is not None, f"standalone actor was not created: {status!r}")
@@ -124,25 +147,25 @@ def run(client: Rcon, results: Path) -> None:
 
     first_actor_id = status['actor']['actor_id']
     response = command(lua_json(remote_call('autorio_actor', 'status')))
-    second_status = json.loads(response)
+    second_status = decode_json(response, 'autorio_actor.status (repeat)')
     assert_true(second_status['actor']['actor_id'] == first_actor_id, 'actor resolution created or selected a different NPC')
 
     # Actor diagnostics must work without a LuaPlayer.
     response = command(lua_json(remote_call('autorio_operations', 'log_actor_info')))
-    assert_true(json.loads(response) is True, f'actor diagnostics failed in zero-player mode: {response!r}')
+    assert_true(decode_json(response, 'autorio_operations.log_actor_info') is True, f'actor diagnostics failed in zero-player mode: {response!r}')
 
     # Exercise the real control.ts on_tick dispatcher with the simplest bounded
     # task. If control.ts still resolved game.connected_players[0], this task
     # would remain stuck forever with zero connected players.
     response = command(lua_json(remote_call('autorio_operations', 'wait', '3')))
-    wait_result = json.loads(response)
+    wait_result = decode_json(response, 'autorio_operations.wait')
     assert_true(wait_result[0] is True, f'could not start wait task: {wait_result!r}')
 
     deadline = time.monotonic() + 5.0
     operation_status = None
     while time.monotonic() < deadline:
         response = command(lua_json(remote_call('autorio_operations', 'status')))
-        operation_status = json.loads(response)
+        operation_status = decode_json(response, 'autorio_operations.status')
         if operation_status['task_state'] == 'idle':
             break
         time.sleep(0.05)
@@ -152,7 +175,7 @@ def run(client: Rcon, results: Path) -> None:
     assert_true(operation_status['actor']['actor_id'] == first_actor_id, f'control loop switched actors: {operation_status!r}')
 
     response = command(lua_json(remote_call('autorio_actor', 'status')))
-    final_status = json.loads(response)
+    final_status = decode_json(response, 'autorio_actor.status (final)')
     assert_true(final_status['connected_players'] == 0, f"a player appeared during NPC smoke test: {final_status!r}")
 
     results.mkdir(parents=True, exist_ok=True)
