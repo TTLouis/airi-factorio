@@ -22,9 +22,16 @@ describe('production Factorio prompt contract', () => {
   })
 
   it('documents the actor-aware read tools', () => {
+    expect(prompt).toContain('getActorStatus()')
+    expect(prompt).toContain('getTaskStatus()')
     expect(prompt).toContain('getInventoryItems()')
     expect(prompt).toContain('getRecipe(item)')
     expect(prompt).toContain("AIRI's controlled actor inventory")
+  })
+
+  it('teaches verification-first planning', () => {
+    expect(prompt).toContain('verify important results with the relevant read-only tool')
+    expect(prompt).toContain('Do not invent success')
   })
 
   it('documents every currently supported Autorio operation', () => {
