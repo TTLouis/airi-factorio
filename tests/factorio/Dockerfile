@@ -1,5 +1,6 @@
 FROM node:22-bookworm AS build
 
+ENV CI=true
 RUN corepack enable
 WORKDIR /src
 COPY . .
