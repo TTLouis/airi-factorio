@@ -91,6 +91,10 @@ def lua_json(expr: str) -> str:
     return f"/silent-command rcon.print(helpers.table_to_json({expr}))"
 
 
+def lua_text(expr: str) -> str:
+    return f"/silent-command rcon.print(tostring({expr}))"
+
+
 def remote_call(interface: str, method: str, *args: str) -> str:
     rendered = ', '.join([repr(interface), repr(method), *args])
     return f'remote.call({rendered})'
@@ -153,9 +157,11 @@ def run(client: Rcon, results: Path) -> None:
     second_status = decode_json(response, 'autorio_actor.status (repeat)')
     assert_true(second_status['actor']['actor_id'] == first_actor_id, 'actor resolution created or selected a different NPC')
 
-    # Actor diagnostics must work without a LuaPlayer.
-    response = command(lua_json(remote_call('autorio_operations', 'log_actor_info')))
-    assert_true(decode_json(response, 'autorio_operations.log_actor_info') is True, f'actor diagnostics failed in zero-player mode: {response!r}')
+    # Actor diagnostics return a scalar boolean, not a table, so they must not
+    # be passed through helpers.table_to_json(). The diagnostic call itself also
+    # exercises character-safe actor inspection in zero-player NPC mode.
+    response = command(lua_text(remote_call('autorio_operations', 'log_actor_info')))
+    assert_true(response == 'true', f'actor diagnostics failed in zero-player mode: {response!r}')
 
     # Exercise the real control.ts on_tick dispatcher with the simplest bounded
     # task. If control.ts still resolved game.connected_players[0], this task
