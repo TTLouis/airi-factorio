@@ -17,7 +17,7 @@
     "start": "dotenvx run -f .env -f .env.local --overload -- tsx src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
-    "test:prompt": "vitest run src/llm/prompt.test.ts src/llm/message-handler.prompt.test.ts src/llm/tools.test.ts src/llm/operations.test.ts"
+    "test:prompt": "vitest run src/llm/prompt.test.ts src/llm/message-handler.prompt.test.ts src/llm/tools.test.ts src/llm/operations.test.ts src/llm/structured-response.test.ts"
   },
   "dependencies": {
     "@dotenvx/dotenvx": "^1.51.0",
