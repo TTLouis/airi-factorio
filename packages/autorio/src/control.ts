@@ -256,6 +256,7 @@ export function get_direction(start_position: MapPositionStruct, end_position: M
   }
   return defines.direction.southeast
 }
+
 export function get_nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
   let min_distance = math.huge
   let nearest_entity: LuaEntity | null = null
@@ -275,10 +276,79 @@ export function get_nearest_entity(actor: ControlledActor, entities: LuaEntity[]
   return nearest_entity
 }
 
-function start_mining(actor: ControlledActor, entity_position: MapPositionStruct) {
-  actor.update_selected_entity(entity_position)
-  actor.set_mining_state({ mining: true, position: entity_position }) // should not use mine_entity() because it will skip the mining animation
-  log(`[AUTORIO] Started mining at position: ${serpent.line(entity_position)}`)
+function is_standalone_actor(actor: ControlledActor) {
+  return actor.status_snapshot().kind === 'standalone_character'
+}
+
+function start_mining(actor: ControlledActor, entity: LuaEntity) {
+  const parameters = task_manager.player_state.parameters_mine_entity
+  if (!parameters) {
+    return
+  }
+
+  parameters.position = { x: entity.position.x, y: entity.position.y }
+  parameters.last_target_amount = entity.type === 'resource' ? entity.amount : undefined
+  actor.update_selected_entity(entity.position)
+  actor.set_mining_state({ mining: true, position: entity.position })
+  log(`[AUTORIO] Started mining ${entity.name} at position: ${serpent.line(entity.position)}`)
+}
+
+function find_current_mining_target(actor: ControlledActor) {
+  const parameters = task_manager.player_state.parameters_mine_entity
+  if (!parameters?.position) {
+    return undefined
+  }
+
+  return actor.surface.find_entities_filtered({
+    position: parameters.position,
+    radius: 0.25,
+    name: parameters.entity_name,
+  })[0]
+}
+
+function finish_mining_task(actor: ControlledActor) {
+  actor.set_mining_state({ mining: false })
+  log('[AUTORIO] Mining task complete')
+  task_manager.reset_task_state()
+  task_manager.next_task()
+}
+
+function poll_standalone_mining_progress(actor: ControlledActor) {
+  const parameters = task_manager.player_state.parameters_mine_entity
+  if (!parameters || !parameters.position || !is_standalone_actor(actor)) {
+    return false
+  }
+
+  const target = find_current_mining_target(actor)
+  if (!target) {
+    // Non-resource entities disappear when the mining cycle completes. A
+    // depleted resource with amount 1 also disappears, so this accounts for
+    // that final cycle as well.
+    parameters.count -= 1
+    parameters.position = undefined
+    parameters.last_target_amount = undefined
+    actor.set_mining_state({ mining: false })
+    log(`[AUTORIO] Standalone actor completed mining cycle, remaining: ${parameters.count}`)
+  }
+  else if (target.type === 'resource') {
+    const amount = target.amount
+    if (parameters.last_target_amount === undefined) {
+      parameters.last_target_amount = amount
+    }
+    else if (amount < parameters.last_target_amount) {
+      const mined = math.min(parameters.count, parameters.last_target_amount - amount)
+      parameters.count -= mined
+      parameters.last_target_amount = amount
+      log(`[AUTORIO] Standalone actor mined ${mined} ${parameters.entity_name}, remaining: ${parameters.count}`)
+    }
+  }
+
+  if (parameters.count <= 0) {
+    finish_mining_task(actor)
+    return true
+  }
+
+  return false
 }
 
 // FIXME: who are changing the selected entity while mining?
@@ -326,19 +396,20 @@ script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEnti
     return
   }
 
-  if (!task_manager.player_state.parameters_mine_entity) {
+  const parameters = task_manager.player_state.parameters_mine_entity
+  if (!parameters) {
     log('[AUTORIO] No parameters found when on_player_mined_entity event')
     return
   }
 
-  if (task_manager.player_state.parameters_mine_entity.count <= 0) {
-    log('[AUTORIO] Count is 0, switching to IDLE state')
-    task_manager.reset_task_state()
-    task_manager.next_task()
-    return
-  }
+  parameters.count -= 1
+  parameters.position = undefined
+  parameters.last_target_amount = undefined
+  log(`[AUTORIO] Controlled player completed mining cycle, remaining: ${parameters.count}`)
 
-  task_manager.player_state.parameters_mine_entity.count = task_manager.player_state.parameters_mine_entity.count - 1
+  if (parameters.count <= 0) {
+    finish_mining_task(actor)
+  }
 })
 
 function setup() {
@@ -503,8 +574,13 @@ function state_walking_to_entity(actor: ControlledActor) {
 }
 
 function state_mining(actor: ControlledActor) {
-  if (!task_manager.player_state.parameters_mine_entity) {
+  const parameters = task_manager.player_state.parameters_mine_entity
+  if (!parameters) {
     log('[AUTORIO] No parameters found when mining')
+    return
+  }
+
+  if (poll_standalone_mining_progress(actor)) {
     return
   }
 
@@ -512,15 +588,20 @@ function state_mining(actor: ControlledActor) {
     return
   }
 
-  if (task_manager.player_state.parameters_mine_entity.position) {
-    start_mining(actor, task_manager.player_state.parameters_mine_entity.position)
-    return
+  if (parameters.position) {
+    const existing_target = find_current_mining_target(actor)
+    if (existing_target) {
+      start_mining(actor, existing_target)
+      return
+    }
+    parameters.position = undefined
+    parameters.last_target_amount = undefined
   }
 
   const entities = actor.surface.find_entities_filtered({
     position: actor.position,
     radius: 5, // but the character can only mine entities within its normal reach
-    name: task_manager.player_state.parameters_mine_entity.entity_name,
+    name: parameters.entity_name,
   })
 
   if (entities.length === 0) {
@@ -538,7 +619,7 @@ function state_mining(actor: ControlledActor) {
     return
   }
 
-  start_mining(actor, nearest_entity.position)
+  start_mining(actor, nearest_entity)
 }
 
 function state_placing(actor: ControlledActor) {
@@ -782,7 +863,8 @@ function check_can_craft(actor: ControlledActor, item_name: string, count: numbe
 }
 
 function state_crafting(actor: ControlledActor) {
-  if (!task_manager.player_state.parameters_craft_item) {
+  const parameters = task_manager.player_state.parameters_craft_item
+  if (!parameters) {
     log('[AUTORIO] No parameters found when crafting')
     return
   }
@@ -794,9 +876,27 @@ function state_crafting(actor: ControlledActor) {
     return
   }
 
-  // Crafting completion for connected players is currently event-driven by
-  // on_player_crafted_item below. Standalone NPC completion will be made
-  // actor-native in the next migration pass.
+  // Connected LuaPlayers keep their existing event-driven completion path.
+  if (!is_standalone_actor(actor)) {
+    return
+  }
+
+  const started = parameters.started ?? parameters.count
+  const queue_count_before = parameters.queue_count_before ?? 0
+  const currently_queued = actor.get_crafting_queue_count(parameters.item_name)
+  const remaining_for_task = math.max(0, currently_queued - queue_count_before)
+  const crafted = math.max(0, started - math.min(started, remaining_for_task))
+
+  if (crafted > parameters.crafted) {
+    parameters.crafted = crafted
+    log(`[AUTORIO] Standalone actor crafted ${parameters.crafted}/${started} ${parameters.item_name}`)
+  }
+
+  if (remaining_for_task <= 0 || parameters.crafted >= started) {
+    log('[AUTORIO] Standalone crafting task complete')
+    task_manager.reset_task_state()
+    task_manager.next_task()
+  }
 }
 
 function state_researching(actor: ControlledActor) {
@@ -958,13 +1058,14 @@ script.on_event(defines.events.on_player_crafted_item, (event: OnPlayerCraftedIt
   const actor = get_controlled_actor()
   if (!actor || !actor.owns_player_index(event.player_index)) {
     // Not our controlled actor's craft (e.g. another connected player) — ignore it.
-    // Standalone NPC crafting completion is handled in the next migration pass.
+    // Standalone NPC crafting completion is polled from its own crafting queue.
     return
   }
 
   log(`[AUTORIO] Actor ${actor.status_snapshot().name} crafted item: ${event.item_stack.name}`)
 
-  if (!task_manager.player_state.parameters_craft_item) {
+  const parameters = task_manager.player_state.parameters_craft_item
+  if (!parameters) {
     log('[AUTORIO] No parameters found when item crafted')
     return
   }
@@ -973,10 +1074,11 @@ script.on_event(defines.events.on_player_crafted_item, (event: OnPlayerCraftedIt
     return
   }
 
-  task_manager.player_state.parameters_craft_item.crafted = task_manager.player_state.parameters_craft_item.crafted + 1
-  log(`[AUTORIO] Crafted 1 ${task_manager.player_state.parameters_craft_item.item_name}, remaining: ${task_manager.player_state.parameters_craft_item.count - task_manager.player_state.parameters_craft_item.crafted}`)
+  parameters.crafted += 1
+  const target_count = parameters.started ?? parameters.count
+  log(`[AUTORIO] Crafted 1 ${parameters.item_name}, remaining: ${target_count - parameters.crafted}`)
 
-  if (task_manager.player_state.parameters_craft_item.crafted >= task_manager.player_state.parameters_craft_item.count) {
+  if (parameters.crafted >= target_count) {
     log('[AUTORIO] Crafting task complete')
     task_manager.reset_task_state()
     task_manager.next_task()
