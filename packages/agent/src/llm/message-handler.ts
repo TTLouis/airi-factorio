@@ -62,7 +62,11 @@ export async function createMessageHandler() {
     }
 
     const parsedMessage = parseLLMMessage(messageFromLLM)
-    messages.push(assistant(`${JSON.stringify(parsedMessage)}`))
+    // Preserve the model's original validated JSON in history. The parser may
+    // normalize structured operations into legacy command strings for the
+    // executor, but those implementation details should not be taught back to
+    // the model on the next turn.
+    messages.push(assistant(messageFromLLM))
 
     return parsedMessage
   }
