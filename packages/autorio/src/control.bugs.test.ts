@@ -7,6 +7,7 @@ import { TaskStates } from './types'
 beforeEach(() => {
   task_manager.cancel_all_tasks()
   ;(globalThis as any).game.connected_players = []
+  ;(globalThis as any).storage.airi_actor_mode = 'player'
 })
 
 describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on pickup', () => {
@@ -50,7 +51,7 @@ describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on
     expect(moved_total).toBe(5)
   })
 
-  it('reports only what was actually inserted when the player inventory can only take part of it', () => {
+  it('reports only what was actually inserted when the actor inventory can only take part of it', () => {
     const fake_inventory = {
       remove: vi.fn(() => 5),
       insert: vi.fn(),
@@ -59,7 +60,7 @@ describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on
       get_max_inventory_index: () => 1,
       get_inventory: (_index: number) => fake_inventory,
     }
-    const fake_player_inventory = {
+    const fake_actor_inventory = {
       can_insert: () => true,
       insert: vi.fn(() => 3), // only 3 of the 5 removed items actually fit
     }
@@ -67,7 +68,7 @@ describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on
       position: { x: 0, y: 0 },
       surface: { find_entities_filtered: () => [fake_entity] },
       force: {},
-      get_main_inventory: () => fake_player_inventory,
+      get_main_inventory: () => fake_actor_inventory,
     } as unknown as ControlledActor
 
     task_manager.add_task({
@@ -87,10 +88,16 @@ describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on
   })
 })
 
-describe('Bug 1 (fixed): craft completion is gated by actor identity', () => {
+describe('Player-sourced completion events are gated by actor identity', () => {
   function connect_controlled_actor(index: number) {
-    (globalThis as any).game.connected_players = [
-      { index, name: 'AIRI', character: {}, begin_crafting: () => {} },
+    ;(globalThis as any).game.connected_players = [
+      {
+        valid: true,
+        index,
+        name: 'AIRI',
+        character: {},
+        begin_crafting: () => {},
+      },
     ]
   }
 
@@ -125,11 +132,81 @@ describe('Bug 1 (fixed): craft completion is gated by actor identity', () => {
 
     expect(task_manager.player_state.parameters_craft_item?.crafted).toBe(1)
   })
+
+  it('ignores a mined-entity event from another player', () => {
+    connect_controlled_actor(1)
+
+    task_manager.add_task({
+      type: TaskStates.MINING,
+      entity_name: 'iron-ore',
+      count: 3,
+    })
+
+    const on_player_mined_entity = get_handler('on_player_mined_entity')
+    on_player_mined_entity({ player_index: 2 })
+
+    expect(task_manager.player_state.parameters_mine_entity?.count).toBe(3)
+  })
+
+  it('counts a mined-entity event from the controlled player', () => {
+    connect_controlled_actor(1)
+
+    task_manager.add_task({
+      type: TaskStates.MINING,
+      entity_name: 'iron-ore',
+      count: 3,
+    })
+
+    const on_player_mined_entity = get_handler('on_player_mined_entity')
+    on_player_mined_entity({ player_index: 1 })
+
+    expect(task_manager.player_state.parameters_mine_entity?.count).toBe(2)
+  })
+
+  it('does not let any LuaPlayer mining event advance an NPC task', () => {
+    ;(globalThis as any).storage.airi_actor_mode = 'npc'
+    const force = {
+      name: 'player',
+      get_spawn_position: () => ({ x: 0, y: 0 }),
+    }
+    const character = {
+      valid: true,
+      unit_number: 42,
+      position: { x: 0, y: 0 },
+      force,
+      mining_state: { mining: false },
+      get_main_inventory: vi.fn(),
+      begin_crafting: vi.fn(),
+    }
+    const surface = {
+      name: 'nauvis',
+      find_entities_filtered: vi.fn(() => []),
+      find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
+      create_entity: vi.fn(() => character),
+    }
+    character.surface = surface as any
+    ;(globalThis as any).game.surfaces[1] = surface
+    ;(globalThis as any).game.forces = { player: force }
+
+    task_manager.add_task({
+      type: TaskStates.MINING,
+      entity_name: 'iron-ore',
+      count: 3,
+    })
+
+    const on_player_mined_entity = get_handler('on_player_mined_entity')
+    on_player_mined_entity({ player_index: 1 })
+
+    expect(task_manager.player_state.parameters_mine_entity?.count).toBe(3)
+  })
 })
 
 describe('Bug 4 (fixed): ATTACKING now has an on_tick dispatch case', () => {
   function connect_player_seeing(entities: unknown[]) {
     const fake_player = {
+      valid: true,
+      index: 1,
+      name: 'AIRI',
       character: {},
       position: { x: 0, y: 0 },
       surface: { find_entities_filtered: () => entities },
