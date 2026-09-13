@@ -76,23 +76,7 @@ export class StandaloneCharacterActor implements ControlledActor {
   }
 
   get_mining_state(): ActorMiningState {
-    const state = this.character_entity.mining_state
-
-    if (state.mining && state.position) {
-      // A standalone scripted character has no physical mouse cursor holding
-      // its selection in place. Factorio mining depends on both mining_state
-      // and the currently selected entity, and the selection can be cleared
-      // after a completed resource cycle while mining_state still reads true.
-      // Refresh both inputs while Autorio is polling the active mining task so
-      // multi-count mining behaves like a human holding the mining control.
-      this.character_entity.update_selected_entity(state.position)
-      this.character_entity.mining_state = {
-        mining: true,
-        position: state.position,
-      }
-    }
-
-    return state
+    return this.character_entity.mining_state
   }
 
   set_mining_state(state: ActorMiningState) {
