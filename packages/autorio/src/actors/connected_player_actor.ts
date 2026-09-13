@@ -54,7 +54,17 @@ export class ConnectedPlayerActor implements ControlledActor {
   }
 
   begin_crafting(params: { count: number, recipe: string }) {
-    this.player.begin_crafting(params)
+    return this.player.begin_crafting(params)
+  }
+
+  get_crafting_queue_count(recipe: string) {
+    let count = 0
+    for (const item of this.player.crafting_queue ?? []) {
+      if (item.recipe === recipe) {
+        count += item.count
+      }
+    }
+    return count
   }
 
   owns_player_index(player_index: number): boolean {
