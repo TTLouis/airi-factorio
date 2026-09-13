@@ -1,5 +1,6 @@
-import type { LuaEntity, LuaPlayer } from 'factorio:runtime'
+import type { LuaEntity } from 'factorio:runtime'
 import { describe, expect, it } from 'vitest'
+import type { ControlledActor } from './actors/types'
 import { get_direction, get_nearest_entity } from './control'
 
 describe('get_direction', () => {
@@ -24,8 +25,8 @@ describe('get_direction', () => {
 })
 
 describe('get_nearest_entity', () => {
-  function fake_player(x: number, y: number): LuaPlayer {
-    return { position: { x, y } } as unknown as LuaPlayer
+  function fake_actor(x: number, y: number): ControlledActor {
+    return { position: { x, y } } as unknown as ControlledActor
   }
 
   function fake_entity(name: string, x: number, y: number): LuaEntity {
@@ -33,22 +34,22 @@ describe('get_nearest_entity', () => {
   }
 
   it('returns null for an empty entity list', () => {
-    expect(get_nearest_entity(fake_player(0, 0), [])).toBeNull()
+    expect(get_nearest_entity(fake_actor(0, 0), [])).toBeNull()
   })
 
   it('picks the closest entity by squared distance', () => {
-    const player = fake_player(0, 0)
+    const actor = fake_actor(0, 0)
     const near = fake_entity('near', 1, 0)
     const far = fake_entity('far', 10, 0)
 
-    expect(get_nearest_entity(player, [far, near])).toBe(near)
+    expect(get_nearest_entity(actor, [far, near])).toBe(near)
   })
 
   it('keeps the first entity found when distances tie', () => {
-    const player = fake_player(0, 0)
+    const actor = fake_actor(0, 0)
     const first = fake_entity('first', 1, 0)
     const second = fake_entity('second', -1, 0)
 
-    expect(get_nearest_entity(player, [first, second])).toBe(first)
+    expect(get_nearest_entity(actor, [first, second])).toBe(first)
   })
 })

@@ -1,5 +1,5 @@
-import type { LuaPlayer } from 'factorio:runtime'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ControlledActor } from './actors/types'
 import { state_moving_items, task_manager } from './control'
 import { get_handler } from './test-event-registry'
 import { TaskStates } from './types'
@@ -26,11 +26,12 @@ describe('Bug 3: state_moving_items double-counts moved_total on pickup', () => 
       can_insert: () => true,
       insert: inserted_into_player,
     }
-    const fake_player = {
+    const fake_actor = {
+      position: { x: 0, y: 0 },
       surface: { find_entities_filtered: () => [fake_entity] },
       force: {},
       get_main_inventory: () => fake_player_inventory,
-    } as unknown as LuaPlayer
+    } as unknown as ControlledActor
 
     task_manager.add_task({
       type: TaskStates.MOVING_ITEMS,
@@ -40,7 +41,7 @@ describe('Bug 3: state_moving_items double-counts moved_total on pickup', () => 
       to_entity: false,
     })
 
-    const moved_total = state_moving_items(fake_player)
+    const moved_total = state_moving_items(fake_actor)
 
     // Only 5 items actually moved (one remove + one matching insert)...
     expect(removed_from_entity).toHaveBeenCalledTimes(1)

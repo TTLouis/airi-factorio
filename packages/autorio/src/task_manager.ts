@@ -1,7 +1,8 @@
+import type { ControlledActor } from './actors/types'
 import type { PlayerParameters, PlayerState } from './types'
 import { TaskStates } from './types'
 
-export function new_task_manager() {
+export function new_task_manager(get_controlled_actor: () => ControlledActor | undefined) {
   const player_state: PlayerState = {
     task_state: TaskStates.IDLE,
   }
@@ -63,13 +64,13 @@ export function new_task_manager() {
         player_state.parameters_move_items = task
         break
       case TaskStates.CRAFTING:{
-        const player = game.connected_players[0]
-        if (!player) {
+        const actor = get_controlled_actor()
+        if (!actor) {
           log('[AUTORIO] No player found')
           return
         }
 
-        player.begin_crafting({
+        actor.begin_crafting({
           count: task.count,
           recipe: task.item_name,
         })
