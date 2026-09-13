@@ -943,8 +943,14 @@ script.on_event(defines.events.on_tick, (unused_event) => {
 })
 
 script.on_event(defines.events.on_player_crafted_item, (event: OnPlayerCraftedItemEvent) => {
+  const actor = get_controlled_actor()
+  if (!actor || !actor.owns_player_index(event.player_index)) {
+    // Not our controlled actor's craft (e.g. another connected player) — ignore it.
+    return
+  }
+
   // compact for lua array index
-  log(`[AUTORIO] Player ${game.connected_players[event.player_index - 1].name} crafted item: ${event.item_stack.name}`) // TODO: determine player index
+  log(`[AUTORIO] Player ${game.connected_players[event.player_index - 1].name} crafted item: ${event.item_stack.name}`)
 
   if (!task_manager.player_state.parameters_craft_item) {
     log('[AUTORIO] No parameters found when item crafted')

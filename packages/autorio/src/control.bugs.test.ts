@@ -53,6 +53,46 @@ describe('Bug 3: state_moving_items double-counts moved_total on pickup', () => 
   })
 })
 
+describe('Bug 1 (fixed): craft completion is gated by actor identity', () => {
+  function connect_controlled_actor(index: number) {
+    (globalThis as any).game.connected_players = [
+      { index, name: 'AIRI', character: {}, begin_crafting: () => {} },
+    ]
+  }
+
+  it('ignores a crafted-item event from a player_index that is not the controlled actor', () => {
+    connect_controlled_actor(1)
+
+    task_manager.add_task({
+      type: TaskStates.CRAFTING,
+      item_name: 'iron-gear-wheel',
+      count: 5,
+      crafted: 0,
+    })
+
+    const on_player_crafted_item = get_handler('on_player_crafted_item')
+    on_player_crafted_item({ player_index: 2, item_stack: { name: 'iron-gear-wheel', count: 1 } })
+
+    expect(task_manager.player_state.parameters_craft_item?.crafted).toBe(0)
+  })
+
+  it('counts a crafted-item event from the controlled actor\'s own player_index', () => {
+    connect_controlled_actor(1)
+
+    task_manager.add_task({
+      type: TaskStates.CRAFTING,
+      item_name: 'iron-gear-wheel',
+      count: 5,
+      crafted: 0,
+    })
+
+    const on_player_crafted_item = get_handler('on_player_crafted_item')
+    on_player_crafted_item({ player_index: 1, item_stack: { name: 'iron-gear-wheel', count: 1 } })
+
+    expect(task_manager.player_state.parameters_craft_item?.crafted).toBe(1)
+  })
+})
+
 describe('Bug 4: ATTACKING has no on_tick dispatch case', () => {
   it('leaves a queued attack task stuck forever instead of running or erroring', () => {
     const on_tick = get_handler('on_tick')

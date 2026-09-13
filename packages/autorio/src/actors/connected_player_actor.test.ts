@@ -6,6 +6,7 @@ function fake_player(overrides: Record<string, unknown> = {}) {
   return {
     valid: true,
     name: 'Louis',
+    index: 1,
     position: { x: 1, y: 2 },
     character: { unit_number: 7 },
     surface: { name: 'nauvis' },
@@ -91,5 +92,13 @@ describe('ConnectedPlayerActor', () => {
     const actor = new ConnectedPlayerActor(player)
 
     expect(actor.status_snapshot().has_character).toBe(false)
+  })
+
+  it('owns_player_index matches only the wrapped player\'s own index', () => {
+    const player = fake_player({ index: 3 })
+    const actor = new ConnectedPlayerActor(player)
+
+    expect(actor.owns_player_index(3)).toBe(true)
+    expect(actor.owns_player_index(1)).toBe(false)
   })
 })

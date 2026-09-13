@@ -46,6 +46,15 @@ export interface ControlledActor {
 
   begin_crafting: (params: { count: number, recipe: string }) => void
 
+  /**
+   * Whether a LuaPlayer-sourced event (e.g. on_player_crafted_item's
+   * player_index) originated from this actor, so crafting/mining progress
+   * is only ever attributed to the actor AIRI is actually controlling.
+   * An actor with no underlying LuaPlayer (e.g. a future standalone
+   * character) should always return false here.
+   */
+  owns_player_index: (player_index: number) => boolean
+
   entity_build_args: () => ActorEntityBuildArgs
 
   status_snapshot: () => ActorStatusSnapshot

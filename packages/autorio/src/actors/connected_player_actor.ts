@@ -54,6 +54,10 @@ export class ConnectedPlayerActor implements ControlledActor {
     this.player.begin_crafting(params)
   }
 
+  owns_player_index(player_index: number): boolean {
+    return this.player.index === player_index
+  }
+
   entity_build_args(): ActorEntityBuildArgs {
     return {
       force: this.player.force,
