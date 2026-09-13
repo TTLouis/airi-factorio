@@ -1,3 +1,12 @@
+> [!IMPORTANT]
+>
+> **This is a fork.** It's maintained independently from the upstream
+> [`moeru-ai/airi-factorio`](https://github.com/moeru-ai/airi-factorio) project and may
+> diverge in scope, direction, and priorities — it isn't guaranteed to track upstream or
+> to stay compatible with it. See [`deploy/pterodactyl/`](./deploy/pterodactyl) for this
+> fork's Pterodactyl deployment notes. Everything below this notice is the original
+> project's README.
+
 <p align="center">
   <picture>
     <img width="100%" src="./docs/banner-1280x640.png" />
