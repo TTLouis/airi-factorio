@@ -80,6 +80,13 @@ creation/reinstall time is enough; you do not need to hand-edit
 outside the panel (e.g. templating multiple servers from one exported
 config) or prefer editing the file directly.
 
+The installer writes this file for you: on first install (never on a later
+reinstall/update, so it won't clobber edits you've made) it seeds
+`/home/container/airi-config.json` with a snapshot of whatever the egg
+variables above currently resolve to (`seedConfigFromEnv` in `common.mjs`),
+so it shows up as a real, editable file in the panel's File Manager instead
+of being invisible env-only state — `OPENAI_API_KEY` is never written to it.
+
 **Most important: `AIRI_PLAYER`.** Without it (or a `player` key in
 `airi-config.json`), AI control stays **disabled** — the server still runs,
 but the installer's own log line says it plainly: *"Set AIRI_PLAYER or

@@ -264,6 +264,24 @@ export function redactor(secrets) {
   const tokens = secrets.filter(x => typeof x === 'string' && x.length > 0).sort((a,b) => b.length-a.length);
   return s => tokens.reduce((value, token) => value.split(token).join('[REDACTED]'), String(s));
 }
+/** Snapshot of currently-set egg variables, for seeding a first airi-config.json so it exists as a real, editable file rather than being invisible env-only state. OPENAI_API_KEY is deliberately never included - it must only ever come from the environment. */
+export function seedConfigFromEnv(env = process.env) {
+  const config = {};
+  if (env.AIRI_PLAYER) config.player = env.AIRI_PLAYER;
+  if (env.SAVE_NAME) config.save = env.SAVE_NAME;
+  if (env.OPENAI_MODEL) config.model = env.OPENAI_MODEL;
+  if (env.OPENAI_API_BASEURL) config.providerUrl = env.OPENAI_API_BASEURL;
+  if (env.FACTORIO_VERSION) config.factorioVersion = env.FACTORIO_VERSION;
+  if (env.AUTO_UPDATE !== undefined) config.autoUpdate = env.AUTO_UPDATE === '1';
+  if (env.TTL_UPDATER !== undefined) config.watchUpdates = env.TTL_UPDATER === '1';
+  if (env.UPDATE_TTL_MIN) config.updateMinutes = Number(env.UPDATE_TTL_MIN);
+  if (env.MAX_PROVIDER_REQUESTS_PER_HOUR) config.maxProviderRequestsPerHour = Number(env.MAX_PROVIDER_REQUESTS_PER_HOUR);
+  if (env.SHUTDOWN_TIMEOUT_MS) config.shutdownTimeoutMs = Number(env.SHUTDOWN_TIMEOUT_MS);
+  if (env.FACTORIO_EXTRA_ARGS) {
+    try { config.extraArgs = JSON.parse(env.FACTORIO_EXTRA_ARGS); } catch {}
+  }
+  return config;
+}
 
 /** A positive allowlist. Paths and alternate run modes are intentionally absent. */
 export function extraArgs(input = []) {
@@ -1348,7 +1366,7 @@ import {PassThrough} from 'node:stream';
 import {setTimeout as delay} from 'node:timers/promises';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {check,regularFile,directory,inside,atomicWrite,atomicLink,readJSON,capacity,number,factorioVersion,compareVersion,redactor,extraArgs,saveSelection,snapshot,Child,Rcon,freeControlPort,assertLoopback,run,hashFile} from '../src/common.mjs';
+import {check,regularFile,directory,inside,atomicWrite,atomicLink,readJSON,capacity,number,factorioVersion,compareVersion,redactor,extraArgs,saveSelection,snapshot,Child,Rcon,freeControlPort,assertLoopback,run,hashFile,seedConfigFromEnv} from '../src/common.mjs';
 import {parseOperation,responsePlan,luaString,toolCommand,providerEndpoint} from '../src/policy.mjs';
 import {Agent,providerRequest} from '../src/agent.mjs';
 import {configuration,gameArgs,reserveBudget,Session} from '../src/supervisor.mjs';
@@ -1375,6 +1393,10 @@ for(const input of [{OPENAI_API_KEY:''},{AUTO_UPDATE:'yes'},{TTL_UPDATER:'2'},{U
 test('provider budget and shutdown timeout can be overridden by environment',()=>{const c=configuration({},{...env,MAX_PROVIDER_REQUESTS_PER_HOUR:'5',SHUTDOWN_TIMEOUT_MS:'2000'});assert.equal(c.budget,5);assert.equal(c.stopMs,2000);});
 test('secrets are redacted including split pieces reassembled into a line',()=>assert.equal(redactor(['secret-value'])('token secret-'+'value'),'token [REDACTED]'));
 test('path containment rejects traversal',()=>assert.throws(()=>inside('/root','/root/../etc/passwd')));
+test('seeded config never includes the API key',()=>{const seeded=seedConfigFromEnv({...env,OPENAI_API_KEY:'sk-should-never-be-written',AIRI_PLAYER:'Louis'});assert.equal(seeded.player,'Louis');assert.ok(!('key' in seeded));assert.ok(!JSON.stringify(seeded).includes('sk-should-never-be-written'));});
+test('seeded config omits unset egg variables instead of writing empty placeholders',()=>{assert.deepEqual(seedConfigFromEnv({}),{});assert.ok(!('player' in seedConfigFromEnv({AIRI_PLAYER:''})));});
+test('seeded config mirrors what configuration() would actually resolve from the same env',()=>{const e={...env,AIRI_PLAYER:'Louis',OPENAI_MODEL:'deepseek-v4-flash',MAX_PROVIDER_REQUESTS_PER_HOUR:'5',AUTO_UPDATE:'0'};const seeded=seedConfigFromEnv(e);const resolved=configuration(seeded,{OPENAI_API_KEY:env.OPENAI_API_KEY});assert.equal(resolved.player,'Louis');assert.equal(resolved.model,'deepseek-v4-flash');assert.equal(resolved.budget,5);assert.equal(resolved.autoUpdate,false);});
+test('seeded config round-trips through configuration() identically whether env or the seeded file supplies it',()=>{const e={...env,AIRI_PLAYER:'Louis',SHUTDOWN_TIMEOUT_MS:'2000',FACTORIO_EXTRA_ARGS:'["--verbose"]'};const fromEnv=configuration({},e);const fromFile=configuration(seedConfigFromEnv(e),{OPENAI_API_KEY:env.OPENAI_API_KEY});assert.equal(fromEnv.player,fromFile.player);assert.equal(fromEnv.stopMs,fromFile.stopMs);assert.deepEqual(fromEnv.extras,fromFile.extras);});
 
 test('no save creates a selection, not an invented ZIP',async t=>{const root=await temp(t);const s=await saveSelection(root);assert.equal(s.create,true);await assert.rejects(fs.access(s.file));});
 test('unambiguous differently named upload reused',async t=>{const root=await temp(t);await write(root,'saves/uploaded map.zip',zip);const s=await saveSelection(root);assert.equal(path.basename(s.file),'uploaded map.zip');assert.equal(s.create,false);});
@@ -1588,6 +1610,22 @@ mv "$APP" "$RELEASE"
 if [[ -f "$SERVER_DIR/start-airi.sh" ]]; then cp -p "$SERVER_DIR/start-airi.sh" "$SERVER_DIR/.airi/previous-start-$RELEASE_ID.sh"; fi
 ln -s ".airi/releases/$RELEASE_ID/start-airi.sh" "$SERVER_DIR/.start-airi-$RELEASE_ID.new"
 mv -Tf "$SERVER_DIR/.start-airi-$RELEASE_ID.new" "$SERVER_DIR/start-airi.sh"
+# Give the operator a real, editable airi-config.json in the file manager
+# instead of leaving configuration purely invisible in egg-variable env vars.
+# Only written when absent: never clobber a file the operator already edited
+# by hand on a later reinstall/update. Egg variables still take precedence
+# over this file at runtime (configuration() reads env first) - this is a
+# convenience snapshot of what's currently configured, not a second source
+# of truth. OPENAI_API_KEY is deliberately never written here.
+if [[ ! -e "$SERVER_DIR/airi-config.json" ]]; then
+  AIRI_CONFIG_PATH="$SERVER_DIR/airi-config.json" AIRI_RELEASE_SRC="$RELEASE/src" "$RELEASE/node/bin/node" --input-type=module <<'AIRI_EMBED_CONFIG_SEED'
+import fs from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+const { seedConfigFromEnv } = await import(pathToFileURL(`${process.env.AIRI_RELEASE_SRC}/common.mjs`).href);
+await fs.writeFile(process.env.AIRI_CONFIG_PATH, `${JSON.stringify(seedConfigFromEnv(), null, 2)}\n`);
+AIRI_EMBED_CONFIG_SEED
+  log 'Wrote airi-config.json seeded from current egg variables (edit it directly to override without touching egg variables).'
+fi
 log 'Installation complete. New release atomically activated.'
 log 'No customer saves were changed. The disposable smoke-test world will be deleted.'
 log 'Runtime image must be ghcr.io/ptero-eggs/yolks:debian_bookworm on this existing server.'
