@@ -25,7 +25,7 @@ create_tools_remote_interface()
 
 let setup_complete = false
 
-const task_manager = new_task_manager()
+export const task_manager = new_task_manager()
 
 function log_player_info(player_id: number) {
   // compact for lua array index
@@ -649,7 +649,7 @@ function state_placing(player: LuaPlayer) {
 }
 
 // TODO: Move items between specified entity and player inventory, give the entity name and position as parameters
-function state_moving_items(player: LuaPlayer) {
+export function state_moving_items(player: LuaPlayer) {
   const parameters = task_manager.player_state.parameters_move_items
 
   if (!parameters) {
@@ -773,6 +773,8 @@ function state_moving_items(player: LuaPlayer) {
 
   task_manager.reset_task_state()
   task_manager.next_task()
+
+  return moved_total
 }
 
 function check_can_craft(player: LuaPlayer, item_name: string, count: number) {

@@ -1,3 +1,5 @@
+import { event_handlers } from './test-event-registry'
+
 // Minimal stand-ins for the Factorio/Lua globals that control.ts touches at module
 // load time (remote.add_interface, script.on_event registration, the closing log()
 // call) plus the Lua `math` stdlib used by pure logic like get_direction. This lets
@@ -10,11 +12,27 @@
 }
 
 ;(globalThis as any).script = {
-  on_event: () => {},
+  on_event: (event_key: unknown, handler: (event: any) => void) => {
+    event_handlers.set(event_key, handler)
+  },
+}
+
+;(globalThis as any).game = {
+  connected_players: [],
+  surfaces: {
+    1: { find_entities_filtered: () => [] },
+  },
+  print: () => {},
 }
 
 ;(globalThis as any).defines = {
-  events: {},
+  events: {
+    on_selected_entity_changed: 'on_selected_entity_changed',
+    on_script_path_request_finished: 'on_script_path_request_finished',
+    on_player_mined_entity: 'on_player_mined_entity',
+    on_tick: 'on_tick',
+    on_player_crafted_item: 'on_player_crafted_item',
+  },
   direction: {
     north: 'north',
     northeast: 'northeast',
