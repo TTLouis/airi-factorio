@@ -1,0 +1,13 @@
+{
+  "name": "AIRI zero-player NPC integration",
+  "description": "Private deterministic test world; simulation must run with no players.",
+  "visibility": {
+    "public": false,
+    "lan": false
+  },
+  "require_user_verification": false,
+  "allow_commands": "admins-only",
+  "auto_pause": false,
+  "auto_pause_when_players_connect": false,
+  "autosave_interval": 0
+}

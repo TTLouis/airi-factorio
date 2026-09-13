@@ -4,9 +4,11 @@ set -Eeuo pipefail
 FACTORIO_BIN="${FACTORIO_ROOT:-/opt/factorio}/bin/x64/factorio"
 SAVE="${TEST_ROOT:-/test}/saves/npc-test.zip"
 RESULTS="${TEST_ROOT:-/test}/results"
+SERVER_SETTINGS="${TEST_ROOT:-/test}/fixtures/server-settings.json"
 RCON_PORT="${RCON_PORT:-27015}"
 RCON_PASSWORD="${RCON_PASSWORD:-airi-test}"
 FACTORIO_PID=""
+export PYTHONUNBUFFERED=1
 
 mkdir -p "$(dirname "$SAVE")" "$RESULTS"
 rm -f "$SAVE" "$RESULTS"/*
@@ -29,10 +31,14 @@ cleanup() {
 finish() {
   local code=$?
   trap - EXIT
+  cleanup
   if (( code != 0 )); then
     printf '\n[npc-test] FAILED with exit code %s\n' "$code" >&2
+    print_file "$SERVER_SETTINGS"
+    print_file "$RESULTS/runner-unit.log"
     print_file "$RESULTS/create.log"
     print_file "$RESULTS/factorio.log"
+    print_file "$RESULTS/simulation-clock.json"
     print_file "$RESULTS/runner-error.txt"
     print_file "$RESULTS/runner-transcript.json"
     print_file "$RESULTS/runner.json"
@@ -40,10 +46,14 @@ finish() {
     print_file "$RESULTS/placement-transfer-transcript.json"
     print_file "$RESULTS/placement-transfer.json"
   fi
-  cleanup
   exit "$code"
 }
 trap finish EXIT
+
+printf '[npc-test] Running deterministic Python runner regressions...\n'
+python3 -m unittest discover -s "${TEST_ROOT:-/test}/runner" -p 'test_*.py' -v \
+  >"$RESULTS/runner-unit.log" 2>&1
+cat "$RESULTS/runner-unit.log"
 
 printf '[npc-test] Creating deterministic Factorio save...\n'
 "$FACTORIO_BIN" --create "$SAVE" \
@@ -51,8 +61,9 @@ printf '[npc-test] Creating deterministic Factorio save...\n'
   >"$RESULTS/create.log" 2>&1
 printf '[npc-test] Save created successfully.\n'
 
-printf '[npc-test] Starting Factorio headless server with RCON...\n'
+printf '[npc-test] Starting Factorio with auto_pause=false and private server settings...\n'
 "$FACTORIO_BIN" --start-server "$SAVE" \
+  --server-settings "$SERVER_SETTINGS" \
   --rcon-port "$RCON_PORT" \
   --rcon-password "$RCON_PASSWORD" \
   >"$RESULTS/factorio.log" 2>&1 &
@@ -66,7 +77,7 @@ if ! kill -0 "$FACTORIO_PID" 2>/dev/null; then
   exit 1
 fi
 
-printf '[npc-test] Factorio started (pid=%s); running zero-player NPC smoke...\n' "$FACTORIO_PID"
+printf '[npc-test] Factorio started (pid=%s); checking clock and core NPC actions...\n' "$FACTORIO_PID"
 python3 "${TEST_ROOT:-/test}/runner/run.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \

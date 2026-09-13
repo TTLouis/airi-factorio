@@ -7,6 +7,8 @@ import sys
 import time
 from pathlib import Path
 
+from runtime import operation_status_command, wait_until_idle
+
 SERVERDATA_RESPONSE_VALUE = 0
 SERVERDATA_EXECCOMMAND = 2
 SERVERDATA_AUTH_RESPONSE = 2
@@ -101,19 +103,22 @@ def assert_true(condition: bool, message: str) -> None:
 
 def run(client: Rcon, results: Path) -> None:
     transcript: list[dict[str, object]] = []
+    results.mkdir(parents=True, exist_ok=True)
     transcript_path = results / 'placement-transfer-transcript.json'
+    started = time.monotonic()
 
     def command(value: str) -> str:
         response = client.command(value)
-        transcript.append({'command': value, 'response': response})
+        transcript.append({
+            'command': value,
+            'response': response,
+            'elapsed_seconds': round(time.monotonic() - started, 3),
+        })
         transcript_path.write_text(json.dumps({'transcript': transcript}, indent=2))
         return response
 
     def operation_status(context: str) -> dict:
-        return decode_json(
-            command(lua_json(remote_call('autorio_operations', 'status'))),
-            context,
-        )
+        return decode_json(command(operation_status_command()), context)
 
     def actor_status(context: str) -> dict:
         return decode_json(
@@ -122,14 +127,7 @@ def run(client: Rcon, results: Path) -> None:
         )
 
     def wait_for_idle(context: str, timeout: float = 10.0) -> dict:
-        deadline = time.monotonic() + timeout
-        last_status = None
-        while time.monotonic() < deadline:
-            last_status = operation_status(context)
-            if last_status['task_state'] == 'idle':
-                return last_status
-            time.sleep(0.05)
-        raise AssertionError(f'{context} did not return to idle: {last_status!r}')
+        return wait_until_idle(operation_status, context, timeout)
 
     initial_status = actor_status('autorio_actor.status before placement')
     assert_true(initial_status['mode'] == 'npc', f'NPC mode was lost: {initial_status!r}')

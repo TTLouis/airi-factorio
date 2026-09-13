@@ -7,6 +7,8 @@ import sys
 import time
 from pathlib import Path
 
+from runtime import operation_status_command, verify_free_running_ticks, wait_until_idle
+
 SERVERDATA_RESPONSE_VALUE = 0
 SERVERDATA_EXECCOMMAND = 2
 SERVERDATA_AUTH_RESPONSE = 2
@@ -122,15 +124,20 @@ def run(client: Rcon, results: Path) -> None:
     transcript: list[dict[str, object]] = []
     results.mkdir(parents=True, exist_ok=True)
     transcript_path = results / 'runner-transcript.json'
+    started = time.monotonic()
 
     def command(value: str) -> str:
         response = client.command(value)
-        transcript.append({'command': value, 'response': response})
+        transcript.append({
+            'command': value,
+            'response': response,
+            'elapsed_seconds': round(time.monotonic() - started, 3),
+        })
         transcript_path.write_text(json.dumps({'transcript': transcript}, indent=2))
         return response
 
     def operation_status(context: str) -> dict:
-        response = command(lua_json(remote_call('autorio_operations', 'status')))
+        response = command(operation_status_command())
         return decode_json(response, context)
 
     def actor_status(context: str) -> dict:
@@ -138,14 +145,7 @@ def run(client: Rcon, results: Path) -> None:
         return decode_json(response, context)
 
     def wait_for_idle(context: str, timeout: float = 10.0) -> dict:
-        deadline = time.monotonic() + timeout
-        last_status = None
-        while time.monotonic() < deadline:
-            last_status = operation_status(context)
-            if last_status['task_state'] == 'idle':
-                return last_status
-            time.sleep(0.05)
-        raise AssertionError(f'{context} did not return to idle: {last_status!r}')
+        return wait_until_idle(operation_status, context, timeout)
 
     # Factorio 2.0 requires the first Lua console command to be repeated before
     # it disables achievements and actually executes Lua. RCON receives an empty
@@ -160,6 +160,10 @@ def run(client: Rcon, results: Path) -> None:
         probe_response == 'AIRI_RCON_READY',
         f'Factorio Lua console handshake failed over RCON: {probe_response!r}',
     )
+
+    # Prove this is a continuously ticking zero-player world, not a paused
+    # server taking a single simulation step for each RCON status request.
+    simulation_clock = verify_free_running_ticks(command, results)
 
     response = command(lua_json(remote_call('autorio_actor', 'set_mode', repr('npc'))))
     set_mode = decode_json(response, 'autorio_actor.set_mode')
@@ -232,9 +236,8 @@ def run(client: Rcon, results: Path) -> None:
     )
 
     # NPC-native mining: remove the movement target and place a single resource
-    # entity inside AIRI's reach. The operation must complete without any
-    # LuaPlayer mining events, and both the resource amount and actor inventory
-    # must prove that three real mining cycles occurred.
+    # entity inside AIRI's reach. Capture its actual engine position: resources
+    # may snap to tile centers, so the requested position is not a safe lookup.
     mining_fixture = (
         "/silent-command "
         "local s=game.surfaces[1]; "
@@ -242,12 +245,14 @@ def run(client: Rcon, results: Path) -> None:
         "local a=s.find_entities_filtered{name='character'}[1]; "
         "local ore=s.create_entity{name='iron-ore',position={x=10,y=0},amount=20}; "
         "rcon.print(helpers.table_to_json({created=ore~=nil,amount=ore and ore.amount or nil,"
+        "position=ore and ore.position or nil,"
         "inventory=a and a.get_item_count('iron-ore') or nil,actor_position=a and a.position or nil}))"
     )
     mining_before = decode_json(command(mining_fixture), 'mining fixture setup')
     assert_true(mining_before['created'] is True, f'could not create deterministic ore target: {mining_before!r}')
+    ore_position = mining_before['position']
     assert_true(
-        squared_distance(mining_before['actor_position'], {'x': 10, 'y': 0}) <= 16.0,
+        squared_distance(mining_before['actor_position'], ore_position) <= 16.0,
         f'NPC is outside deterministic mining reach setup: {mining_before!r}',
     )
 
@@ -261,18 +266,22 @@ def run(client: Rcon, results: Path) -> None:
         "/silent-command "
         "local s=game.surfaces[1]; "
         "local a=s.find_entities_filtered{name='character'}[1]; "
-        "local ore=s.find_entities_filtered{name='iron-ore',position={x=10,y=0},radius=0.25}[1]; "
-        "rcon.print(helpers.table_to_json({amount=ore and ore.amount or 0,"
+        "local ore=s.find_entities_filtered{name='iron-ore',"
+        f"position={{x={ore_position['x']},y={ore_position['y']}}},radius=0.25}}[1]; "
+        "rcon.print(helpers.table_to_json({found=ore~=nil,amount=ore and ore.amount or 0,"
         "inventory=a and a.get_item_count('iron-ore') or 0,mining=a and a.mining_state.mining or false}))"
     )
     mining_after = decode_json(command(mining_inspect), 'mining result inspection')
+    # A missing target must not be accepted as successful depletion: this
+    # deterministic 20-unit patch must still exist after exactly three cycles.
+    assert_true(mining_after['found'] is True, f'deterministic ore target disappeared: {mining_after!r}')
     assert_true(
-        mining_after['inventory'] >= mining_before['inventory'] + 3,
-        f'NPC mining did not add three iron ore to inventory: before={mining_before!r}, after={mining_after!r}',
+        mining_after['inventory'] == mining_before['inventory'] + 3,
+        f'NPC mining did not add exactly three iron ore to inventory: before={mining_before!r}, after={mining_after!r}',
     )
     assert_true(
-        mining_after['amount'] <= mining_before['amount'] - 3,
-        f'NPC mining did not consume three resource units: before={mining_before!r}, after={mining_after!r}',
+        mining_after['amount'] == mining_before['amount'] - 3,
+        f'NPC mining did not consume exactly three resource units: before={mining_before!r}, after={mining_after!r}',
     )
     assert_true(mining_after['mining'] is False, f'NPC remained in mining state after task completion: {mining_after!r}')
 
@@ -322,6 +331,7 @@ def run(client: Rcon, results: Path) -> None:
     (results / 'runner.json').write_text(json.dumps({
         'status': 'pass',
         'actor_id': first_actor_id,
+        'simulation_clock': simulation_clock,
         'initial_position': initial_position,
         'movement_target': target_position,
         'final_position': final_status['actor']['position'],
