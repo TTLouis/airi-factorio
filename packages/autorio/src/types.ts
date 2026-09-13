@@ -35,8 +35,12 @@ export interface PlayerParametersWalkingDirect {
 export interface PlayerParametersMineEntity {
   type: TaskStates.MINING
   entity_name: string
+  /** Remaining mining cycles requested by the operation. */
   count: number
+  /** Current target position while a mining cycle is active. */
   position?: MapPositionStruct
+  /** Resource amount seen on the previous tick for standalone-NPC polling. */
+  last_target_amount?: number
 }
 
 export interface PlayerParametersPlaceEntity {
@@ -56,8 +60,13 @@ export interface PlayerParametersMoveItems {
 export interface PlayerParametersCraftItem {
   type: TaskStates.CRAFTING
   item_name: string
+  /** Requested number of recipe crafts. */
   count: number
   crafted: number
+  /** Number of recipe crafts actually accepted by begin_crafting. */
+  started?: number
+  /** Matching recipe crafts that were already queued before this task began. */
+  queue_count_before?: number
 }
 
 export interface PlayerParametersAttackNearestEnemy {
