@@ -34,6 +34,7 @@ finish() {
     print_file "$RESULTS/create.log"
     print_file "$RESULTS/factorio.log"
     print_file "$RESULTS/runner-error.txt"
+    print_file "$RESULTS/runner-transcript.json"
     print_file "$RESULTS/runner.json"
   fi
   cleanup
