@@ -147,13 +147,17 @@ export function create_tools_remote_interface() {
           continue
         }
 
-        const items: Array<{ name: string, count: number }> = []
-        for (const [item_name, count] of pairs(inventory.get_contents())) {
+        const items: Array<{ name: string, quality: string, count: number }> = []
+        for (const item of inventory.get_contents()) {
           if (returned_items >= MAX_ENTITY_INVENTORY_ITEMS) {
             inventory_items_truncated = true
             break
           }
-          items.push({ name: item_name, count })
+          items.push({
+            name: item.name,
+            quality: item.quality,
+            count: item.count,
+          })
           returned_items += 1
         }
 
