@@ -38,8 +38,9 @@ the top of `install.sh`. Instead:
 4. Commit `payload-src/installer.sh` together with the regenerated
    `install.sh` and `egg-airi-factorio-server.json`.
 
-`payload-src/installer.sh` itself downloads a pinned upstream AIRI source
-revision (`AIRI_REF` near its top) and Node at install time — it's the
+`payload-src/installer.sh` itself downloads a pinned AIRI source revision
+from this fork (`TTLouis/airi-factorio`, `AIRI_REF` near its top) and Node
+at install time — it's the
 installer for the Node supervisor + Factorio headless binary, structured as
 a transactional bootstrap: portable Node → pinned source → generated
 supervisor/agent modules written out via heredocs → smoke tests → release

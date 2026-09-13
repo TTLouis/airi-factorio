@@ -7,7 +7,7 @@ umask 022
 SERVER_DIR="${AIRI_INSTALL_ROOT:-/mnt/server}"
 NODE_VERSION="v24.21.0"
 PNPM_VERSION="10.30.1"
-AIRI_REF="cf2b39dd7f3fa3d85bd1f4471b7ac22b9505ef16"
+AIRI_REF="78ef2acf788189981d82aa9e15e9c33b3dedb29c"
 REVISION="2026-09-13.9"
 WORK=""
 log(){ printf '[AIRI install] %s\n' "$*"; }
@@ -66,7 +66,7 @@ node "$APP/node/lib/node_modules/npm/bin/npm-cli.js" install --global --prefix "
 export PATH="$WORK/build-tools/bin:$PATH"
 [[ "$(pnpm --version)" == "$PNPM_VERSION" ]] || fail 'pnpm verification failed'
 log 'Downloading pinned AIRI source'
-fetch "https://codeload.github.com/moeru-ai/airi-factorio/tar.gz/$AIRI_REF" "$WORK/airi-source.tar.gz"
+fetch "https://codeload.github.com/TTLouis/airi-factorio/tar.gz/$AIRI_REF" "$WORK/airi-source.tar.gz"
 mkdir -p "$WORK/source"
 tar -xzf "$WORK/airi-source.tar.gz" --strip-components=1 --no-same-owner -C "$WORK/source"
 [[ -f "$WORK/source/pnpm-lock.yaml" ]] || fail 'Source lockfile missing'
