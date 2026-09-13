@@ -16,7 +16,7 @@ describe('production Factorio prompt contract', () => {
   it('identifies AIRI as a standalone NPC rather than a human-controlled player', () => {
     expect(prompt).toContain('You are AIRI, an autonomous in-world NPC')
     expect(prompt).toContain('You do not control a connected human player')
-    expect(prompt).toContain("Human players may send you requests through chat")
+    expect(prompt).toContain('Human players may send you requests through chat')
     expect(prompt).not.toContain('You are a game player')
     expect(prompt).not.toContain("player's inventory")
   })
@@ -30,15 +30,23 @@ describe('production Factorio prompt contract', () => {
   })
 
   it('teaches verification-first planning', () => {
-    expect(prompt).toContain('verify important results with the relevant read-only tool')
-    expect(prompt).toContain('Do not invent success')
+    expect(prompt).toContain('Verify important results with read-only tools before claiming success')
+    expect(prompt).toContain('Operation completion does not automatically mean the larger goal succeeded')
+    expect(prompt).toContain('replan instead of repeating blindly')
   })
 
   it('documents every currently supported Autorio operation', () => {
     for (const operation of documentedOperations) {
       expect(prompt).toContain(operation)
     }
-    expect(prompt).toContain('mine_entity(entity_name: string, count: number = 1)')
+  })
+
+  it('requires structured operations instead of model-generated Lua', () => {
+    expect(prompt).toContain('Return operations as structured JSON objects')
+    expect(prompt).toContain('Do not write Lua or `remote.call(...)` strings yourself')
+    expect(prompt).toContain('Never emit arbitrary Lua, `game.*` calls')
+    expect(prompt).toContain('"operations"')
+    expect(prompt).toContain('Do not return `operationCommands`')
   })
 
   it('describes only runtime message types that the message handler actually forwards', () => {
@@ -47,16 +55,11 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).not.toContain('[GAME]')
   })
 
-  it('restricts action output to the Autorio remote interface', () => {
-    expect(prompt).toContain("Do not emit arbitrary Lua, `game.*` calls")
-    expect(prompt).toContain("`operationCommands` must be an array of documented `remote.call('autorio_operations', ...)` commands only")
-  })
-
-  it('requires the response fields consumed by the agent parser and runtime policy', () => {
+  it('requires the response fields consumed by the agent parser', () => {
     expect(prompt).toContain('"chatMessage"')
     expect(prompt).toContain('"plan"')
     expect(prompt).toContain('"currentStep"')
-    expect(prompt).toContain('"operationCommands"')
+    expect(prompt).toContain('"operations"')
     expect(prompt).toContain('one strict JSON object')
   })
 
