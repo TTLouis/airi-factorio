@@ -67,7 +67,7 @@ function log_actor_info() {
           health: character.health,
           health_max: character.max_health,
           mining_progress: character.mining_progress,
-          mining_target: character.mining_target,
+          mining_state: actor.get_mining_state(),
         }
       : undefined,
   }
@@ -257,7 +257,6 @@ export function get_direction(start_position: MapPositionStruct, end_position: M
   }
   return defines.direction.southeast
 }
-
 export function get_nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
   let min_distance = math.huge
   let nearest_entity: LuaEntity | null = null
