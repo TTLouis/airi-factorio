@@ -30,7 +30,7 @@ COPY --from=build /src/packages/autorio/dist /opt/factorio/mods/autorio_0.1.0
 COPY tests/factorio/runner /test/runner
 COPY tests/factorio/fixtures /test/fixtures
 COPY tests/factorio/run.sh /test/run.sh
-RUN chmod +x /test/run.sh
+RUN sed -i 's/\r$//' /test/run.sh && chmod +x /test/run.sh
 
 WORKDIR /test
 ENTRYPOINT ["/test/run.sh"]
