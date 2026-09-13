@@ -11,7 +11,7 @@ function baseResponse(overrides: Record<string, unknown> = {}) {
 }
 
 describe('LLM structured operation compatibility', () => {
-  it('keeps the legacy operationCommands response working', () => {
+  it('keeps approved legacy operationCommands responses working', () => {
     const operationCommands = ["remote.call('autorio_operations', 'wait', 3)"]
     const parsed = parseLLMMessage(JSON.stringify(baseResponse({ operationCommands })))
 
@@ -19,7 +19,13 @@ describe('LLM structured operation compatibility', () => {
     expect(parsed.operations).toBeUndefined()
   })
 
-  it('validates and renders structured operations into the legacy execution path', () => {
+  it('rejects arbitrary Lua in the legacy compatibility field', () => {
+    expect(() => parseLLMMessage(JSON.stringify(baseResponse({
+      operationCommands: ["remote.call('autorio_operations', 'wait', 3); game.clear()"],
+    })))).toThrow(/approved Autorio call/)
+  })
+
+  it('validates and renders structured operations into the existing execution path', () => {
     const parsed = parseLLMMessage(JSON.stringify(baseResponse({
       operations: [
         { name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 50 } },
@@ -54,5 +60,12 @@ describe('LLM structured operation compatibility', () => {
         { name: 'game.clear', args: {} },
       ],
     })))).toThrow()
+  })
+
+  it('rejects a currentStep that does not point at an existing plan step', () => {
+    expect(() => parseLLMMessage(JSON.stringify(baseResponse({
+      currentStep: 2,
+      operations: [],
+    })))).toThrow(/existing plan step/)
   })
 })
