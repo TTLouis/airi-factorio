@@ -126,6 +126,8 @@ export class StandaloneCharacterActor implements ControlledActor {
   }
 
   status_snapshot(): ActorStatusSnapshot {
+    const selected = this.character_entity.selected
+
     return {
       kind: 'standalone_character',
       valid: this.character_entity.valid,
@@ -133,6 +135,14 @@ export class StandaloneCharacterActor implements ControlledActor {
       position: this.character_entity.position,
       has_character: true,
       actor_id: this.character_entity.unit_number,
+      selected_entity: selected
+        ? {
+            name: selected.name,
+            position: selected.position,
+          }
+        : undefined,
+      mining_state: this.character_entity.mining_state,
+      mining_progress: this.character_entity.mining_progress,
     }
   }
 }
