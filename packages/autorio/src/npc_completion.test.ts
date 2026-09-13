@@ -33,15 +33,19 @@ function configureNpcWorld(resource?: Record<string, any>) {
     type: 'character',
     position: { x: 0, y: 0 },
     force,
+    selected: undefined,
     mining_state: { mining: false, position: { x: 0, y: 0 } },
     walking_state: { walking: false, direction: 'north' },
     shooting_state: { state: 'not_shooting', position: { x: 0, y: 0 } },
     crafting_queue: [],
-    update_selected_entity: vi.fn(),
     get_main_inventory: vi.fn(() => ({
       get_item_count: vi.fn(() => 0),
     })),
   }
+
+  character.update_selected_entity = vi.fn(() => {
+    character.selected = resource?.valid === false ? undefined : resource
+  })
 
   character.begin_crafting = vi.fn(({ count, recipe }: { count: number, recipe: string }) => {
     character.crafting_queue = [{ index: 1, recipe, count, prerequisite: false }]
@@ -88,7 +92,7 @@ function configureNpcWorld(resource?: Record<string, any>) {
 }
 
 describe('standalone NPC completion polling', () => {
-  it('counts real resource depletion and keeps mining across multiple cycles without LuaPlayer events', () => {
+  it('counts real resource depletion and keeps mining across selection loss without LuaPlayer events', () => {
     const resource: Record<string, any> = {
       valid: true,
       name: 'iron-ore',
@@ -107,18 +111,22 @@ describe('standalone NPC completion polling', () => {
 
     on_tick({})
     expect(character.update_selected_entity).toHaveBeenCalledWith(resource.position)
+    expect(character.selected).toBe(resource)
     expect(character.mining_state.mining).toBe(true)
     expect(task_manager.player_state.parameters_mine_entity?.count).toBe(2)
 
     const selections_after_start = character.update_selected_entity.mock.calls.length
     resource.amount = 9
+    character.selected = undefined
     on_tick({})
     expect(task_manager.player_state.parameters_mine_entity?.count).toBe(1)
     expect(task_manager.player_state.task_state).toBe(TaskStates.MINING)
     expect(character.mining_state.mining).toBe(true)
+    expect(character.selected).toBe(resource)
     expect(character.update_selected_entity.mock.calls.length).toBeGreaterThan(selections_after_start)
 
     resource.amount = 8
+    character.selected = undefined
     on_tick({})
     expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
     expect(character.mining_state.mining).toBe(false)
