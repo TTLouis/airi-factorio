@@ -42,7 +42,7 @@ describe('production Factorio prompt contract', () => {
 
   it('restricts action output to the Autorio remote interface', () => {
     expect(prompt).toContain("Do not emit arbitrary Lua, `game.*` calls")
-    expect(prompt).toContain("operationCommands must be an array of documented `remote.call('autorio_operations', ...)` commands only")
+    expect(prompt).toContain("`operationCommands` must be an array of documented `remote.call('autorio_operations', ...)` commands only")
   })
 
   it('requires the response fields consumed by the agent parser and runtime policy', () => {
