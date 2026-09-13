@@ -59,12 +59,15 @@ The source agent exposes bounded read tools:
 - `getInventoryItems()`
 - `getRecipe(item)`
 - `getNearbyEntities({ radius?, name?, type?, limit? })`
+- `getEntityStatus({ name, radius? })`
 
 `getNearbyEntities` is bounded to a 64-tile radius and 100 returned entities. It supports exact prototype-name and entity-type filters and returns compact summaries rather than raw Lua objects or a whole-map dump.
 
-The production prompt tells AIRI to observe the local area before assuming that a resource, chest, machine, or other world target exists nearby.
+`getEntityStatus` is bounded to a 32-tile radius. It selects the nearest local entity with the requested exact prototype name and returns compact identity/position data plus bounded inventory summaries: at most eight entity inventories and at most fifty returned item records total. Inventory contents use Factorio 2.x `{name, quality, count}` records.
 
-Recipe and nearby-entity tool inputs are validated and Lua-escaped before RCON execution.
+The production prompt tells AIRI to observe the local area before assuming that a resource, chest, machine, or other world target exists nearby, and to verify placement/item-transfer results before depending on them.
+
+Recipe, nearby-entity, and entity-status tool inputs are validated and Lua-escaped before RCON execution.
 
 ### Structured operations
 
@@ -128,7 +131,7 @@ The response parser validates:
 
 Crafting status includes the requested/started craft count and compact queued-craft count. Mining status includes remaining requested cycles, current target position, and the last observed resource amount.
 
-### NPC-native mining / pass 3B — implemented, awaiting real-engine gate
+### NPC-native mining / pass 3B — implemented, awaiting user real-engine gate
 
 Standalone mining no longer depends on `on_player_mined_entity` for completion.
 
@@ -141,19 +144,48 @@ The NPC path now:
 5. decrements the requested remaining count;
 6. stops mining and advances the task queue when the requested count is satisfied.
 
+The real-engine failure captured on 2026-09-13 showed the first ore unit completing while the standalone character remained selected on the same resource. The restart detector incorrectly read `LuaEntity.mining_progress`, which is not the standalone character's mining-progress field. `StandaloneCharacterActor` now uses Factorio's `character_mining_progress`, allowing the controller to recognize the zero-progress boundary and restart the next requested mining cycle even when selection remains on the resource.
+
+Regression coverage now includes both real-engine behaviors:
+
+- selection remains on the resource while `character_mining_progress` resets;
+- Factorio clears selection after a mining cycle.
+
 Connected-player mining remains event-driven. Its previous final-count off-by-one was also corrected so a one-count task finishes on the first successful mining event rather than waiting for an extra event.
 
-The Docker runner now creates deterministic `iron-ore` within AIRI's reach, requests three mining cycles, and verifies both resource depletion and AIRI inventory growth before accepting idle completion.
+The Docker runner creates deterministic `iron-ore` within AIRI's reach, requests three mining cycles, and verifies both resource depletion and AIRI inventory growth before accepting idle completion.
 
-### NPC-native crafting / pass 3C — implemented, awaiting real-engine gate
+### NPC-native crafting / pass 3C — implemented, awaiting user real-engine gate
 
 Standalone crafting no longer depends on `on_player_crafted_item` for completion.
 
-`ControlledActor.begin_crafting` now returns the number of crafts Factorio actually queued, and actors expose a bounded count of queued crafts for a recipe. The task manager records the pre-task queue baseline and the number actually started. The standalone on-tick path then polls its own crafting queue and completes the task when AIRI's newly queued crafts drain.
+`ControlledActor.begin_crafting` returns the number of crafts Factorio actually queued, and actors expose a bounded count of queued crafts for a recipe. The task manager records the pre-task queue baseline and the number actually started. The standalone on-tick path then polls its own crafting queue and completes the task when AIRI's newly queued crafts drain.
 
 Connected players retain their existing event-driven crafting completion path.
 
-The Docker runner now seeds four deterministic iron plates, requests two `iron-gear-wheel` crafts, and verifies output inventory, ingredient consumption, an empty crafting queue, idle task state, stable actor identity, and zero connected players.
+The Docker runner seeds four deterministic iron plates, requests two `iron-gear-wheel` crafts, and verifies output inventory, ingredient consumption, an empty crafting queue, idle task state, stable actor identity, and zero connected players.
+
+### Placement + inventory transfer — acceptance added, awaiting user real-engine gate
+
+The next documented gameplay slice is now included in the authoritative Docker path.
+
+After the core wait → movement → mining → crafting runner passes, a second zero-player runner:
+
+1. keeps the already-running Factorio world and the same standalone AIRI actor;
+2. seeds one `wooden-chest` and five `iron-plate` items into AIRI's own inventory as deterministic test setup;
+3. calls the normal `place_entity('wooden-chest')` Autorio operation;
+4. verifies a nearby player-force wooden chest exists and exactly one chest item was consumed;
+5. calls `move_items('iron-plate', 'wooden-chest', 3, true)`;
+6. verifies three plates leave AIRI and enter the placed chest;
+7. calls `move_items('iron-plate', 'wooden-chest', 2, false)`;
+8. verifies two plates return to AIRI and leave the chest;
+9. verifies the same `actor_id` survives the sequence and connected-player count remains zero.
+
+Expected success prefix for this stage:
+
+```text
+PASS: zero-player NPC completed placement + inventory transfer
+```
 
 ### Docker validation scope
 
@@ -165,31 +197,42 @@ The Docker build now runs, in order:
 4. Autorio unit tests, including NPC mining/crafting completion regressions;
 5. Autorio TSTL typecheck;
 6. Autorio mod build;
-7. real Factorio 2.0.77 runtime integration.
+7. real Factorio 2.0.77 wait + movement + mining + crafting integration;
+8. real Factorio placement + bidirectional inventory-transfer integration in the same zero-player world.
 
-This makes the Docker path the authoritative validation route without requiring host pnpm/node setup.
+The Docker path remains the authoritative validation route without requiring host pnpm/node setup. The user is performing the real-engine Docker runs for this branch; implementation status should not be relabeled as proven until those results are reported.
 
 ## Current runtime gate
 
-The next combined Docker run must preserve the already-proven wait + movement behavior and additionally prove:
+The next user-run combined Docker gate should prove all of the following in one zero-player session:
 
-1. standalone character mining actually removes at least three units from the deterministic iron resource;
-2. at least three iron ore enter AIRI's own inventory;
-3. the mining task returns to idle and mining state is stopped;
-4. standalone hand crafting consumes four seeded iron plates;
-5. at least two iron gears enter AIRI's own inventory;
+1. wait returns to idle;
+2. deterministic movement reaches the target area;
+3. standalone mining consumes at least three resource units and adds at least three ore to AIRI's own inventory;
+4. the mining task returns to idle and mining state is stopped;
+5. standalone crafting consumes four seeded iron plates and creates at least two iron gears;
 6. AIRI's crafting queue drains and the crafting task returns to idle;
-7. the same `actor_id` survives the complete wait → movement → mining → crafting sequence;
-8. connected-player count remains zero.
+7. AIRI places a wooden chest from its own inventory;
+8. AIRI transfers three iron plates into that chest;
+9. AIRI retrieves two iron plates from that chest;
+10. the same `actor_id` survives the complete wait → movement → mining → crafting → placement → transfer sequence;
+11. connected-player count remains zero.
 
-Expected success prefix:
+Expected success lines include:
 
 ```text
 PASS: zero-player NPC completed wait + movement + mining + crafting
+PASS: zero-player NPC completed placement + inventory transfer
 ```
 
 ## After this gate
 
-The next useful batch is deterministic placement + inventory transfer, then research/combat and persistence/death recovery. In parallel, the agent harness can add deterministic structured-agent scenarios that combine `getNearbyEntities`, inventory/recipe observation, structured operations, and verification/replanning.
+Next implementation targets remain aligned with the roadmap:
+
+1. research/combat acceptance scenarios;
+2. save/restart persistence and same-NPC reacquisition;
+3. death detection/replacement actor recovery and a post-recovery task;
+4. deterministic structured-agent scenarios combining observation, structured operations, verification, and replanning;
+5. only after the single NPC is persistent/reliable, begin swarm/message-board architecture.
 
 Pterodactyl migration remains separate from this core NPC/harness work.
