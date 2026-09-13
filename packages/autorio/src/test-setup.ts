@@ -25,6 +25,11 @@ import { event_handlers } from './test-event-registry'
   print: () => {},
 }
 
+// Factorio 2.0's per-save persistence table. Real shape is declared locally
+// by whichever file uses it (see standalone_character_actor.ts); tests just
+// need the binding to exist so `storage.foo` doesn't throw ReferenceError.
+;(globalThis as any).storage = {}
+
 ;(globalThis as any).defines = {
   events: {
     on_selected_entity_changed: 'on_selected_entity_changed',
