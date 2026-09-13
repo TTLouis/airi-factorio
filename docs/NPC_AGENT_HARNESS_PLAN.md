@@ -592,3 +592,223 @@ implementation
 → real Factorio integration scenario
 → only then build the next behavior on top
 ```
+
+---
+
+# 13. Production-planning harness
+
+**Status:** Planned requirements. Not implemented. No engine validation is claimed.
+
+## Purpose and integration
+
+Make a smaller, cheaper LLM precise by providing authoritative inputs, deterministic calculations, bounded design choices, and explicit failure reasons. Do not try to reproduce a long reasoning transcript or teach one memorized green-circuit blueprint.
+
+This appended section extends the existing persistent-plan, runtime-context, observation, verification, and testing sections rather than replacing their requirements. Preserve the current single-NPC real-engine release gates and the separation from deployment work. Planning-only fixtures can be developed independently; world-changing construction must wait for the underlying actor capabilities and runtime gates. Swarm execution remains later work.
+
+The general rule is:
+
+> Expose the whole relevant dependency chain. Let the LLM propose boundaries and trade-offs. Calculate requirements and validate every material connection in code. Execute only an authorized revision. Call the project successful only when its specified delivered output is measured.
+
+All tool names and schemas below are proposed interfaces, not claims about current functionality.
+
+## 13.1 Responsibilities and decision records
+
+| Component | Responsibility |
+|---|---|
+| Factorio adapter and NPC controller | Read version-appropriate game state, enforce physical actions, return stable entity references and action receipts. |
+| Deterministic planning services | Resolve recipes, calculate material balances, assess supply and transport constraints, generate/check layout candidates, normalize telemetry. |
+| LLM | Interpret the goal, propose project scope, compare feasible alternatives, request missing evidence, and choose bounded recovery. |
+| Project executor | Own persistent state, reservations, approved revisions, cancellation, idempotent actions, and verification. |
+
+Store a short decision record: target, evidence references, declared assumptions, calculation result IDs, considered options, chosen option, reason, outstanding blockers, and next verification. Do not request or store private chain-of-thought. A model explanation is not evidence that an action happened.
+
+Do not advertise unimplemented actions to the model. A capability manifest must distinguish available observations, planning-only tools, and executable operations. An unavailable capability produces an explicit blocker, not invented Lua or a fabricated tool call.
+
+## 13.2 Goal contract: distinguish size from scope
+
+A project must specify product, quality, required delivered rate, output destination, allowed construction area, accessible inputs, actor/force/surface, and modification permissions. It must also specify the acceptance window and any minimum safety margin. Resolve material ambiguities through observations or declared user-approved defaults; ask only when a consequential choice cannot be resolved that way.
+
+**Size** describes how much the block should produce. Prefer an output rate. Support belt-sized, input-limited, area-limited, and machine-count-limited requests by translating them into rates and explicit constraints. A belt target must identify product, tier, lane allocation, stacking assumptions, and utilization.
+
+**Scope** describes which production stages and infrastructure changes the project owns. Model imports, internal transformations, and exports independently from size. Upstream visibility is not authorization to build upstream.
+
+Use three levels: a tightly connected production **cell**, a repeatable **block** with defined input/output connections, and a **project** that may coordinate multiple blocks.
+
+Stop extending upstream only when the required supply is identified, sufficiently fresh, reachable, available after other commitments, and deliverable at the required rate over the stated operating horizon. Otherwise present a bounded expansion, another source, a smaller target, or an unresolved dependency. Do not infer which upstream component needs expansion merely from an input deficit.
+
+Keep construction materials, startup inventory/fuel, and continuing operating demand in separate accounts. Stored items are not a sustainable flow rate. Research, demolition, rerouting existing production, and supply reallocation are separate scope changes when not already authorized.
+
+## 13.3 Required information: chain context plus effective capabilities
+
+The harness maintains a relevant recipe graph from raw inputs through the requested products, including alternative routes, shared intermediates, cycles, and byproducts where applicable. Overlay the observed factory network and competing consumers. A recipe dependency does not prove that a machine or transport connection exists.
+
+Provide an end-to-end compact summary before selecting the construction boundary, not just the dependencies inside a boundary the harness has silently selected. Fetch detailed subgraphs and entity data on demand. Mark omitted, unsurveyed, unsupported, and truncated information explicitly. Apply the configured observation policy; do not leak unexplored-world state merely because the server API can read it.
+
+| Information group | Required fields or distinctions |
+|---|---|
+| Goal and authority | Target, quality, destination, area, resource budget, allowed modifications, plan revision. |
+| Game context | Runtime version, loaded-content fingerprint, relevant research/capability revision, force and surface. |
+| Recipes | Recipe IDs separate from product IDs; typed inputs/outputs; amounts; duration; availability; compatible machines; relevant productivity and yield rules. |
+| Effective machines | Selected entity/quality, speed and productivity under actual settings, relevant modules/beacons, footprint, power/fuel requirements. |
+| Inserter connections | Prototype/quality, effective carrying settings and research, pickup/drop geometry, source/destination kind, filters, transfer profile and evidence. |
+| Belt connections | Segment and lane, tier/speed, assigned products, stacking permission, actual loading/stacking arrangement, guaranteed or observed capacity. |
+| Supply and demand | Installed capacity, measured production/consumption, existing commitments, storage trend, and estimated additional deliverable supply. |
+| Geometry and execution | Exact targets, terrain/occupancy, proposed footprints, utility connections, actor reach/access, physical inventory, available action capabilities. |
+
+Every material rate uses explicit units, such as items per simulation second or fluid units per simulation second. Never compare per-minute figures directly with per-second figures. Do not combine different qualities into interchangeable supply without an explicit rule.
+
+Label each value as an engine read, measurement, calculation, estimate, fixture value, or unknown. Attach observation tick/window, source scope, assumptions, and dependency revisions. Use `null` or an explicit unknown state instead of guessing zero or silently applying vanilla defaults.
+
+Invalidate affected calculations after changes to research, equipment, recipes, routes, actor identity, or other dependencies. Re-check mutation preconditions at execution time even when the plan was valid earlier.
+
+## 13.4 Deterministic design rules
+
+### A. Calculate production and material balance
+
+For the simple, deterministic, no-productivity fixture class:
+
+`crafts_per_second = effective_crafting_speed / recipe_duration_seconds`
+
+`product_rate = crafts_per_second * product_amount_per_craft`
+
+`ingredient_rate = crafts_per_second * ingredient_amount_per_craft`
+
+Solve demand backward through the selected recipe graph, then aggregate shared inputs and assign forward flows to actual connections. Use integer machine counts and distinguish requested utilization from nominal capacity.
+
+The production solver must have an explicit supported recipe domain. Do not apply the simple formula unchanged to unsupported productivity rules, probabilistic quality outputs, catalysts, recipe cycles, or multiple useful byproducts. Use a validated extension or return `UNSUPPORTED_PRODUCTION_MODEL`. Expected yield is not automatically a guaranteed short-window rate.
+
+### B. Use expansion/condensation as a preference, not a command
+
+For simple solid-item recipes, compute output-item count divided by input-item count as a transport signal. Prefer investigating local production near consumption for expanding intermediates and early processing for condensing intermediates.
+
+Never sum fluid volume with solid item count. Keep gross edge flows even when a net material balance is small. Evaluate shared consumers, existing infrastructure, machine ratios, layout costs, and recovery access before choosing direct insertion.
+
+The final decision uses per-material rates at the actual project scale, not the expansion score alone.
+
+### C. Validate inserters as part of the production graph
+
+Direct insertion removes an intermediate belt, not the material-transfer requirement.
+
+Use transfer profiles keyed to relevant game/content version, effective research and hand settings, entity quality, pickup/drop geometry, and source/destination conditions. Profiles should distinguish theoretical ceilings from conservative estimates and whole-connection measurements. Carrying a maximum hand is not the same as achieving that hand size every cycle.
+
+Include belt pickup availability, output space, startup behavior, power conditions, and contention among parallel inserters in validation. Do not simply sum isolated maximum rates for inserters sharing a source and destination. A stronger inserter or further research is a proposed dependency until it is actually available and authorized.
+
+With a declared utilization limit `u`, require `required_flow <= u * validated_capacity`. The example preference `u = 0.8` is configurable, not an engine law. Record whether margins are already included in a capacity bound to avoid applying them twice. An unmeasured connection may remain a conditional candidate, but not an unconditional feasible design.
+
+### D. Validate belts per segment, lane, and loading condition
+
+Keep these distinct: inventory stack size, inserter hand capacity, permitted belt stack height, and actual item stacking on a belt segment.
+
+For a saturated fixture lane, the capacity estimate is `unstacked_lane_capacity * effective_stack_height`. This is not a promise of observed flow. The loading equipment, occupancy, startup behavior, and downstream acceptance must support the estimate.
+
+Track stacking changes at each relevant loading/transfer boundary. Stacked inputs do not establish stacked outputs. Unknown stack height cannot be replaced with the researched maximum.
+
+Check lane assignment, merges, split ratios, branch extraction, downstream residual flow, and output evacuation. A full belt's capacity cannot be assigned to a single lane. Repeating a cell requires row-level checks; the last cell may be starved even when the first works.
+
+For a fixed simple route with edge demand `a_e` items per final product, its final-product bound is `u_e * C_e / a_e`. Convert capacities to comparable final-output units before identifying the limiting edge. Shared routes, alternative paths, and coupled production need a flow calculation rather than a naive minimum of unrelated raw rates.
+
+### E. Distinguish production from spare supply
+
+Report installed theoretical capacity, measured output, existing obligations, buffer trend, and additional deliverable supply separately. Additional deliverable supply is a constrained estimate over a specified route and horizon, not simply installed capacity minus the latest observed production.
+
+A blocked output can make production look low; a draining stockpile can make delivery look sustainable. Shared supply allocations must not be counted twice. A dedicated controlled-capacity test may be needed when ordinary observations do not establish headroom.
+
+### F. Check layouts beyond entity collisions
+
+Validate proposed-versus-existing and proposed-versus-proposed footprints, tile alignment, orientations, item placement requirements, inserter endpoints, belt lane/stack transitions, utility connectivity, and capacity. Include actor paths, working positions, construction order, and maintenance/expansion space where required.
+
+Treat geometric fit, throughput calculation, engine operability, and sustained delivered performance as separate claims. Candidate templates need declared machine/recipe/capability compatibility. The earlier chat layout is not a certified blueprint, and no prior geometry-check claim is accepted as test evidence without an inspectable artifact.
+
+## 13.5 Model interface and feasibility gates
+
+Proposed planning tools should return typed, bounded results. An initial surface can use `getProductionContext`, `getProductionChain`, `solveProduction`, `evaluateDesign`, and `getProjectEvidence`; detailed transfer and layout queries can be requested as needed. Planning calls never mutate the world.
+
+Always include the goal/scope, relevant full-chain summary, active constraints, current bottlenecks, outstanding evidence, and a small candidate summary in the model's decision packet. Supply exact subgraph, layout, and entity details only when relevant. Refresh changed facts rather than repeatedly appending the whole history.
+
+A candidate summary should contain requested rate, nominal capacity, demand at both rates, machine bill, critical transfer edges, supply commitments, footprint, risks, feasibility status, and evidence IDs. Generated candidates are suggestions: allow the model to propose another arrangement and run it through the same checks.
+
+A compact model decision contains candidate selection or requested change, a short rationale, cited evidence/calculation IDs, unresolved blockers, and the next bounded planning or execution action. It cannot set its own validation status to passed.
+
+Use the following gate sequence:
+
+| Gate | Requirement |
+|---|---|
+| Goal and scope | Unambiguous output contract and proposed boundary; mutations stay within authority. |
+| Data sufficiency | Required parameters are known, conservatively bounded, or explicitly conditional. |
+| Production balance | Requested output and all intermediates have calculated feasible production. |
+| Transport and supply | Every assigned connection has sufficient supply, inserter, lane, stacking, and sink capacity. |
+| Layout and access | Geometry, utility connections, actor access, and construction order are feasible. |
+| Execution admission | Exact revision authorized; fresh preconditions; materials/area allocated; actions supported. |
+| Runtime acceptance | Measured output and integration constraints pass over specified simulation windows. |
+
+Useful candidate states are `rejected`, `needs_observation`, `needs_measurement`, `analytically_feasible`, `engine_validated`, and `accepted_for_this_project`. Authorization is separate from feasibility. A scope expansion can be feasible but unauthorized.
+
+Structured violations should state code, affected connection, required rate, known capacity/bound, evidence, and candidate remedies. Examples: `INSERTER_CAPACITY_UNKNOWN`, `LANE_OVER_CAPACITY`, `STACKING_NOT_ESTABLISHED`, `SUPPLY_SHORTFALL`, `OUTPUT_BLOCKED`, `STALE_CONTEXT`, and `SCOPE_EXPANSION_REQUIRED`. Do not return only "invalid plan".
+
+## 13.6 Execution and verification
+
+Use persistent dependencies, plan revisions, exact entity references, and idempotent request IDs. Reconcile action receipts after lost responses or restarts instead of repeating world mutations blindly. Invalidate only the affected portion of a plan where possible. Actor controllers handle routine navigation and bounded retries; call the LLM for meaningful choices and blockers, not each tick.
+
+An explicit stop/cancel path must not depend on a new model answer. Budget exhaustion leaves the project persisted and either safely paused or finishing only already-approved bounded work. Chat and tool text cannot expand permissions or bypass gates.
+
+Measure the registered block and its output boundary, not just force-wide totals. Record startup separately from steady operation. Exclude pre-seeded output, hand-crafted products, and unrelated deliveries from acceptance. Observe input stock trends and downstream acceptance so a temporary buffer cannot impersonate sustainable throughput.
+
+Use simulation time for production windows and a separate wall-clock safety timeout. A stopped clock is a clock failure, not a low-production result. Require structural correctness, functional operation, delivered-rate performance, and agreed protection of existing consumers. Record the operating conditions and window for every pass; finite measurements are not a universal guarantee.
+
+Pass one cell before repeating it, then test the whole row. A cell test does not validate shared supply, final output, power capacity, or actor access for an expanded block.
+
+## 13.7 Green-circuit reference fixture and counterexamples
+
+These are declared offline fixture values from the brainstorming exercise, not current-save observations or an engine-certified blueprint.
+
+- Cable recipe: one copper plate -> two cables, 0.5 seconds.
+- Circuit recipe: one iron plate plus three cables -> one circuit, 0.5 seconds.
+- Both assembler types use effective speed 0.75, with no productivity, adequate power, and normal quality.
+- Unstacked lane capacities: yellow 7.5 items/s; red 15 items/s.
+- Optional transport-utilization preference: 0.8. Do not silently impose a separate machine-utilization margin on the fixture calculations.
+
+| Quantity | One 3-cable / 2-circuit cell | Four cells at full capacity | Required for a 10/s target |
+|---|---:|---:|---:|
+| Circuit output | 3/s | 12/s | 10/s |
+| Copper plates | 4.5/s | 18/s | 15/s |
+| Iron plates | 3/s | 12/s | 10/s |
+| Internal cable flow | 9/s | 36/s | 30/s |
+
+The cell candidate assigns cable transfers of 3/s, 1.5/s, 1.5/s, and 3/s. At a 0.8 utilization limit, the respective validated connection capacities must be at least 3.75/s, 1.875/s, 1.875/s, and 3.75/s. Parallel inserters are a candidate solution to the heavy connections, not proof of those capacities.
+
+Four repeated cells contain 20 assemblers. This is a modular candidate, not a claim of minimum machine count. A sizing-only lower-bound alternative for 10/s is 10 cable assemblers and 7 circuit assemblers under the fixture assumptions; its physical connectivity and practical performance remain separate problems.
+
+For four cells at full capacity, one unstacked red lane is insufficient for 18 copper plates/s. Both copper lanes have aggregate room, but the actual pickup distribution must still be validated. Separate red lanes carrying 12 iron plates/s and 12 circuits/s are each at 80% theoretical lane utilization.
+
+Critical stacking counterexample: even with sufficient four-high plate input, one unstacked yellow circuit-output lane still has a 7.5/s theoretical limit, or a 6/s planning limit at 0.8 utilization. Never multiply its capacity by the input stack height.
+
+Supply counterexample: 12 additional copper plates/s supports at most 8 circuits/s under these recipe assumptions before other limits. A 10/s target is short by 3 copper plates/s. Request a justified source change, target reduction, or bounded upstream proposal; do not silently expand the project.
+
+## 13.8 Tests for smaller models and deterministic services
+
+Keep expected answers out of planner inputs during evaluation. Evaluate properties and achieved behavior, not conformity to one explanation or machine arrangement. Reject unauthorized mutation or fabricated evidence even when nominal output calculations are correct.
+
+| Perturbation | Required behavior |
+|---|---|
+| Reduced inserter research/carry settings | Refresh relevant profile and revise or reject undersized transfers. |
+| Unknown or mismatched transfer profile | Request evidence or remain conditional; do not claim full feasibility. |
+| Only one copper lane is fed | Apply single-lane capacity and distinguish loading shortage from machine shortage. |
+| Stacked plate inputs, unstacked product output | Preserve the unstacked output bottleneck. |
+| Maximum stacking unlocked but loader absent | Do not credit unsupported stack density. |
+| Effective speed or productivity changes | Recompute machine counts, material ratios, and transfer loads. |
+| Supply reduced or already allocated | Detect the deficit without double-counting stock or committed capacity. |
+| Full output buffer or consumer blockage | Diagnose downstream acceptance before proposing more machines. |
+| Rotated/mirrored layout or more row cells | Revalidate endpoints, lanes, shared flow, utilities, and actor access. |
+| Stale snapshot or human modification | Refresh affected dependencies and revalidate before action. |
+| Lost response, cancellation, restart | Preserve project state without duplicate placement or item transfer. |
+| Preloaded products, draining input buffer, paused game | Do not report a sustained-production pass. |
+| Out-of-scope upstream fix or missing action capability | Stop at the correct authorization/capability boundary. |
+| Renamed fixture recipes and changed numeric values | Derive the solution from supplied data rather than recall the green-circuit ratio. |
+
+Use three evidence layers: pure solver/schema tests, deterministic harness tests with scripted responses, and real-engine acceptance. Live-model comparison is opt-in and budgeted. Compare a baseline, structured context, and structured context plus calculation/validation tools with matched tasks and reported call/token budgets. Include held-out layouts and perturbed fixtures, and record feasibility errors, unnecessary actions, recovery, verified output, and cost per accepted project.
+
+Implement in this order: data contracts and evidence -> recipe/flow solver -> inserter and per-lane stacking profiles -> scope/candidate evaluator -> one-cell engine test -> repeated-row test -> cheaper-model evaluation. Preserve the existing single-NPC prerequisites; do not promote design notes into implementation or test status.
+
+## TL;DR
+
+Give the LLM the full relevant chain, effective research/equipment capabilities, and live supply evidence. Let deterministic services calculate machine and connection flows. Treat inserters, each belt lane, and actual stacking as independent constraints. Keep size, scope, authorization, and validation status separate. Use the circuit example as a parameterized test fixture, not a memorized blueprint. Accept a project only after measuring the intended delivered output under recorded conditions.
