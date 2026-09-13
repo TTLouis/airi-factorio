@@ -26,6 +26,7 @@
     "lint": "eslint --cache .",
     "lint:fix": "eslint --cache --fix .",
     "typecheck": "pnpm -r --filter=./packages/* run typecheck",
+    "test": "pnpm --filter @proj-airi/factorio-agent --filter autorio.ts --if-present run test",
     "bootstrap": "node scripts/bootstrap.ts"
   },
   "devDependencies": {
