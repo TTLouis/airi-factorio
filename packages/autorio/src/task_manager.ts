@@ -94,6 +94,87 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     return task_queue.length === 0
   }
 
+  function get_current_task_snapshot() {
+    switch (player_state.task_state) {
+      case TaskStates.IDLE:
+        return undefined
+      case TaskStates.WALKING_TO_ENTITY: {
+        const task = player_state.parameters_walk_to_entity
+        return task
+          ? {
+              type: task.type,
+              entity_name: task.entity_name,
+              search_radius: task.search_radius,
+              path_index: task.path_index,
+              calculating_path: task.calculating_path,
+              target_position: task.target_position,
+            }
+          : { type: player_state.task_state }
+      }
+      case TaskStates.WALKING_DIRECT: {
+        const task = player_state.parameters_walking_direct
+        return task ? { type: task.type, target_position: task.target_position } : { type: player_state.task_state }
+      }
+      case TaskStates.MINING: {
+        const task = player_state.parameters_mine_entity
+        return task ? { type: task.type, entity_name: task.entity_name, count: task.count, position: task.position } : { type: player_state.task_state }
+      }
+      case TaskStates.PLACING: {
+        const task = player_state.parameters_place_entity
+        return task ? { type: task.type, entity_name: task.entity_name, position: task.position } : { type: player_state.task_state }
+      }
+      case TaskStates.MOVING_ITEMS: {
+        const task = player_state.parameters_move_items
+        return task
+          ? {
+              type: task.type,
+              item_name: task.item_name,
+              entity_name: task.entity_name,
+              max_count: task.max_count,
+              to_entity: task.to_entity,
+            }
+          : { type: player_state.task_state }
+      }
+      case TaskStates.CRAFTING: {
+        const task = player_state.parameters_craft_item
+        return task ? { type: task.type, item_name: task.item_name, count: task.count, crafted: task.crafted } : { type: player_state.task_state }
+      }
+      case TaskStates.ATTACKING: {
+        const task = player_state.parameters_attack_nearest_enemy
+        const target = task?.target
+        return task
+          ? {
+              type: task.type,
+              search_radius: task.search_radius,
+              target: target && target.valid
+                ? { name: target.name, position: target.position }
+                : undefined,
+            }
+          : { type: player_state.task_state }
+      }
+      case TaskStates.RESEARCHING: {
+        const task = player_state.parameters_research_technology
+        return task ? { type: task.type, technology_name: task.technology_name } : { type: player_state.task_state }
+      }
+      case TaskStates.WAITING: {
+        const task = player_state.parameters_waiting
+        return task ? { type: task.type, remaining_ticks: task.remaining_ticks } : { type: player_state.task_state }
+      }
+      default:
+        return { type: player_state.task_state }
+    }
+  }
+
+  function get_status_snapshot() {
+    return {
+      task_state: player_state.task_state,
+      queue_empty: task_queue.length === 0,
+      queue_length: task_queue.length,
+      queued_task_types: task_queue.map(task => task.type),
+      current_task: get_current_task_snapshot(),
+    }
+  }
+
   function cancel_task() {
     reset_task_state()
   }
@@ -108,6 +189,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     add_task,
     next_task,
     is_task_queue_empty,
+    get_status_snapshot,
     reset_task_state,
     cancel_task,
     cancel_all_tasks,
