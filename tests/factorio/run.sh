@@ -45,6 +45,10 @@ finish() {
     print_file "$RESULTS/placement-transfer-error.txt"
     print_file "$RESULTS/placement-transfer-transcript.json"
     print_file "$RESULTS/placement-transfer.json"
+    print_file "$RESULTS/control-lifecycle-error.txt"
+    print_file "$RESULTS/control-lifecycle-transcript.json"
+    print_file "$RESULTS/control-lifecycle-observations.json"
+    print_file "$RESULTS/control-lifecycle.json"
   fi
   exit "$code"
 }
@@ -86,6 +90,13 @@ python3 "${TEST_ROOT:-/test}/runner/run.py" \
 
 printf '[npc-test] Core NPC smoke passed; running placement + inventory transfer...\n'
 python3 "${TEST_ROOT:-/test}/runner/placement_transfer.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS"
+
+printf '[npc-test] Gameplay passed; checking physical stop and cancellation...\n'
+python3 "${TEST_ROOT:-/test}/runner/control_lifecycle.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \
   --password "$RCON_PASSWORD" \

@@ -2,13 +2,52 @@
 
 This file tracks implementation progress against `docs/NPC_AGENT_HARNESS_PLAN.md` on `feat/npc-transition-work`.
 
-## Current correction — zero-player simulation clock (2026-09-13)
+## User-verified checkpoint (2026-09-13)
 
-The latest user-supplied transcript shows `character_mining_progress` increasing from about `0.0583` to `0.4917`, while the mining task has two cycles remaining and the resource amount remains 19. This is evidence of an unfinished, progressing mining cycle, not evidence that progress is frozen. The excerpt contains neither elapsed timestamps nor game ticks, so it does not establish the exact simulation rate or prove completion.
+The user supplied a successful combined Docker runtime log after the `d34a4b3` handoff. The console output is retained at [validation/2026-09-13-npc-core.txt](validation/2026-09-13-npc-core.txt). It does not print a source commit or Docker build output, so this record does not independently attest the image revision or claim new build-time test results.
+
+Reported results:
+
+- 14 deterministic Python runner tests passed;
+- the real zero-player world advanced 121 ticks across 2.02 quiet seconds, approximately 60 UPS;
+- wait completed after 7 observed ticks;
+- movement completed after 84 observed ticks;
+- mining completed after 364 observed ticks / 6.08 seconds;
+- crafting completed after 63 observed ticks / 1.07 seconds;
+- the core wait → movement → mining → crafting runner passed with `actor_id=1`;
+- placement and both inventory-transfer directions passed with the same actor;
+- the complete runtime script reported success.
+
+The 120-tick clock line inside the Python unit test is a mock result. The later 121-tick line after Factorio starts is the real-engine clock result. Likewise, `observed_ups=0.0` for an immediately idle placement/transfer observation means no additional tick was sampled during that wait, not that the world stopped.
+
+This closes the existing deterministic core and placement/transfer gates at their implemented scope. It does not prove live-model planning, research/combat, persistence, death recovery, or every physical-control lifecycle condition.
+
+### Follow-up found in the passing log: physical stop after movement
+
+The core runner's final actor position was `{x=20.03515625, y=0.52734375}`, although its movement target was near `x=10` and arrival had been checked earlier. This exposes a gap: the runner checked arrival at one instant, not that AIRI remained stationary afterward. Source review found that movement completion cleared the task record but never cleared the character's walking input. This explains the apparent drift; the new physical-stop gate below must verify the correction in the engine.
+
+`task_manager.reset_task_state()` now releases controls owned by the outgoing task before clearing its state or starting queued work:
+
+- path/direct movement stops walking;
+- mining stops mining;
+- attacking stops walking and shooting;
+- both cancellation entrypoints use the same cleanup;
+- an already-idle reset does not resolve/spawn an actor;
+- unrelated controls are not reset just because a wait/crafting task ends.
+
+New deterministic TypeScript regressions cover completion, cancellation, cleanup ordering before queued crafting, missing/invalid actors, and preserving unrelated controls. Python assertion regressions reject drift, active controls hidden behind an idle label, a replacement actor, paused simulation, missing physical telemetry, queued work, or a connected human.
+
+The new `control_lifecycle.py` engine stage runs after the existing gameplay stages in the same world. It checks stationary idle behavior, arrival followed by a quiet interval, movement → queued wait without drift, cancellation of active movement with queued work, and cancellation of active mining without further resource/inventory changes. It uses the original core actor ID, inspects real walking/mining/shooting flags, and leaves two quiet seconds between observations. Fixtures create terrain/targets only: they do not force-stop, teleport, speed up, or replace AIRI to make the assertions pass.
+
+**New lifecycle patch: implemented, awaiting the user's tests.** This is not a complete navigation or combat rewrite. Path-request ID correlation, obstacle/stuck recovery, native hand-crafting queue cancellation, and cross-actor/mode-change ownership remain separate work. Combat stop behavior has new unit coverage but no new engine-combat acceptance result yet.
+
+## Earlier correction — zero-player simulation clock (2026-09-13)
+
+The earlier failing user transcript showed `character_mining_progress` increasing from about `0.0583` to `0.4917`, while the mining task had two cycles remaining and the resource amount remained 19. This was evidence of an unfinished, progressing mining cycle, not evidence that progress was frozen. That excerpt contained neither elapsed timestamps nor game ticks.
 
 The harness previously started Factorio without `--server-settings` and used a 12-second wall-clock mining deadline. That left zero-player auto-pause implicit. A Factorio developer explains that queued RCON commands can temporarily override server pause and cause individual updates; apparent movement during polling therefore does not prove continuous zero-player simulation. See the [Factorio developer explanation](https://forums.factorio.com/viewtopic.php?p=545440) and [LuaGameScript clock API](https://lua-api.factorio.com/latest/classes/LuaGameScript.html).
 
-The current patch:
+The clock correction:
 
 - explicitly loads private test-server settings with `auto_pause: false` and `auto_pause_when_players_connect: false`;
 - checks that `game.tick` advances across a quiet two-second interval with no intervening RCON commands, before creating/controlling the NPC;
@@ -19,17 +58,15 @@ The current patch:
 - records the resource's actual engine position and requires the original 20-unit ore entity to remain with exactly 17 units plus exactly three additional ore in AIRI's inventory. A missing lookup is no longer treated as successful depletion;
 - includes deterministic Python regressions in the user-run Docker entrypoint.
 
-No production mining-speed boost, instant mining/crafting, fake player, or additional mining-controller rewrite is used to bypass this failure. The previously implemented placement/transfer stage remains in the combined run.
-
-**Validation status: implemented; not executed by the assistant. The user is running the tests.** The auto-pause/timing diagnosis fits the trace and the missing server configuration, but the corrected real-engine run is still required. Earlier wait/movement results remain historical observations and must be rerun with the independent-clock preflight before treating continuous zero-player operation as proven.
+No production mining-speed boost, instant mining/crafting, fake player, or additional mining-controller rewrite was used to bypass that failure. The user has now reported the independent-clock and combined gameplay pass above. The assistant did not perform the engine run.
 
 `NPC_TEST_WALL_TIMEOUT` can override the wall-clock cap in seconds through `docker run -e NPC_TEST_WALL_TIMEOUT=180 ...` on a slow host. This does not enlarge or reset the simulation tick budget. It is not a substitute for disabling auto-pause.
 
-## Previously observed in real Factorio
+## Observed in real Factorio
 
 ### NPC foundation / passes 1–2
 
-The previous zero-player Docker integration gate passed against Factorio 2.0.77, subject to the independent-clock limitation described above.
+The previous zero-player Docker integration gate targeted Factorio 2.0.77. The user has now repeated the combined runtime successfully with the independent-clock check.
 
 Observed in the real engine:
 
@@ -48,7 +85,7 @@ Observed in the real engine:
 
 ### NPC movement / pass 3A
 
-The previous deterministic movement scenario also passed in the real engine while the runner was polling.
+The deterministic movement scenario passed, including in the user's freely running world. Its existing checks prove arrival, not sustained physical stop; the new lifecycle gate covers the latter.
 
 Observed:
 
@@ -60,7 +97,7 @@ Observed:
 6. the operation returns to idle;
 7. `actor_id` remains stable and connected-player count remains zero.
 
-Observed passing endpoint: AIRI moved from the origin to approximately `{x=8.90, y=0.53}` for a target at `{x=10, y=0}`.
+Earlier observed arrival: approximately `{x=8.90, y=0.53}` for a target at `{x=10, y=0}`. Do not confuse that arrival sample with the later end-of-core-run position reported above.
 
 ## Implemented
 
@@ -152,9 +189,9 @@ The response parser validates:
 
 `autorio_operations.status()` includes this richer task snapshot while preserving the original `task_state`, `queue_empty`, and `actor` fields.
 
-Crafting status includes the requested/started craft count and compact queued-craft count. Mining status includes remaining requested cycles, current target position, and the last observed resource amount. The integration runners add timing telemetry to their own observations without changing the production status contract.
+Crafting status includes the requested/started craft count and compact queued-craft count. Mining status includes remaining requested cycles, current target position, and the last observed resource amount. The integration runners add timing and physical-control telemetry to their own observations without changing the production status contract.
 
-### NPC-native mining / pass 3B — implemented, awaiting user real-engine gate
+### NPC-native mining / pass 3B — user-reported deterministic engine pass
 
 Standalone mining no longer depends on `on_player_mined_entity` for completion.
 
@@ -167,15 +204,15 @@ The NPC path now:
 5. decrements the requested remaining count;
 6. stops mining and advances the task queue when the requested count is satisfied.
 
-The earlier diagnostic/restart patch changed `StandaloneCharacterActor` to use `character_mining_progress` instead of the generic entity field. The latest user trace now exposes advancing character progress. Neither the earlier nor latest excerpt proves the complete three-cycle acceptance scenario; the independent-clock correction above must be tested before attributing another failure to the mining controller.
+The earlier diagnostic/restart patch changed `StandaloneCharacterActor` to use `character_mining_progress` instead of the generic entity field. Earlier partial traces did not prove the complete three-cycle scenario. The subsequent user-run independent-clock and core gameplay gate now reports completion.
 
-Existing unit regression coverage models both selection remaining on the resource at a zero-progress boundary and selection being cleared after a cycle. These modeled cases must not be confused with new engine-test results.
+Existing unit regression coverage models both selection remaining on the resource at a zero-progress boundary and selection being cleared after a cycle. These modeled cases must not be confused with exhaustive engine-test results.
 
 Connected-player mining remains event-driven. Its previous final-count off-by-one was also corrected so a one-count task finishes on the first successful mining event rather than waiting for an extra event.
 
 The Docker runner creates deterministic `iron-ore` within AIRI's reach, requests three mining cycles, and checks exact resource depletion and AIRI inventory growth after idle completion.
 
-### NPC-native crafting / pass 3C — implemented, awaiting user real-engine gate
+### NPC-native crafting / pass 3C — user-reported deterministic engine pass
 
 Standalone crafting no longer depends on `on_player_crafted_item` for completion.
 
@@ -185,9 +222,9 @@ Connected players retain their existing event-driven crafting completion path.
 
 The Docker runner seeds four deterministic iron plates, requests two `iron-gear-wheel` crafts, and verifies output inventory, ingredient consumption, an empty crafting queue, idle task state, stable actor identity, and zero connected players.
 
-### Placement + inventory transfer — acceptance added, awaiting user real-engine gate
+### Placement + inventory transfer — user-reported deterministic engine pass
 
-The next documented gameplay slice is included in the authoritative Docker path.
+This documented gameplay slice is included in the authoritative Docker path and passed in the supplied log.
 
 After the core wait → movement → mining → crafting runner passes, a second zero-player runner:
 
@@ -216,7 +253,7 @@ The Docker build runs:
 1. locked workspace dependency install;
 2. agent prompt/tool/structured-response contract tests;
 3. TSTL plugin build;
-4. Autorio unit tests, including NPC mining/crafting completion regressions;
+4. Autorio unit tests, including NPC completion and task-control lifecycle regressions;
 5. Autorio TSTL typecheck;
 6. Autorio mod build.
 
@@ -226,13 +263,14 @@ The Docker run then performs:
 2. deterministic save creation and startup with explicit private server settings;
 3. a zero-player independent-clock preflight;
 4. real Factorio 2.0.77 wait + movement + mining + crafting integration;
-5. real Factorio placement + bidirectional inventory-transfer integration in the same zero-player world.
+5. real Factorio placement + bidirectional inventory-transfer integration in the same zero-player world;
+6. physical stop, queued-wait, and movement/mining cancellation integration using the original actor.
 
-The Docker path remains the authoritative validation route without requiring host pnpm/node setup. The user is performing the tests for this branch; implementation status must not be relabeled as proven until those results are reported.
+The Docker path remains the authoritative validation route without requiring host pnpm/node setup. The user performs the tests. The newly added lifecycle stage and regressions have not been run by the assistant or reported by the user yet.
 
 ## Current runtime gate
 
-The next user-run combined Docker gate should prove all of the following in one zero-player session:
+The original combined gate has a user-reported pass. The next run must retain those results and additionally prove that finished/cancelled tasks stop their physical inputs:
 
 1. simulation advances without RCON polling or a connected human;
 2. wait returns to idle;
@@ -244,8 +282,11 @@ The next user-run combined Docker gate should prove all of the following in one 
 8. AIRI places a wooden chest from its own inventory;
 9. AIRI transfers three iron plates into that chest;
 10. AIRI retrieves two iron plates from that chest;
-11. the same `actor_id` survives the complete wait → movement → mining → crafting → placement → transfer sequence;
-12. connected-player count remains zero.
+11. AIRI stays stationary after gameplay and after another completed movement;
+12. a queued wait starts with walking stopped;
+13. cancelling active movement stops it immediately, clears queued work, and remains stationary during a quiet interval;
+14. cancelling active mining stops it and leaves resource/inventory counts unchanged during a quiet interval;
+15. the same `actor_id` survives the complete sequence and connected-player count remains zero.
 
 Expected success lines include:
 
@@ -253,13 +294,14 @@ Expected success lines include:
 PASS: zero-player simulation advances without RCON polling
 PASS: zero-player NPC completed wait + movement + mining + crafting
 PASS: zero-player NPC completed placement + inventory transfer
+PASS: zero-player NPC stops after movement and cancellation
 ```
 
 ## After this gate
 
 Next implementation targets remain aligned with the roadmap:
 
-1. research/combat acceptance scenarios;
+1. research/combat acceptance scenarios, including task/result semantics and combat movement/stop behavior;
 2. save/restart persistence and same-NPC reacquisition;
 3. death detection/replacement actor recovery and a post-recovery task;
 4. deterministic structured-agent scenarios combining observation, structured operations, verification, and replanning;

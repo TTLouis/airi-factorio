@@ -18,7 +18,39 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     }
   }
 
+  function stop_task_controls() {
+    // Clearing our task record does not clear a standalone character's engine
+    // inputs. Stop the outgoing task's controls before a queued task can start.
+    // Do not stop unrelated controls (e.g. a human walking while hand-crafting),
+    // and do not resolve/spawn an actor for an already-idle reset.
+    const state = player_state.task_state
+    const stop_walking = state === TaskStates.WALKING_TO_ENTITY
+      || state === TaskStates.WALKING_DIRECT
+      || state === TaskStates.ATTACKING
+    const stop_mining = state === TaskStates.MINING
+    const stop_shooting = state === TaskStates.ATTACKING
+    if (!stop_walking && !stop_mining && !stop_shooting) {
+      return
+    }
+
+    const actor = get_controlled_actor()
+    if (!actor || !actor.is_valid || !actor.character) {
+      return
+    }
+
+    if (stop_walking) {
+      actor.set_walking_state({ walking: false, direction: defines.direction.north })
+    }
+    if (stop_mining) {
+      actor.set_mining_state({ mining: false })
+    }
+    if (stop_shooting) {
+      actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
+    }
+  }
+
   function reset_task_state() {
+    stop_task_controls()
     player_state.task_state = TaskStates.IDLE
     player_state.parameters_walk_to_entity = undefined
     player_state.parameters_walking_direct = undefined
