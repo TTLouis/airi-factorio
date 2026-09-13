@@ -51,56 +51,53 @@ swap. Read it directly; it's no longer a blob you have to decode first.
 **Startup command:** `bash ./start-airi.sh`
 
 **Egg variables (exposed in the panel):**
-| Variable | Env var | Notes |
-|---|---|---|
-| Factorio Version | `FACTORIO_VERSION` | `latest` or a pinned `2.0.x` |
-| OpenAI API Key | `OPENAI_API_KEY` | required, not shown to non-admins |
+| Variable | Env var | Default | Notes |
+|---|---|---|---|
+| AIRI Controlled Player | `AIRI_PLAYER` | *(none)* | the one connected player AI is allowed to control — see below |
+| OpenAI API Key | `OPENAI_API_KEY` | *(none)* | required, not shown to non-admins, never read from `airi-config.json` |
+| AI Model | `OPENAI_MODEL` | `gpt-4o` | OpenAI-compatible model name |
+| Provider Base URL | `OPENAI_API_BASEURL` | `https://api.openai.com/v1` | point at a different OpenAI-compatible endpoint |
+| Save File Name | `SAVE_NAME` | *(auto-detect, only if exactly one save exists)* | which save to boot |
+| Auto Update AIRI Release | `AUTO_UPDATE` | `1` | `0`/`1` |
+| Watch For Updates | `TTL_UPDATER` | `1` | `0`/`1` |
+| Update Check Interval (Minutes) | `UPDATE_TTL_MIN` | `10` | |
+| Max AI Requests Per Hour | `MAX_PROVIDER_REQUESTS_PER_HOUR` | `30` | hourly cap on LLM calls |
+| Shutdown Timeout (ms) | `SHUTDOWN_TIMEOUT_MS` | `60000` | graceful-stop timeout |
+| Extra Factorio Arguments | `FACTORIO_EXTRA_ARGS` | `[]` | extra CLI args passed to the Factorio binary |
+| Factorio Version | `FACTORIO_VERSION` | `latest` | `latest` or a pinned `2.0.x` |
 
-## ⚠️ You must hand-edit `airi-config.json` after install
+`gamePort` has no dedicated egg variable — Pterodactyl's own auto-injected
+`SERVER_PORT` covers it (`configuration()` reads `env.SERVER_PORT` directly).
 
-The egg only exposes two variables (above). Everything else — most
-importantly **which in-game player the AI is allowed to control** — has no
-egg variable and is *not* set automatically. After the server's first
-install/boot, you must manually create or edit
-**`/home/container/airi-config.json`** (edit it from the panel's file
-manager, or `sftp`/shell into the container — `/home/container` is where
-Pterodactyl mounts the server's persistent volume at runtime, as opposed to
-the `/mnt/server` path used only during install).
+## `airi-config.json` is optional
 
-Minimum required content:
+Every field above is read by `configuration()` (`payload-src/installer.sh`,
+the `configuration` function) as `env.X ?? raw.Y ?? default` — **the egg
+variable always wins when both are set**, and `airi-config.json` is only
+consulted as a fallback. Setting the egg variables above at
+creation/reinstall time is enough; you do not need to hand-edit
+`/home/container/airi-config.json` unless you want to override something
+outside the panel (e.g. templating multiple servers from one exported
+config) or prefer editing the file directly.
+
+**Most important: `AIRI_PLAYER`.** Without it (or a `player` key in
+`airi-config.json`), AI control stays **disabled** — the server still runs,
+but the installer's own log line says it plainly: *"Set AIRI_PLAYER or
+airi-config.json player before using `!airi` requests in game."* The AI only
+ever acts as this one already-connected, explicitly authorized player — it
+does not spawn or control a separate autonomous character.
+
+If you do want to hand-edit the file instead of using the egg variables,
+it lives at `/home/container/airi-config.json` (edit it from the panel's
+file manager, or `sftp`/shell into the container — `/home/container` is
+where Pterodactyl mounts the server's persistent volume at runtime, as
+opposed to the `/mnt/server` path used only during install):
 
 ```json
 {
   "player": "YourInGameCharacterName"
 }
 ```
-
-Without a `player` name (either here, or via an `AIRI_PLAYER` environment
-variable set on the server), AI control stays **disabled** — the server
-still runs, but the installer's own log line says it plainly: *"AI control
-is disabled until AIRI_PLAYER or airi-config.json player names the
-authorized player."* The AI only ever acts as this one already-connected,
-explicitly authorized player — it does not spawn or control a separate
-autonomous character.
-
-Optional fields you can only set here (no egg variable exists for them):
-
-| Field | Default | Purpose |
-|---|---|---|
-| `save` | auto-detect (only if exactly one save exists) | which save to boot |
-| `model` | `gpt-4o` | OpenAI-compatible model name |
-| `providerUrl` | `https://api.openai.com/v1` | point at a different OpenAI-compatible endpoint |
-| `factorioVersion` | `latest` | overridden by `FACTORIO_VERSION` env if both set |
-| `gamePort` | `34197` | overridden by `SERVER_PORT` env if both set |
-| `autoUpdate` / `watchUpdates` | `true` | overridden by `AUTO_UPDATE` / `TTL_UPDATER` env (`"0"`/`"1"`) |
-| `updateMinutes` | `10` | overridden by `UPDATE_TTL_MIN` env |
-| `maxProviderRequestsPerHour` | `30` | hourly cap on LLM calls |
-| `shutdownTimeoutMs` | `60000` | graceful-stop timeout |
-| `extraArgs` | `[]` | extra CLI args passed to the Factorio binary |
-
-`OPENAI_API_KEY` can only come from the environment/egg variable — it is
-never read out of `airi-config.json`, so it can't be accidentally committed
-to a save/config backup.
 
 ## Why no Factorio account / API token is needed
 
