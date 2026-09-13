@@ -4,6 +4,7 @@ RUN corepack enable
 WORKDIR /src
 COPY . .
 RUN pnpm install --frozen-lockfile
+RUN pnpm test:prompt
 RUN pnpm --filter autorio.ts run build
 RUN cp packages/autorio/info.json packages/autorio/dist/info.json
 
