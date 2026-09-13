@@ -31,6 +31,7 @@ describe('agent observation tools', () => {
       'getInventoryItems',
       'getRecipe',
       'getNearbyEntities',
+      'getEntityStatus',
     ])
   })
 
@@ -98,6 +99,33 @@ describe('agent observation tools', () => {
 
     mocks.raw.mockClear()
     await expect(getTool('getNearbyEntities').fn({ parameters: { radius: 65 } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('renders a bounded exact-name entity-status lookup', async () => {
+    await getTool('getEntityStatus').fn({
+      parameters: {
+        name: 'wooden-chest',
+      },
+    })
+
+    expect(mocks.raw).toHaveBeenCalledWith({
+      body: {
+        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_entity_status", \'wooden-chest\', 8)))',
+      },
+    })
+  })
+
+  it('escapes entity-status names and rejects an oversized lookup radius', async () => {
+    await getTool('getEntityStatus').fn({ parameters: { name: "mod's-chest", radius: 16 } })
+    expect(mocks.raw).toHaveBeenCalledWith({
+      body: {
+        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_entity_status", \'mod\\\'s-chest\', 16)))',
+      },
+    })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getEntityStatus').fn({ parameters: { name: 'wooden-chest', radius: 33 } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 })
