@@ -21,11 +21,13 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).not.toContain("player's inventory")
   })
 
-  it('documents the actor-aware read tools', () => {
+  it('documents the actor-aware bounded read tools', () => {
     expect(prompt).toContain('getActorStatus()')
     expect(prompt).toContain('getTaskStatus()')
     expect(prompt).toContain('getInventoryItems()')
     expect(prompt).toContain('getRecipe(item)')
+    expect(prompt).toContain('getNearbyEntities({ radius?, name?, type?, limit? })')
+    expect(prompt).toContain('Radius is limited to 64 tiles')
     expect(prompt).toContain("AIRI's controlled actor inventory")
   })
 
@@ -33,6 +35,7 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('Verify important results with read-only tools before claiming success')
     expect(prompt).toContain('Operation completion does not automatically mean the larger goal succeeded')
     expect(prompt).toContain('replan instead of repeating blindly')
+    expect(prompt).toContain('inspect the local area before choosing movement or mining')
   })
 
   it('documents every currently supported Autorio operation', () => {
