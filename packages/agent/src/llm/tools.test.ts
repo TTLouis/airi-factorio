@@ -8,6 +8,7 @@ vi.mock('factorio-rcon-api-client', () => ({
   v2FactorioConsoleCommandRawPost: mocks.raw,
 }))
 
+import prompt from './prompt.md?raw'
 import { tools } from './tools'
 
 function getTool(name: string) {
@@ -32,6 +33,8 @@ describe('agent observation tools', () => {
       'getRecipe',
       'getNearbyEntities',
       'getEntityStatus',
+      'getResearchStatus',
+      'getTechnology',
     ])
   })
 
@@ -127,5 +130,47 @@ describe('agent observation tools', () => {
     mocks.raw.mockClear()
     await expect(getTool('getEntityStatus').fn({ parameters: { name: 'wooden-chest', radius: 33 } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
+  })
+})
+
+describe('research observation tools', () => {
+  it('reads force research without treating the request result as completion', async () => {
+    const output = '{"current":{"name":"automation"},"progress":0.1,"last_request_result":{"accepted":true}}'
+    mocks.raw.mockResolvedValue({ data: { output } })
+    expect(await getTool('getResearchStatus').fn({ parameters: {} })).toBe(output)
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research", "status")))',
+    } })
+  })
+
+  it('escapes exact technology names', async () => {
+    await getTool('getTechnology').fn({ parameters: { name: "mod's-tech" } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research", "technology", \'mod\\\'s-tech\')))',
+    } })
+  })
+
+  it('rejects malformed and extra technology arguments before RCON', async () => {
+    for (const parameters of [{}, { name: 'automation\n/c game.clear()' }, { name: 'automation', force: 'enemy' }]) {
+      await expect(getTool('getTechnology').fn({ parameters })).rejects.toThrow()
+    }
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+})
+
+describe('research prompt contract', () => {
+  it('documents the actual observation tools', () => {
+    for (const name of ['getResearchStatus', 'getTechnology']) {
+      expect(tools.some(tool => tool.name === name)).toBe(true)
+      expect(prompt).toContain(name)
+    }
+  })
+
+  it('distinguishes submission from technology completion and shared research cancellation', () => {
+    expect(prompt).toContain('A queued/accepted request is not completed research')
+    expect(prompt).toContain('does not mean the technology is unlocked')
+    expect(prompt).toContain('does not cancel already-started shared force research')
+    expect(prompt).toContain('force_busy')
+    expect(prompt).toContain('Gameplay-trigger technologies require their actual trigger')
   })
 })

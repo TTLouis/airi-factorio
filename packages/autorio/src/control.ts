@@ -14,6 +14,7 @@ import type {
 
 import type { ControlledActor } from './actors/types'
 import { get_controlled_actor } from './actors/actor_controller'
+import { new_research_controller } from './research'
 import { new_task_manager } from './task_manager'
 import { create_tools_remote_interface } from './tools'
 import { TaskStates } from './types'
@@ -25,6 +26,12 @@ create_tools_remote_interface()
 let setup_complete = false
 
 export const task_manager = new_task_manager(get_controlled_actor)
+const research_controller = new_research_controller(get_controlled_actor, task_manager)
+
+remote.add_interface('autorio_research', {
+  status: () => research_controller.status(),
+  technology: (name: string) => research_controller.technology(name),
+})
 
 function log_actor_info() {
   const actor = get_controlled_actor()
@@ -180,38 +187,7 @@ remote.add_interface('autorio_operations', {
     log(`[AUTORIO] New attack nearest enemy task, search radius: ${search_radius}`)
     return [true, 'Task started']
   },
-  research_technology: (technology_name: string): [boolean, string] => {
-    const actor = get_controlled_actor()
-    if (!actor) {
-      log('[AUTORIO] Cannot start research_technology task: No controlled actor')
-      return [false, 'No controlled actor']
-    }
-    const force = actor.force
-    const tech = force.technologies[technology_name]
-
-    if (!tech) {
-      log('[AUTORIO] Cannot start research_technology task: Technology not found')
-      return [false, 'Technology not found']
-    }
-
-    if (tech.researched) {
-      log('[AUTORIO] Cannot start research_technology task: Technology already researched')
-      return [false, 'Technology already researched']
-    }
-
-    if (!tech.enabled) {
-      log('[AUTORIO] Cannot start research_technology task: Technology not available for research')
-      return [false, 'Technology not available for research']
-    }
-
-    const research_added = force.add_research(tech)
-    if (research_added) {
-      log(`[AUTORIO] New research_technology task: ${technology_name}`)
-      return [true, 'Research started']
-    }
-    log('[AUTORIO] Could not start new research.')
-    return [true, 'Cannot start new research.']
-  },
+  research_technology: (name: string): [boolean, string] => research_controller.submit(name),
   cancel_all_tasks: () => {
     task_manager.cancel_all_tasks()
     return true
@@ -899,27 +875,6 @@ function state_crafting(actor: ControlledActor) {
   }
 }
 
-function state_researching(actor: ControlledActor) {
-  if (!task_manager.player_state.parameters_research_technology) {
-    log('[AUTORIO] No parameters found when researching')
-    return
-  }
-
-  const force = actor.force
-  const tech = force.technologies[task_manager.player_state.parameters_research_technology.technology_name]
-
-  if (tech.researched) {
-    log(`[AUTORIO] Research completed: ${task_manager.player_state.parameters_research_technology.technology_name}`)
-    task_manager.reset_task_state()
-    task_manager.next_task()
-  }
-  else if (force.current_research !== tech) {
-    log(`[AUTORIO] Research interrupted: ${task_manager.player_state.parameters_research_technology.technology_name}`)
-    task_manager.reset_task_state()
-    task_manager.next_task()
-  }
-}
-
 function state_walking_direct(actor: ControlledActor) {
   if (!task_manager.player_state.parameters_walking_direct) {
     log('[AUTORIO] No parameters found when walking directly')
@@ -1041,7 +996,7 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     state_crafting(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) {
-    state_researching(actor)
+    research_controller.tick(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) {
     state_walking_direct(actor)

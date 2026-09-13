@@ -24,11 +24,13 @@ const entityStatusSchema = z.object({
   radius: z.number().int().min(1).max(32).default(8),
 }).strict()
 
-async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations') {
+async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_research') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
   return response.data.output
 }
+
+const technologySchema = z.object({ name: factorioNameSchema }).strict()
 
 export const tools: ToolFunction[] = [
   {
@@ -103,6 +105,23 @@ export const tools: ToolFunction[] = [
       const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_entity_status", ${renderLuaString(parsed.name)}, ${parsed.radius})))`
       const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
       logger.withFields({ output: response.data.output, parameters: parsed }).debug('Entity status')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getResearchStatus',
+    description: 'Read current force research, progress, a bounded queue, and the last research-request result. A request being accepted is not technology completion.',
+    schema: z.object({}).strict(),
+    fn: async () => readRemoteStatus('autorio_research'),
+  },
+  {
+    name: 'getTechnology',
+    description: 'Inspect one exact technology: researched state, level, prerequisites, science requirements, and any request blocker. Use this to verify research completion.',
+    schema: technologySchema,
+    fn: async ({ parameters }) => {
+      const { name } = technologySchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research", "technology", ${renderLuaString(name)})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
       return response.data.output
     },
   },

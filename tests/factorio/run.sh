@@ -49,6 +49,9 @@ finish() {
     print_file "$RESULTS/control-lifecycle-transcript.json"
     print_file "$RESULTS/control-lifecycle-observations.json"
     print_file "$RESULTS/control-lifecycle.json"
+    print_file "$RESULTS/research-error.txt"
+    print_file "$RESULTS/research-transcript.json"
+    print_file "$RESULTS/research.json"
   fi
   exit "$code"
 }
@@ -97,6 +100,13 @@ python3 "${TEST_ROOT:-/test}/runner/placement_transfer.py" \
 
 printf '[npc-test] Gameplay passed; checking physical stop and cancellation...\n'
 python3 "${TEST_ROOT:-/test}/runner/control_lifecycle.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS"
+
+printf '[npc-test] Lifecycle passed; checking research submission and native labs...\n'
+python3 "${TEST_ROOT:-/test}/runner/research.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \
   --password "$RCON_PASSWORD" \

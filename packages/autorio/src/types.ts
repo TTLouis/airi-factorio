@@ -78,6 +78,10 @@ export interface PlayerParametersAttackNearestEnemy {
 export interface PlayerParametersResearchTechnology {
   type: TaskStates.RESEARCHING
   technology_name: string
+  /** Bind deferred research submission to the requesting actor and force. */
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
 }
 
 export interface PlayerParametersWaiting {
