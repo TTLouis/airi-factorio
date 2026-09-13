@@ -4,8 +4,8 @@
         "version": "PTDL_v2",
         "update_url": null
     },
-    "exported_at": "2026-09-13T11:56:56-04:00",
-    "name": "AIRI Factorio Server",
+    "exported_at": "2026-09-13T13:44:19-04:00",
+    "name": "AIRI Factorio Server (Fork)",
     "author": "noreply@ttlouis.space",
     "description": "Self-contained AIRI-powered Factorio server with automatic Factorio updates. Each server runs an isolated Factorio process and Node supervisor, using authenticated loopback-only RCON plus local IPC for the AIRI agent. Only the Factorio game port is exposed externally.",
     "features": [],
@@ -16,7 +16,7 @@
     "startup": "bash .\/start-airi.sh",
     "config": {
         "files": "{}",
-        "startup": "{\r\n    \"done\": \"AIRI Factorio ready\"\r\n}",
+        "startup": "{\"done\": \"AIRI Factorio ready\"}",
         "logs": "{}",
         "stop": "^C"
     },
@@ -29,13 +29,13 @@
     },
     "variables": [
         {
-            "name": "Factorio Version",
-            "description": "",
-            "env_variable": "FACTORIO_VERSION",
-            "default_value": "latest",
+            "name": "AIRI Controlled Player",
+            "description": "The exact in-game name of the already-connected player AIRI is allowed to control. AI control stays disabled until this is set.",
+            "env_variable": "AIRI_PLAYER",
+            "default_value": "",
             "user_viewable": true,
             "user_editable": true,
-            "rules": "required|string|max:20",
+            "rules": "nullable|string|max:64",
             "field_type": "text"
         },
         {
@@ -49,28 +49,18 @@
             "field_type": "text"
         },
         {
-            "name": "AIRI Controlled Player",
-            "description": "The exact in-game name of the already-connected player AIRI is allowed to control. AI control stays disabled until this is set.",
-            "env_variable": "AIRI_PLAYER",
-            "default_value": "",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|string|max:64",
-            "field_type": "text"
-        },
-        {
             "name": "AI Model",
             "description": "OpenAI-compatible model name used for AIRI's responses.",
             "env_variable": "OPENAI_MODEL",
             "default_value": "gpt-4o",
             "user_viewable": true,
             "user_editable": true,
-            "rules": "required|string|max:200|regex:\/^[a-zA-Z0-9._:\/-]+$\/",
+            "rules": "required|string|max:200|regex:\/^[a-zA-Z0-9._:\\\/-]+$\/",
             "field_type": "text"
         },
         {
             "name": "Provider Base URL",
-            "description": "OpenAI-compatible API base URL. Change this to point at a different provider/proxy.",
+            "description": "OpenAI-compatible API base URL. Change this to point at a different provider\/proxy.",
             "env_variable": "OPENAI_API_BASEURL",
             "default_value": "https:\/\/api.openai.com\/v1",
             "user_viewable": true,
@@ -146,6 +136,16 @@
             "user_viewable": true,
             "user_editable": true,
             "rules": "required|string|max:1000",
+            "field_type": "text"
+        },
+        {
+            "name": "Factorio Version",
+            "description": "",
+            "env_variable": "FACTORIO_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:20",
             "field_type": "text"
         }
     ]
