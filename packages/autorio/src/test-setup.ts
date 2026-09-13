@@ -43,6 +43,11 @@ import { event_handlers } from './test-event-registry'
     west: 'west',
     northwest: 'northwest',
   },
+  shooting: {
+    not_shooting: 'not_shooting',
+    shooting_enemies: 'shooting_enemies',
+    shooting_selected: 'shooting_selected',
+  },
 }
 
 ;(globalThis as any).math = {

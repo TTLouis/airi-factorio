@@ -1,5 +1,5 @@
 import type { LuaPlayer } from 'factorio:runtime'
-import type { ActorEntityBuildArgs, ActorMiningState, ActorStatusSnapshot, ActorWalkingState, ControlledActor } from './types'
+import type { ActorEntityBuildArgs, ActorMiningState, ActorShootingState, ActorStatusSnapshot, ActorWalkingState, ControlledActor } from './types'
 
 /**
  * Wraps a connected LuaPlayer behind the ControlledActor interface,
@@ -48,6 +48,10 @@ export class ConnectedPlayerActor implements ControlledActor {
 
   set_walking_state(state: ActorWalkingState) {
     this.player.walking_state = state
+  }
+
+  set_shooting_state(state: ActorShootingState) {
+    this.player.shooting_state = state
   }
 
   begin_crafting(params: { count: number, recipe: string }) {

@@ -9,8 +9,8 @@ beforeEach(() => {
   ;(globalThis as any).game.connected_players = []
 })
 
-describe('Bug 3: state_moving_items double-counts moved_total on pickup', () => {
-  it('reports twice the actually-moved amount when pulling items from a nearby entity', () => {
+describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on pickup', () => {
+  it('reports exactly what was moved when pulling items from a nearby entity', () => {
     const removed_from_entity = vi.fn(() => 5)
     const inserted_into_player = vi.fn(() => 5) // full insert: inserted === removed
 
@@ -43,13 +43,47 @@ describe('Bug 3: state_moving_items double-counts moved_total on pickup', () => 
 
     const moved_total = state_moving_items(fake_actor)
 
-    // Only 5 items actually moved (one remove + one matching insert)...
     expect(removed_from_entity).toHaveBeenCalledTimes(1)
     expect(inserted_into_player).toHaveBeenCalledTimes(1)
-    // ...but state_moving_items reports 10: `moved_total += removed` runs both
-    // inside the `inserted < removed ? ... : moved_total += removed` branch and
-    // again unconditionally right after it (control.ts, state_moving_items).
-    expect(moved_total).toBe(10)
+    // Previously reported 10 (double-counted); state_moving_items no longer
+    // adds `removed` a second time unconditionally after the if/else.
+    expect(moved_total).toBe(5)
+  })
+
+  it('reports only what was actually inserted when the player inventory can only take part of it', () => {
+    const fake_inventory = {
+      remove: vi.fn(() => 5),
+      insert: vi.fn(),
+    }
+    const fake_entity = {
+      get_max_inventory_index: () => 1,
+      get_inventory: (_index: number) => fake_inventory,
+    }
+    const fake_player_inventory = {
+      can_insert: () => true,
+      insert: vi.fn(() => 3), // only 3 of the 5 removed items actually fit
+    }
+    const fake_actor = {
+      position: { x: 0, y: 0 },
+      surface: { find_entities_filtered: () => [fake_entity] },
+      force: {},
+      get_main_inventory: () => fake_player_inventory,
+    } as unknown as ControlledActor
+
+    task_manager.add_task({
+      type: TaskStates.MOVING_ITEMS,
+      item_name: 'iron-plate',
+      entity_name: 'iron-chest',
+      max_count: 5,
+      to_entity: false,
+    })
+
+    const moved_total = state_moving_items(fake_actor)
+
+    // The 2 that didn't fit are moved back into the entity's inventory...
+    expect(fake_inventory.insert).toHaveBeenCalledWith({ name: 'iron-plate', count: 2 })
+    // ...and moved_total reflects only the 3 that actually ended up with the actor.
+    expect(moved_total).toBe(3)
   })
 })
 
@@ -93,11 +127,21 @@ describe('Bug 1 (fixed): craft completion is gated by actor identity', () => {
   })
 })
 
-describe('Bug 4: ATTACKING has no on_tick dispatch case', () => {
-  it('leaves a queued attack task stuck forever instead of running or erroring', () => {
-    const on_tick = get_handler('on_tick')
+describe('Bug 4 (fixed): ATTACKING now has an on_tick dispatch case', () => {
+  function connect_player_seeing(entities: unknown[]) {
+    const fake_player = {
+      character: {},
+      position: { x: 0, y: 0 },
+      surface: { find_entities_filtered: () => entities },
+      force: {},
+    }
+    ;(globalThis as any).game.connected_players = [fake_player]
+    return fake_player as any
+  }
 
-    ;(globalThis as any).game.connected_players = [{ character: {} }]
+  it('completes the attack task instead of hanging when no enemy is found', () => {
+    const on_tick = get_handler('on_tick')
+    connect_player_seeing([])
 
     task_manager.add_task({
       type: TaskStates.ATTACKING,
@@ -107,10 +151,59 @@ describe('Bug 4: ATTACKING has no on_tick dispatch case', () => {
     expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
 
     on_tick({})
+
+    expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
+  })
+
+  it('shoots an enemy that is already within engage range', () => {
+    const on_tick = get_handler('on_tick')
+    const fake_player = connect_player_seeing([{ valid: true, position: { x: 5, y: 0 } }])
+
+    task_manager.add_task({
+      type: TaskStates.ATTACKING,
+      search_radius: 50,
+      target: null,
+    })
+
     on_tick({})
 
-    // No dispatch branch handles ATTACKING, so on_tick is a no-op for it every
-    // tick: the task never completes and never falls back to IDLE.
     expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
+    expect(fake_player.shooting_state).toEqual({ state: 'shooting_enemies', position: { x: 5, y: 0 } })
+    expect(fake_player.walking_state).toBeUndefined()
+  })
+
+  it('walks toward a distant enemy instead of shooting when out of engage range', () => {
+    const on_tick = get_handler('on_tick')
+    const fake_player = connect_player_seeing([{ valid: true, position: { x: 100, y: 0 } }])
+
+    task_manager.add_task({
+      type: TaskStates.ATTACKING,
+      search_radius: 200,
+      target: null,
+    })
+
+    on_tick({})
+
+    expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
+    expect(fake_player.walking_state).toBeDefined()
+    expect(fake_player.shooting_state).toBeUndefined()
+  })
+
+  it('re-acquires a new target once the current one is no longer valid', () => {
+    const on_tick = get_handler('on_tick')
+    connect_player_seeing([])
+
+    task_manager.add_task({
+      type: TaskStates.ATTACKING,
+      search_radius: 50,
+      // Already has a target locked from a previous tick, but it died —
+      // state_attacking must re-search rather than keep aiming at it.
+      target: { valid: false, position: { x: 5, y: 0 } } as any,
+    })
+
+    on_tick({})
+
+    // No replacement enemy found either, so the task completes.
+    expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
   })
 })

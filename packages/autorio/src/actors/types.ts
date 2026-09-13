@@ -3,6 +3,7 @@ import type { LuaEntity, LuaForce, LuaInventory, LuaPlayer, LuaSurface } from 'f
 
 export type ActorMiningState = LuaPlayer['mining_state']
 export type ActorWalkingState = LuaPlayer['walking_state']
+export type ActorShootingState = LuaPlayer['shooting_state']
 
 /**
  * Arguments to spread into `LuaSurface.create_entity` so a placed entity is
@@ -43,6 +44,7 @@ export interface ControlledActor {
   set_mining_state: (state: ActorMiningState) => void
 
   set_walking_state: (state: ActorWalkingState) => void
+  set_shooting_state: (state: ActorShootingState) => void
 
   begin_crafting: (params: { count: number, recipe: string }) => void
 

@@ -781,7 +781,6 @@ export function state_moving_items(actor: ControlledActor) {
           moved_total += removed
         }
 
-        moved_total += removed
         log(`[AUTORIO] Moved ${removed} ${parameters.item_name} from ${inventory.entity_owner?.name} inventory index ${inventory.index}`)
       })
   }
@@ -883,6 +882,46 @@ function state_walking_direct(actor: ControlledActor) {
   }
 }
 
+// Distance within which the actor stops closing in and starts shooting
+// instead. Not derived from the equipped weapon's actual range — a fixed,
+// conservative value keeps this bounded without needing prototype lookups.
+const ATTACK_ENGAGE_RANGE = 10
+
+function state_attacking(actor: ControlledActor) {
+  const parameters = task_manager.player_state.parameters_attack_nearest_enemy
+  if (!parameters) {
+    log('[AUTORIO] No parameters found when attacking')
+    return
+  }
+
+  if (!parameters.target || !parameters.target.valid) {
+    const enemies = actor.surface.find_entities_filtered({
+      position: actor.position,
+      radius: parameters.search_radius,
+      force: 'enemy',
+    })
+
+    parameters.target = get_nearest_entity(actor, enemies)
+
+    if (!parameters.target) {
+      log('[AUTORIO] No enemy found to attack, switching to IDLE state')
+      task_manager.reset_task_state()
+      task_manager.next_task()
+      return
+    }
+  }
+
+  const target = parameters.target
+
+  if (distance(actor.position, target.position) > ATTACK_ENGAGE_RANGE) {
+    const direction = get_direction(actor.position, target.position)
+    actor.set_walking_state({ walking: true, direction })
+    return
+  }
+
+  actor.set_shooting_state({ state: defines.shooting.shooting_enemies, position: target.position })
+}
+
 function state_waiting() {
   if (!task_manager.player_state.parameters_waiting) {
     log('[AUTORIO] No parameters found when waiting')
@@ -936,6 +975,9 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   }
   else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) {
     state_walking_direct(actor)
+  }
+  else if (task_manager.player_state.task_state === TaskStates.ATTACKING) {
+    state_attacking(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.WAITING) {
     state_waiting()
