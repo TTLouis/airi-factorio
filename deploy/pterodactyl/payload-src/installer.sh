@@ -839,8 +839,8 @@ export function configuration(raw = {}, env = process.env) {
     autoUpdate:env.AUTO_UPDATE===undefined ? raw.autoUpdate ?? true : env.AUTO_UPDATE==='1',
     watchUpdates:env.TTL_UPDATER===undefined ? raw.watchUpdates ?? true : env.TTL_UPDATER==='1',
     updateMinutes:number(env.UPDATE_TTL_MIN ?? raw.updateMinutes ?? 10,'update interval',1,1440),
-    budget:number(raw.maxProviderRequestsPerHour ?? 30,'hourly request budget',1,1200),
-    stopMs:number(raw.shutdownTimeoutMs ?? 60000,'shutdown timeout',1000,300000),
+    budget:number(env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? 30,'hourly request budget',1,1200),
+    stopMs:number(env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? 60000,'shutdown timeout',1000,300000),
     extras:extraArgs(env.FACTORIO_EXTRA_ARGS ?? raw.extraArgs ?? []),
   };
   for(const key of ['AUTO_UPDATE','TTL_UPDATER'])check(env[key]===undefined||['0','1'].includes(env[key]),`Invalid ${key}`);
@@ -1371,7 +1371,8 @@ test('ambiguous shell quoting is rejected rather than misparsed',()=>assert.thro
 test('duplicate optional flags rejected',()=>assert.throws(()=>extraArgs(['--verbose','--verbose'])));
 test('bind and RCON endpoints are explicitly assigned',()=>{const args=gameArgs(cfg(),'save.zip','settings','mods','config',27015,'secret');assert.ok(args.includes('127.0.0.1:27015'));assert.ok(args.includes('0.0.0.0:34060'));assert.ok(!args.includes('--rcon-port'));});
 test('shadow compatibility probe uses loopback game binding',()=>assert.ok(gameArgs(cfg(),'save','settings','mods','ini',27015,'s','127.0.0.1').includes('127.0.0.1:34060')));
-for(const input of [{OPENAI_API_KEY:''},{AUTO_UPDATE:'yes'},{TTL_UPDATER:'2'},{UPDATE_TTL_MIN:'-1'},{SERVER_PORT:'1'},{FACTORIO_VERSION:'2.1.0'}])test(`configuration rejects ${JSON.stringify(input)}`,()=>assert.throws(()=>configuration({}, {...env,...input})));
+for(const input of [{OPENAI_API_KEY:''},{AUTO_UPDATE:'yes'},{TTL_UPDATER:'2'},{UPDATE_TTL_MIN:'-1'},{SERVER_PORT:'1'},{FACTORIO_VERSION:'2.1.0'},{MAX_PROVIDER_REQUESTS_PER_HOUR:'0'},{SHUTDOWN_TIMEOUT_MS:'500'}])test(`configuration rejects ${JSON.stringify(input)}`,()=>assert.throws(()=>configuration({}, {...env,...input})));
+test('provider budget and shutdown timeout can be overridden by environment',()=>{const c=configuration({},{...env,MAX_PROVIDER_REQUESTS_PER_HOUR:'5',SHUTDOWN_TIMEOUT_MS:'2000'});assert.equal(c.budget,5);assert.equal(c.stopMs,2000);});
 test('secrets are redacted including split pieces reassembled into a line',()=>assert.equal(redactor(['secret-value'])('token secret-'+'value'),'token [REDACTED]'));
 test('path containment rejects traversal',()=>assert.throws(()=>inside('/root','/root/../etc/passwd')));
 
@@ -1572,11 +1573,11 @@ node "$APP/src/smoke.mjs" "$WORK/.airi/smoke" > "$APP/smoke.log" 2>&1 || { cat "
 cat "$APP/smoke.log"
 cp "$WORK/.airi/smoke/smoke-results.json" "$APP/smoke-results.json"
 # Manifest is written only after every gate passed. The bootstrap will reject its absence.
-APP_SRC="$APP/src" node --input-type=module <<'MANIFEST'
+APP_SRC="$APP/src" node --input-type=module <<MANIFEST
 import fs from 'node:fs/promises';import path from 'node:path';import crypto from 'node:crypto';
 const root=process.env.APP_SRC, files={};
 async function visit(dir){for(const e of await fs.readdir(dir,{withFileTypes:true})){const f=path.join(dir,e.name);if(e.isDirectory())await visit(f);else if(e.isFile() && e.name!=='manifest.json'){files[path.relative(root,f)]=crypto.createHash('sha256').update(await fs.readFile(f)).digest('hex');}else if(e.isSymbolicLink())throw Error('Release contains unexpected symlink');}}
-await visit(root);await fs.writeFile(path.join(root,'manifest.json'),JSON.stringify({revision:'2026-09-13.9',upstream:'cf2b39dd7f3fa3d85bd1f4471b7ac22b9505ef16',node:'v24.21.0',files},null,2));
+await visit(root);await fs.writeFile(path.join(root,'manifest.json'),JSON.stringify({revision:'2026-09-13.9',upstream:'$AIRI_REF',node:'v24.21.0',files},null,2));
 MANIFEST
 chmod -R a+rX "$APP"
 RELEASE_ID="${REVISION}-$(basename "$WORK" | tr . -)"
