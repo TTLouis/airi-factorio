@@ -24,12 +24,13 @@ beforeEach(() => {
 })
 
 describe('agent observation tools', () => {
-  it('exposes the Stage A observation tool set', () => {
+  it('exposes the bounded observation tool set', () => {
     expect(tools.map(tool => tool.name)).toEqual([
       'getActorStatus',
       'getTaskStatus',
       'getInventoryItems',
       'getRecipe',
+      'getNearbyEntities',
     ])
   })
 
@@ -67,6 +68,36 @@ describe('agent observation tools', () => {
 
   it('rejects control characters in recipe tool input before RCON execution', async () => {
     await expect(getTool('getRecipe').fn({ parameters: { item: 'iron-plate\n/c game.clear()' } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('renders bounded nearby-entity filters into a read-only remote call', async () => {
+    await getTool('getNearbyEntities').fn({
+      parameters: {
+        radius: 32,
+        name: 'iron-ore',
+        type: 'resource',
+        limit: 25,
+      },
+    })
+
+    expect(mocks.raw).toHaveBeenCalledWith({
+      body: {
+        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_nearby_entities", 32, \'iron-ore\', \'resource\', 25)))',
+      },
+    })
+  })
+
+  it('applies safe defaults and rejects oversized nearby-entity queries', async () => {
+    await getTool('getNearbyEntities').fn({ parameters: {} })
+    expect(mocks.raw).toHaveBeenCalledWith({
+      body: {
+        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_nearby_entities", 20, nil, nil, 50)))',
+      },
+    })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getNearbyEntities').fn({ parameters: { radius: 65 } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 })
