@@ -114,6 +114,10 @@ def decode_json(response: str, context: str):
         raise RuntimeError(f'{context} returned non-JSON RCON output: {response!r}') from exc
 
 
+def squared_distance(a: dict[str, float], b: dict[str, float]) -> float:
+    return (a['x'] - b['x']) ** 2 + (a['y'] - b['y']) ** 2
+
+
 def run(client: Rcon, results: Path) -> None:
     transcript: list[dict[str, object]] = []
     results.mkdir(parents=True, exist_ok=True)
@@ -124,6 +128,14 @@ def run(client: Rcon, results: Path) -> None:
         transcript.append({'command': value, 'response': response})
         transcript_path.write_text(json.dumps({'transcript': transcript}, indent=2))
         return response
+
+    def operation_status(context: str) -> dict:
+        response = command(lua_json(remote_call('autorio_operations', 'status')))
+        return decode_json(response, context)
+
+    def actor_status(context: str) -> dict:
+        response = command(lua_json(remote_call('autorio_actor', 'status')))
+        return decode_json(response, context)
 
     # Factorio 2.0 requires the first Lua console command to be repeated before
     # it disables achievements and actually executes Lua. RCON receives an empty
@@ -143,8 +155,7 @@ def run(client: Rcon, results: Path) -> None:
     set_mode = decode_json(response, 'autorio_actor.set_mode')
     assert_true(set_mode[0] is True, f'could not enable npc mode: {set_mode!r}')
 
-    response = command(lua_json(remote_call('autorio_actor', 'status')))
-    status = decode_json(response, 'autorio_actor.status')
+    status = actor_status('autorio_actor.status')
     assert_true(status['mode'] == 'npc', f"expected npc mode, got {status!r}")
     assert_true(status['connected_players'] == 0, f"NPC test unexpectedly has players: {status!r}")
     assert_true(status['actor'] is not None, f"standalone actor was not created: {status!r}")
@@ -153,8 +164,8 @@ def run(client: Rcon, results: Path) -> None:
     assert_true(isinstance(status['actor']['actor_id'], int), f"NPC has no stable unit identity: {status!r}")
 
     first_actor_id = status['actor']['actor_id']
-    response = command(lua_json(remote_call('autorio_actor', 'status')))
-    second_status = decode_json(response, 'autorio_actor.status (repeat)')
+    initial_position = status['actor']['position']
+    second_status = actor_status('autorio_actor.status (repeat)')
     assert_true(second_status['actor']['actor_id'] == first_actor_id, 'actor resolution created or selected a different NPC')
 
     # Actor diagnostics return a scalar boolean, not a table, so they must not
@@ -171,24 +182,79 @@ def run(client: Rcon, results: Path) -> None:
     assert_true(wait_result[0] is True, f'could not start wait task: {wait_result!r}')
 
     deadline = time.monotonic() + 5.0
-    operation_status = None
+    wait_status = None
     while time.monotonic() < deadline:
-        response = command(lua_json(remote_call('autorio_operations', 'status')))
-        operation_status = decode_json(response, 'autorio_operations.status')
-        if operation_status['task_state'] == 'idle':
+        wait_status = operation_status('autorio_operations.status (wait)')
+        if wait_status['task_state'] == 'idle':
             break
         time.sleep(0.05)
 
-    assert_true(operation_status is not None, 'operation status was never returned')
-    assert_true(operation_status['task_state'] == 'idle', f'zero-player control loop did not complete wait task: {operation_status!r}')
-    assert_true(operation_status['actor']['actor_id'] == first_actor_id, f'control loop switched actors: {operation_status!r}')
+    assert_true(wait_status is not None, 'operation status was never returned')
+    assert_true(wait_status['task_state'] == 'idle', f'zero-player control loop did not complete wait task: {wait_status!r}')
+    assert_true(wait_status['actor']['actor_id'] == first_actor_id, f'control loop switched actors: {wait_status!r}')
+    assert_true(wait_status.get('queue_empty') is True, f'wait task left queued work behind: {wait_status!r}')
+    assert_true(wait_status.get('queue_length') == 0, f'wait task status did not expose an empty bounded queue: {wait_status!r}')
 
-    response = command(lua_json(remote_call('autorio_actor', 'status')))
-    final_status = decode_json(response, 'autorio_actor.status (final)')
+    # Create a deterministic, obstacle-free movement corridor. The test harness
+    # owns this setup directly; production/model code still uses only Autorio's
+    # structured operation interface. A wooden chest is unique on the test map,
+    # so walk_to_entity cannot accidentally select a generated resource patch.
+    movement_fixture = (
+        "/silent-command "
+        "local s=game.surfaces[1]; "
+        "local tiles={}; "
+        "for x=-2,12 do for y=-2,2 do tiles[#tiles+1]={name='landfill',position={x=x,y=y}} end end; "
+        "s.set_tiles(tiles,true,false,true); "
+        "for _,e in pairs(s.find_entities_filtered{area={{-2,-2},{12,2}}}) do "
+        "if e.name~='character' then e.destroy() end end; "
+        "local target=s.create_entity{name='wooden-chest',position={x=10,y=0},force=game.forces.player}; "
+        "rcon.print(helpers.table_to_json({created=target~=nil,position=target and target.position or nil}))"
+    )
+    fixture = decode_json(command(movement_fixture), 'movement fixture setup')
+    assert_true(fixture['created'] is True, f'could not create deterministic movement target: {fixture!r}')
+    target_position = fixture['position']
+
+    response = command(lua_text(remote_call('autorio_operations', 'walk_to_entity', repr('wooden-chest'), '50')))
+    assert_true(response == 'true', f'could not start movement task: {response!r}')
+
+    deadline = time.monotonic() + 10.0
+    movement_status = None
+    while time.monotonic() < deadline:
+        movement_status = operation_status('autorio_operations.status (movement)')
+        if movement_status['task_state'] == 'idle':
+            break
+        time.sleep(0.05)
+
+    assert_true(movement_status is not None, 'movement operation status was never returned')
+    assert_true(movement_status['task_state'] == 'idle', f'NPC movement task did not return to idle: {movement_status!r}')
+    assert_true(movement_status['actor']['actor_id'] == first_actor_id, f'movement switched actors: {movement_status!r}')
+
+    moved_position = movement_status['actor']['position']
+    assert_true(
+        squared_distance(initial_position, moved_position) >= 4.0,
+        f'NPC did not move a meaningful distance: start={initial_position!r}, end={moved_position!r}',
+    )
+    assert_true(
+        squared_distance(moved_position, target_position) <= 16.0,
+        f'NPC stopped too far from deterministic target: actor={moved_position!r}, target={target_position!r}',
+    )
+
+    final_status = actor_status('autorio_actor.status (final)')
     assert_true(final_status['connected_players'] == 0, f"a player appeared during NPC smoke test: {final_status!r}")
+    assert_true(final_status['actor']['actor_id'] == first_actor_id, f"final actor identity changed: {final_status!r}")
 
-    (results / 'runner.json').write_text(json.dumps({'status': 'pass', 'transcript': transcript}, indent=2))
-    print(f'PASS: zero-player NPC control loop completed a task with stable actor_id={first_actor_id}')
+    (results / 'runner.json').write_text(json.dumps({
+        'status': 'pass',
+        'actor_id': first_actor_id,
+        'initial_position': initial_position,
+        'movement_target': target_position,
+        'final_position': final_status['actor']['position'],
+        'transcript': transcript,
+    }, indent=2))
+    print(
+        'PASS: zero-player NPC completed wait + movement '
+        f'with stable actor_id={first_actor_id}, final_position={final_status["actor"]["position"]}'
+    )
 
 
 def main() -> int:
