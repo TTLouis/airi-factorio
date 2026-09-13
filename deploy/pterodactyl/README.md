@@ -8,14 +8,42 @@ Factorio headless server, exactly as exported from the panel.
   **Admin → Nests → Import Egg** — it already contains the install script.
 - [`install.sh`](install.sh) — the same install script as a standalone file,
   extracted from the egg's `scripts.installation.script` field, for reading
-  or pasting into the egg's *Install Script* field by hand. Keep it in sync
-  with the egg JSON if either is regenerated from the panel.
+  or pasting into the egg's *Install Script* field by hand.
 
 Both files are a bootstrap wrapper: they verify and unpack an embedded,
 checksummed payload (`AIRI_PAYLOAD`) into `/mnt/server` at install time,
 which is the actual installer for the Node supervisor + Factorio headless
-binary. Don't hand-edit the payload; regenerate it from the panel export if
-the installer logic changes upstream.
+binary.
+
+**The payload's real source of truth is [`payload-src/installer.sh`](payload-src/installer.sh)**,
+a normal, diffable bash script — not the base64+gzip blob embedded in the
+two files above. Never hand-edit that embedded blob, and never hand-edit the
+`EXPECTED_SHA256` / `EXPECTED_BYTES` / `EXPECTED_BASE64_BYTES` constants near
+the top of `install.sh`. Instead:
+
+1. Edit [`payload-src/installer.sh`](payload-src/installer.sh).
+2. Run [`build-payload.sh`](build-payload.sh) (or `node build-payload.mjs`
+   directly). It compresses that file, splices the result into both
+   `install.sh` and the egg JSON's `scripts.installation.script` field
+   (they must always carry the identical script — this is enforced by the
+   build, not just documented), and updates the three `EXPECTED_*`
+   constants to match.
+3. The build refuses to write anything unless decoding its own freshly
+   built blob reproduces `payload-src/installer.sh` byte-for-byte — the
+   thing that actually matters, since that's the content a server install
+   would end up running. The *compressed* bytes are allowed to change
+   between runs (gzip isn't a canonical encoding), so don't be surprised if
+   `EXPECTED_BASE64_BYTES` moves even when `payload-src/installer.sh`
+   didn't.
+4. Commit `payload-src/installer.sh` together with the regenerated
+   `install.sh` and `egg-airi-factorio-server.json`.
+
+`payload-src/installer.sh` itself downloads a pinned upstream AIRI source
+revision (`AIRI_REF` near its top) and Node at install time — it's the
+installer for the Node supervisor + Factorio headless binary, structured as
+a transactional bootstrap: portable Node → pinned source → generated
+supervisor/agent modules written out via heredocs → smoke tests → release
+swap. Read it directly; it's no longer a blob you have to decode first.
 
 **Docker image (both install and runtime):**
 `ghcr.io/ptero-eggs/yolks:debian_bookworm`
