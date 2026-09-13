@@ -22,6 +22,12 @@ export interface ActorStatusSnapshot {
   position: MapPositionStruct
   has_character: boolean
   actor_id?: number
+  selected_entity?: {
+    name: string
+    position: MapPositionStruct
+  }
+  mining_state?: ActorMiningState
+  mining_progress?: number
 }
 
 /**
