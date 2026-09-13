@@ -36,6 +36,9 @@ finish() {
     print_file "$RESULTS/runner-error.txt"
     print_file "$RESULTS/runner-transcript.json"
     print_file "$RESULTS/runner.json"
+    print_file "$RESULTS/placement-transfer-error.txt"
+    print_file "$RESULTS/placement-transfer-transcript.json"
+    print_file "$RESULTS/placement-transfer.json"
   fi
   cleanup
   exit "$code"
@@ -65,6 +68,13 @@ fi
 
 printf '[npc-test] Factorio started (pid=%s); running zero-player NPC smoke...\n' "$FACTORIO_PID"
 python3 "${TEST_ROOT:-/test}/runner/run.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS"
+
+printf '[npc-test] Core NPC smoke passed; running placement + inventory transfer...\n'
+python3 "${TEST_ROOT:-/test}/runner/placement_transfer.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \
   --password "$RCON_PASSWORD" \
