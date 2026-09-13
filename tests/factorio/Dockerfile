@@ -6,6 +6,7 @@ WORKDIR /src
 COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm test:prompt
+RUN pnpm --filter @proj-airi/tstl-plugin-reload-factorio-mod run build
 RUN pnpm --filter autorio.ts run build
 RUN cp packages/autorio/info.json packages/autorio/dist/info.json
 
