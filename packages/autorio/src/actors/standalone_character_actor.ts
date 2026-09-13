@@ -76,7 +76,18 @@ export class StandaloneCharacterActor implements ControlledActor {
   }
 
   get_mining_state(): ActorMiningState {
-    return this.character_entity.mining_state
+    const state = this.character_entity.mining_state
+
+    // Factorio mines the currently selected entity. A standalone scripted
+    // character can retain `mining_state.mining = true` after one resource
+    // cycle while its selection has already been cleared. Report that state as
+    // effectively stopped so control.ts reselects the persisted target and
+    // starts the next requested mining cycle.
+    if (state.mining && !this.character_entity.selected) {
+      return { mining: false }
+    }
+
+    return state
   }
 
   set_mining_state(state: ActorMiningState) {
