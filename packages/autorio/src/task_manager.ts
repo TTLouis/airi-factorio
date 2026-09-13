@@ -63,18 +63,33 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       case TaskStates.MOVING_ITEMS:
         player_state.parameters_move_items = task
         break
-      case TaskStates.CRAFTING:{
+      case TaskStates.CRAFTING: {
         const actor = get_controlled_actor()
         if (!actor) {
-          log('[AUTORIO] No player found')
+          log('[AUTORIO] No controlled actor found while starting crafting task')
+          reset_task_state()
+          next_task()
           return
         }
 
-        actor.begin_crafting({
+        task.queue_count_before = actor.get_crafting_queue_count(task.item_name)
+        task.started = actor.begin_crafting({
           count: task.count,
           recipe: task.item_name,
         })
 
+        if (task.started <= 0) {
+          log(`[AUTORIO] Could not begin crafting ${task.item_name}, ending task`)
+          reset_task_state()
+          next_task()
+          return
+        }
+
+        if (task.started !== task.count) {
+          log(`[AUTORIO] Requested ${task.count} ${task.item_name} crafts but only ${task.started} started`)
+        }
+
+        task.crafted = 0
         player_state.parameters_craft_item = task
         break
       }
@@ -117,7 +132,15 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       }
       case TaskStates.MINING: {
         const task = player_state.parameters_mine_entity
-        return task ? { type: task.type, entity_name: task.entity_name, count: task.count, position: task.position } : { type: player_state.task_state }
+        return task
+          ? {
+              type: task.type,
+              entity_name: task.entity_name,
+              count: task.count,
+              position: task.position,
+              last_target_amount: task.last_target_amount,
+            }
+          : { type: player_state.task_state }
       }
       case TaskStates.PLACING: {
         const task = player_state.parameters_place_entity
@@ -137,7 +160,18 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       }
       case TaskStates.CRAFTING: {
         const task = player_state.parameters_craft_item
-        return task ? { type: task.type, item_name: task.item_name, count: task.count, crafted: task.crafted } : { type: player_state.task_state }
+        if (!task) {
+          return { type: player_state.task_state }
+        }
+        const actor = get_controlled_actor()
+        return {
+          type: task.type,
+          item_name: task.item_name,
+          count: task.count,
+          crafted: task.crafted,
+          started: task.started,
+          queued_crafts: actor?.get_crafting_queue_count(task.item_name),
+        }
       }
       case TaskStates.ATTACKING: {
         const task = player_state.parameters_attack_nearest_enemy
