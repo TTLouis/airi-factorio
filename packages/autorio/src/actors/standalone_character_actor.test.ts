@@ -163,7 +163,7 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
     expect(actor.entity_build_args()).toEqual({ force: character.force })
   })
 
-  it('produces a status snapshot identifying itself as a standalone_character', () => {
+  it('produces a status snapshot identifying itself as a standalone_character with bounded mining diagnostics', () => {
     const { actor } = create_actor()
 
     expect(actor.status_snapshot()).toEqual({
@@ -173,6 +173,9 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
       position: { x: 10, y: 20 },
       has_character: true,
       actor_id: 42,
+      selected_entity: undefined,
+      mining_state: { mining: false },
+      mining_progress: 0,
     })
   })
 })
