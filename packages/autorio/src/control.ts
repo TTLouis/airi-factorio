@@ -264,7 +264,7 @@ remote.add_interface('autorio_operations', {
   },
 })
 
-function get_direction(start_position: MapPositionStruct, end_position: MapPositionStruct) {
+export function get_direction(start_position: MapPositionStruct, end_position: MapPositionStruct) {
   const angle = math.atan2(end_position.y - start_position.y, start_position.x - end_position.x)
   const octant = (angle + math.pi) / (2 * math.pi) * 8 + 0.5
 
@@ -292,7 +292,7 @@ function get_direction(start_position: MapPositionStruct, end_position: MapPosit
   return defines.direction.southeast
 }
 
-function get_nearest_entity(player: LuaPlayer, entities: LuaEntity[]) {
+export function get_nearest_entity(player: LuaPlayer, entities: LuaEntity[]) {
   let min_distance = math.huge
   let nearest_entity: LuaEntity | null = null
 
