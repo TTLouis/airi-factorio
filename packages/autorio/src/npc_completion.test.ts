@@ -88,7 +88,7 @@ function configureNpcWorld(resource?: Record<string, any>) {
 }
 
 describe('standalone NPC completion polling', () => {
-  it('counts real resource depletion and finishes mining without LuaPlayer events', () => {
+  it('counts real resource depletion and keeps mining across multiple cycles without LuaPlayer events', () => {
     const resource: Record<string, any> = {
       valid: true,
       name: 'iron-ore',
@@ -110,10 +110,13 @@ describe('standalone NPC completion polling', () => {
     expect(character.mining_state.mining).toBe(true)
     expect(task_manager.player_state.parameters_mine_entity?.count).toBe(2)
 
+    const selections_after_start = character.update_selected_entity.mock.calls.length
     resource.amount = 9
     on_tick({})
     expect(task_manager.player_state.parameters_mine_entity?.count).toBe(1)
     expect(task_manager.player_state.task_state).toBe(TaskStates.MINING)
+    expect(character.mining_state.mining).toBe(true)
+    expect(character.update_selected_entity.mock.calls.length).toBeGreaterThan(selections_after_start)
 
     resource.amount = 8
     on_tick({})
