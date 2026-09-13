@@ -219,8 +219,7 @@ remote.add_interface('autorio_operations', {
   status: () => {
     const actor = get_controlled_actor()
     return {
-      task_state: task_manager.player_state.task_state,
-      queue_empty: task_manager.is_task_queue_empty(),
+      ...task_manager.get_status_snapshot(),
       actor: actor?.status_snapshot(),
     }
   },
@@ -782,6 +781,24 @@ function check_can_craft(actor: ControlledActor, item_name: string, count: numbe
   return true
 }
 
+function state_crafting(actor: ControlledActor) {
+  if (!task_manager.player_state.parameters_craft_item) {
+    log('[AUTORIO] No parameters found when crafting')
+    return
+  }
+
+  if (!actor.character) {
+    log('[AUTORIO] Actor character not found, ending CRAFTING task')
+    task_manager.reset_task_state()
+    task_manager.next_task()
+    return
+  }
+
+  // Crafting completion for connected players is currently event-driven by
+  // on_player_crafted_item below. Standalone NPC completion will be made
+  // actor-native in the next migration pass.
+}
+
 function state_researching(actor: ControlledActor) {
   if (!task_manager.player_state.parameters_research_technology) {
     log('[AUTORIO] No parameters found when researching')
@@ -919,6 +936,9 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   }
   else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) {
     state_moving_items(actor)
+  }
+  else if (task_manager.player_state.task_state === TaskStates.CRAFTING) {
+    state_crafting(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) {
     state_researching(actor)
