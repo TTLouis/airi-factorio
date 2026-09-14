@@ -169,7 +169,7 @@ if ([string]::IsNullOrWhiteSpace($powerShellExe)) {
 
 $process = Start-Process `
     -FilePath $powerShellExe `
-    -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) `
+    -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) `
     -WorkingDirectory $Repo `
     -RedirectStandardOutput $StdoutLog `
     -RedirectStandardError $StderrLog `
