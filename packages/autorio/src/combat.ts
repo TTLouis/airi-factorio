@@ -1,9 +1,9 @@
-import type { MapPositionStruct } from 'factorio:prototype'
 import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersAttackNearestEnemy } from './types'
 import { TaskStates } from './types'
+import { direction_towards } from './utils/direction'
 import { distance } from './utils/math'
 
 const MAX_SEARCH_RADIUS = 256
@@ -29,19 +29,6 @@ interface CombatResult {
 
 declare const storage: {
   airi_last_combat_result?: CombatResult
-}
-
-function get_direction(start: MapPositionStruct, target: MapPositionStruct) {
-  const angle = math.atan2(target.y - start.y, start.x - target.x)
-  const octant = (angle + math.pi) / (2 * math.pi) * 8 + 0.5
-  if (octant < 1) return defines.direction.east
-  if (octant < 2) return defines.direction.northeast
-  if (octant < 3) return defines.direction.north
-  if (octant < 4) return defines.direction.northwest
-  if (octant < 5) return defines.direction.west
-  if (octant < 6) return defines.direction.southwest
-  if (octant < 7) return defines.direction.south
-  return defines.direction.southeast
 }
 
 function nearest(actor: ControlledActor, entities: LuaEntity[]) {
@@ -209,7 +196,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       fail(actor, task, 'stuck')
       return
     }
-    actor.set_walking_state({ walking: true, direction: get_direction(actor.position, target.position) })
+    actor.set_walking_state({ walking: true, direction: direction_towards(actor.position, target.position) })
   }
 
   function status() {
