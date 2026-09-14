@@ -73,6 +73,15 @@ export interface PlayerParametersAttackNearestEnemy {
   type: TaskStates.ATTACKING
   search_radius: number
   target: LuaEntity | null
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
+  target_name?: string
+  target_unit_number?: number
+  target_initial_health?: number
+  started_tick?: number
+  last_progress_tick?: number
+  last_distance?: number
 }
 
 export interface PlayerParametersResearchTechnology {
