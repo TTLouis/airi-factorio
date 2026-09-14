@@ -1,9 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { bootstrapFromArchive, buildArtifacts, verifyGeneratedArtifacts } from './build-payload.mjs'
 
+const here = dirname(fileURLToPath(import.meta.url))
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
 DEPLOYMENT_REVISION="airi-deploy-v8-test"
@@ -42,4 +46,12 @@ test('generated artifact verifier rejects payload/source drift', () => {
     () => verifyGeneratedArtifacts(changedSource, canonical.installScript, canonical.eggJson),
     /checksum is stale|does not reproduce/,
   )
+})
+
+test('committed Pterodactyl egg is valid JSON with a valid model rule', () => {
+  const egg = JSON.parse(readFileSync(join(here, 'egg-airi-factorio-server.json'), 'utf8'))
+  const model = egg.variables.find(entry => entry.env_variable === 'OPENAI_MODEL')
+  assert.ok(model)
+  assert.equal(model.rules, 'required|string|max:200|regex:/^[a-zA-Z0-9._:\\\\/-]+$/')
+  assert.equal(egg.scripts.installation.script, readFileSync(join(here, 'install.sh'), 'utf8'))
 })
