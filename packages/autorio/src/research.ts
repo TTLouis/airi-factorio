@@ -126,9 +126,6 @@ export function research_error(actor: ControlledActor | undefined, name: string)
   for (const [, prerequisite] of pairs(tech.prerequisites)) {
     if (!prerequisite.researched) return 'missing_prerequisites'
   }
-  // Conservative shared-force policy: never replace or append to someone
-  // else's active queue. A request for the exact already-queued technology is
-  // observationally attached to that native work instead of duplicating it.
   if (force.current_research || (force.research_queue ?? []).length > 0) return 'force_busy'
   return undefined
 }
@@ -136,16 +133,15 @@ export function research_error(actor: ControlledActor | undefined, name: string)
 function push_result(result: ResearchResult) {
   storage.airi_last_research_result = result
   const history = results()
-  const previous = result_by_id(result.request_id)
-  if (previous) {
-    for (let i = 0; i < history.length; i++) {
-      if (history[i]?.request_id === result.request_id) {
-        history[i] = result
-        break
-      }
+  let replaced = false
+  for (let i = 0; i < history.length; i++) {
+    if (history[i]?.request_id === result.request_id) {
+      history[i] = result
+      replaced = true
+      break
     }
   }
-  else {
+  if (!replaced) {
     history.push(result)
     trim(history)
   }
@@ -169,9 +165,9 @@ function record_result(
     code,
     technology: valid_name(name) ? name : '<invalid>',
     tick: game.tick,
-    force_index: actor?.is_valid ? actor.force.index : details.force_index,
-    actor_id: identity?.actor_id ?? details.actor_id,
-    actor_kind: identity?.kind ?? details.actor_kind,
+    force_index: details.force_index ?? (actor?.is_valid ? actor.force.index : undefined),
+    actor_id: details.actor_id ?? identity?.actor_id,
+    actor_kind: details.actor_kind ?? identity?.kind,
     ...details,
   })
 }
@@ -196,16 +192,15 @@ function start_follow(task: PlayerParametersResearchTechnology, actor: Controlle
     observed_level: force.technologies[task.technology_name]?.level,
   }
   const records = follow_records()
-  const existing = follow_by_id(record.request_id)
-  if (existing) {
-    for (let i = 0; i < records.length; i++) {
-      if (records[i]?.request_id === record.request_id) {
-        records[i] = record
-        break
-      }
+  let replaced = false
+  for (let i = 0; i < records.length; i++) {
+    if (records[i]?.request_id === record.request_id) {
+      records[i] = record
+      replaced = true
+      break
     }
   }
-  else {
+  if (!replaced) {
     records.push(record)
     trim(records)
   }
@@ -231,14 +226,19 @@ export function execute_research_request(actor: ControlledActor, task: PlayerPar
   if (task.owner_actor_id === undefined || task.owner_force_index === undefined
     || identity.actor_id !== task.owner_actor_id || identity.kind !== task.owner_actor_kind
     || actor.force.index !== task.owner_force_index) {
-    return record_result(request_id, actor, task.technology_name, false, false, 'actor_changed')
+    return record_result(request_id, actor, task.technology_name, false, false, 'actor_changed', {
+      actor_id: task.owner_actor_id,
+      actor_kind: task.owner_actor_kind,
+      force_index: task.owner_force_index,
+      requested_level: task.requested_level,
+    })
   }
   const error = research_error(actor, task.technology_name)
   if (error) return record_result(request_id, actor, task.technology_name, false, false, error)
 
   const force = actor.force
   const tech = force.technologies[task.technology_name]
-  task.requested_level ??= tech.level
+  if (task.requested_level === undefined) task.requested_level = tech.level
 
   if (tech.researched) {
     start_follow(task, actor, 'completed')
@@ -336,8 +336,6 @@ export function new_research_controller(get_actor: () => ControlledActor | undef
       }
       record.observed_level = tech.level
 
-      // Normal one-shot technologies flip researched=true. Repeatable/infinite
-      // technologies advance their level after each completed native research.
       if (tech.researched || tech.level > record.requested_level) {
         record.state = 'completed'
         record.completed_tick = game.tick
@@ -368,9 +366,6 @@ export function new_research_controller(get_actor: () => ControlledActor | undef
         continue
       }
 
-      // The tracked native research disappeared without completing the requested
-      // level. Do not restart or replace it automatically; report interruption so
-      // the agent can inspect current force state and decide what to do.
       record.state = 'interrupted'
       update_follow_result(actor, record, 'interrupted', false, { observed_level: tech.level })
     }
@@ -382,16 +377,12 @@ export function new_research_controller(get_actor: () => ControlledActor | undef
     for (const record of follow_records()) {
       if (record.force_index !== force.index || record.technology !== tech.name
         || record.state === 'completed' || record.state === 'interrupted') continue
-      // The event is raised after native completion. For repeatable technologies
-      // level advancement is the correlation key; for one-shot technologies the
-      // researched flag is the completion key.
       if (!tech.researched && tech.level <= record.requested_level) continue
       record.state = 'completed'
       record.completed_tick = event.tick
       record.observed_level = tech.level
       record.by_script = event.by_script
-      const actor = get_actor()
-      update_follow_result(actor, record, 'completed', true, {
+      update_follow_result(get_actor(), record, 'completed', true, {
         observed_level: tech.level,
         by_script: event.by_script,
       })
@@ -411,6 +402,7 @@ export function new_research_controller(get_actor: () => ControlledActor | undef
   function status() {
     const actor = get_actor()
     if (!actor || !actor.is_valid) return { error: 'no_actor' }
+    follow(actor)
     const force = actor.force
     const queue = force.research_queue ?? []
     const current = force.current_research
@@ -467,6 +459,8 @@ export function new_research_controller(get_actor: () => ControlledActor | undef
       prerequisites_truncated: prerequisite_count > MAX_TECHNOLOGY_RECORDS,
     }
   }
+
+  script.on_event(defines.events.on_research_finished, (event: OnResearchFinishedEvent) => on_research_finished(event))
 
   return { submit, tick, follow, on_research_finished, status, technology, request_result }
 }
