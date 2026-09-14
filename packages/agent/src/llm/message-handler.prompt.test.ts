@@ -47,7 +47,7 @@ beforeEach(() => {
 })
 
 describe('actual prompt/message harness', () => {
-  it('sends the production prompt as the system message for a chat request', async () => {
+  it('sends the production prompt and sender identity for a chat request', async () => {
     const handler = await createMessageHandler()
 
     const result = await handler.handleMessage({
@@ -61,7 +61,7 @@ describe('actual prompt/message harness', () => {
     expect(mocks.call).toHaveBeenCalledTimes(1)
     const [messages, options] = mocks.call.mock.calls[0]
     expect(messages[0]).toEqual({ role: 'system', content: prompt })
-    expect(messages[1]).toEqual({ role: 'user', content: '[CHAT] wait a moment' })
+    expect(messages[1]).toEqual({ role: 'user', content: '[CHAT] Louis: wait a moment' })
     expect(options).toMatchObject({ maxRoundTrip: 10 })
     expect(result?.operationCommands).toEqual(["remote.call('autorio_operations', 'wait', 3)"])
   })
