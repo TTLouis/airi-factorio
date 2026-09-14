@@ -96,6 +96,15 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       controller.fail(actor, task, 'actor_changed')
       return
     }
+
+    // Factorio throws a fatal script error when find_entities_filtered receives
+    // an unknown prototype name. Model/user supplied strings must therefore be
+    // validated before they reach any prototype-filtered engine call.
+    if (!prototypes.entity[task.entity_name]) {
+      controller.fail(actor, task, 'invalid_entity')
+      return
+    }
+
     if (poll_standalone_mining(actor)) return
     if (actor.get_mining_state().mining) return
 
@@ -205,6 +214,11 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     }
     if (!controller.identity_matches(actor, task)) {
       controller.fail(actor, task, 'actor_changed')
+      return 0
+    }
+
+    if (!prototypes.entity[task.entity_name]) {
+      controller.fail(actor, task, 'invalid_entity')
       return 0
     }
 
