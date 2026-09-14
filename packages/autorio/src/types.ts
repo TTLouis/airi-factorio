@@ -36,7 +36,10 @@ export interface PlayerParametersWalkToEntity {
   next_retry_tick?: number
   started_tick?: number
   last_progress_tick?: number
-  last_position?: MapPositionStruct
+  /** Best observed distance to the current waypoint. Environmental motion such
+   * as transport belts must not count as progress unless it actually reduces
+   * this distance. */
+  last_waypoint_distance?: number
 }
 
 export interface PlayerParametersWalkingDirect {
