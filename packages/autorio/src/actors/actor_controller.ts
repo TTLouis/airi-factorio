@@ -4,14 +4,29 @@ import { StandaloneCharacterActor } from './standalone_character_actor'
 
 export type ActorMode = 'player' | 'npc'
 
+export interface NpcRecoveryReceipt {
+  reason: 'missing_persisted_actor'
+  previous_actor_id: number
+  replacement_actor_id: number
+  force_index: number
+  tick: number
+  inventory_policy: 'no_transfer'
+}
+
+type NpcRecoveryHandler = (event: { previous_actor_id: number }) => void
+
 declare const storage: {
   airi_actor_mode?: ActorMode
+  standalone_character_unit_number?: number
+  airi_last_npc_recovery?: NpcRecoveryReceipt
 }
 
 let standalone_actor: StandaloneCharacterActor | undefined
 let post_load_reconciliation_pending = false
 let last_reconciled_actor_id: number | undefined
 let last_reconciled_tick: number | undefined
+let npc_recovery_handler: NpcRecoveryHandler | undefined
+let recovery_invalidated_actor_id: number | undefined
 
 // Factorio does not persist ordinary Lua module locals across save/load. Autorio's
 // logical task manager is therefore intentionally volatile for now, while the
@@ -23,6 +38,7 @@ script.on_load(() => {
   post_load_reconciliation_pending = true
   last_reconciled_actor_id = undefined
   last_reconciled_tick = undefined
+  recovery_invalidated_actor_id = undefined
 })
 
 export function get_actor_mode(): ActorMode {
@@ -32,7 +48,12 @@ export function get_actor_mode(): ActorMode {
 export function set_actor_mode(mode: ActorMode): ActorMode {
   storage.airi_actor_mode = mode
   standalone_actor = undefined
+  recovery_invalidated_actor_id = undefined
   return mode
+}
+
+export function register_npc_recovery_handler(handler: NpcRecoveryHandler | undefined) {
+  npc_recovery_handler = handler
 }
 
 function get_player_actor(): ControlledActor | undefined {
@@ -64,6 +85,39 @@ function reconcile_loaded_npc(actor: StandaloneCharacterActor) {
   log(`[AUTORIO] Reconciled loaded NPC controls for actor_id=${identity.actor_id ?? 'unknown'}`)
 }
 
+function invalidate_missing_npc(previous_actor_id: number) {
+  if (recovery_invalidated_actor_id === previous_actor_id) {
+    return
+  }
+
+  // The old entity is already invalid/missing, so task invalidation must not try
+  // to resolve an actor in order to stop its controls. Doing so would recurse
+  // back into replacement creation. The task manager registers a logical-only
+  // invalidation handler for this boundary.
+  recovery_invalidated_actor_id = previous_actor_id
+  npc_recovery_handler?.({ previous_actor_id })
+  rendering.clear()
+  log(`[AUTORIO] Invalidated work owned by missing NPC actor_id=${previous_actor_id}`)
+}
+
+function record_npc_recovery(previous_actor_id: number, actor: StandaloneCharacterActor) {
+  const identity = actor.status_snapshot()
+  if (identity.actor_id === undefined) {
+    return
+  }
+
+  storage.airi_last_npc_recovery = {
+    reason: 'missing_persisted_actor',
+    previous_actor_id,
+    replacement_actor_id: identity.actor_id,
+    force_index: actor.force.index,
+    tick: game.tick,
+    inventory_policy: 'no_transfer',
+  }
+  recovery_invalidated_actor_id = undefined
+  log(`[AUTORIO] Recovered standalone NPC actor_id=${previous_actor_id} -> ${identity.actor_id} without inventory transfer`)
+}
+
 function get_npc_actor(): ControlledActor | undefined {
   if (standalone_actor?.is_valid) {
     reconcile_loaded_npc(standalone_actor)
@@ -76,16 +130,25 @@ function get_npc_actor(): ControlledActor | undefined {
     return undefined
   }
 
+  const persisted_actor_id = storage.standalone_character_unit_number
   standalone_actor = StandaloneCharacterActor.reacquire(surface)
   if (standalone_actor?.is_valid) {
+    recovery_invalidated_actor_id = undefined
     reconcile_loaded_npc(standalone_actor)
     return standalone_actor
+  }
+
+  if (persisted_actor_id !== undefined) {
+    invalidate_missing_npc(persisted_actor_id)
   }
 
   const spawn_position = force.get_spawn_position(surface)
   const position = surface.find_non_colliding_position('character', spawn_position, 32, 0.5) ?? spawn_position
   standalone_actor = StandaloneCharacterActor.create(surface, force, position)
   if (standalone_actor?.is_valid) {
+    if (persisted_actor_id !== undefined) {
+      record_npc_recovery(persisted_actor_id, standalone_actor)
+    }
     reconcile_loaded_npc(standalone_actor)
   }
   return standalone_actor
@@ -104,6 +167,14 @@ export function get_load_reconciliation_status() {
     pending: post_load_reconciliation_pending,
     last_actor_id: last_reconciled_actor_id,
     last_tick: last_reconciled_tick,
+  }
+}
+
+export function get_npc_recovery_status() {
+  return {
+    policy: 'discard_autorio_tasks_and_create_empty_replacement',
+    pending_from_actor_id: recovery_invalidated_actor_id,
+    last_result: storage.airi_last_npc_recovery,
   }
 }
 
@@ -126,6 +197,7 @@ export function create_actor_remote_interface() {
         actor: actor?.status_snapshot(),
         connected_players: game.connected_players.length,
         load_reconciliation: get_load_reconciliation_status(),
+        death_recovery: get_npc_recovery_status(),
       }
     },
   })
