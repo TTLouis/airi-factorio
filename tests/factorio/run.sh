@@ -62,6 +62,9 @@ finish() {
     print_file "$RESULTS/persistence-verify-error.txt"
     print_file "$RESULTS/persistence-verify-transcript.json"
     print_file "$RESULTS/persistence.json"
+    print_file "$RESULTS/death-recovery-error.txt"
+    print_file "$RESULTS/death-recovery-transcript.json"
+    print_file "$RESULTS/death-recovery.json"
   fi
   exit "$code"
 }
@@ -153,6 +156,13 @@ start_factorio "$RESULTS/factorio-restart.log"
 printf '[npc-test] Factorio restarted (pid=%s); checking NPC reacquisition and load reconciliation...\n' "$FACTORIO_PID"
 
 python3 "${TEST_ROOT:-/test}/runner/persistence_verify.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS"
+
+printf '[npc-test] Persistence passed; killing the active NPC to verify bounded recovery...\n'
+python3 "${TEST_ROOT:-/test}/runner/death_recovery.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \
   --password "$RCON_PASSWORD" \
