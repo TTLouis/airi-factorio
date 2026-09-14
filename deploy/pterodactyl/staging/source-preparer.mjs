@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export class SourcePreparationError extends Error {}
 
@@ -63,4 +64,19 @@ export async function prepareNativeNpcSource(sourceRoot, guardSource) {
     controlPath,
     guardPath,
   }
+}
+
+async function main() {
+  const [sourceRoot, guardPath] = process.argv.slice(2)
+  check(sourceRoot && guardPath, 'Usage: node source-preparer.mjs <source-root> <guard.ts>')
+  const guardSource = await fs.readFile(guardPath, 'utf8')
+  const result = await prepareNativeNpcSource(path.resolve(sourceRoot), guardSource)
+  process.stdout.write(`${JSON.stringify(result)}\n`)
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(error => {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exitCode = 1
+  })
 }
