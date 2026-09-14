@@ -19,6 +19,7 @@ import { new_research_controller } from './research'
 import { new_task_manager } from './task_manager'
 import { create_tools_remote_interface } from './tools'
 import { TaskStates } from './types'
+import { direction_towards } from './utils/direction'
 import { get_actor_inventory_items } from './utils/inventory'
 import { distance } from './utils/math'
 
@@ -203,31 +204,7 @@ remote.add_interface('autorio_operations', {
 })
 
 export function get_direction(start_position: MapPositionStruct, end_position: MapPositionStruct) {
-  const angle = math.atan2(end_position.y - start_position.y, start_position.x - end_position.x)
-  const octant = (angle + math.pi) / (2 * math.pi) * 8 + 0.5
-
-  if (octant < 1) {
-    return defines.direction.east
-  }
-  if (octant < 2) {
-    return defines.direction.northeast
-  }
-  if (octant < 3) {
-    return defines.direction.north
-  }
-  if (octant < 4) {
-    return defines.direction.northwest
-  }
-  if (octant < 5) {
-    return defines.direction.west
-  }
-  if (octant < 6) {
-    return defines.direction.southwest
-  }
-  if (octant < 7) {
-    return defines.direction.south
-  }
-  return defines.direction.southeast
+  return direction_towards(start_position, end_position)
 }
 
 export function get_nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
