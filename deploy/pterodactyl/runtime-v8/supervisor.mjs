@@ -12,6 +12,7 @@ import {
   check,
   cleanString,
   describeChatPlayers,
+  describeRelease,
   DeploymentError,
   directory,
   freeTcpPort,
@@ -194,7 +195,7 @@ export class Session {
       env: this.cleanEnv(),
       label: 'Factorio',
       log: gameLog,
-    })
+    }).attachInput(process.stdin)
 
     const deadline = Date.now() + this.startupMs
     while (Date.now() < deadline) {
@@ -334,7 +335,7 @@ async function main() {
   check(os.arch() === 'x64', 'AIRI Pterodactyl v8 requires amd64')
   const root = path.resolve(process.env.CONTAINER_ROOT || '/home/container')
   const app = installedAppRoot()
-  await verifyManifest(app)
+  const manifest = await verifyManifest(app)
   await directory(path.join(root, '.airi'))
   await directory(path.join(root, '.airi', 'tmp'))
   const raw = await migrateConfigFile(path.join(root, 'airi-config.json'))
@@ -345,6 +346,7 @@ async function main() {
   let session
   let requestedStop = false
   const log = message => console.log(`[${new Date().toISOString()}] [AIRI Factorio] ${message}`)
+  log(describeRelease(manifest))
 
   const handleSignal = () => {
     requestedStop = true
