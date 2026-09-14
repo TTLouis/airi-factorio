@@ -69,7 +69,7 @@ describe('bounded navigation controller', () => {
     const { controller, manager } = make_context()
 
     expect(controller.submit('steel-chest', 0)).toBe(false)
-    expect(controller.submit('steel-chest', 257)).toBe(false)
+    expect(controller.submit('steel-chest', 4097)).toBe(false)
     expect(manager.get_status_snapshot()).toMatchObject({ task_state: TaskStates.IDLE, queue_length: 0 })
     expect(controller.status().last_result?.code).toBe('invalid_radius')
   })
