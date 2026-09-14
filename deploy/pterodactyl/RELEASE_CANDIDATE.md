@@ -17,13 +17,17 @@ The generated `egg-airi-factorio-server.json` is now a v8 standalone-NPC candida
 - valid PTDL_v2 JSON with the same immutable checksummed installer loader as `install.sh` — confirmed
 - existing-save upgrade/rollback check — PASS (real Docker volume: install, upgrade-install over it, `rollback-airi.sh` restored the prior release's `start-airi.sh` target; pre-existing saves, mods, and `airi-config.json` were untouched throughout)
 
-The immutable installer payload is commit `867031bf2364ffdc4359545f59a0daac5eb710f5`, whose `payload-src/installer.sh` has SHA-256 `d0224f5af1ec5ade147b20a41917f8acc2f5470920a0fd9b25a32970ac769470`. That installer pins runtime source `76615f72a3a69390c5104601046d6fecb51f12f8` and revision `2026-09-14.16`.
+The immutable installer payload is commit `92afd659485f5cb47a912615e669332c85ef9d12`, whose `payload-src/installer.sh` has SHA-256 `7bcddbab0e959d505a156269340fa2de2fe4c837bc83b0fc9d9f7b6df58dfff1`. That installer pins runtime source `ad3e87523b157880a360e773de68519e49f809f0` and revision `2026-09-14.22`.
 
 ## Production provider validation (deferred, not a merge blocker)
 
 Every gate above is **engineering/package validated** without any real provider credentials — package smoke and the zero-player Factorio harness use a dummy `OPENAI_API_KEY`/URL and never issue a paid provider request, because standalone NPC readiness and runtime correctness do not require provider contact.
 
 **Production provider validation is pending**: running one real provider-to-NPC goal against a packaged server with a real OpenAI-compatible API key. This is intentionally deferred to production deployment, is not exercised by repository CI or package smoke, and is not a merge blocker for this branch.
+
+## Deferred hardening roadmap
+
+The Pterodactyl install/runtime image remains `ghcr.io/ptero-eggs/yolks:debian_bookworm` by tag. Pinning that image to an immutable digest is still a roadmap hardening item and is intentionally not part of this promotion checkpoint.
 
 ## Root cause of the package smoke failure this checkpoint fixes
 
