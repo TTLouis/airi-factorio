@@ -6,7 +6,7 @@ This directory contains this fork's Pterodactyl deployment for the standalone AI
 
 The Factorio runtime has a **user-verified standalone-NPC baseline**: the parallel zero-player `core`, `research-combat`, and `resilience` lanes pass, including real restarts, death recovery, navigation, native crafting ownership/reconciliation, research follow-through, combat, actor-mode boundaries, and explicit operation outcomes.
 
-The checked-in [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) is now a **generated v8 standalone-NPC release candidate**, not the previous connected-player v7 package. It is generated from [`payload-src/installer.sh`](payload-src/installer.sh) and is pinned to source commit `8879a71b7b74118b1030d8a89aaf4fba3c95ebf6`.
+The checked-in [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) is now a **generated v8 standalone-NPC release candidate**, not the previous connected-player v7 package. The installed runtime remains pinned to source commit `8879a71b7b74118b1030d8a89aaf4fba3c95ebf6`.
 
 The candidate still stays on `feat/npc-transition-work` until the packaged Docker smoke is green. Do not merge/publish it to `main` merely because the JSON imports successfully.
 
@@ -62,10 +62,12 @@ There is deliberately no `AIRI_PLAYER` actor-ownership variable in the v8 egg. Z
 
 ## Generated artifacts
 
-- [`payload-src/installer.sh`](payload-src/installer.sh) — human-readable source of truth.
-- [`build-payload.mjs`](build-payload.mjs) — deterministic generator and drift checker.
-- [`install.sh`](install.sh) — checksummed bootstrap generated from the payload source.
-- [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) — PTDL_v2 egg containing that exact generated bootstrap.
+- [`payload-src/installer.sh`](payload-src/installer.sh) — human-readable installer source of truth.
+- [`build-payload.mjs`](build-payload.mjs) — generator and integrity/drift checker.
+- [`install.sh`](install.sh) — self-contained checksummed bootstrap generated from the payload source.
+- [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) — compact PTDL_v2 egg whose install field downloads that bootstrap from an **immutable commit pin**, verifies that the bootstrap advertises the expected payload-source SHA-256, and then executes it.
+
+The egg deliberately does **not** embed the large gzip/base64 bootstrap anymore. Keeping the PTDL JSON small avoids fragile escaping and makes it practical to parse/inspect independently, while the immutable commit pin plus the bootstrap's own source/archive checks preserve the release-integrity chain.
 
 Regenerate/check with:
 
@@ -74,9 +76,9 @@ node deploy/pterodactyl/build-payload.mjs
 node deploy/pterodactyl/build-payload.mjs --check
 ```
 
-`--check` fails if either generated artifact differs from what the payload source would currently produce.
+`--check` validates the standalone bootstrap against `payload-src/installer.sh`, parses the committed egg as JSON, and verifies that the complete egg schema matches the expected immutable loader contract. It does not require identical gzip output across different Node/zlib builds.
 
-The bootstrap also supports a non-installing integrity probe:
+The standalone bootstrap also supports a non-installing integrity probe:
 
 ```bash
 AIRI_INSTALL_ROOT=/tmp/airi-bootstrap-check bash deploy/pterodactyl/install.sh --verify-only
@@ -90,16 +92,24 @@ The release gate for the generated artifact is:
 bash deploy/pterodactyl/package-smoke.sh
 ```
 
-On a Docker-capable machine this uses the real Bookworm Pterodactyl yolk and performs:
+On Windows with Docker Desktop:
 
-1. generated bootstrap `--verify-only`;
-2. clean transactional installation into a disposable server volume;
-3. pinned native Autorio tests/build plus injected v8 guard typecheck/build;
-4. verified Factorio 2.0 headless download;
-5. startup with **zero connected players**;
-6. required `AIRI Factorio ready; standalone NPC actor_id=...` acknowledgement;
-7. graceful SIGINT shutdown and `/server-save`;
-8. verification that a non-empty save exists.
+```powershell
+.\deploy\pterodactyl\package-smoke.ps1
+```
+
+On a Docker-capable machine the smoke performs:
+
+1. generated-artifact integrity/schema check;
+2. parse the committed PTDL_v2 egg and extract its real installation script;
+3. standalone generated bootstrap `--verify-only`;
+4. clean transactional installation **through the egg loader** into a disposable server volume;
+5. pinned native Autorio tests/build plus injected v8 guard typecheck/build;
+6. verified Factorio 2.0 headless download;
+7. startup with **zero connected players**;
+8. required `AIRI Factorio ready; standalone NPC actor_id=...` acknowledgement;
+9. graceful SIGINT shutdown and `/server-save`;
+10. verification that a non-empty save exists.
 
 The script intentionally uses a dummy provider URL/key and does not issue a paid provider request; readiness must not require provider contact.
 
@@ -129,7 +139,7 @@ For the same candidate revision, require:
 2. v8 staging + production-runtime Node tests;
 3. injected guard typecheck/build;
 4. full zero-player Factorio acceptance harness;
-5. generated package smoke on a Docker-capable runner;
+5. generated package smoke on a Docker-capable runner, executing the committed egg loader;
 6. existing-save upgrade/rollback check;
 7. one real provider-to-NPC goal on the packaged server before calling the deployment production-ready.
 
