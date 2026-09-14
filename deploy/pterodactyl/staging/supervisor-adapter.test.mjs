@@ -102,7 +102,7 @@ test('authorized operation wraps the mutation with an atomic actor-epoch check',
 test('authorized dependency batch admits every operation in one RCON/Lua transaction', async () => {
   const marker = 'AIRI_RESULT_0123456789abcdef01234567:'
   const rcon = new FakeRcon([
-    `${marker}${JSON.stringify({ ok: true, result: [[true, 'first'], [true, 'second']] })}`,
+    `${marker}${JSON.stringify({ ok: true, result: [true, [true, 'second']] })}`,
   ])
   const result = await executeAuthorizedBatch(rcon, 3, [
     'remote.call("autorio_operations","mine_entity","iron-ore",1)',
@@ -110,13 +110,14 @@ test('authorized dependency batch admits every operation in one RCON/Lua transac
   ], marker)
 
   assert.equal(rcon.commands.length, 1)
-  assert.equal(result.results.length, 2)
+  assert.deepEqual(result.results, [true, [true, 'second']])
   assert.equal((rcon.commands[0].match(/airi_deployment","authorize",3/g) ?? []).length, 1)
   const first = rcon.commands[0].indexOf('autorio_operations","mine_entity"')
   const second = rcon.commands[0].indexOf('autorio_operations","wait"')
   assert.ok(first >= 0 && second > first)
-  assert.match(rcon.commands[0], /local r1=\{remote\.call/)
-  assert.match(rcon.commands[0], /local r2=\{remote\.call/)
+  assert.match(rcon.commands[0], /local r1=remote\.call/)
+  assert.match(rcon.commands[0], /local r2=remote\.call/)
+  assert.match(rcon.commands[0], /type\(r1\)=="table" and r1\[1\]==false/)
 })
 
 test('mutation rejection, missing acknowledgement, and stale authorization fail closed without retries', async () => {
