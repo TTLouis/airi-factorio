@@ -34,7 +34,17 @@ def assert_kill(before: dict, after: dict, combat: dict, actor_id: int) -> None:
     assert_stopped(after, actor_id)
     require(before['target_alive'] is True and before['target_health'] > 0, before)
     require(after['target_alive'] is False, 'target must actually be gone; idle is not a kill')
+    require(before['selected_gun_index'] == 1, before)
     require(before['selected_gun'] == 'pistol' and before['selected_ammo'] == 'firearm-magazine', before)
+
+    # This fixture supplies 20 magazines and never changes the selected slot.
+    # If the selected pistol/ammo telemetry disappears or switches while the
+    # weak target dies, the acceptance evidence is incomplete and must fail
+    # closed rather than inferring that AIRI fired the expected weapon.
+    require(after['selected_gun_index'] == before['selected_gun_index'], after)
+    require(after['selected_gun'] == before['selected_gun'], after)
+    require(after['selected_ammo'] == before['selected_ammo'], after)
+
     # LuaInventory.get_item_count() counts magazine *items*, not rounds inside the
     # currently loaded magazine. A small biter can die before a magazine is
     # emptied, so item count can remain unchanged while LuaItemStack.ammo drops.
