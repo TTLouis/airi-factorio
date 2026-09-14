@@ -52,7 +52,7 @@ test('generated egg is valid JSON and uses the immutable compact installer loade
   const model = egg.variables.find(entry => entry.env_variable === 'OPENAI_MODEL')
   assert.ok(model)
   assert.equal(model.rules, 'required|string|max:200')
-  assert.match(egg.scripts.installation.script, /raw\.githubusercontent\.com\/TTLouis\/airi-factorio\/2d9ea4cbcd65dcf850a5f6deed49cf5747433571\/deploy\/pterodactyl\/install\.sh/)
+  assert.match(egg.scripts.installation.script, /raw\.githubusercontent\.com\/TTLouis\/airi-factorio\/b75c93dd784509f78f04123e613fe618cdd8fb05\/deploy\/pterodactyl\/install\.sh/)
   assert.match(egg.scripts.installation.script, /EXPECTED_SOURCE_SHA256=/)
 })
 
@@ -65,6 +65,6 @@ test('committed Pterodactyl artifacts are internally valid', () => {
   assert.equal(verifyGeneratedArtifacts(committedSource, committedInstall, committedEggText), true)
   const model = egg.variables.find(entry => entry.env_variable === 'OPENAI_MODEL')
   assert.equal(model.rules, 'required|string|max:200')
-  assert.match(egg.scripts.installation.script, /2d9ea4cbcd65dcf850a5f6deed49cf5747433571/)
+  assert.match(egg.scripts.installation.script, /b75c93dd784509f78f04123e613fe618cdd8fb05/)
   assert.notEqual(egg.scripts.installation.script, committedInstall)
 })
