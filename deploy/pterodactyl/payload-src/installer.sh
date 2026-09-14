@@ -54,7 +54,7 @@ WORK="$(mktemp -d "$SERVER_DIR/.airi/install.XXXXXX")"
 APP="$WORK/app"
 mkdir -p "$APP/src/runtime-v8" "$APP/src/staging" "$APP/autorio" "$APP/factorio" "$APP/client-mod" "$WORK/tmp" "$WORK/home" "$WORK/cache" "$WORK/npm-cache"
 export HOME="$WORK/home" TMPDIR="$WORK/tmp" XDG_CACHE_HOME="$WORK/cache" NPM_CONFIG_CACHE="$WORK/npm-cache"
-unset OPENAI_API_KEY OPENAI_API_BASEURL FACTORIO_RCON_PASSWORD RCON_PASSWORD SERVER_TOKEN NODE_OPTIONS NODE_PATH || true
+unset OPENAI_API_KEY OPENAI_API_BASEURL FACTORIO_RCON_PASSWORD RCON_PASSWORD SERVER_TOKEN FACTORIO_TOKEN NODE_OPTIONS NODE_PATH || true
 export NODE_TLS_REJECT_UNAUTHORIZED=1
 
 fetch() {
@@ -272,6 +272,7 @@ log "Installation complete: $DEPLOYMENT_REVISION"
 log "Pinned source: $AIRI_REF"
 log "Factorio: $FACTORIO_TARGET"
 log 'Actor ownership: standalone NPC; zero connected humans is valid.'
-log 'Set AIRI_CHAT_PLAYER to the human allowed to issue !airi requests.'
+log 'Set AIRI_CHAT_PLAYERS to control who may issue !airi requests (blank/* = everyone, comma list = allowlist, none = disabled).'
+log 'Set FACTORIO_USERNAME and FACTORIO_TOKEN together to publish the server; leave both blank for a hidden server.'
 log 'Startup command: bash ./start-airi.sh'
 exit 0

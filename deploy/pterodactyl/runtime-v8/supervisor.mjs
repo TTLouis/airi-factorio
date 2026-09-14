@@ -7,13 +7,16 @@ import { setTimeout as delay } from 'node:timers/promises'
 import {
   Child,
   Rcon,
+  chatAuthorized,
   check,
   cleanString,
+  describeChatPlayers,
   DeploymentError,
   directory,
   freeTcpPort,
   hashFile,
   nonce,
+  parseChatPlayers,
   readJson,
   redact,
   regularFile,
@@ -32,10 +35,16 @@ export function configuration(raw = {}, env = process.env) {
   check(actorMode === 'npc', 'This v8 egg currently supports AIRI_ACTOR_MODE=npc only')
 
   const legacyChat = env.AIRI_PLAYER ?? raw.player ?? ''
-  const chatPlayer = env.AIRI_CHAT_PLAYER ?? raw.chatPlayer ?? legacyChat
+  const legacySingleChatPlayer = env.AIRI_CHAT_PLAYER ?? raw.chatPlayer ?? legacyChat
+  const chatPlayersSource = env.AIRI_CHAT_PLAYERS ?? raw.chatPlayers ?? legacySingleChatPlayer
+
+  const factorioUsername = cleanString(env.FACTORIO_USERNAME ?? raw.factorioUsername ?? '', 'FACTORIO_USERNAME', 128)
+  const factorioToken = cleanString(env.FACTORIO_TOKEN ?? '', 'FACTORIO_TOKEN', 128)
+  check((factorioUsername === '') === (factorioToken === ''), 'FACTORIO_USERNAME and FACTORIO_TOKEN must both be set or both left blank')
+
   const config = {
     actorMode,
-    chatPlayer: cleanString(chatPlayer, 'AIRI_CHAT_PLAYER', 64),
+    chatPlayers: parseChatPlayers(cleanString(chatPlayersSource, 'AIRI_CHAT_PLAYERS', 512)),
     save: cleanString(env.SAVE_NAME ?? raw.save ?? '', 'SAVE_NAME', 160),
     model: cleanString(env.OPENAI_MODEL ?? raw.model ?? 'gpt-5.6', 'OPENAI_MODEL', 200),
     base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? 'https://api.openai.com/v1',
@@ -43,6 +52,11 @@ export function configuration(raw = {}, env = process.env) {
     gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? 34197, 'SERVER_PORT', 1024, 65535),
     budget: safeInteger(env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? 30, 'MAX_PROVIDER_REQUESTS_PER_HOUR', 1, 1200),
     stopMs: safeInteger(env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? 60000, 'SHUTDOWN_TIMEOUT_MS', 1000, 300000),
+    factorio: {
+      username: factorioUsername,
+      token: factorioToken,
+      public: factorioUsername !== '' && factorioToken !== '',
+    },
   }
   check(typeof config.key === 'string' && config.key.trim().length > 0 && !/[\r\n\0]/.test(config.key), 'OPENAI_API_KEY is missing or malformed')
   providerEndpoint(config.base)
@@ -51,13 +65,15 @@ export function configuration(raw = {}, env = process.env) {
 
 export function seedConfigFromEnv(env = process.env) {
   const config = { actorMode: env.AIRI_ACTOR_MODE ?? 'npc' }
-  if (env.AIRI_CHAT_PLAYER) config.chatPlayer = env.AIRI_CHAT_PLAYER
-  else if (env.AIRI_PLAYER) config.chatPlayer = env.AIRI_PLAYER
+  if (env.AIRI_CHAT_PLAYERS) config.chatPlayers = env.AIRI_CHAT_PLAYERS
+  else if (env.AIRI_CHAT_PLAYER) config.chatPlayers = env.AIRI_CHAT_PLAYER
+  else if (env.AIRI_PLAYER) config.chatPlayers = env.AIRI_PLAYER
   if (env.SAVE_NAME) config.save = env.SAVE_NAME
   if (env.OPENAI_MODEL) config.model = env.OPENAI_MODEL
   if (env.OPENAI_API_BASEURL) config.providerUrl = env.OPENAI_API_BASEURL
   if (env.MAX_PROVIDER_REQUESTS_PER_HOUR) config.maxProviderRequestsPerHour = Number(env.MAX_PROVIDER_REQUESTS_PER_HOUR)
   if (env.SHUTDOWN_TIMEOUT_MS) config.shutdownTimeoutMs = Number(env.SHUTDOWN_TIMEOUT_MS)
+  if (env.FACTORIO_USERNAME) config.factorioUsername = env.FACTORIO_USERNAME
   return config
 }
 
@@ -146,7 +162,7 @@ export class Session {
 
   async start() {
     const rconPort = await freeTcpPort([this.config.gamePort])
-    const secrets = [this.config.key, this.rconPassword, this.session]
+    const secrets = [this.config.key, this.rconPassword, this.session, this.config.factorio.token]
     const gameLog = line => {
       this.log(redact(secrets, line))
       this.onGameLine(line)
@@ -199,7 +215,7 @@ export class Session {
     this.poll = setInterval(() => {
       if (!this.stopping) this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
     }, 2000)
-    this.log(`AIRI Factorio ready; standalone NPC actor_id=${this.lastStatus.actor_id}, chat=${this.config.chatPlayer || 'disabled'}`)
+    this.log(`AIRI Factorio ready; standalone NPC actor_id=${this.lastStatus.actor_id}, chat=${describeChatPlayers(this.config.chatPlayers)}`)
     return this.lastStatus
   }
 
@@ -219,7 +235,7 @@ export class Session {
   onGameLine(line) {
     if (!this.ready || this.stopping || !this.agent) return
     const chat = line.match(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[CHAT\] ([^:\r\n]+): !airi (.{1,4000})$/)
-    if (chat && this.config.chatPlayer && chat[1] === this.config.chatPlayer) {
+    if (chat && chatAuthorized(this.config.chatPlayers, chat[1])) {
       const text = chat[2].trim()
       this.queueEvent(async () => {
         await this.ensureAuthorization()
@@ -316,7 +332,7 @@ async function main() {
 
   try {
     const modDir = await prepareMods(root, app, work)
-    const settingsFile = await prepareServerSettings(root, game)
+    const settingsFile = await prepareServerSettings(root, game, config.factorio)
     const ini = await prepareGameConfig(work, game, root)
     const selected = await selectSave(root, config.save)
     if (selected.create) {

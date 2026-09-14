@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { chatAuthorized, describeChatPlayers } from './common.mjs'
 import { providerEndpoint } from './provider.mjs'
 import { configuration, installedAppRoot, Session } from './supervisor.mjs'
 
@@ -26,15 +27,98 @@ const baseEnv = {
 test('configuration defaults to standalone NPC and keeps chat authorization separate', () => {
   const config = configuration({}, baseEnv)
   assert.equal(config.actorMode, 'npc')
-  assert.equal(config.chatPlayer, 'Louis')
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['Louis'] })
   assert.equal(config.gamePort, 34197)
   const explicitBlank = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYER: '', AIRI_PLAYER: 'LegacyName' })
-  assert.equal(explicitBlank.chatPlayer, '')
+  assert.deepEqual(explicitBlank.chatPlayers, { mode: 'all', names: [] })
   const aliasEnv = { ...baseEnv, AIRI_PLAYER: 'LegacyName' }
   delete aliasEnv.AIRI_CHAT_PLAYER
   const alias = configuration({}, aliasEnv)
-  assert.equal(alias.chatPlayer, 'LegacyName')
+  assert.deepEqual(alias.chatPlayers, { mode: 'allowlist', names: ['LegacyName'] })
   assert.throws(() => configuration({}, { ...baseEnv, AIRI_ACTOR_MODE: 'player' }))
+})
+
+test('AIRI_CHAT_PLAYERS blank or "*" allows every player', () => {
+  const blank = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: '' })
+  assert.deepEqual(blank.chatPlayers, { mode: 'all', names: [] })
+  assert.equal(chatAuthorized(blank.chatPlayers, 'AnyoneAtAll'), true)
+  const wildcard = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: '*' })
+  assert.deepEqual(wildcard.chatPlayers, { mode: 'all', names: [] })
+  assert.equal(chatAuthorized(wildcard.chatPlayers, 'AnyoneAtAll'), true)
+})
+
+test('AIRI_CHAT_PLAYERS "none" disables every player', () => {
+  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: 'none' })
+  assert.deepEqual(config.chatPlayers, { mode: 'disabled', names: [] })
+  assert.equal(chatAuthorized(config.chatPlayers, 'Louis'), false)
+})
+
+test('AIRI_CHAT_PLAYERS supports a single-name allowlist', () => {
+  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: 'TTLouis' })
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['TTLouis'] })
+  assert.equal(chatAuthorized(config.chatPlayers, 'TTLouis'), true)
+  assert.equal(chatAuthorized(config.chatPlayers, 'Alice'), false)
+})
+
+test('AIRI_CHAT_PLAYERS supports a multi-name allowlist and trims/dedupes whitespace', () => {
+  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: ' TTLouis , Alice ,,Bob, Alice ' })
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['TTLouis', 'Alice', 'Bob'] })
+  assert.equal(chatAuthorized(config.chatPlayers, 'TTLouis'), true)
+  assert.equal(chatAuthorized(config.chatPlayers, 'Alice'), true)
+  assert.equal(chatAuthorized(config.chatPlayers, 'Bob'), true)
+})
+
+test('AIRI_CHAT_PLAYERS rejects a player not on the allowlist', () => {
+  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: 'TTLouis,Alice' })
+  assert.equal(chatAuthorized(config.chatPlayers, 'Eve'), false)
+})
+
+test('AIRI_CHAT_PLAYERS takes priority over the legacy AIRI_CHAT_PLAYER fallback', () => {
+  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYER: 'Legacy', AIRI_CHAT_PLAYERS: 'TTLouis' })
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['TTLouis'] })
+})
+
+test('AIRI_CHAT_PLAYERS explicitly blank does not fall back to a non-blank legacy AIRI_CHAT_PLAYER', () => {
+  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYER: 'Legacy', AIRI_CHAT_PLAYERS: '' })
+  assert.deepEqual(config.chatPlayers, { mode: 'all', names: [] })
+  assert.equal(chatAuthorized(config.chatPlayers, 'AnyoneAtAll'), true)
+  assert.equal(chatAuthorized(config.chatPlayers, 'Legacy'), true)
+})
+
+test('Factorio account: blank username and token is a hidden server', () => {
+  const config = configuration({}, baseEnv)
+  assert.deepEqual(config.factorio, { username: '', token: '', public: false })
+})
+
+test('Factorio account: matching username and token publishes the server', () => {
+  const config = configuration({}, { ...baseEnv, FACTORIO_USERNAME: 'ttlouis', FACTORIO_TOKEN: 'dummy-token-1234' })
+  assert.deepEqual(config.factorio, { username: 'ttlouis', token: 'dummy-token-1234', public: true })
+})
+
+test('Factorio account: only one of username/token supplied fails configuration', () => {
+  assert.throws(() => configuration({}, { ...baseEnv, FACTORIO_USERNAME: 'ttlouis' }))
+  assert.throws(() => configuration({}, { ...baseEnv, FACTORIO_TOKEN: 'dummy-token-1234' }))
+})
+
+test('startup chat summary is understandable without logging the allowlist itself', () => {
+  assert.equal(describeChatPlayers({ mode: 'all', names: [] }), 'all')
+  assert.equal(describeChatPlayers({ mode: 'disabled', names: [] }), 'disabled')
+  assert.equal(describeChatPlayers({ mode: 'allowlist', names: ['TTLouis', 'Alice', 'Bob'] }), 'allowlist:3')
+})
+
+test('cleanEnv strips the Factorio auth token from the game child process environment', () => {
+  process.env.FACTORIO_TOKEN = 'super-secret-token'
+  process.env.FACTORIO_USERNAME = 'ttlouis'
+  try {
+    const session = new Session({ root: '/tmp/airi-root', app: '/tmp/app', game: '/tmp/game', config: configuration({}, baseEnv), save: 'x', settingsFile: 'x', modDir: 'x', ini: 'x' })
+    const env = session.cleanEnv()
+    assert.equal(env.FACTORIO_TOKEN, undefined)
+    assert.equal(env.FACTORIO_USERNAME, 'ttlouis')
+  }
+  finally {
+    delete process.env.FACTORIO_TOKEN
+    delete process.env.FACTORIO_USERNAME
+  }
 })
 
 test('installed supervisor resolves the release root above src/runtime-v8', () => {

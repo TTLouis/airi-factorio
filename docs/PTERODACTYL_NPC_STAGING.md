@@ -53,10 +53,10 @@ Allowed staged values are `npc` and `player`. In NPC mode, connected-player coun
 ### Chat authorization
 
 ```text
-AIRI_CHAT_PLAYER=<optional human allowed to issue !airi requests>
+AIRI_CHAT_PLAYERS=<blank or * = everyone, "none" = disabled, or a comma-separated exact-name allowlist>
 ```
 
-The human is a requester, not AIRI's body. `AIRI_PLAYER` may remain only as an explicit compatibility fallback while the old egg is being migrated; it must never become NPC ownership.
+The named humans are requesters, not AIRI's body. `AIRI_CHAT_PLAYER` (singular) and `AIRI_PLAYER` may remain only as explicit compatibility fallbacks while older eggs are being migrated; neither must ever become NPC ownership.
 
 Expected NPC behavior:
 
@@ -217,7 +217,7 @@ The migration is now at this point:
 - [x] dedicated Node 24 staging CI job;
 - [x] payload generator safety rail blocks accidental v7 regeneration;
 - [ ] migrate `payload-src/installer.sh` to the v8 runtime/supervisor contract;
-- [ ] replace egg variables with `AIRI_ACTOR_MODE` / `AIRI_CHAT_PLAYER` semantics;
+- [ ] replace egg variables with `AIRI_ACTOR_MODE` / `AIRI_CHAT_PLAYERS` semantics;
 - [ ] packaged zero-player disposable smoke;
 - [ ] existing-save upgrade smoke;
 - [ ] graceful packaged restart/save gate;

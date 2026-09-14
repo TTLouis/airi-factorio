@@ -52,21 +52,33 @@ export async function prepareMods(root, app, workspace) {
   return destination
 }
 
-export async function prepareServerSettings(root, game) {
+export async function prepareServerSettings(root, game, factorio = { username: '', token: '', public: false }) {
   const data = path.join(root, 'data')
   await directory(data)
   const filename = path.join(data, 'server-settings.json')
-  if (!(await stat(filename))) {
-    const example = JSON.parse(await fsp.readFile(path.join(game, 'data', 'server-settings.example.json'), 'utf8'))
-    example.name = 'AIRI Factorio NPC'
-    example.description = 'AIRI standalone NPC Factorio server'
-    example.visibility = { public: false, lan: false }
-    example.require_user_verification = false
-    await atomicWrite(filename, `${JSON.stringify(example, null, 2)}\n`)
+  const existing = await stat(filename)
+  let current
+  if (existing) {
+    await regularFile(filename)
+    current = JSON.parse(await fsp.readFile(filename, 'utf8'))
+    check(current && typeof current === 'object' && !Array.isArray(current), 'server-settings.json must be an object')
   }
-  await regularFile(filename)
-  const current = JSON.parse(await fsp.readFile(filename, 'utf8'))
-  check(current && typeof current === 'object' && !Array.isArray(current), 'server-settings.json must be an object')
+  else {
+    current = JSON.parse(await fsp.readFile(path.join(game, 'data', 'server-settings.example.json'), 'utf8'))
+    current.name = 'AIRI Factorio NPC'
+    current.description = 'AIRI standalone NPC Factorio server'
+    current.require_user_verification = false
+  }
+
+  const next = {
+    ...current,
+    visibility: { ...current.visibility, public: factorio.public, lan: false },
+    username: factorio.username,
+    token: factorio.token,
+  }
+  if (!existing || JSON.stringify(next) !== JSON.stringify(current)) {
+    await atomicWrite(filename, `${JSON.stringify(next, null, 2)}\n`)
+  }
   return filename
 }
 

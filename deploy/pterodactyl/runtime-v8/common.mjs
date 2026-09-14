@@ -55,6 +55,32 @@ export function cleanString(value, label, max = 256) {
   return value
 }
 
+export function parseChatPlayers(value) {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (trimmed === '' || trimmed === '*') return { mode: 'all', names: [] }
+  if (trimmed.toLowerCase() === 'none') return { mode: 'disabled', names: [] }
+  const seen = new Set()
+  const names = []
+  for (const part of trimmed.split(',')) {
+    const name = part.trim()
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    names.push(name)
+  }
+  return { mode: 'allowlist', names }
+}
+
+export function chatAuthorized(chatPlayers, sender) {
+  if (!sender) return false
+  if (chatPlayers.mode === 'all') return true
+  if (chatPlayers.mode === 'disabled') return false
+  return chatPlayers.names.includes(sender)
+}
+
+export function describeChatPlayers(chatPlayers) {
+  return chatPlayers.mode === 'allowlist' ? `allowlist:${chatPlayers.names.length}` : chatPlayers.mode
+}
+
 export function redact(values, text) {
   let output = String(text)
   for (const value of values) {

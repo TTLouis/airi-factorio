@@ -45,6 +45,22 @@ test('generated egg is valid PTDL_v2 JSON with the v8 variable contract', () => 
   assert.ok(model)
   assert.equal(model.rules, 'required|string|max:200')
   assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_PLAYER'))
+  assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_CHAT_PLAYER'))
+
+  const chatPlayers = egg.variables.find(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS')
+  assert.ok(chatPlayers)
+  assert.equal(chatPlayers.default_value, '')
+  assert.equal(chatPlayers.rules, 'nullable|string|max:512')
+
+  const factorioUsername = egg.variables.find(entry => entry.env_variable === 'FACTORIO_USERNAME')
+  assert.ok(factorioUsername)
+  assert.equal(factorioUsername.default_value, '')
+  assert.equal(factorioUsername.user_viewable, true)
+
+  const factorioToken = egg.variables.find(entry => entry.env_variable === 'FACTORIO_TOKEN')
+  assert.ok(factorioToken)
+  assert.equal(factorioToken.default_value, '')
+  assert.equal(factorioToken.user_viewable, false)
 })
 
 test('committed Pterodactyl artifacts are internally valid', () => {

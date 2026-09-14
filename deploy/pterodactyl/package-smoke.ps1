@@ -78,7 +78,7 @@ try {
         '-v', "${Volume}:/mnt/server",
         '-e', 'AIRI_INSTALL_ROOT=/mnt/server',
         '-e', 'AIRI_ACTOR_MODE=npc',
-        '-e', 'AIRI_CHAT_PLAYER=SmokeOperator',
+        '-e', 'AIRI_CHAT_PLAYERS=SmokeOperator',
         '-e', "FACTORIO_VERSION=$FactorioSmokeVersion",
         $Image,
         'bash', '/tmp/egg-install.sh'

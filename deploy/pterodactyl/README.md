@@ -14,7 +14,7 @@ The packaged Docker smoke (`deploy/pterodactyl/package-smoke.ps1`) is green on t
 
 - zero-player NPC ownership through native `autorio_actor` mode/status;
 - actor ID/kind/epoch authorization instead of connected-player ownership;
-- `AIRI_CHAT_PLAYER` is chat authorization only and never actor ownership;
+- `AIRI_CHAT_PLAYERS` is chat authorization only and never actor ownership;
 - strict structured model `operations`, with no model-generated Lua or legacy `operationCommands`;
 - actor-aware observations for inventory, entities, navigation, crafting, research and combat;
 - exact correlated research-request lookup;
@@ -50,16 +50,19 @@ The only externally exposed service required by AIRI is Factorio's normal game p
 | Purpose | Setting | Meaning |
 |---|---|---|
 | Actor ownership | `AIRI_ACTOR_MODE` | fixed to `npc` for this first v8 egg |
-| Chat authorization | `AIRI_CHAT_PLAYER` | optional exact player name allowed to issue `!airi ...` |
+| Chat authorization | `AIRI_CHAT_PLAYERS` | who may issue `!airi ...`: blank/`*` = everyone, `none` = disabled, or a comma-separated exact-name allowlist |
 | Provider credential | `OPENAI_API_KEY` | required; hidden and never written to `airi-config.json` |
 | Model | `OPENAI_MODEL` | OpenAI-compatible model identifier |
 | Provider URL | `OPENAI_API_BASEURL` | HTTPS OpenAI-compatible API base URL |
 | Save | `SAVE_NAME` | optional explicit save name; blank chooses newest or creates `airi-world.zip` |
+| Factorio account | `FACTORIO_USERNAME` / `FACTORIO_TOKEN` | both blank = hidden server; both set = published through Factorio's public matching service; hidden and never written to `airi-config.json` |
 | Provider budget | `MAX_PROVIDER_REQUESTS_PER_HOUR` | persisted hourly request cap |
 | Shutdown timeout | `SHUTDOWN_TIMEOUT_MS` | save/stop timeout before forced termination |
 | Factorio version | `FACTORIO_VERSION` | `latest`, `experimental`, or an exact supported `2.0.x` |
 
-There is deliberately no `AIRI_PLAYER` actor-ownership variable in the v8 egg. Zero connected humans is valid. If `AIRI_CHAT_PLAYER` is blank, AIRI may run as an NPC but ordinary in-game `!airi` chat requests are disabled.
+There is deliberately no `AIRI_PLAYER` actor-ownership variable in the v8 egg. Zero connected humans is valid. `AIRI_CHAT_PLAYERS` defaults to blank, which allows every player to issue `!airi` chat requests; set it to `none` to disable in-game AIRI commands entirely, or to a comma-separated list of exact player names for an allowlist. The legacy single-name `AIRI_CHAT_PLAYER` variable is still accepted as a fallback when `AIRI_CHAT_PLAYERS` is unset, for existing installs.
+
+`FACTORIO_USERNAME` and `FACTORIO_TOKEN` must both be set or both left blank; supplying only one fails startup rather than silently publishing or discarding the credential. Neither is ever logged, persisted to `airi-config.json`, or included in the release manifest.
 
 ## Generated artifacts
 
