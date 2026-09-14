@@ -1,4 +1,4 @@
-import type { BoundingBoxArray, CollisionMask, LuaEntity, OnScriptPathRequestFinishedEvent, PathfinderWaypoint } from 'factorio:runtime'
+import type { LuaEntity, OnScriptPathRequestFinishedEvent, PathfinderWaypoint } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersWalkToEntity } from './types'
@@ -195,22 +195,17 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return false
     }
 
-    const bbox: BoundingBoxArray = [[-0.5, -0.5], [0.5, 0.5]]
-    const collision_mask: CollisionMask = {
-      layers: {
-        player: true,
-        train: true,
-        water_tile: true,
-        object: true,
-      },
-      consider_tile_transitions: true,
-    }
+    // Match Factorio's real character geometry. In 2.0.77 the character's
+    // collision mask deliberately does not collide with transport belts, while
+    // the previous hard-coded `object` layer did. Using the prototype keeps
+    // pathfinding aligned with places the NPC can physically occupy.
+    const character_prototype = character.prototype
 
     task.path_attempts = (task.path_attempts ?? 0) + 1
     task.target_position = copy_position(target.position)
     task.path_request_id = actor.surface.request_path({
-      bounding_box: bbox,
-      collision_mask,
+      bounding_box: character_prototype.collision_box,
+      collision_mask: character_prototype.collision_mask,
       radius: 2,
       start,
       goal: task.target_position,
