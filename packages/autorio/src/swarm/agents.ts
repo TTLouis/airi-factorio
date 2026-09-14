@@ -1,8 +1,9 @@
-import type { ActorId, AgentAvailabilityState, AgentId, PersistedAgentState, ProjectId, SimulationTick, SwarmStorage, WorkId } from './types'
+import type { ActorId, AgentAvailabilityState, AgentId, PersistedActorState, PersistedAgentState, ProjectId, SimulationTick, SwarmStorage, WorkId } from './types'
 import { allocate_swarm_id } from './storage'
 
 export function create_agent(swarm: SwarmStorage, actorId?: ActorId): PersistedAgentState {
-  if (actorId) {
+  if (actorId !== undefined) {
+    if (swarm.actors[actorId] === undefined) throw new Error(`Unknown logical actor ${actorId}`)
     for (const id in swarm.agents) {
       if (swarm.agents[id].actorId === actorId) throw new Error(`Actor ${actorId} is already bound to agent ${id}`)
     }
@@ -20,13 +21,22 @@ export function create_agent(swarm: SwarmStorage, actorId?: ActorId): PersistedA
 }
 
 export function allocate_logical_actor_id(swarm: SwarmStorage) {
-  return allocate_swarm_id('actor', swarm)
+  const id = allocate_swarm_id('actor', swarm)
+  const actor: PersistedActorState = {
+    id,
+    state: 'unbound',
+    bodyRevision: 0,
+    revision: 1,
+  }
+  swarm.actors[id] = actor
+  return id
 }
 
 export function bind_agent_actor(swarm: SwarmStorage, agentId: AgentId, expectedRevision: number, actorId: ActorId) {
   const agent = swarm.agents[agentId]
   if (!agent) return { ok: false as const, code: 'not_found' as const }
   if (agent.revision !== expectedRevision) return { ok: false as const, code: 'revision_mismatch' as const, currentRevision: agent.revision }
+  if (swarm.actors[actorId] === undefined) return { ok: false as const, code: 'actor_not_found' as const }
   for (const id in swarm.agents) {
     if (id !== agentId && swarm.agents[id].actorId === actorId) return { ok: false as const, code: 'actor_already_bound' as const }
   }

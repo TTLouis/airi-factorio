@@ -1,4 +1,4 @@
-import type { SwarmBoardStorage, SwarmIdByKind, SwarmIdKind, SwarmStorage } from './types'
+import type { PersistedActorState, SwarmBoardStorage, SwarmIdByKind, SwarmIdKind, SwarmStorage } from './types'
 
 export const SWARM_STORAGE_VERSION = 1
 
@@ -30,6 +30,7 @@ export function create_empty_swarm_storage(): SwarmStorage {
   return {
     version: SWARM_STORAGE_VERSION,
     agents: {},
+    actors: {},
     board: create_empty_board(),
     missions: {},
     objectives: {},
@@ -38,8 +39,24 @@ export function create_empty_swarm_storage(): SwarmStorage {
   }
 }
 
+function create_unbound_actor_state(id: string): PersistedActorState {
+  return {
+    id,
+    state: 'unbound',
+    bodyRevision: 0,
+    revision: 1,
+  }
+}
+
 function normalize_current_storage(current: PartialSwarmStorage): SwarmStorage {
   if (!current.agents) current.agents = {}
+  if (!current.actors) current.actors = {}
+  for (const agentId in current.agents) {
+    const actorId = current.agents[agentId]?.actorId
+    if (actorId !== undefined && current.actors[actorId] === undefined) {
+      current.actors[actorId] = create_unbound_actor_state(actorId)
+    }
+  }
   if (!current.board) current.board = {}
   if (!current.board.work) current.board.work = {}
   if (!current.board.requests) current.board.requests = {}

@@ -6,6 +6,7 @@ describe('swarm storage foundation', () => {
     const root: any = { existing_npc_state: 'preserve-me' }
     const swarm = get_swarm_storage(root)
     expect(swarm.version).toBe(SWARM_STORAGE_VERSION)
+    expect(swarm.actors).toEqual({})
     expect(swarm.board.events).toEqual([])
     expect(swarm.board.reservations).toEqual({})
     expect(root.existing_npc_state).toBe('preserve-me')
@@ -16,7 +17,32 @@ describe('swarm storage foundation', () => {
     const swarm = get_swarm_storage(root)
     expect(swarm.board.work).toEqual({})
     expect(swarm.agents).toEqual({})
+    expect(swarm.actors).toEqual({})
     expect(allocate_swarm_id('work', swarm)).toBe('work-5')
+  })
+
+  it('reconstructs unbound actor metadata for older version-1 agent bindings', () => {
+    const root: any = {
+      airi_swarm: {
+        version: SWARM_STORAGE_VERSION,
+        agents: {
+          'agent-1': {
+            id: 'agent-1',
+            actorId: 'actor-7',
+            state: 'available',
+            activeRequestIds: [],
+            revision: 1,
+          },
+        },
+      },
+    }
+    const swarm = get_swarm_storage(root)
+    expect(swarm.actors['actor-7']).toEqual({
+      id: 'actor-7',
+      state: 'unbound',
+      bodyRevision: 0,
+      revision: 1,
+    })
   })
 
   it('allocates independent deterministic logical ids', () => {

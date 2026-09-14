@@ -9,6 +9,7 @@ describe('logical swarm identity', () => {
     const actor = allocate_logical_actor_id(swarm)
     const revision = agent.revision
 
+    expect(swarm.actors[actor]).toMatchObject({ id: actor, state: 'unbound', bodyRevision: 0 })
     expect(bind_agent_actor(swarm, agent.id, revision, actor).ok).toBe(true)
     expect(bind_agent_actor(swarm, agent.id, revision, allocate_logical_actor_id(swarm)))
       .toMatchObject({ ok: false, code: 'revision_mismatch' })
@@ -20,6 +21,14 @@ describe('logical swarm identity', () => {
 
     create_agent(swarm, actor)
     expect(() => create_agent(swarm, actor)).toThrow('already bound')
+  })
+
+  it('rejects fabricated logical actor ids', () => {
+    const swarm = create_empty_swarm_storage()
+    const agent = create_agent(swarm)
+    expect(() => create_agent(swarm, 'actor-999')).toThrow('Unknown logical actor')
+    expect(bind_agent_actor(swarm, agent.id, agent.revision, 'actor-999'))
+      .toMatchObject({ ok: false, code: 'actor_not_found' })
   })
 
   it('persists current commitment rather than a permanent role', () => {

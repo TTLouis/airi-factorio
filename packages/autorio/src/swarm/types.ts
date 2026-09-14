@@ -54,6 +54,24 @@ export interface ActorAdmissionSnapshot {
   bodyRevision: number
 }
 
+export type ActorRuntimeState = 'unbound' | 'online' | 'missing'
+
+export interface PhysicalActorIdentity {
+  physicalActorId: number
+  kind: string
+  forceIndex: number
+}
+
+export interface PersistedActorState {
+  id: ActorId
+  state: ActorRuntimeState
+  bodyRevision: number
+  physical?: PhysicalActorIdentity
+  lastSeenTick?: SimulationTick
+  missingSinceTick?: SimulationTick
+  revision: number
+}
+
 export type AgentAvailabilityState = 'available' | 'working' | 'blocked' | 'recovering' | 'disabled'
 
 export interface PersistedAgentState {
@@ -343,6 +361,7 @@ export interface SwarmBoardStorage {
 export interface SwarmStorage {
   version: number
   agents: Record<AgentId, PersistedAgentState>
+  actors: Record<ActorId, PersistedActorState>
   board: SwarmBoardStorage
   missions: Record<MissionId, Mission>
   objectives: Record<ObjectiveId, Objective>
