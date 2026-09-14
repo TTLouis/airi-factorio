@@ -1,8 +1,8 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import test from 'node:test'
 
 import { prepareServerSettings } from './game-files.mjs'
 
@@ -35,7 +35,7 @@ async function readSettings(root) {
   return JSON.parse(await fsp.readFile(path.join(root, 'data', 'server-settings.json'), 'utf8'))
 }
 
-test('blank username/token produces a hidden server on first creation', async t => {
+test('blank username/token produces a hidden server on first creation', async (t) => {
   const root = await temp(t)
   const game = await setupGame(root)
   await prepareServerSettings(root, game, { username: '', token: '', public: false })
@@ -47,18 +47,45 @@ test('blank username/token produces a hidden server on first creation', async t 
   assert.equal(settings.require_user_verification, false)
 })
 
-test('matching username/token publishes the server', async t => {
+test('matching username/token publishes the server', async (t) => {
   const root = await temp(t)
   const game = await setupGame(root)
   await prepareServerSettings(root, game, { username: 'ttlouis', token: 'dummy-token', public: true })
   const settings = await readSettings(root)
   assert.equal(settings.visibility.public, true)
   assert.equal(settings.visibility.lan, false)
+  assert.equal(settings.require_user_verification, true)
   assert.equal(settings.username, 'ttlouis')
   assert.equal(settings.token, 'dummy-token')
 })
 
-test('unrelated settings survive repeated updates', async t => {
+test('an existing file with require_user_verification=false is switched to true when credentials are added', async (t) => {
+  const root = await temp(t)
+  const game = await setupGame(root)
+  await prepareServerSettings(root, game, { username: '', token: '', public: false })
+  let settings = await readSettings(root)
+  assert.equal(settings.require_user_verification, false)
+
+  await prepareServerSettings(root, game, { username: 'ttlouis', token: 'dummy-token', public: true })
+  settings = await readSettings(root)
+  assert.equal(settings.visibility.public, true)
+  assert.equal(settings.require_user_verification, true)
+})
+
+test('an existing public file is switched back to require_user_verification=false when credentials are removed', async (t) => {
+  const root = await temp(t)
+  const game = await setupGame(root)
+  await prepareServerSettings(root, game, { username: 'ttlouis', token: 'dummy-token', public: true })
+  let settings = await readSettings(root)
+  assert.equal(settings.require_user_verification, true)
+
+  await prepareServerSettings(root, game, { username: '', token: '', public: false })
+  settings = await readSettings(root)
+  assert.equal(settings.visibility.public, false)
+  assert.equal(settings.require_user_verification, false)
+})
+
+test('unrelated settings survive repeated updates', async (t) => {
   const root = await temp(t)
   const game = await setupGame(root)
   await prepareServerSettings(root, game, { username: '', token: '', public: false })
@@ -83,7 +110,7 @@ test('unrelated settings survive repeated updates', async t => {
   assert.equal(settings.token, 'dummy-token')
 })
 
-test('changing environment-derived values updates managed settings without reinstall', async t => {
+test('changing environment-derived values updates managed settings without reinstall', async (t) => {
   const root = await temp(t)
   const game = await setupGame(root)
   await prepareServerSettings(root, game, { username: 'ttlouis', token: 'dummy-token', public: true })
@@ -97,7 +124,7 @@ test('changing environment-derived values updates managed settings without reins
   assert.equal(settings.token, '')
 })
 
-test('an unchanged configuration does not rewrite the settings file', async t => {
+test('an unchanged configuration does not rewrite the settings file', async (t) => {
   const root = await temp(t)
   const game = await setupGame(root)
   const factorio = { username: 'ttlouis', token: 'dummy-token', public: true }
@@ -110,7 +137,7 @@ test('an unchanged configuration does not rewrite the settings file', async t =>
   assert.equal(before, after)
 })
 
-test('the secret token is never written to any log-visible location besides server-settings.json', async t => {
+test('the secret token is never written to any log-visible location besides server-settings.json', async (t) => {
   const root = await temp(t)
   const game = await setupGame(root)
   await prepareServerSettings(root, game, { username: 'ttlouis', token: 'super-secret-token', public: true })

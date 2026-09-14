@@ -67,12 +67,15 @@ export async function prepareServerSettings(root, game, factorio = { username: '
     current = JSON.parse(await fsp.readFile(path.join(game, 'data', 'server-settings.example.json'), 'utf8'))
     current.name = 'AIRI Factorio NPC'
     current.description = 'AIRI standalone NPC Factorio server'
-    current.require_user_verification = false
   }
 
+  // Factorio refuses to start a public game unless require_user_verification
+  // is also true (CommandLineMultiplayer.cpp), so this tracks visibility.public
+  // exactly rather than being an independently configurable setting.
   const next = {
     ...current,
     visibility: { ...current.visibility, public: factorio.public, lan: false },
+    require_user_verification: factorio.public,
     username: factorio.username,
     token: factorio.token,
   }
