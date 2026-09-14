@@ -223,6 +223,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     task.calculating_path = true
     task.path = null
     task.path_drawn = false
+    task.last_waypoint_distance = undefined
     task.next_retry_tick = undefined
     log(`[AUTORIO] Requested path id=${task.path_request_id} attempt=${task.path_attempts} to ${serpent.line(task.target_position)}`)
     return true
@@ -244,7 +245,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     task.target_position = copy_position(target.position)
     task.started_tick = game.tick
     task.last_progress_tick = game.tick
-    task.last_position = copy_position(actor.position)
+    task.last_waypoint_distance = undefined
     record(actor, task, true, false, 'started')
     return request_path(actor, task)
   }
@@ -259,7 +260,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     task.path_requested_tick = undefined
     task.next_retry_tick = undefined
     task.last_progress_tick = game.tick
-    task.last_position = copy_position(actor.position)
+    task.last_waypoint_distance = undefined
     if ((task.path_attempts ?? 0) >= MAX_PATH_ATTEMPTS) {
       fail(actor, task, exhausted_code)
       return false
@@ -309,7 +310,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     task.path_drawn = false
     task.path_index = 1
     task.last_progress_tick = game.tick
-    task.last_position = copy_position(actor.position)
+    task.last_waypoint_distance = distance(actor.position, event.path[0].position)
     log(`[AUTORIO] Accepted path result with ${event.path.length} waypoints`)
   }
 
@@ -325,14 +326,22 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     }
 
     const next_position = path[0].position
-    if (distance(next_position, actor.position) <= WAYPOINT_REACHED_DISTANCE) {
+    const waypoint_distance = distance(next_position, actor.position)
+    if (waypoint_distance <= WAYPOINT_REACHED_DISTANCE) {
       path.shift()
+      task.last_progress_tick = game.tick
+      task.last_waypoint_distance = path.length > 0
+        ? distance(path[0].position, actor.position)
+        : undefined
       return true
     }
 
-    const previous_position = task.last_position ?? actor.position
-    if (distance(previous_position, actor.position) >= PROGRESS_DISTANCE) {
-      task.last_position = copy_position(actor.position)
+    // Position change alone is not navigation progress: a transport belt can
+    // move an idle/walking character sideways or backward. Only reset the stuck
+    // timer when AIRI materially closes distance to the current path waypoint.
+    const best_distance = task.last_waypoint_distance
+    if (best_distance === undefined || waypoint_distance <= best_distance - PROGRESS_DISTANCE) {
+      task.last_waypoint_distance = waypoint_distance
       task.last_progress_tick = game.tick
     }
 
@@ -425,6 +434,8 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
             request_id: task.path_request_id,
             attempts: task.path_attempts ?? 0,
             waypoints_remaining: task.path?.length ?? 0,
+            best_waypoint_distance: task.last_waypoint_distance,
+            last_progress_tick: task.last_progress_tick,
           }
         : undefined,
       last_result: storage.airi_last_navigation_result,
