@@ -1,5 +1,5 @@
 import type { ControlledActor } from './actors/types'
-import { register_npc_recovery_handler } from './actors/actor_controller'
+import { register_actor_mode_transition_handler, register_npc_recovery_handler } from './actors/actor_controller'
 import type { PlayerParameters, PlayerState } from './types'
 import { TaskStates } from './types'
 
@@ -257,6 +257,17 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
   register_npc_recovery_handler(({ previous_actor_id }) => {
     discard_all_tasks_after_actor_loss()
     log(`[AUTORIO] Discarded active and queued work after loss of actor_id=${previous_actor_id}`)
+  })
+
+  register_actor_mode_transition_handler(({ previous_mode, next_mode }) => {
+    if (player_state.task_state === TaskStates.IDLE && task_queue.length === 0) {
+      return
+    }
+    // set_actor_mode invokes this hook before changing storage.airi_actor_mode,
+    // so cancellation resolves the previous actor and stops/cancels only work
+    // that belonged to that actor (including an owned native crafting queue).
+    cancel_all_tasks()
+    log(`[AUTORIO] Cancelled active and queued work before actor mode change ${previous_mode} -> ${next_mode}`)
   })
 
   return {
