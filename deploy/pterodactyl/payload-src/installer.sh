@@ -225,11 +225,33 @@ RELEASE="$SERVER_DIR/.airi/releases/$RELEASE_ID"
 mv "$APP" "$RELEASE"
 
 cp "$RELEASE/client-mod/autorio_0.1.0.zip" "$SERVER_DIR/autorio_0.1.0.zip"
-if [[ -e "$SERVER_DIR/start-airi.sh" || -L "$SERVER_DIR/start-airi.sh" ]]; then
-  cp -a "$SERVER_DIR/start-airi.sh" "$SERVER_DIR/.airi/previous-start-$RELEASE_ID.sh" 2>/dev/null || true
+PREVIOUS_TARGET=""
+if [[ -L "$SERVER_DIR/start-airi.sh" ]]; then
+  PREVIOUS_TARGET="$(readlink -- "$SERVER_DIR/start-airi.sh")"
+  [[ "$PREVIOUS_TARGET" == .airi/releases/*/start-airi.sh ]] || fail 'Existing AIRI startup symlink has an unexpected target'
+elif [[ -e "$SERVER_DIR/start-airi.sh" ]]; then
+  [[ -f "$SERVER_DIR/start-airi.sh" ]] || fail 'Existing AIRI startup path is not a regular file or managed symlink'
 fi
 ln -s ".airi/releases/$RELEASE_ID/start-airi.sh" "$SERVER_DIR/.start-airi-$RELEASE_ID.new"
 mv -Tf "$SERVER_DIR/.start-airi-$RELEASE_ID.new" "$SERVER_DIR/start-airi.sh"
+if [[ -n "$PREVIOUS_TARGET" ]]; then
+  printf '%s\n' "$PREVIOUS_TARGET" > "$SERVER_DIR/.airi/rollback-$RELEASE_ID.target.tmp"
+  mv -Tf "$SERVER_DIR/.airi/rollback-$RELEASE_ID.target.tmp" "$SERVER_DIR/.airi/rollback-$RELEASE_ID.target"
+fi
+cat > "$SERVER_DIR/rollback-airi.sh" <<'ROLLBACK_AIRI'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROOT="${CONTAINER_ROOT:-/home/container}"
+ROOT="$(readlink -f -- "$ROOT")"
+LATEST="$(ls -1t "$ROOT"/.airi/rollback-*.target 2>/dev/null | head -n 1 || true)"
+[[ -n "$LATEST" && -f "$LATEST" ]] || { echo '[AIRI rollback] No previous completed release is recorded.' >&2; exit 1; }
+TARGET="$(cat "$LATEST")"
+[[ "$TARGET" == .airi/releases/*/start-airi.sh && -f "$ROOT/$TARGET" ]] || { echo '[AIRI rollback] Recorded previous release is unavailable.' >&2; exit 1; }
+ln -s "$TARGET" "$ROOT/.start-airi-rollback.new"
+mv -Tf "$ROOT/.start-airi-rollback.new" "$ROOT/start-airi.sh"
+echo "[AIRI rollback] Restored startup target: $TARGET"
+ROLLBACK_AIRI
+chmod 755 "$SERVER_DIR/rollback-airi.sh"
 
 if [[ ! -e "$SERVER_DIR/airi-config.json" ]]; then
   AIRI_CONFIG_PATH="$SERVER_DIR/airi-config.json" AIRI_SUPERVISOR="$RELEASE/src/runtime-v8/supervisor.mjs" "$RELEASE/node/bin/node" --input-type=module <<'CONFIG'
