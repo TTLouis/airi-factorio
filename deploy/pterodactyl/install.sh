@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Generated AIRI Factorio standalone-NPC v8 installer loader.
+# Generated AIRI Factorio swarm-capable standalone-NPC v8 installer loader.
 # Immutable source: deploy/pterodactyl/payload-src/installer.sh
 set -Eeuo pipefail
 umask 077
-REF="5e56255fcfcd9f79e21838d452c20de3dbed829c"
-EXPECTED_SOURCE_SHA256="014e965de0cb1e753bb42d992d10ba9762e7abe0681da020a3ed9c6e5949eb1f"
+REF="b93cbd094a91508883f39450420fbb1caf6c3752"
+EXPECTED_SOURCE_SHA256="feb286960a9d22d01d82efde52634022a83e3369a0af02c00d8059ff19ce6940"
 URL="https://raw.githubusercontent.com/TTLouis/airi-factorio/$REF/deploy/pterodactyl/payload-src/installer.sh"
 TMP="$(mktemp)"
 log() { printf '[AIRI bootstrap] %s\n' "$*"; }
@@ -14,7 +14,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 for tool in bash curl sha256sum awk mktemp rm; do command -v "$tool" >/dev/null || fail "Missing installer loader tool: $tool"; done
-curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$TMP" || fail 'Unable to download pinned AIRI installer source'
+curl --fail --location --retry 8 --retry-delay 5 --retry-max-time 240 --retry-all-errors --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$TMP" || fail 'Unable to download pinned AIRI installer source'
 ACTUAL_SOURCE_SHA256="$(sha256sum "$TMP" | awk '{print $1}')"
 [[ "$ACTUAL_SOURCE_SHA256" == "$EXPECTED_SOURCE_SHA256" ]] || fail 'Pinned AIRI installer source checksum mismatch'
 if [[ "${1:-}" == '--verify-only' ]]; then log "Pinned payload verified at $REF; installation was not run."; exit 0; fi
