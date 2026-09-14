@@ -48,8 +48,8 @@ export function configuration(raw = {}, env = process.env) {
     actorMode,
     chatPlayers: parseChatPlayers(cleanString(chatPlayersSource, 'AIRI_CHAT_PLAYERS', 512)),
     save: cleanString(env.SAVE_NAME ?? raw.save ?? '', 'SAVE_NAME', 160),
-    model: cleanString(env.OPENAI_MODEL ?? raw.model ?? 'gpt-5.6', 'OPENAI_MODEL', 200),
-    base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? 'https://api.openai.com/v1',
+    model: cleanString(env.OPENAI_MODEL ?? raw.model ?? 'replace-me', 'OPENAI_MODEL', 200),
+    base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? 'https://provider.invalid/v1',
     key: env.OPENAI_API_KEY ?? '',
     providerTimeoutMs: safeInteger(env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? 120000, 'PROVIDER_TIMEOUT_MS', 1000, 600000),
     gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? 34197, 'SERVER_PORT', 1024, 65535),
@@ -73,8 +73,8 @@ export function configuration(raw = {}, env = process.env) {
 export const AIRI_CONFIG_DEFAULTS = {
   actorMode: 'npc',
   chatPlayers: '',
-  providerUrl: 'https://api.openai.com/v1',
-  model: 'gpt-5.6',
+  providerUrl: 'https://provider.invalid/v1',
+  model: 'replace-me',
   save: '',
   providerTimeoutMs: 120000,
   gamePort: 34197,
@@ -83,14 +83,15 @@ export const AIRI_CONFIG_DEFAULTS = {
 }
 
 // Fills in any default field missing from an existing config without
-// touching values the user already set, and keeps providerUrl synchronized
-// with the effective endpoint: OPENAI_API_BASEURL, when set, overrides
-// whatever is stored, so the file never shows a stale/meaningless value for
-// the endpoint AIRI is actually using this run.
+// touching values the user already set, and keeps setup-controlled provider
+// fields synchronized with the effective runtime values. Pterodactyl's
+// OPENAI_API_BASEURL and OPENAI_MODEL values therefore remain visible in
+// airi-config.json instead of leaving stale defaults behind.
 export function migrateConfig(raw = {}, env = process.env) {
   check(raw && typeof raw === 'object' && !Array.isArray(raw), 'airi-config.json must be an object')
   const next = { ...AIRI_CONFIG_DEFAULTS, ...raw }
   next.providerUrl = env.OPENAI_API_BASEURL ?? raw.providerUrl ?? AIRI_CONFIG_DEFAULTS.providerUrl
+  next.model = env.OPENAI_MODEL ?? raw.model ?? AIRI_CONFIG_DEFAULTS.model
   delete next.factorioUsername
   return next
 }
