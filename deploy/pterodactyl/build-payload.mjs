@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { gzipSync, gunzipSync } from 'node:zlib'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,28 +9,14 @@ const sourcePath = join(here, 'payload-src', 'installer.sh')
 const installPath = join(here, 'install.sh')
 const eggPath = join(here, 'egg-airi-factorio-server.json')
 const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
-// This immutable commit contains the synchronized standalone v8 install.sh.
-// Future installer revisions intentionally require advancing this pin after
-// the new install.sh has been committed, avoiding a mutable branch fetch.
-const EGG_INSTALL_REF = 'b75c93dd784509f78f04123e613fe618cdd8fb05'
+
+// Immutable commit that contains the exact payload-src/installer.sh used by this
+// release candidate. Both the standalone bootstrap and the PTDL egg embed the
+// same small loader, so there is only one installer transport contract to audit.
+const PAYLOAD_REF = 'c60728afc4d348d9739a3c7de70bec86cc9c708a'
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
-}
-
-function deterministicGzip(bytes) {
-  const compressed = gzipSync(bytes, { level: 9 })
-  compressed[4] = 0
-  compressed[5] = 0
-  compressed[6] = 0
-  compressed[7] = 0
-  return compressed
-}
-
-function wrapBase64(text, width = 76) {
-  const lines = []
-  for (let offset = 0; offset < text.length; offset += width) lines.push(text.slice(offset, offset + width))
-  return lines.join('\n')
 }
 
 function assertNpcV8Source(source) {
@@ -48,75 +33,31 @@ function assertNpcV8Source(source) {
   if (failures.length) throw new Error(`Refusing to generate v8 artifacts: ${failures.join('; ')}`)
 }
 
-export function bootstrapFromArchive(source, archive) {
-  assertNpcV8Source(source)
-  if (!gunzipSync(archive).equals(source)) throw new Error('Payload archive does not round-trip to source')
-  const sourceHash = sha256(source)
-  const archiveHash = sha256(archive)
-  const encoded = wrapBase64(archive.toString('base64'))
-  return `#!/usr/bin/env bash
-# Generated AIRI Factorio standalone-NPC v8 Pterodactyl bootstrap.
-# Source of truth: deploy/pterodactyl/payload-src/installer.sh
-set -Eeuo pipefail
-umask 077
-BOOT_DIR=""
-EXPECTED_SOURCE_SHA256="${sourceHash}"
-EXPECTED_SOURCE_BYTES="${source.length}"
-EXPECTED_ARCHIVE_SHA256="${archiveHash}"
-log() { printf '[AIRI bootstrap] %s\\n' "$*"; }
-fail() { log "ERROR: $*" >&2; exit 78; }
-cleanup() { local code=$?; trap - EXIT; [[ -z "$BOOT_DIR" || ! -d "$BOOT_DIR" ]] || rm -rf -- "$BOOT_DIR"; exit "$code"; }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM HUP
-for tool in awk base64 gzip sha256sum mktemp wc bash mkdir rm; do command -v "$tool" >/dev/null || fail "Missing bootstrap tool: $tool"; done
-ROOT="\${AIRI_INSTALL_ROOT:-/mnt/server}"
-[[ "$ROOT" == /* && "$ROOT" != / ]] || fail 'Installer root must be an absolute directory other than /.'
-mkdir -p -- "$ROOT"
-BOOT_DIR="$(mktemp -d "$ROOT/.airi-bootstrap.XXXXXX")"
-PAYLOAD="$BOOT_DIR/installer.b64"
-ARCHIVE="$BOOT_DIR/installer.sh.gz"
-INSTALLER="$BOOT_DIR/installer.sh"
-cat > "$PAYLOAD" <<'AIRI_PAYLOAD'
-${encoded}
-AIRI_PAYLOAD
-base64 -d "$PAYLOAD" > "$ARCHIVE" || fail 'Payload base64 decode failed'
-[[ "$(sha256sum "$ARCHIVE" | awk '{print $1}')" == "$EXPECTED_ARCHIVE_SHA256" ]] || fail 'Compressed payload checksum mismatch'
-gzip -dc "$ARCHIVE" > "$INSTALLER" || fail 'Payload decompression failed'
-[[ "$(wc -c < "$INSTALLER" | tr -d '[:space:]')" == "$EXPECTED_SOURCE_BYTES" ]] || fail 'Installer payload size mismatch'
-[[ "$(sha256sum "$INSTALLER" | awk '{print $1}')" == "$EXPECTED_SOURCE_SHA256" ]] || fail 'Installer payload checksum mismatch'
-if [[ "\${1:-}" == '--verify-only' ]]; then log 'Payload verified; installation was not run.'; exit 0; fi
-[[ $# == 0 ]] || fail 'Only --verify-only is supported as a bootstrap argument.'
-log 'Payload verified; starting standalone-NPC v8 installer.'
-bash "$INSTALLER"
-`
-}
-
-function bootstrap(source) {
-  return bootstrapFromArchive(source, deterministicGzip(source))
-}
-
-export function eggInstallerLoader(source) {
+export function installerLoader(source) {
   assertNpcV8Source(source)
   const sourceHash = sha256(source)
   return `#!/usr/bin/env bash
-# Compact Pterodactyl egg loader for the standalone-NPC v8 installer.
+# Generated AIRI Factorio standalone-NPC v8 installer loader.
+# Immutable source: deploy/pterodactyl/payload-src/installer.sh
 set -Eeuo pipefail
 umask 077
-REF="${EGG_INSTALL_REF}"
+REF="${PAYLOAD_REF}"
 EXPECTED_SOURCE_SHA256="${sourceHash}"
-URL="https://raw.githubusercontent.com/TTLouis/airi-factorio/$REF/deploy/pterodactyl/install.sh"
+URL="https://raw.githubusercontent.com/TTLouis/airi-factorio/$REF/deploy/pterodactyl/payload-src/installer.sh"
 TMP="$(mktemp)"
-log() { printf '[AIRI egg] %s\\n' "$*"; }
+log() { printf '[AIRI bootstrap] %s\\n' "$*"; }
 fail() { log "ERROR: $*" >&2; exit 78; }
 cleanup() { local code=$?; trap - EXIT; rm -f -- "$TMP"; exit "$code"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
-for tool in bash curl grep mktemp rm; do command -v "$tool" >/dev/null || fail "Missing egg installer tool: $tool"; done
-curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$TMP" || fail 'Unable to download pinned AIRI installer'
-grep -Fq "EXPECTED_SOURCE_SHA256=\\\"$EXPECTED_SOURCE_SHA256\\\"" "$TMP" || fail 'Pinned AIRI installer payload checksum does not match this egg'
-log "Using immutable installer revision $REF"
+for tool in bash curl sha256sum awk mktemp rm; do command -v "$tool" >/dev/null || fail "Missing installer loader tool: $tool"; done
+curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$TMP" || fail 'Unable to download pinned AIRI installer source'
+ACTUAL_SOURCE_SHA256="$(sha256sum "$TMP" | awk '{print $1}')"
+[[ "$ACTUAL_SOURCE_SHA256" == "$EXPECTED_SOURCE_SHA256" ]] || fail 'Pinned AIRI installer source checksum mismatch'
+if [[ "\${1:-}" == '--verify-only' ]]; then log "Pinned payload verified at $REF; installation was not run."; exit 0; fi
+[[ $# == 0 ]] || fail 'Only --verify-only is supported as a loader argument.'
+log "Using immutable installer payload $REF"
 bash "$TMP"
 `
 }
@@ -134,7 +75,7 @@ function variable(name, description, envVariable, defaultValue, rules, { viewabl
   }
 }
 
-function egg(source) {
+function egg(installScript) {
   return {
     _comment: 'DO NOT EDIT: generated by deploy/pterodactyl/build-payload.mjs',
     meta: { version: 'PTDL_v2', update_url: null },
@@ -156,7 +97,7 @@ function egg(source) {
     },
     scripts: {
       installation: {
-        script: eggInstallerLoader(source),
+        script: installScript,
         container: 'ghcr.io/ptero-eggs/yolks:debian_bookworm',
         entrypoint: 'bash',
       },
@@ -176,8 +117,8 @@ function egg(source) {
 }
 
 export function buildArtifacts(source) {
-  const installScript = bootstrap(source)
-  const eggJson = `${JSON.stringify(egg(source), null, 4)}\n`
+  const installScript = installerLoader(source)
+  const eggJson = `${JSON.stringify(egg(installScript), null, 4)}\n`
   return { installScript, eggJson }
 }
 
@@ -185,50 +126,27 @@ function normalizeCheckoutText(text) {
   return text.replaceAll('\r\n', '\n')
 }
 
-function requiredMatch(text, regex, name) {
-  const match = text.match(regex)
-  if (!match) throw new Error(`Generated install.sh is missing ${name}`)
-  return match[1]
-}
-
 export function verifyGeneratedArtifacts(source, installText, eggText) {
   assertNpcV8Source(source)
-  const installScript = normalizeCheckoutText(installText)
+  const currentInstall = normalizeCheckoutText(installText)
   const currentEgg = normalizeCheckoutText(eggText)
+  const expected = buildArtifacts(source)
 
-  const expectedSourceHash = requiredMatch(installScript, /^EXPECTED_SOURCE_SHA256="([a-f0-9]{64})"$/m, 'EXPECTED_SOURCE_SHA256')
-  const expectedSourceBytes = Number(requiredMatch(installScript, /^EXPECTED_SOURCE_BYTES="([0-9]+)"$/m, 'EXPECTED_SOURCE_BYTES'))
-  const expectedArchiveHash = requiredMatch(installScript, /^EXPECTED_ARCHIVE_SHA256="([a-f0-9]{64})"$/m, 'EXPECTED_ARCHIVE_SHA256')
-
-  const payloadStart = `cat > "$PAYLOAD" <<'AIRI_PAYLOAD'\n`
-  const start = installScript.indexOf(payloadStart)
-  if (start === -1) throw new Error('Generated install.sh is missing AIRI_PAYLOAD start marker')
-  const bodyStart = start + payloadStart.length
-  const end = installScript.indexOf('\nAIRI_PAYLOAD\n', bodyStart)
-  if (end === -1) throw new Error('Generated install.sh is missing AIRI_PAYLOAD end marker')
-
-  const encoded = installScript.slice(bodyStart, end).replace(/\s+/g, '')
-  const archive = Buffer.from(encoded, 'base64')
-  let decoded
-  try {
-    decoded = gunzipSync(archive)
-  } catch (error) {
-    throw new Error(`Generated install.sh payload is not valid gzip: ${error.message}`)
+  if (currentInstall !== expected.installScript) {
+    throw new Error('Generated install.sh loader is stale')
   }
 
-  if (expectedSourceHash !== sha256(source)) throw new Error('Generated install.sh source checksum is stale')
-  if (expectedSourceBytes !== source.length) throw new Error('Generated install.sh source byte count is stale')
-  if (expectedArchiveHash !== sha256(archive)) throw new Error('Generated install.sh archive checksum is stale')
-  if (!decoded.equals(source)) throw new Error('Generated install.sh payload does not reproduce payload-src/installer.sh')
-
+  let parsedEgg
   try {
-    JSON.parse(currentEgg)
-  } catch (error) {
+    parsedEgg = JSON.parse(currentEgg)
+  }
+  catch (error) {
     throw new Error(`Generated egg JSON is invalid: ${error.message}`)
   }
-
-  const expectedEgg = `${JSON.stringify(egg(source), null, 4)}\n`
-  if (currentEgg !== expectedEgg) throw new Error('Generated egg schema is stale')
+  if (normalizeCheckoutText(parsedEgg?.scripts?.installation?.script ?? '') !== expected.installScript) {
+    throw new Error('Generated egg does not embed the expected immutable installer loader')
+  }
+  if (currentEgg !== expected.eggJson) throw new Error('Generated egg schema is stale')
   return true
 }
 
@@ -246,10 +164,9 @@ function main() {
   const { installScript, eggJson } = buildArtifacts(source)
   writeFileSync(installPath, installScript)
   writeFileSync(eggPath, eggJson)
-  console.log('Generated standalone-NPC v8 install.sh and compact egg-airi-factorio-server.json.')
+  console.log('Generated standalone-NPC v8 install.sh and egg-airi-factorio-server.json.')
   console.log(`  payload source sha256: ${sha256(source)}`)
-  console.log(`  install script bytes: ${Buffer.byteLength(installScript)}`)
-  console.log(`  egg loader ref: ${EGG_INSTALL_REF}`)
+  console.log(`  immutable payload ref: ${PAYLOAD_REF}`)
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main()
