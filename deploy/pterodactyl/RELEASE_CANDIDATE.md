@@ -15,9 +15,9 @@ The generated `egg-airi-factorio-server.json` is now a v8 standalone-NPC candida
 - graceful `/server-save` + SIGINT shutdown
 - valid PTDL_v2 JSON with the same immutable checksummed installer loader as `install.sh`
 
-The immutable installer payload is commit `c60728afc4d348d9739a3c7de70bec86cc9c708a`, whose `payload-src/installer.sh` has SHA-256 `c5ae9291b5d8ce16deb4356b20e0c1b2629ff350794393c61500dac8f3836170`. That installer pins runtime source `f0a0420d7a16cb6b48855c12538013ba112ec6c5` and revision `2026-09-14.4`.
+The immutable installer payload is commit `5e56255fcfcd9f79e21838d452c20de3dbed829c`, whose `payload-src/installer.sh` has SHA-256 `014e965de0cb1e753bb42d992d10ba9762e7abe0681da020a3ed9c6e5949eb1f`. That installer pins runtime source `c5dc39e57285695f122603dbafc9abf4e0a2ef81` and revision `2026-09-14.5`.
 
-The runtime pin includes the real-Factorio first-Lua-command confirmation fix. Configure admission now repeats the exact same command at most once when the achievement warning blocks execution, and accepts success only when the response contains the acknowledgement marker followed by parseable JSON. An echoed command containing the session or marker text is not treated as execution proof.
+The runtime pin includes the real-Factorio first-Lua-command confirmation fix and a production Source-RCON integration fixture that reproduces that first-command warning. Configure admission repeats the exact same command at most once when the achievement warning blocks execution, and accepts success only when the response contains the acknowledgement marker followed by parseable JSON. An echoed command containing the session or marker text is not treated as execution proof.
 
 `install.sh` and the egg deliberately share one compact loader. The loader downloads the immutable human-readable installer payload directly, verifies its SHA-256, and only then executes it. This avoids mutable branch fetches, nested bootstrap pins, and gzip/zlib reproducibility as release concerns.
 
