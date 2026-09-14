@@ -24,10 +24,13 @@ export class NpcAgentLoop {
     this.log = log
     this.maxToolRounds = maxToolRounds
     this.maxContinuations = maxContinuations
+    this.providerAbort = null
     this.reset()
   }
 
   reset() {
+    this.providerAbort?.abort()
+    this.providerAbort = null
     this.active = false
     this.messages = []
     this.epoch = null
@@ -50,6 +53,17 @@ export class NpcAgentLoop {
     return current
   }
 
+  async runGuarded() {
+    const generation = this.generation
+    try {
+      return await this.runTurn()
+    }
+    catch (error) {
+      if (generation === this.generation) this.reset()
+      throw error
+    }
+  }
+
   async request(text) {
     check(typeof text === 'string' && text.trim().length > 0 && text.length <= 4000, 'Invalid chat request')
     this.reset()
@@ -59,7 +73,7 @@ export class NpcAgentLoop {
       { role: 'user', content: `[CHAT] ${text}` },
     ]
     this.active = true
-    return this.runTurn()
+    return this.runGuarded()
   }
 
   async completed() {
@@ -68,7 +82,7 @@ export class NpcAgentLoop {
     await this.assertCurrent()
     this.continuations++
     this.messages.push({ role: 'user', content: '[MOD] All operations completed' })
-    return this.runTurn()
+    return this.runGuarded()
   }
 
   cancel() {
@@ -82,11 +96,20 @@ export class NpcAgentLoop {
       await this.reserve({ epoch: current.epoch, actorId: current.actor_id })
       await this.assertCurrent()
 
-      const message = await this.provider(this.messages.map(item => ({ ...item })), {
-        epoch: current.epoch,
-        actorId: current.actor_id,
-        round,
-      })
+      const controller = new AbortController()
+      this.providerAbort = controller
+      let message
+      try {
+        message = await this.provider(this.messages.map(item => ({ ...item })), {
+          epoch: current.epoch,
+          actorId: current.actor_id,
+          round,
+          signal: controller.signal,
+        })
+      }
+      finally {
+        if (this.providerAbort === controller) this.providerAbort = null
+      }
       check(generation === this.generation && this.active, 'Model turn was cancelled or superseded')
       await this.assertCurrent()
       check(message && typeof message === 'object', 'Provider returned no message')

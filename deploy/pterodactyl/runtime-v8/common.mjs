@@ -191,7 +191,11 @@ export class Child {
 
   detachInput() {
     if (!this.input) return
-    this.input.stream.off('data', this.input.onData)
+    const { stream, onData } = this.input
+    stream.off('data', onData)
+    if (typeof stream.listenerCount === 'function' && stream.listenerCount('data') === 0 && typeof stream.pause === 'function') {
+      stream.pause()
+    }
     this.input = null
   }
 
@@ -216,7 +220,9 @@ export class Child {
     catch (error) {
       if (!(error instanceof DeploymentError) || error.message !== `${this.label} stop timed out`) throw error
       this.signal('SIGKILL')
-      return { forced: true, result: await this.closed }
+      const forcedTimeoutMs = Math.min(timeoutMs, 5000)
+      const result = await withTimeout(this.closed, forcedTimeoutMs, `${this.label} did not exit after SIGKILL`)
+      return { forced: true, result }
     }
   }
 }
@@ -310,14 +316,15 @@ export class Rcon {
   }
 
   command(text) {
-    this.queue = this.queue.then(async () => {
+    const command = this.queue.catch(() => {}).then(async () => {
       check(this.socket && !this.socket.destroyed, 'RCON is not connected')
       const id = ++this.sequence
       const response = this.request(id, 2, text, 0)
       this.socket.write(encodePacket(id, 2, text))
       return response
     })
-    return this.queue
+    this.queue = command.catch(() => {})
+    return command
   }
 }
 

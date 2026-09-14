@@ -51,6 +51,7 @@ export function configuration(raw = {}, env = process.env) {
     model: cleanString(env.OPENAI_MODEL ?? raw.model ?? 'gpt-5.6', 'OPENAI_MODEL', 200),
     base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? 'https://api.openai.com/v1',
     key: env.OPENAI_API_KEY ?? '',
+    providerTimeoutMs: safeInteger(env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? 120000, 'PROVIDER_TIMEOUT_MS', 1000, 600000),
     gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? 34197, 'SERVER_PORT', 1024, 65535),
     budget: safeInteger(env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? 30, 'MAX_PROVIDER_REQUESTS_PER_HOUR', 1, 1200),
     stopMs: safeInteger(env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? 60000, 'SHUTDOWN_TIMEOUT_MS', 1000, 300000),
@@ -75,6 +76,7 @@ export const AIRI_CONFIG_DEFAULTS = {
   providerUrl: 'https://api.openai.com/v1',
   model: 'gpt-5.6',
   save: '',
+  providerTimeoutMs: 120000,
   gamePort: 34197,
   maxProviderRequestsPerHour: 30,
   shutdownTimeoutMs: 60000,
@@ -110,6 +112,11 @@ function parseStatus(text) {
   catch { throw new DeploymentError('Invalid airi_deployment status JSON') }
   check(value && typeof value === 'object' && !Array.isArray(value), 'Invalid airi_deployment status')
   return value
+}
+
+function expectedCancellation(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  return message === 'Provider request cancelled' || message === 'Model turn was cancelled or superseded'
 }
 
 export class Session {
@@ -225,7 +232,7 @@ export class Session {
         base: this.config.base,
         key: this.config.key,
         model: this.config.model,
-        timeoutMs: 45000,
+        timeoutMs: this.config.providerTimeoutMs,
       }, messages, context),
       reserve: async () => {
         await this.ensureAuthorization()
@@ -242,9 +249,14 @@ export class Session {
     return this.lastStatus
   }
 
-  queueEvent(fn) {
-    this.eventQueue = this.eventQueue.then(fn).catch(error => {
-      this.log(error instanceof Error ? error.message : String(error))
+  queueEvent(fn, { reportError = false } = {}) {
+    this.eventQueue = this.eventQueue.then(fn).catch(async error => {
+      const message = error instanceof Error ? error.message : String(error)
+      this.log(message)
+      if (reportError && !expectedCancellation(error)) {
+        try { await this.printChat(`Request failed: ${message}`) }
+        catch (printError) { this.log(`Unable to report AIRI error in chat: ${printError instanceof Error ? printError.message : printError}`) }
+      }
     })
     return this.eventQueue
   }
@@ -260,17 +272,18 @@ export class Session {
     const chat = line.match(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[CHAT\] ([^:\r\n]+): !airi (.{1,4000})$/)
     if (chat && chatAuthorized(this.config.chatPlayers, chat[1])) {
       const text = chat[2].trim()
+      const stop = text.toLowerCase() === 'stop'
+      if (stop) this.agent.cancel()
       this.queueEvent(async () => {
         await this.ensureAuthorization()
-        if (text.toLowerCase() === 'stop') {
-          this.agent.cancel()
+        if (stop) {
           await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")')
           await this.printChat('Cancelled AIRI work.')
           return
         }
         const result = await this.agent.request(text)
         if (result?.chatMessage) await this.printChat(result.chatMessage)
-      })
+      }, { reportError: true })
       return
     }
 
@@ -281,7 +294,7 @@ export class Session {
         await this.ensureAuthorization()
         const result = await this.agent.completed()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
-      })
+      }, { reportError: true })
       return
     }
 

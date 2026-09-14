@@ -108,6 +108,7 @@ function egg(installScript) {
       variable('OpenAI API Key', 'Provider credential. Kept environment-only and never written to airi-config.json.', 'OPENAI_API_KEY', '', 'required|string|max:512', { viewable: false }),
       variable('AI Model', 'OpenAI-compatible model identifier used by AIRI.', 'OPENAI_MODEL', 'gpt-5.6', 'required|string|max:200'),
       variable('Provider Base URL', 'OpenAI-compatible API base URL. Remote endpoints must use HTTPS.', 'OPENAI_API_BASEURL', 'https://api.openai.com/v1', 'required|string|url|max:255'),
+      variable('Provider Timeout (ms)', 'Maximum time for one provider response before the AIRI turn is cancelled and reported in game.', 'PROVIDER_TIMEOUT_MS', '120000', 'required|numeric|between:1000,600000'),
       variable('Save File Name', 'Save under /saves. Leave blank to use the newest existing save or create airi-world.zip.', 'SAVE_NAME', '', 'nullable|string|max:160'),
       variable('Factorio Username', 'Factorio.com username used for public server listing. Leave both username and token blank for a hidden/private server.', 'FACTORIO_USERNAME', '', 'nullable|string|max:128'),
       variable('Factorio Authentication Token', 'Factorio.com authentication token used for public server listing. Leave both username and token blank for a hidden/private server.', 'FACTORIO_TOKEN', '', 'nullable|string|max:128', { viewable: false }),
