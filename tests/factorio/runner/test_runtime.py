@@ -136,7 +136,18 @@ class RuntimeTests(unittest.TestCase):
         self.assertIs(settings['auto_pause'], False)
         self.assertIs(settings['auto_pause_when_players_connect'], False)
         self.assertEqual(settings['visibility'], {'public': False, 'lan': False})
-        self.assertIn('--server-settings "$SERVER_SETTINGS"', (root / 'run.sh').read_text())
+
+        # Parallel runtime lanes own Factorio server startup now. The top-level
+        # runner only creates the base save and delegates each isolated save to
+        # run_lane.sh, so verify the settings/port/config contract at that layer.
+        run_script = (root / 'run.sh').read_text()
+        lane_script = (root / 'runner/run_lane.sh').read_text()
+        self.assertIn('bash "$TEST_ROOT/runner/run_lane.sh"', run_script)
+        self.assertIn('--server-settings "$SERVER_SETTINGS"', lane_script)
+        self.assertIn('--config "$CONFIG"', lane_script)
+        self.assertIn('--port "$SERVER_PORT"', lane_script)
+        self.assertIn('--rcon-port "$RCON_PORT"', lane_script)
+        self.assertIn('write-data=$WRITE_DATA', lane_script)
 
 
 if __name__ == '__main__':
