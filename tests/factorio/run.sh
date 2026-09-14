@@ -65,6 +65,9 @@ finish() {
     print_file "$RESULTS/death-recovery-error.txt"
     print_file "$RESULTS/death-recovery-transcript.json"
     print_file "$RESULTS/death-recovery.json"
+    print_file "$RESULTS/navigation-error.txt"
+    print_file "$RESULTS/navigation-transcript.json"
+    print_file "$RESULTS/navigation.json"
   fi
   exit "$code"
 }
@@ -163,6 +166,13 @@ python3 "${TEST_ROOT:-/test}/runner/persistence_verify.py" \
 
 printf '[npc-test] Persistence passed; killing the active NPC to verify bounded recovery...\n'
 python3 "${TEST_ROOT:-/test}/runner/death_recovery.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS"
+
+printf '[npc-test] Death recovery passed; checking bounded navigation and stale-path safety...\n'
+python3 "${TEST_ROOT:-/test}/runner/navigation.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \
   --password "$RCON_PASSWORD" \
