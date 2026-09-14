@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from run import Rcon, connect_with_retry, decode_json, lua_text, remote_call, squared_distance
+from run import Rcon, connect_with_retry, decode_json, lua_json, lua_text, remote_call, squared_distance
 from runtime import operation_status_command, validate_clock, wait_until_idle
 
 
@@ -35,6 +35,15 @@ def assert_restarted(before: dict, after: dict) -> None:
     require(reconciliation.get('pending') is False, reconciliation)
     require(reconciliation.get('last_actor_id') == expected_id, reconciliation)
     require(isinstance(reconciliation.get('last_tick'), int), reconciliation)
+
+
+def assert_navigation_reached(navigation: dict, actor_id: int, target_id: int) -> None:
+    result = navigation.get('last_result') or {}
+    require(navigation.get('task_active') is False, navigation)
+    require(result.get('accepted') is True and result.get('completed') is True, navigation)
+    require(result.get('code') == 'reached', navigation)
+    require(result.get('actor_id') == actor_id, navigation)
+    require(result.get('target_unit_number') == target_id, navigation)
 
 
 def run(client: Rcon, results: Path) -> None:
@@ -107,9 +116,18 @@ def run(client: Rcon, results: Path) -> None:
     require(completed['actor']['actor_id'] == original_id, completed)
     require(completed['queue_empty'] is True and completed['queue_length'] == 0, completed)
 
+    navigation = json_command(
+        lua_json(remote_call('autorio_navigation', 'status')),
+        'post-restart navigation result',
+    )
+    assert_navigation_reached(navigation, original_id, target_id)
+
     final = observe('post-restart final observation')
     assert_restarted(before, final)
-    require(squared_distance(final['position'], before['target_position']) < 4.0, (final, before['target_position']))
+    # The bounded navigation contract completes within 2.5 tiles of the bound
+    # entity. Keep a small telemetry tolerance here, but require the exact
+    # target-bound `reached` receipt above so generic idle cannot pass.
+    require(squared_distance(final['position'], before['target_position']) <= 9.0, (final, before['target_position'], navigation))
 
     (results / 'persistence.json').write_text(json.dumps({
         'status': 'pass',
@@ -117,6 +135,7 @@ def run(client: Rcon, results: Path) -> None:
         'before': before,
         'after_restart': after,
         'quiet': quiet,
+        'navigation': navigation,
         'after_new_task': final,
     }, indent=2))
     print(
