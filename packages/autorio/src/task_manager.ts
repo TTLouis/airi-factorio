@@ -9,6 +9,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
   }
 
   const task_queue: PlayerParameters[] = []
+  const cancel_handlers: Partial<Record<TaskStates, () => void>> = {}
 
   function add_task(task: PlayerParameters) {
     task_queue.push(task)
@@ -16,6 +17,17 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
 
     if (task_queue.length === 1) {
       next_task()
+    }
+  }
+
+  function register_cancel_handler(state: TaskStates, handler: () => void) {
+    cancel_handlers[state] = handler
+  }
+
+  function run_cancel_cleanup() {
+    const handler = cancel_handlers[player_state.task_state]
+    if (handler) {
+      handler()
     }
   }
 
@@ -100,36 +112,12 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       case TaskStates.MOVING_ITEMS:
         player_state.parameters_move_items = task
         break
-      case TaskStates.CRAFTING: {
-        const actor = get_controlled_actor()
-        if (!actor) {
-          log('[AUTORIO] No controlled actor found while starting crafting task')
-          reset_task_state()
-          next_task()
-          return
-        }
-
-        task.queue_count_before = actor.get_crafting_queue_count(task.item_name)
-        task.started = actor.begin_crafting({
-          count: task.count,
-          recipe: task.item_name,
-        })
-
-        if (task.started <= 0) {
-          log(`[AUTORIO] Could not begin crafting ${task.item_name}, ending task`)
-          reset_task_state()
-          next_task()
-          return
-        }
-
-        if (task.started !== task.count) {
-          log(`[AUTORIO] Requested ${task.count} ${task.item_name} crafts but only ${task.started} started`)
-        }
-
-        task.crafted = 0
+      case TaskStates.CRAFTING:
+        // Native queue admission/start belongs to the crafting controller so it
+        // can bind actor identity, reject an already-busy native queue, verify
+        // output, and clean up only task-owned native work on cancellation.
         player_state.parameters_craft_item = task
         break
-      }
       case TaskStates.ATTACKING:
         player_state.parameters_attack_nearest_enemy = task
         break
@@ -207,6 +195,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
           count: task.count,
           crafted: task.crafted,
           started: task.started,
+          owns_native_queue: task.owns_native_queue ?? false,
           queued_crafts: actor?.get_crafting_queue_count(task.item_name),
         }
       }
@@ -247,17 +236,20 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
   }
 
   function cancel_task() {
+    run_cancel_cleanup()
     reset_task_state()
   }
 
   function cancel_all_tasks() {
+    run_cancel_cleanup()
     reset_task_state()
     task_queue.length = 0 // can use this to clear the array in lua
   }
 
   function discard_all_tasks_after_actor_loss() {
-    // The previous actor is already invalid. Do not call stop_task_controls(),
-    // because resolving an actor here would enter replacement creation again.
+    // The previous actor is already invalid. Do not call task cleanup or
+    // stop_task_controls(), because resolving an actor here would enter
+    // replacement creation again. Native state on the dead body is gone with it.
     clear_task_state_without_controls()
     task_queue.length = 0
   }
@@ -277,5 +269,6 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     cancel_task,
     cancel_all_tasks,
     discard_all_tasks_after_actor_loss,
+    register_cancel_handler,
   }
 }
