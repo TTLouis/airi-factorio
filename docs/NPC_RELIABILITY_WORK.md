@@ -6,7 +6,7 @@ This is the active continuation of `NPC_AGENT_HARNESS_PLAN.md` and the historica
 
 ## Latest user-reported checkpoint
 
-The latest combined Docker run reports:
+The last fully successful combined Docker run reports:
 
 - real zero-player simulation continued at approximately 60 UPS;
 - wait, movement, mining, native hand crafting, placement and both transfer directions passed;
@@ -14,12 +14,14 @@ The latest combined Docker run reports:
 - native research completed through real labs while the NPC continued other work;
 - bounded combat and its no-target/no-ammo/cancellation cases passed;
 - an actively walking NPC plus queued work survived a real save/process restart as a world entity, while volatile Autorio work was deliberately discarded and serialized controls were reconciled;
-- the restarted process reacquired the same `actor_id=1`, preserved force/inventory/world state, showed no post-load drift, and completed fresh work;
+- the restarted process reacquired the same `actor_id=1`, preserved force/inventory/world state, showed no post-load drift in the deliberately belt-free fixture, and completed fresh work;
 - killing that body invalidated stale active/queued work, created a different empty replacement `actor_id=18` on the same force, and the replacement completed fresh movement;
 - zero connected players were maintained throughout;
 - the runtime smoke completed successfully.
 
 This closes the bounded research, combat, save/restart, and death-recovery gates at their stated scopes. It does not close repeatable/trigger research, general navigation, crafting ownership/cancellation, generalized cross-actor ownership, explicit outcome semantics, or end-to-end autonomous planning.
+
+The first combined run containing the new navigation controller did **not** reach the navigation stage. Earlier gates remained healthy through combat and restart. The restart's fresh `walk_to_entity` completed with AIRI about 2.488 tiles from the exact persisted chest, which is inside the new controller's 2.5-tile arrival radius, but the older persistence runner still required squared distance `< 4.0` (strictly under 2 tiles). That stale acceptance threshold has been replaced with exact `autorio_navigation` receipt verification (`reached`, `completed: true`, exact actor and target IDs) plus a matching physical sanity tolerance. Navigation itself remains unverified until a later user run reaches the new navigation stage.
 
 ## Research request semantics — user-verified bounded gate
 
@@ -33,7 +35,7 @@ The user-verified gate supplied prerequisites, labs, power and exact science as 
 
 The bounded combat controller binds combat to actor/force identity and one target, uses the selected weapon's real `can_shoot` result, stops walking before firing, limits no-progress/total duration, reports explicit failure codes, cancels dependent queued work on failure, and completes only after the bound target is actually gone. Production setup no longer deletes enemies.
 
-The real-engine gate verified target destruction, real ammunition consumption (including rounds from a partially used magazine), stable NPC identity, no-target failure, no-ammo failure without target damage, dependent-queue cancellation, and stopping an out-of-range approach without drift or target damage.
+The real-engine gate verified target destruction, real ammunition consumption (including rounds from a partially used magazine), stable NPC identity, no-target failure, no-ammo failure without target damage, dependent-queue cancellation, and stopping an out-of-range approach without target damage. A stopped control state is the ownership guarantee; world mechanics such as transport belts can still passively displace a character and must not be confused with AIRI continuing to walk.
 
 ## Real save/restart persistence — user verified
 
@@ -48,7 +50,7 @@ The verified persistence policy is fail-safe:
 5. expose the reconciliation policy/result through `autorio_actor.status`;
 6. do not implicitly cancel/rewrite separate force-wide or native engine work here; crafting ownership and research follow-through remain separate workstreams.
 
-The real gate saved an actively walking NPC with queued work, stopped the first Factorio server process, started a second process from that save, reacquired the same `actor_id=1`, preserved the expected inventory/force/target, observed an idle empty Autorio queue with released controls and no quiet-interval drift, then completed a fresh movement task on the same body.
+The real gate saved an actively walking NPC with queued work, stopped the first Factorio server process, started a second process from that save, reacquired the same `actor_id=1`, preserved the expected inventory/force/target, observed an idle empty Autorio queue with released controls, then completed a fresh movement task on the same body. Its quiet-interval no-drift assertion is valid because that acceptance fixture explicitly lays a belt-free landfill corridor. General runtime semantics must not equate released controls with fixed coordinates because belts and other world mechanics can move the character.
 
 ## Bounded death recovery — user verified
 
@@ -63,9 +65,9 @@ The verified recovery behavior is:
 5. create a new standalone character on the same force using normal spawn/non-colliding placement;
 6. do **not** copy the dead character's inventory into the replacement (`inventory_policy: no_transfer`), preventing recovery duplication;
 7. persist/expose a recovery receipt binding old/new actor IDs, force, tick, reason and inventory policy;
-8. require the replacement to remain idle/stationary until fresh work is submitted.
+8. require the replacement to have no Autorio walking/mining/shooting controls until fresh work is submitted.
 
-The real engine gate killed the active `actor_id=1` while it was physically walking with a queued wait. The old work disappeared, the old target remained alive, a corpse was observed, replacement `actor_id=18` was created on the same force without copying deterministic marker inventory, the replacement did not drift, and fresh post-recovery movement completed at approximately 60 UPS.
+The real engine gate killed the active `actor_id=1` while it was physically walking with a queued wait. The old work disappeared, the old target remained alive, a corpse was observed, replacement `actor_id=18` was created on the same force without copying deterministic marker inventory, and fresh post-recovery movement completed at approximately 60 UPS. The acceptance fixture was belt-free, so its stationary quiet interval remains useful there; future generalized ownership checks should inspect controls rather than infer ownership from position alone.
 
 ## Current slice: bounded navigation reliability
 
@@ -80,7 +82,9 @@ The historical `walk_to_entity` path had release blockers:
 - path calculation had no timeout/retry bound;
 - path following had no bounded no-progress detection/repath/failure;
 - moving targets kept stale coordinates;
-- an absent/unreachable target could become generic idle rather than an explicit failure receipt.
+- an absent/unreachable target could become generic idle rather than an explicit failure receipt;
+- no-progress detection based on raw coordinate change would be incorrect on transport belts, because passive belt displacement can move the NPC even with walking controls released;
+- the historical `find_non_colliding_position('iron-chest', ...)` path-start workaround used chest collision rules for a character, which can choose a fake nearby start when AIRI is legally standing on a belt tile that a chest cannot occupy.
 
 The new bounded navigation controller:
 
@@ -93,29 +97,31 @@ The new bounded navigation controller:
 - bounds path calculation waits, total navigation duration, path attempts and no-progress time;
 - removes the old path-failure-to-blind-direct-walking fallback;
 - repaths when the bound target materially moves;
-- tracks actual character movement before refreshing its progress deadline;
+- measures progress as a material reduction in distance to the current waypoint, rather than raw coordinate displacement, so sideways/backward belt motion cannot keep a stuck task alive indefinitely while belt motion that genuinely carries AIRI toward the waypoint still counts as progress;
+- validates path starts with the actual character prototype rather than an iron-chest proxy, preserving legal walkable positions such as transport belts;
 - completes only when the character is within the controller's arrival distance of the current bound target;
 - reports explicit results including `reached`, `no_target`, `target_gone`, `unreachable`, `path_busy`, `path_timeout`, `stuck`, `timeout`, and `actor_changed`;
 - cancels dependent queued operations on navigation failure;
-- exposes the bound target, current path request/attempt state, and last result through read-only `getNavigationStatus()` / `autorio_navigation.status`;
+- exposes the bound target, current path request/attempt state, best current waypoint distance, progress tick and last result through read-only `getNavigationStatus()` / `autorio_navigation.status`;
 - teaches the agent that idle is not navigation success and that `reached` must be verified.
 
 ### Navigation acceptance gate
 
-The combined Docker path now continues after the verified death-recovery stage using the replacement actor.
+The combined Docker path continues after the verified death-recovery stage using the replacement actor.
 
-The real-engine gate has three cases:
+The real-engine gate has four cases:
 
-1. **Obstacle route** — put a solid stone-wall barrier across the direct lane to a steel chest, while leaving open space around the wall. AIRI must use a real Factorio path to reach the exact chest and stop physically.
+1. **Obstacle route** — put a solid stone-wall barrier across the direct lane to a steel chest, while leaving open space around the wall. AIRI must use a real Factorio path to reach the exact chest and stop its own movement controls.
 2. **Moving target** — start toward a wooden chest, wait until an actual path has been accepted, teleport that exact chest eight tiles off its old goal, then require at least one repath and arrival at the new coordinate without silent retargeting.
-3. **Unreachable target** — put an iron chest on a landfill island inside a wide water moat, queue a dependent wait behind movement, and require explicit `unreachable`, an empty dependent queue, the target still alive, stopped controls, and no quiet-interval drift. This specifically rejects the old direct-walking fallback.
+3. **Unreachable target** — put an iron chest on a landfill island inside a wide water moat, queue a dependent wait behind movement, and require explicit `unreachable`, an empty dependent queue, the target still alive, stopped controls, and no drift in this deliberately belt-free fixture. This specifically rejects the old direct-walking fallback.
+4. **Passive transport-belt displacement** — place the idle replacement NPC on a live eastbound transport-belt line, require walking/mining/shooting controls to remain released and the Autorio queue to stay idle/empty, then prove the character's world coordinates nevertheless change while it remains on belts. This prevents the harness and later ownership logic from treating every coordinate change as self-directed NPC motion.
 
-Deterministic controller tests also cover exact request-ID correlation, stale-result rejection, bounded pathfinder-busy retries, request timeout replacement, late old-result rejection, moving-target repath, stuck bounds, and arrival verification. The Python acceptance assertions reject idle-only false positives, wrong actor/target, active controls, connected humans, paused simulation, missing repath evidence, and unreachable results that leave dependent work queued.
+Deterministic controller tests cover exact request-ID correlation, stale-result rejection, bounded pathfinder-busy retries, request timeout replacement, late old-result rejection, moving-target repath, stuck bounds, arrival verification, sideways belt displacement not resetting the progress deadline, belt displacement toward a waypoint counting as legitimate progress, and character-prototype path-start validation. The Python acceptance assertions reject idle-only false positives, wrong actor/target, active controls, connected humans, paused simulation, missing repath evidence, unreachable results that leave dependent work queued, and belt-motion claims without both released controls and real passive displacement.
 
 Expected success line:
 
 ```text
-PASS: zero-player NPC bounded navigation routed obstacles, repathed moving target, and failed unreachable target with actor_id=<replacement id>
+PASS: zero-player NPC bounded navigation routed obstacles, repathed moving target, failed unreachable target, and distinguished passive belt displacement with actor_id=<replacement id>
 ```
 
 The assistant has not executed this new build or real navigation gate. Do not treat navigation as proven until the user's Docker run reports it.
