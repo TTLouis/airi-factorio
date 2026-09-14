@@ -42,6 +42,7 @@ def assert_busy_preserved(before: dict, after: dict, crafting: dict, actor_id: i
     require(before['native_queue_length'] > 0, before)
     require(after['native_queue_length'] == before['native_queue_length'], (before, after))
     require(after['native_queue_recipe'] == before['native_queue_recipe'], (before, after))
+    require(after['native_queue_count'] == before['native_queue_count'], (before, after))
     result = crafting.get('last_result') or {}
     require(result.get('accepted') is False and result.get('completed') is False, crafting)
     require(result.get('code') == 'native_queue_busy', crafting)
@@ -140,17 +141,19 @@ def run(client: Rcon, results: Path) -> None:
     completed_status = crafting_status('craft completion result')
     assert_completed(before, after, completed_status, actor_id, 'iron-gear-wheel', 3)
 
-    # Case 2: an unrelated native queue is not Autorio-owned. The request must
-    # fail closed without cancelling, replacing, appending to, or merging that queue.
-    clear_native_queue_and_inventory({'copper-plate': 1000, 'iron-plate': 20}, 'busy queue fixture')
+    # Case 2: an unrelated native queue is not Autorio-owned. Use the same
+    # already-proven hand-craftable recipe as the Autorio request: ownership,
+    # not recipe identity, is the boundary. The request must fail closed without
+    # cancelling, appending to, replacing, or merging the pre-existing queue.
+    clear_native_queue_and_inventory({'iron-plate': 1000}, 'busy queue fixture')
     busy_setup = json_command(
         "/silent-command local a=nil; for _,e in pairs(game.surfaces[1].find_entities_filtered{name='character'}) do "
         f"if e.unit_number=={actor_id} then a=e end end; assert(a); "
-        "local started=a.begin_crafting{count=500,recipe='copper-cable'}; local q=a.crafting_queue or {}; "
-        "rcon.print(helpers.table_to_json({started=started,queue_length=#q,recipe=q[1] and q[1].recipe or nil,tick=game.tick}))",
+        "local started=a.begin_crafting{count=50,recipe='iron-gear-wheel'}; local q=a.crafting_queue or {}; "
+        "rcon.print(helpers.table_to_json({started=started,queue_length=#q,recipe=q[1] and q[1].recipe or nil,count=q[1] and q[1].count or 0,tick=game.tick}))",
         'pre-existing native craft setup',
     )
-    require(busy_setup['started'] == 500 and busy_setup['queue_length'] > 0, busy_setup)
+    require(busy_setup['started'] == 50 and busy_setup['queue_length'] > 0, busy_setup)
     busy_before = actor_observation('iron-gear-wheel', 'busy queue before')
     busy_admission = json_command(
         lua_json(remote_call('autorio_operations', 'craft_item', repr('iron-gear-wheel'), '2')),
