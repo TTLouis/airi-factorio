@@ -131,6 +131,8 @@ case "$LANE" in
   research-combat)
     printf '[npc-test][research-combat] Running native research gate...\n'
     run_py research.py
+    printf '[npc-test][research-combat] Running correlated research follow-through gate...\n'
+    run_py research_followthrough.py
     printf '[npc-test][research-combat] Running bounded combat gate...\n'
     run_py combat.py
     ;;
