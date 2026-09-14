@@ -116,15 +116,16 @@ class CraftingTests(unittest.TestCase):
                 assert_completed(before, after, completed_status(), ACTOR_ID, 'iron-gear-wheel', 3)
 
     def test_busy_native_queue_is_preserved(self):
-        before = observation(100, native_queue=500, native_recipe='copper-cable')
-        after = observation(101, native_queue=499, native_recipe='copper-cable')
+        before = observation(100, native_queue=1, native_recipe='copper-cable')
+        after = observation(101, native_queue=1, native_recipe='copper-cable')
         assert_busy_preserved(before, after, busy_status(), ACTOR_ID)
 
-    def test_busy_queue_disappearance_or_recipe_replacement_does_not_pass(self):
-        before = observation(100, native_queue=500, native_recipe='copper-cable')
+    def test_busy_queue_disappearance_append_or_recipe_replacement_does_not_pass(self):
+        before = observation(100, native_queue=1, native_recipe='copper-cable')
         for after in [
             observation(101, native_queue=0),
-            observation(101, native_queue=499, native_recipe='iron-gear-wheel'),
+            observation(101, native_queue=2, native_recipe='copper-cable'),
+            observation(101, native_queue=1, native_recipe='iron-gear-wheel'),
         ]:
             with self.assertRaises(AssertionError):
                 assert_busy_preserved(before, after, busy_status(), ACTOR_ID)
