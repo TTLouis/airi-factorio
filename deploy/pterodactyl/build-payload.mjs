@@ -13,7 +13,7 @@ const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
 // Immutable commit that contains the exact payload-src/installer.sh used by this
 // release candidate. Both the standalone bootstrap and the PTDL egg embed the
 // same small loader, so there is only one installer transport contract to audit.
-const PAYLOAD_REF = '301cab56d649926ac193ec4e071e271344401d11'
+const PAYLOAD_REF = '92afd659485f5cb47a912615e669332c85ef9d12'
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
