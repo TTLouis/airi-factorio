@@ -1,6 +1,6 @@
 import type { MapPositionStruct } from 'factorio:prototype'
 import type { LuaEntity, LuaForce, LuaSurface } from 'factorio:runtime'
-import type { ActorEntityBuildArgs, ActorMiningState, ActorShootingState, ActorStatusSnapshot, ActorWalkingState, ControlledActor } from './types'
+import type { ActorCraftingQueueItem, ActorEntityBuildArgs, ActorMiningState, ActorShootingState, ActorStatusSnapshot, ActorWalkingState, ControlledActor } from './types'
 
 declare const storage: {
   standalone_character_unit_number?: number
@@ -105,8 +105,25 @@ export class StandaloneCharacterActor implements ControlledActor {
     this.character_entity.shooting_state = state
   }
 
+  get_craftable_count(recipe: string) {
+    return this.character_entity.get_craftable_count(recipe)
+  }
+
   begin_crafting(params: { count: number, recipe: string }) {
     return this.character_entity.begin_crafting(params)
+  }
+
+  cancel_crafting(params: { index: number, count: number }) {
+    this.character_entity.cancel_crafting(params)
+  }
+
+  get_crafting_queue(): ActorCraftingQueueItem[] {
+    return (this.character_entity.crafting_queue ?? []).map(item => ({
+      index: item.index,
+      recipe: item.recipe,
+      count: item.count,
+      prerequisite: item.prerequisite,
+    }))
   }
 
   get_crafting_queue_count(recipe: string) {
