@@ -5,15 +5,30 @@ import { get_handler } from './test-event-registry'
 import { TaskStates } from './types'
 
 beforeEach(() => {
-  task_manager.cancel_all_tasks()
   ;(globalThis as any).game.connected_players = []
   ;(globalThis as any).storage.airi_actor_mode = 'player'
+  task_manager.cancel_all_tasks()
 })
+
+function owned_move_task(overrides: Record<string, unknown> = {}) {
+  return {
+    type: TaskStates.MOVING_ITEMS,
+    operation_id: 1,
+    owner_actor_id: 1,
+    owner_actor_kind: 'connected_player',
+    owner_force_index: 1,
+    item_name: 'iron-plate',
+    entity_name: 'iron-chest',
+    max_count: 5,
+    to_entity: false,
+    ...overrides,
+  } as any
+}
 
 describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on pickup', () => {
   it('reports exactly what was moved when pulling items from a nearby entity', () => {
     const removed_from_entity = vi.fn(() => 5)
-    const inserted_into_player = vi.fn(() => 5) // full insert: inserted === removed
+    const inserted_into_player = vi.fn(() => 5)
 
     const fake_inventory = {
       remove: removed_from_entity,
@@ -28,26 +43,21 @@ describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on
       insert: inserted_into_player,
     }
     const fake_actor = {
+      is_valid: true,
+      character: { valid: true },
       position: { x: 0, y: 0 },
       surface: { find_entities_filtered: () => [fake_entity] },
-      force: {},
+      force: { index: 1 },
       get_main_inventory: () => fake_player_inventory,
+      status_snapshot: () => ({ actor_id: 1, kind: 'connected_player', valid: true, has_character: true }),
     } as unknown as ControlledActor
 
-    task_manager.add_task({
-      type: TaskStates.MOVING_ITEMS,
-      item_name: 'iron-plate',
-      entity_name: 'iron-chest',
-      max_count: 5,
-      to_entity: false,
-    })
+    task_manager.add_task(owned_move_task())
 
     const moved_total = state_moving_items(fake_actor)
 
     expect(removed_from_entity).toHaveBeenCalledTimes(1)
     expect(inserted_into_player).toHaveBeenCalledTimes(1)
-    // Previously reported 10 (double-counted); state_moving_items no longer
-    // adds `removed` a second time unconditionally after the if/else.
     expect(moved_total).toBe(5)
   })
 
@@ -62,28 +72,23 @@ describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on
     }
     const fake_actor_inventory = {
       can_insert: () => true,
-      insert: vi.fn(() => 3), // only 3 of the 5 removed items actually fit
+      insert: vi.fn(() => 3),
     }
     const fake_actor = {
+      is_valid: true,
+      character: { valid: true },
       position: { x: 0, y: 0 },
       surface: { find_entities_filtered: () => [fake_entity] },
-      force: {},
+      force: { index: 1 },
       get_main_inventory: () => fake_actor_inventory,
+      status_snapshot: () => ({ actor_id: 1, kind: 'connected_player', valid: true, has_character: true }),
     } as unknown as ControlledActor
 
-    task_manager.add_task({
-      type: TaskStates.MOVING_ITEMS,
-      item_name: 'iron-plate',
-      entity_name: 'iron-chest',
-      max_count: 5,
-      to_entity: false,
-    })
+    task_manager.add_task(owned_move_task())
 
     const moved_total = state_moving_items(fake_actor)
 
-    // The 2 that didn't fit are moved back into the entity's inventory...
     expect(fake_inventory.insert).toHaveBeenCalledWith({ name: 'iron-plate', count: 2 })
-    // ...and moved_total reflects only the 3 that actually ended up with the actor.
     expect(moved_total).toBe(3)
   })
 })
@@ -96,9 +101,26 @@ describe('Player-sourced completion events are gated by actor identity', () => {
         index,
         name: 'AIRI',
         character: {},
+        position: { x: 0, y: 0 },
+        surface: { find_entities_filtered: () => [] },
+        force: { index: 1 },
+        crafting_queue: [],
         begin_crafting: () => {},
       },
     ]
+  }
+
+  function add_owned_mining(count: number) {
+    task_manager.add_task({
+      type: TaskStates.MINING,
+      operation_id: 1,
+      owner_actor_id: 1,
+      owner_actor_kind: 'connected_player',
+      owner_force_index: 1,
+      entity_name: 'iron-ore',
+      count,
+      requested_count: count,
+    })
   }
 
   it('ignores a crafted-item event from a player_index that is not the controlled actor', () => {
@@ -136,12 +158,7 @@ describe('Player-sourced completion events are gated by actor identity', () => {
 
   it('ignores a mined-entity event from another player', () => {
     connect_controlled_actor(1)
-
-    task_manager.add_task({
-      type: TaskStates.MINING,
-      entity_name: 'iron-ore',
-      count: 3,
-    })
+    add_owned_mining(3)
 
     const on_player_mined_entity = get_handler('on_player_mined_entity')
     on_player_mined_entity({ player_index: 2 })
@@ -151,12 +168,7 @@ describe('Player-sourced completion events are gated by actor identity', () => {
 
   it('counts a mined-entity event from the controlled player', () => {
     connect_controlled_actor(1)
-
-    task_manager.add_task({
-      type: TaskStates.MINING,
-      entity_name: 'iron-ore',
-      count: 3,
-    })
+    add_owned_mining(3)
 
     const on_player_mined_entity = get_handler('on_player_mined_entity')
     on_player_mined_entity({ player_index: 1 })
@@ -168,6 +180,7 @@ describe('Player-sourced completion events are gated by actor identity', () => {
     ;(globalThis as any).storage.airi_actor_mode = 'npc'
     const force = {
       name: 'player',
+      index: 1,
       get_spawn_position: () => ({ x: 0, y: 0 }),
     }
     const character: Record<string, any> = {
@@ -176,8 +189,13 @@ describe('Player-sourced completion events are gated by actor identity', () => {
       position: { x: 0, y: 0 },
       force,
       mining_state: { mining: false },
+      walking_state: { walking: false, direction: 'north' },
+      shooting_state: { state: 'not_shooting', position: { x: 0, y: 0 } },
+      crafting_queue: [],
       get_main_inventory: vi.fn(),
+      get_craftable_count: vi.fn(() => 0),
       begin_crafting: vi.fn(),
+      cancel_crafting: vi.fn(),
     }
     const surface = {
       name: 'nauvis',
@@ -191,8 +209,13 @@ describe('Player-sourced completion events are gated by actor identity', () => {
 
     task_manager.add_task({
       type: TaskStates.MINING,
+      operation_id: 1,
+      owner_actor_id: 42,
+      owner_actor_kind: 'standalone_character',
+      owner_force_index: 1,
       entity_name: 'iron-ore',
       count: 3,
+      requested_count: 3,
     })
 
     const on_player_mined_entity = get_handler('on_player_mined_entity')
