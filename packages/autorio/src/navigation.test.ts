@@ -193,6 +193,43 @@ describe('bounded navigation controller', () => {
     expect(controller.status().last_result?.code).toBe('stuck')
   })
 
+  it('does not count sideways transport-belt displacement as navigation progress', () => {
+    const { actor, controller, manager, position, surface } = make_context()
+    controller.submit('steel-chest', 40)
+    controller.tick(actor)
+    const task = manager.player_state.parameters_walk_to_entity!
+    const request_id = task.path_request_id!
+    controller.on_path_finished({ id: request_id, path: [waypoint(18)], try_again_later: false } as any)
+
+    // Model passive world motion: AIRI has changed coordinates substantially,
+    // but is farther from the current waypoint rather than closer to it.
+    position.y = 4
+    ;(globalThis as any).game.tick = 601
+    controller.tick(actor)
+
+    expect(surface.request_path).toHaveBeenCalledTimes(2)
+    expect(task.path_attempts).toBe(2)
+  })
+
+  it('allows transport-belt motion toward the waypoint to count as real progress', () => {
+    const { actor, controller, manager, position, surface } = make_context()
+    controller.submit('steel-chest', 40)
+    controller.tick(actor)
+    const task = manager.player_state.parameters_walk_to_entity!
+    const request_id = task.path_request_id!
+    controller.on_path_finished({ id: request_id, path: [waypoint(18)], try_again_later: false } as any)
+
+    // Passive displacement can legitimately help the task. If it materially
+    // closes the waypoint distance, it should reset the no-progress timer.
+    position.x = 1
+    ;(globalThis as any).game.tick = 601
+    controller.tick(actor)
+
+    expect(surface.request_path).toHaveBeenCalledTimes(1)
+    expect(task.last_progress_tick).toBe(601)
+    expect(task.last_waypoint_distance).toBe(17)
+  })
+
   it('completes only when the bound target is actually within reach', () => {
     const { actor, controller, manager, position } = make_context()
     controller.submit('steel-chest', 40)
