@@ -7,6 +7,7 @@ export const factorioNameSchema = z.string()
 
 const positiveCount = z.number().int().min(1).max(100000)
 const searchRadius = z.number().int().min(1).max(1024)
+const combatSearchRadius = z.number().int().min(1).max(256)
 
 export const structuredOperationSchema = z.discriminatedUnion('name', [
   z.object({
@@ -48,7 +49,7 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
   z.object({
     name: z.literal('attack_nearest_enemy'),
     args: z.object({
-      search_radius: searchRadius.default(50),
+      search_radius: combatSearchRadius.default(50),
     }).strict(),
   }).strict(),
   z.object({
