@@ -33,9 +33,19 @@ export interface BasicOperationResult {
   requested_ticks?: number
 }
 
+interface BasicOperationContextStorage {
+  next_operation_id?: number
+  last_result?: BasicOperationResult
+}
+
+export interface BasicOperationControllerOptions {
+  persistenceKey?: string
+}
+
 declare const storage: {
   airi_next_basic_operation_id?: number
   airi_last_basic_operation_result?: BasicOperationResult
+  airi_basic_operation_contexts?: Record<string, BasicOperationContextStorage>
 }
 
 function owner(task: BasicTask) {
@@ -50,18 +60,45 @@ function valid_integer(value: number, min: number, max: number) {
   return typeof value === 'number' && value === math.floor(value) && value >= min && value <= max
 }
 
-function next_operation_id() {
-  const next = (storage.airi_next_basic_operation_id ?? 0) + 1
-  storage.airi_next_basic_operation_id = next
+function context_storage(key: string) {
+  if (storage.airi_basic_operation_contexts === undefined) storage.airi_basic_operation_contexts = {}
+  let context = storage.airi_basic_operation_contexts[key]
+  if (context === undefined) {
+    context = {}
+    storage.airi_basic_operation_contexts[key] = context
+  }
+  return context
+}
+
+function next_operation_id(persistenceKey?: string) {
+  if (persistenceKey === undefined) {
+    const next = (storage.airi_next_basic_operation_id ?? 0) + 1
+    storage.airi_next_basic_operation_id = next
+    return next
+  }
+  const context = context_storage(persistenceKey)
+  const next = (context.next_operation_id ?? 0) + 1
+  context.next_operation_id = next
   return next
 }
 
-function bind(task: BasicTask, actor: ControlledActor) {
+function last_result(persistenceKey?: string) {
+  return persistenceKey === undefined
+    ? storage.airi_last_basic_operation_result
+    : storage.airi_basic_operation_contexts?.[persistenceKey]?.last_result
+}
+
+function store_result(result: BasicOperationResult, persistenceKey?: string) {
+  if (persistenceKey === undefined) storage.airi_last_basic_operation_result = result
+  else context_storage(persistenceKey).last_result = result
+}
+
+function bind(task: BasicTask, actor: ControlledActor, persistenceKey?: string) {
   const identity = actor.status_snapshot()
   if (identity.actor_id === undefined) {
     return false
   }
-  task.operation_id = next_operation_id()
+  task.operation_id = next_operation_id(persistenceKey)
   task.owner_actor_id = identity.actor_id
   task.owner_actor_kind = identity.kind
   task.owner_force_index = actor.force.index
@@ -78,7 +115,7 @@ export function basic_identity_matches(actor: ControlledActor, task: BasicTask) 
     && actor.force.index === task.owner_force_index
 }
 
-function result_for(actor: ControlledActor | undefined, task: BasicTask | undefined, accepted: boolean, completed: boolean, code: BasicOperationCode, details: Partial<BasicOperationResult> = {}) {
+function result_for(actor: ControlledActor | undefined, task: BasicTask | undefined, accepted: boolean, completed: boolean, code: BasicOperationCode, details: Partial<BasicOperationResult> = {}, persistenceKey?: string) {
   const identity = actor?.is_valid ? actor.status_snapshot() : undefined
   const bound = task ? owner(task) : undefined
   const result: BasicOperationResult = {
@@ -98,35 +135,36 @@ function result_for(actor: ControlledActor | undefined, task: BasicTask | undefi
     requested_ticks: task?.type === TaskStates.WAITING ? (task.requested_ticks ?? task.remaining_ticks) : undefined,
     ...details,
   }
-  storage.airi_last_basic_operation_result = result
+  store_result(result, persistenceKey)
   return result
 }
 
-export function new_basic_operation_controller(get_actor: () => ControlledActor | undefined, manager: ReturnType<typeof new_task_manager>) {
+export function new_basic_operation_controller(get_actor: () => ControlledActor | undefined, manager: ReturnType<typeof new_task_manager>, options: BasicOperationControllerOptions = {}) {
   let suppress_cancel_receipt = false
+  const persistenceKey = options.persistenceKey
 
   function actor_for_submission() {
     const actor = get_actor()
     if (!actor || !actor.is_valid || !actor.character || actor.status_snapshot().actor_id === undefined) {
-      result_for(actor, undefined, false, false, 'no_actor')
+      result_for(actor, undefined, false, false, 'no_actor', {}, persistenceKey)
       return undefined
     }
     return actor
   }
 
   function queue(task: BasicTask, actor: ControlledActor) {
-    if (!bind(task, actor)) {
-      result_for(actor, task, false, false, 'no_actor')
+    if (!bind(task, actor, persistenceKey)) {
+      result_for(actor, task, false, false, 'no_actor', {}, persistenceKey)
       return false
     }
     manager.add_task(task)
-    result_for(actor, task, true, false, 'queued')
+    result_for(actor, task, true, false, 'queued', {}, persistenceKey)
     return true
   }
 
   function submit_mining(entity_name: string, count: number = 1) {
     if (!valid_integer(count, 1, 1000)) {
-      result_for(get_actor(), undefined, false, false, 'invalid_count')
+      result_for(get_actor(), undefined, false, false, 'invalid_count', {}, persistenceKey)
       return false
     }
     const actor = actor_for_submission()
@@ -153,7 +191,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
 
   function submit_move(item_name: string, entity_name: string, max_count: number, to_entity: boolean): [boolean, string] {
     if (!valid_integer(max_count, 1, 100000)) {
-      result_for(get_actor(), undefined, false, false, 'invalid_max_count')
+      result_for(get_actor(), undefined, false, false, 'invalid_max_count', {}, persistenceKey)
       return [false, 'max_count must be an integer from 1 to 100000']
     }
     const actor = actor_for_submission()
@@ -171,7 +209,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
 
   function submit_wait(ticks: number): [boolean, string] {
     if (!valid_integer(ticks, 1, 360000)) {
-      result_for(get_actor(), undefined, false, false, 'invalid_ticks')
+      result_for(get_actor(), undefined, false, false, 'invalid_ticks', {}, persistenceKey)
       return [false, 'ticks must be an integer from 1 to 360000']
     }
     const actor = actor_for_submission()
@@ -186,19 +224,16 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
   }
 
   function complete(actor: ControlledActor, task: BasicTask, details: Partial<BasicOperationResult> = {}) {
-    result_for(actor, task, true, true, 'completed', details)
+    result_for(actor, task, true, true, 'completed', details, persistenceKey)
     manager.reset_task_state()
     manager.next_task()
   }
 
   function fail(actor: ControlledActor | undefined, task: BasicTask, code: BasicOperationCode, details: Partial<BasicOperationResult> = {}) {
-    // cancel_all_tasks owns control cleanup and dependent queue invalidation. Its
-    // registered basic-operation cancellation callback is suppressed so the
-    // explicit failure receipt remains authoritative.
     suppress_cancel_receipt = true
     manager.cancel_all_tasks()
     suppress_cancel_receipt = false
-    result_for(actor, task, false, false, code, details)
+    result_for(actor, task, false, false, code, details, persistenceKey)
     log(`[AUTORIO] [ERROR] ${task.type} failed: ${code}; dependent operations cancelled`)
   }
 
@@ -208,7 +243,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
       const task = get_task()
       if (!task) return
       const actor = get_actor()
-      result_for(actor, task, false, false, 'cancelled')
+      result_for(actor, task, false, false, 'cancelled', {}, persistenceKey)
     })
   }
 
@@ -219,8 +254,10 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
 
   function status() {
     return {
-      last_result: storage.airi_last_basic_operation_result,
-      next_operation_id: storage.airi_next_basic_operation_id ?? 0,
+      last_result: last_result(persistenceKey),
+      next_operation_id: persistenceKey === undefined
+        ? (storage.airi_next_basic_operation_id ?? 0)
+        : (storage.airi_basic_operation_contexts?.[persistenceKey]?.next_operation_id ?? 0),
     }
   }
 

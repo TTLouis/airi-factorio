@@ -14,7 +14,7 @@ const DISTANCE_PROGRESS_EPSILON = 0.25
 type CombatCode = 'started' | 'target_destroyed' | 'no_actor' | 'invalid_radius'
   | 'no_target' | 'no_weapon_or_ammo' | 'actor_changed' | 'stuck' | 'timeout'
 
-interface CombatResult {
+export interface CombatResult {
   accepted: boolean
   completed: boolean
   code: CombatCode
@@ -27,8 +27,13 @@ interface CombatResult {
   target_initial_health?: number
 }
 
+export interface CombatControllerOptions {
+  persistenceKey?: string
+}
+
 declare const storage: {
   airi_last_combat_result?: CombatResult
+  airi_combat_results?: Record<string, CombatResult>
 }
 
 function nearest(actor: ControlledActor, entities: LuaEntity[]) {
@@ -63,20 +68,30 @@ function has_selected_weapon_and_ammo(character: LuaEntity) {
   const factorioIndex = character.selected_gun_index
   const guns = character.get_inventory(defines.inventory.character_guns)
   const ammo = character.get_inventory(defines.inventory.character_ammo)
-  if (!factorioIndex || !guns || !ammo) {
-    return false
-  }
+  if (!factorioIndex || !guns || !ammo) return false
 
-  // Factorio exposes selected_gun_index as a 1-based Lua inventory slot.
-  // typed-factorio intentionally presents LuaInventory as a 0-based
-  // TypeScript array, so convert the engine slot before indexing it here.
   const typescriptIndex = factorioIndex - 1
   const gun = guns[typescriptIndex]
   const magazine = ammo[typescriptIndex]
   return gun?.valid_for_read === true && magazine?.valid_for_read === true
 }
 
-function record(actor: ControlledActor | undefined, task: PlayerParametersAttackNearestEnemy | undefined, accepted: boolean, completed: boolean, code: CombatCode): CombatResult {
+function store_result(result: CombatResult, persistenceKey?: string) {
+  if (persistenceKey === undefined) {
+    storage.airi_last_combat_result = result
+    return
+  }
+  if (storage.airi_combat_results === undefined) storage.airi_combat_results = {}
+  storage.airi_combat_results[persistenceKey] = result
+}
+
+function last_result(persistenceKey?: string) {
+  return persistenceKey === undefined
+    ? storage.airi_last_combat_result
+    : storage.airi_combat_results?.[persistenceKey]
+}
+
+function record(actor: ControlledActor | undefined, task: PlayerParametersAttackNearestEnemy | undefined, accepted: boolean, completed: boolean, code: CombatCode, persistenceKey?: string): CombatResult {
   const identity = actor?.is_valid ? actor.status_snapshot() : undefined
   const result: CombatResult = {
     accepted,
@@ -90,20 +105,22 @@ function record(actor: ControlledActor | undefined, task: PlayerParametersAttack
     target_unit_number: task?.target_unit_number,
     target_initial_health: task?.target_initial_health,
   }
-  storage.airi_last_combat_result = result
+  store_result(result, persistenceKey)
   return result
 }
 
-export function new_combat_controller(get_actor: () => ControlledActor | undefined, manager: ReturnType<typeof new_task_manager>) {
+export function new_combat_controller(get_actor: () => ControlledActor | undefined, manager: ReturnType<typeof new_task_manager>, options: CombatControllerOptions = {}) {
+  const persistenceKey = options.persistenceKey
+
   function submit(search_radius: number = 50): [boolean, string] {
     if (!valid_radius(search_radius)) {
-      record(get_actor(), undefined, false, false, 'invalid_radius')
+      record(get_actor(), undefined, false, false, 'invalid_radius', persistenceKey)
       return [false, 'invalid_radius']
     }
     const actor = get_actor()
     const identity = actor?.is_valid ? actor.status_snapshot() : undefined
     if (!actor || !actor.is_valid || !actor.character || identity?.actor_id === undefined) {
-      record(actor, undefined, false, false, 'no_actor')
+      record(actor, undefined, false, false, 'no_actor', persistenceKey)
       return [false, 'no_actor']
     }
     manager.add_task({
@@ -118,13 +135,13 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function fail(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, code: CombatCode) {
-    record(actor, task, false, false, code)
+    record(actor, task, false, false, code, persistenceKey)
     manager.cancel_all_tasks()
     log(`[AUTORIO] [ERROR] Combat task failed: ${code}; queued operations cancelled`)
   }
 
   function complete(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
-    record(actor, task, true, true, 'target_destroyed')
+    record(actor, task, true, true, 'target_destroyed', persistenceKey)
     manager.reset_task_state()
     manager.next_task()
     log('[AUTORIO] Combat task complete: target destroyed')
@@ -147,23 +164,19 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.started_tick = game.tick
     task.last_progress_tick = game.tick
     task.last_distance = distance(actor.position, target.position)
-    const result = record(actor, task, true, false, 'started')
+    const result = record(actor, task, true, false, 'started', persistenceKey)
     log(`[AUTORIO] Combat target acquired: ${result.target_name} unit=${result.target_unit_number ?? 'n/a'}`)
     return true
   }
 
   function tick(actor: ControlledActor) {
     const task = manager.player_state.parameters_attack_nearest_enemy
-    if (!task || manager.player_state.task_state !== TaskStates.ATTACKING) {
-      return
-    }
+    if (!task || manager.player_state.task_state !== TaskStates.ATTACKING) return
     if (!identity_matches(actor, task)) {
       fail(actor, task, 'actor_changed')
       return
     }
-    if (!task.target && !acquire(actor, task)) {
-      return
-    }
+    if (!task.target && !acquire(actor, task)) return
     const target = task.target
     if (!target || !target.valid || (target.health !== undefined && target.health !== null && target.health <= 0)) {
       complete(actor, task)
@@ -191,7 +204,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       actor.set_walking_state({ walking: false, direction: defines.direction.north })
       actor.update_selected_entity(target.position)
       actor.set_shooting_state({ state: defines.shooting.shooting_selected, position: target.position })
-      // Damage/target invalidation is the proof of progress while engaged.
       task.last_progress_tick = game.tick
       return
     }
@@ -220,7 +232,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
             distance: actor ? distance(actor.position, target.position) : undefined,
           }
         : undefined,
-      last_result: storage.airi_last_combat_result,
+      last_result: last_result(persistenceKey),
     }
   }
 

@@ -11,7 +11,7 @@ type CraftingCode = 'queued' | 'started' | 'completed' | 'cancelled'
   | 'native_queue_busy' | 'not_enough_ingredients' | 'could_not_start'
   | 'partial_start' | 'actor_changed' | 'output_missing' | 'timeout'
 
-interface CraftingResult {
+export interface CraftingResult {
   accepted: boolean
   completed: boolean
   code: CraftingCode
@@ -27,7 +27,7 @@ interface CraftingResult {
   native_queue_remaining?: number
 }
 
-interface OwnedCraftingMarker {
+export interface OwnedCraftingMarker {
   actor_id: number
   actor_kind: string
   force_index: number
@@ -36,9 +36,58 @@ interface OwnedCraftingMarker {
   started_tick: number
 }
 
+export interface CraftingContextStorage {
+  last_result?: CraftingResult
+  owned_crafting?: OwnedCraftingMarker
+}
+
+export interface CraftingControllerOptions {
+  persistenceKey?: string
+}
+
 declare const storage: {
   airi_last_crafting_result?: CraftingResult
   airi_owned_crafting?: OwnedCraftingMarker
+  airi_crafting_contexts?: Record<string, CraftingContextStorage>
+}
+
+function context_storage(key: string) {
+  if (storage.airi_crafting_contexts === undefined) storage.airi_crafting_contexts = {}
+  let context = storage.airi_crafting_contexts[key]
+  if (context === undefined) {
+    context = {}
+    storage.airi_crafting_contexts[key] = context
+  }
+  return context
+}
+
+export function get_crafting_context_storage(persistenceKey: string) {
+  return storage.airi_crafting_contexts?.[persistenceKey]
+}
+
+function owned_marker(persistenceKey?: string) {
+  return persistenceKey === undefined
+    ? storage.airi_owned_crafting
+    : storage.airi_crafting_contexts?.[persistenceKey]?.owned_crafting
+}
+
+function set_owned_marker(marker: OwnedCraftingMarker | undefined, persistenceKey?: string) {
+  if (persistenceKey === undefined) {
+    storage.airi_owned_crafting = marker
+    return
+  }
+  context_storage(persistenceKey).owned_crafting = marker
+}
+
+function last_result(persistenceKey?: string) {
+  return persistenceKey === undefined
+    ? storage.airi_last_crafting_result
+    : storage.airi_crafting_contexts?.[persistenceKey]?.last_result
+}
+
+function store_result(result: CraftingResult, persistenceKey?: string) {
+  if (persistenceKey === undefined) storage.airi_last_crafting_result = result
+  else context_storage(persistenceKey).last_result = result
 }
 
 function valid_count(count: number) {
@@ -49,8 +98,6 @@ function valid_count(count: number) {
 }
 
 function identity_matches(actor: ControlledActor, task: PlayerParametersCraftItem) {
-  // Never infer ownership from whichever actor happens to be resolved now.
-  // Legacy/synthetic task data may not carry ownership metadata at all.
   if (task.owner_actor_id === undefined || task.owner_actor_kind === undefined || task.owner_force_index === undefined) {
     return false
   }
@@ -66,7 +113,7 @@ function output_count(actor: ControlledActor, item_name: string) {
   return actor.get_main_inventory()?.get_item_count(item_name) ?? 0
 }
 
-function record(actor: ControlledActor | undefined, task: PlayerParametersCraftItem | undefined, accepted: boolean, completed: boolean, code: CraftingCode): CraftingResult {
+function record(actor: ControlledActor | undefined, task: PlayerParametersCraftItem | undefined, accepted: boolean, completed: boolean, code: CraftingCode, persistenceKey?: string): CraftingResult {
   const identity = actor?.is_valid ? actor.status_snapshot() : undefined
   const result: CraftingResult = {
     accepted,
@@ -83,51 +130,45 @@ function record(actor: ControlledActor | undefined, task: PlayerParametersCraftI
     output_count_after: actor && task ? output_count(actor, task.item_name) : undefined,
     native_queue_remaining: actor?.get_crafting_queue().length,
   }
-  storage.airi_last_crafting_result = result
+  store_result(result, persistenceKey)
   return result
 }
 
-function persist_owned_marker(task: PlayerParametersCraftItem) {
+function persist_owned_marker(task: PlayerParametersCraftItem, persistenceKey?: string) {
   if (task.owner_actor_id === undefined || task.owner_actor_kind === undefined || task.owner_force_index === undefined || task.started_tick === undefined) {
     return
   }
-  storage.airi_owned_crafting = {
+  set_owned_marker({
     actor_id: task.owner_actor_id,
     actor_kind: task.owner_actor_kind,
     force_index: task.owner_force_index,
     item_name: task.item_name,
     requested_count: task.count,
     started_tick: task.started_tick,
-  }
+  }, persistenceKey)
 }
 
-function clear_owned_marker(task: PlayerParametersCraftItem) {
-  const marker = storage.airi_owned_crafting
-  if (!marker) {
-    return
-  }
+function clear_owned_marker(task: PlayerParametersCraftItem, persistenceKey?: string) {
+  const marker = owned_marker(persistenceKey)
+  if (marker === undefined) return
   if (marker.actor_id === task.owner_actor_id && marker.actor_kind === task.owner_actor_kind && marker.force_index === task.owner_force_index) {
-    storage.airi_owned_crafting = undefined
+    set_owned_marker(undefined, persistenceKey)
   }
 }
 
-export function new_crafting_controller(get_actor: () => ControlledActor | undefined, manager: ReturnType<typeof new_task_manager>) {
+export function new_crafting_controller(get_actor: () => ControlledActor | undefined, manager: ReturnType<typeof new_task_manager>, options: CraftingControllerOptions = {}) {
+  const persistenceKey = options.persistenceKey
+
   function cancel_owned_native_queue(actor: ControlledActor, task: PlayerParametersCraftItem) {
     if (!task.owns_native_queue) {
       return 0
     }
 
-    // Admission requires an empty native queue. Therefore every queue entry
-    // created by begin_crafting for this request (including prerequisites) is
-    // owned by the request. Cancel from the tail so queue indexes before the
-    // cancelled entry stay stable as Factorio removes entries/cascades.
     const queue = actor.get_crafting_queue()
     let cancelled = 0
     for (let i = queue.length - 1; i >= 0; i--) {
       const item = queue[i]
-      if (!item) {
-        continue
-      }
+      if (!item) continue
       actor.cancel_crafting({ index: item.index, count: item.count })
       cancelled += item.count
     }
@@ -139,24 +180,17 @@ export function new_crafting_controller(get_actor: () => ControlledActor | undef
     if (cancel_native && actor && identity_matches(actor, task)) {
       cancel_owned_native_queue(actor, task)
     }
-    // Keep the persisted marker on actor_changed: another identity must never
-    // cancel the previous body's queue. Load/death ownership reconciliation is
-    // responsible for the old body marker at those boundaries.
-    if (code !== 'actor_changed') {
-      clear_owned_marker(task)
-    }
-    // Avoid the registered cancellation handler overwriting the explicit
-    // failure result after native cleanup has already run.
+    if (code !== 'actor_changed') clear_owned_marker(task, persistenceKey)
     task.owns_native_queue = false
     manager.cancel_all_tasks()
-    record(actor, task, false, false, code)
+    record(actor, task, false, false, code, persistenceKey)
     log(`[AUTORIO] [ERROR] Crafting task failed: ${code}; dependent operations cancelled`)
   }
 
   function complete(actor: ControlledActor, task: PlayerParametersCraftItem) {
-    clear_owned_marker(task)
+    clear_owned_marker(task, persistenceKey)
     task.owns_native_queue = false
-    record(actor, task, true, true, 'completed')
+    record(actor, task, true, true, 'completed', persistenceKey)
     manager.reset_task_state()
     manager.next_task()
     log(`[AUTORIO] Crafting task complete: ${task.item_name} x${task.started ?? task.count}`)
@@ -164,37 +198,34 @@ export function new_crafting_controller(get_actor: () => ControlledActor | undef
 
   function submit(item_name: string, count: number = 1): [boolean, string] {
     if (!valid_count(count)) {
-      record(get_actor(), undefined, false, false, 'invalid_count')
+      record(get_actor(), undefined, false, false, 'invalid_count', persistenceKey)
       return [false, `Craft count must be an integer from 1 to ${MAX_CRAFT_COUNT}`]
     }
 
     const actor = get_actor()
     const identity = actor?.is_valid ? actor.status_snapshot() : undefined
     if (!actor || !actor.is_valid || !actor.character || identity?.actor_id === undefined) {
-      record(actor, undefined, false, false, 'no_actor')
+      record(actor, undefined, false, false, 'no_actor', persistenceKey)
       return [false, 'No controlled actor']
     }
 
     const recipe = actor.force.recipes[item_name]
     if (!recipe) {
-      record(actor, undefined, false, false, 'recipe_unavailable')
+      record(actor, undefined, false, false, 'recipe_unavailable', persistenceKey)
       return [false, 'Recipe not available']
     }
     if (!recipe.enabled) {
-      record(actor, undefined, false, false, 'recipe_locked')
+      record(actor, undefined, false, false, 'recipe_locked', persistenceKey)
       return [false, 'Recipe not unlocked']
     }
 
-    // Do not merge ownership into pre-existing native crafting work. Waiting
-    // or retrying later preserves unrelated crafts exactly as Factorio queued
-    // them and gives cancellation a clean ownership boundary.
     if (actor.get_crafting_queue().length > 0) {
-      record(actor, undefined, false, false, 'native_queue_busy')
+      record(actor, undefined, false, false, 'native_queue_busy', persistenceKey)
       return [false, 'Native crafting queue is busy; wait for existing crafts before retrying']
     }
 
     if (actor.get_craftable_count(item_name) < count) {
-      record(actor, undefined, false, false, 'not_enough_ingredients')
+      record(actor, undefined, false, false, 'not_enough_ingredients', persistenceKey)
       return [false, 'Not enough ingredients']
     }
 
@@ -208,7 +239,7 @@ export function new_crafting_controller(get_actor: () => ControlledActor | undef
       owner_force_index: actor.force.index,
     }
     manager.add_task(task)
-    record(actor, task, true, false, 'queued')
+    record(actor, task, true, false, 'queued', persistenceKey)
     log(`[AUTORIO] New craft_item task: ${item_name} x${count}`)
     return [true, 'Task started']
   }
@@ -248,27 +279,21 @@ export function new_crafting_controller(get_actor: () => ControlledActor | undef
       return false
     }
 
-    if (task.owns_native_queue) {
-      persist_owned_marker(task)
-    }
-    record(actor, task, true, false, 'started')
+    if (task.owns_native_queue) persist_owned_marker(task, persistenceKey)
+    record(actor, task, true, false, 'started', persistenceKey)
     return true
   }
 
   function tick(actor: ControlledActor) {
     const task = manager.player_state.parameters_craft_item
-    if (!task || manager.player_state.task_state !== TaskStates.CRAFTING) {
-      return
-    }
+    if (!task || manager.player_state.task_state !== TaskStates.CRAFTING) return
     if (!identity_matches(actor, task)) {
       fail(actor, task, 'actor_changed', false)
       return
     }
 
     if (task.started === undefined) {
-      if (!start_native(actor, task)) {
-        return
-      }
+      if (!start_native(actor, task)) return
     }
 
     const before = task.output_count_before ?? 0
@@ -279,12 +304,8 @@ export function new_crafting_controller(get_actor: () => ControlledActor | undef
     const queue = actor.get_crafting_queue()
     if (queue.length === 0) {
       task.owns_native_queue = false
-      if (produced >= expected) {
-        complete(actor, task)
-      }
-      else {
-        fail(actor, task, 'output_missing', false)
-      }
+      if (produced >= expected) complete(actor, task)
+      else fail(actor, task, 'output_missing', false)
       return
     }
 
@@ -295,40 +316,35 @@ export function new_crafting_controller(get_actor: () => ControlledActor | undef
 
   function status() {
     const actor = get_actor()
-    const task = manager.player_state.parameters_craft_item
     return {
       task_active: manager.player_state.task_state === TaskStates.CRAFTING,
       actor: actor?.status_snapshot(),
       native_queue: actor?.get_crafting_queue().slice(0, 16),
-      persisted_owner: storage.airi_owned_crafting,
-      last_result: storage.airi_last_crafting_result,
+      persisted_owner: owned_marker(persistenceKey),
+      last_result: last_result(persistenceKey),
     }
   }
 
   manager.register_cancel_handler(TaskStates.CRAFTING, () => {
     const task = manager.player_state.parameters_craft_item
-    if (!task || task.owner_actor_id === undefined || task.owner_actor_kind === undefined || task.owner_force_index === undefined) {
-      return
-    }
+    if (!task || task.owner_actor_id === undefined || task.owner_actor_kind === undefined || task.owner_force_index === undefined) return
 
     const actor = get_actor()
-    if (!actor || !identity_matches(actor, task)) {
-      return
-    }
+    if (!actor || !identity_matches(actor, task)) return
 
     const before = task.output_count_before ?? output_count(actor, task.item_name)
     const expected = task.expected_output_delta ?? task.started ?? task.count
     const produced = math.max(0, output_count(actor, task.item_name) - before)
     if (task.started !== undefined && actor.get_crafting_queue().length === 0 && produced >= expected) {
-      clear_owned_marker(task)
+      clear_owned_marker(task, persistenceKey)
       task.owns_native_queue = false
-      record(actor, task, true, true, 'completed')
+      record(actor, task, true, true, 'completed', persistenceKey)
       return
     }
 
     cancel_owned_native_queue(actor, task)
-    clear_owned_marker(task)
-    record(actor, task, false, false, 'cancelled')
+    clear_owned_marker(task, persistenceKey)
+    record(actor, task, false, false, 'cancelled', persistenceKey)
   })
 
   return { submit, tick, status }

@@ -36,8 +36,13 @@ interface NavigationResult {
   path_attempts?: number
 }
 
+export interface NavigationControllerOptions {
+  persistenceKey?: string
+}
+
 declare const storage: {
   airi_last_navigation_result?: NavigationResult
+  airi_navigation_results?: Record<string, NavigationResult>
 }
 
 function valid_radius(radius: number) {
@@ -86,7 +91,22 @@ function draw_path(actor: ControlledActor, path: PathfinderWaypoint[]) {
   }
 }
 
-function record(actor: ControlledActor | undefined, task: PlayerParametersWalkToEntity | undefined, accepted: boolean, completed: boolean, code: NavigationCode): NavigationResult {
+function store_result(result: NavigationResult, persistenceKey?: string) {
+  if (persistenceKey === undefined) {
+    storage.airi_last_navigation_result = result
+    return
+  }
+  if (storage.airi_navigation_results === undefined) storage.airi_navigation_results = {}
+  storage.airi_navigation_results[persistenceKey] = result
+}
+
+function last_result(persistenceKey?: string) {
+  return persistenceKey === undefined
+    ? storage.airi_last_navigation_result
+    : storage.airi_navigation_results?.[persistenceKey]
+}
+
+function record(actor: ControlledActor | undefined, task: PlayerParametersWalkToEntity | undefined, accepted: boolean, completed: boolean, code: NavigationCode, persistenceKey?: string): NavigationResult {
   const identity = actor?.is_valid ? actor.status_snapshot() : undefined
   const result: NavigationResult = {
     accepted,
@@ -102,13 +122,15 @@ function record(actor: ControlledActor | undefined, task: PlayerParametersWalkTo
     path_request_id: task?.path_request_id,
     path_attempts: task?.path_attempts,
   }
-  storage.airi_last_navigation_result = result
+  store_result(result, persistenceKey)
   return result
 }
 
-export function new_navigation_controller(get_actor: () => ControlledActor | undefined, manager: ReturnType<typeof new_task_manager>) {
+export function new_navigation_controller(get_actor: () => ControlledActor | undefined, manager: ReturnType<typeof new_task_manager>, options: NavigationControllerOptions = {}) {
+  const persistenceKey = options.persistenceKey
+
   function fail(actor: ControlledActor | undefined, task: PlayerParametersWalkToEntity, code: NavigationCode) {
-    record(actor, task, false, false, code)
+    record(actor, task, false, false, code, persistenceKey)
     rendering.clear()
     if (actor && identity_matches(actor, task)) {
       manager.cancel_all_tasks()
@@ -120,7 +142,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
   }
 
   function complete(actor: ControlledActor, task: PlayerParametersWalkToEntity) {
-    record(actor, task, true, true, 'reached')
+    record(actor, task, true, true, 'reached', persistenceKey)
     rendering.clear()
     manager.reset_task_state()
     manager.next_task()
@@ -129,18 +151,18 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
 
   function submit(entity_name: string, search_radius: number): boolean {
     if (typeof entity_name !== 'string' || entity_name.length === 0) {
-      record(get_actor(), undefined, false, false, 'invalid_entity_name')
+      record(get_actor(), undefined, false, false, 'invalid_entity_name', persistenceKey)
       return false
     }
     if (!valid_radius(search_radius)) {
-      record(get_actor(), undefined, false, false, 'invalid_radius')
+      record(get_actor(), undefined, false, false, 'invalid_radius', persistenceKey)
       return false
     }
 
     const actor = get_actor()
     const identity = actor?.is_valid ? actor.status_snapshot() : undefined
     if (!actor || !actor.is_valid || !actor.character || identity?.actor_id === undefined) {
-      record(actor, undefined, false, false, 'no_actor')
+      record(actor, undefined, false, false, 'no_actor', persistenceKey)
       return false
     }
 
@@ -173,10 +195,6 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return false
     }
 
-    // Validate the start with the character prototype, not an iron-chest proxy.
-    // A character can legally stand on transport belts and other walkable
-    // entities that a chest cannot occupy; using a chest could move the
-    // pathfinder's start away from AIRI's real position.
     const start = actor.surface.find_non_colliding_position(
       character.name,
       character.position,
@@ -195,10 +213,6 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return false
     }
 
-    // Match Factorio's real character geometry. In 2.0.77 the character's
-    // collision mask deliberately does not collide with transport belts, while
-    // the previous hard-coded `object` layer did. Using the prototype keeps
-    // pathfinding aligned with places the NPC can physically occupy.
     const character_prototype = character.prototype
 
     task.path_attempts = (task.path_attempts ?? 0) + 1
@@ -245,7 +259,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     task.started_tick = game.tick
     task.last_progress_tick = game.tick
     task.last_waypoint_distance = undefined
-    record(actor, task, true, false, 'started')
+    record(actor, task, true, false, 'started', persistenceKey)
     return request_path(actor, task)
   }
 
@@ -267,23 +281,30 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     return request_path(actor, task)
   }
 
+  function owns_path_request(requestId: number) {
+    const task = manager.player_state.parameters_walk_to_entity
+    return manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY
+      && task?.path_request_id !== undefined
+      && task.path_request_id === requestId
+  }
+
   function on_path_finished(event: OnScriptPathRequestFinishedEvent) {
     const task = manager.player_state.parameters_walk_to_entity
     if (!task || manager.player_state.task_state !== TaskStates.WALKING_TO_ENTITY) {
-      return
+      return false
     }
     if (task.path_request_id === undefined || event.id !== task.path_request_id) {
-      log(`[AUTORIO] Ignoring stale path result id=${event.id}; active=${task.path_request_id ?? 'none'}`)
-      return
+      if (persistenceKey === undefined) log(`[AUTORIO] Ignoring stale path result id=${event.id}; active=${task.path_request_id ?? 'none'}`)
+      return false
     }
 
     const actor = get_actor()
     if (!actor || manager.player_state.parameters_walk_to_entity !== task) {
-      return
+      return false
     }
     if (!identity_matches(actor, task)) {
       fail(actor, task, 'actor_changed')
-      return
+      return true
     }
 
     task.calculating_path = false
@@ -293,16 +314,16 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     if (event.try_again_later) {
       if ((task.path_attempts ?? 0) >= MAX_PATH_ATTEMPTS) {
         fail(actor, task, 'path_busy')
-        return
+        return true
       }
       task.next_retry_tick = game.tick + PATH_RETRY_DELAY_TICKS
       log('[AUTORIO] Pathfinder busy; bounded retry scheduled')
-      return
+      return true
     }
 
     if (!event.path || event.path.length === 0) {
       fail(actor, task, 'unreachable')
-      return
+      return true
     }
 
     task.path = event.path
@@ -311,6 +332,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     task.last_progress_tick = game.tick
     task.last_waypoint_distance = distance(actor.position, event.path[0].position)
     log(`[AUTORIO] Accepted path result with ${event.path.length} waypoints`)
+    return true
   }
 
   function follow_path(actor: ControlledActor, task: PlayerParametersWalkToEntity) {
@@ -335,9 +357,6 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return true
     }
 
-    // Position change alone is not navigation progress: a transport belt can
-    // move an idle/walking character sideways or backward. Only reset the stuck
-    // timer when AIRI materially closes distance to the current path waypoint.
     const best_distance = task.last_waypoint_distance
     if (best_distance === undefined || waypoint_distance <= best_distance - PROGRESS_DISTANCE) {
       task.last_waypoint_distance = waypoint_distance
@@ -437,9 +456,9 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
             last_progress_tick: task.last_progress_tick,
           }
         : undefined,
-      last_result: storage.airi_last_navigation_result,
+      last_result: last_result(persistenceKey),
     }
   }
 
-  return { submit, tick, on_path_finished, status }
+  return { submit, tick, owns_path_request, on_path_finished, status }
 }
