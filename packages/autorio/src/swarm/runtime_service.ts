@@ -1,13 +1,19 @@
 import type { MapPositionStruct } from 'factorio:prototype'
 import type { OnScriptPathRequestFinishedEvent } from 'factorio:runtime'
 import { TaskStates } from '../types'
+import { reconcile_recovered_agents } from './agent_reconciliation'
 import { allocate_logical_actor_id, create_agent } from './agents'
 import { new_actor_registry } from './actor_registry'
 import { new_actor_runtime_router } from './actor_runtime_router'
 import { create_work } from './blackboard'
+import { block_work_with_observation_request } from './blockers'
+import { reconcile_mission_work_completion } from './mission_completion'
+import { create_survey_mission_workflow } from './mission_workflow'
+import type { SurveyMissionTarget } from './mission_workflow'
+import { new_request_coordinator } from './request_coordinator'
 import { new_standalone_actor_pool } from './standalone_actor_pool'
 import { get_swarm_storage } from './storage'
-import type { ActorCapability, ActorId, WorkId } from './types'
+import type { ActorCapability, ActorId, MissionId, RequestId, WorkId } from './types'
 import { new_work_coordinator } from './work_coordinator'
 
 const DEFAULT_STANDALONE_CAPABILITIES: ActorCapability[] = [
@@ -39,6 +45,7 @@ export function new_swarm_runtime_service() {
   const pool = new_standalone_actor_pool(swarm, registry)
   const router = new_actor_runtime_router(registry)
   const coordinator = new_work_coordinator(swarm, registry, router)
+  const requestCoordinator = new_request_coordinator(swarm)
 
   // Ordinary module locals are rebuilt after a save/load. Swarm storage keeps
   // logical and physical identity, so reconstruct runtime registrations and
@@ -125,6 +132,7 @@ export function new_swarm_runtime_service() {
       found: true as const,
       actorId,
       runtime: registry.runtime_snapshot(actorId, game.tick),
+      agent: runtime.agentId !== undefined ? swarm.agents[runtime.agentId] : undefined,
       actor: actor?.status_snapshot(),
       tasks: context?.manager.get_status_snapshot(),
       basic: context?.basic.status(),
@@ -176,6 +184,52 @@ export function new_swarm_runtime_service() {
     return { ok: true as const, work }
   }
 
+  function create_survey_mission(
+    title: string,
+    targets: SurveyMissionTarget[],
+    priority: number = 60,
+  ) {
+    if (title === '') return { ok: false as const, code: 'invalid_title' as const }
+    if (!valid_priority(priority)) return { ok: false as const, code: 'invalid_priority' as const }
+    if (targets === undefined || targets.length === 0) return { ok: false as const, code: 'no_targets' as const }
+    for (let index = 0; index < targets.length; index += 1) {
+      const surfaceIndex = targets[index].surfaceIndex ?? 1
+      if (game.surfaces[surfaceIndex] === undefined) {
+        return { ok: false as const, code: 'unknown_surface' as const, targetIndex: index }
+      }
+    }
+    return create_survey_mission_workflow(swarm, {
+      title,
+      priority,
+      targets,
+      createdBy: 'human',
+      tick: game.tick,
+    })
+  }
+
+  function mission_status(missionId?: MissionId) {
+    if (missionId !== undefined) {
+      const mission = swarm.missions[missionId]
+      if (mission === undefined) return { found: false as const, missionId, code: 'unknown_mission' as const }
+      const objectives = []
+      for (const objectiveId of mission.objectiveIds) {
+        const objective = swarm.objectives[objectiveId]
+        if (objective !== undefined) objectives.push(objective)
+      }
+      const works = []
+      for (const workId in swarm.board.work) {
+        const work = swarm.board.work[workId]
+        if (work.missionId === mission.id) works.push(work)
+      }
+      works.sort((a, b) => a.createdTick - b.createdTick || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      return { found: true as const, mission, objectives, works }
+    }
+    const missions = []
+    for (const id in swarm.missions) missions.push(swarm.missions[id])
+    missions.sort((a, b) => a.createdTick - b.createdTick || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    return { missions }
+  }
+
   function work_status(workId?: WorkId) {
     if (workId !== undefined) {
       const work = swarm.board.work[workId]
@@ -197,6 +251,48 @@ export function new_swarm_runtime_service() {
     for (const id in swarm.board.work) works.push(swarm.board.work[id])
     works.sort((a, b) => a.createdTick - b.createdTick || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     return { works }
+  }
+
+  function block_work_for_observation(
+    workId: WorkId,
+    x: number,
+    y: number,
+    radius: number = 1.5,
+    priority: number = 80,
+    surfaceIndex: number = 1,
+  ) {
+    if (!valid_coordinate(x) || !valid_coordinate(y)) return { ok: false as const, code: 'invalid_position' as const }
+    if (!valid_radius(radius)) return { ok: false as const, code: 'invalid_radius' as const }
+    if (!valid_priority(priority)) return { ok: false as const, code: 'invalid_priority' as const }
+    if (game.surfaces[surfaceIndex] === undefined) return { ok: false as const, code: 'unknown_surface' as const }
+    return block_work_with_observation_request(swarm, router, {
+      workId,
+      description: `Observe blocker before resuming ${workId}`,
+      destination: {
+        surfaceIndex,
+        position: { x, y },
+        radius,
+      },
+      priority,
+      tick: game.tick,
+    })
+  }
+
+  function request_status(requestId?: RequestId) {
+    if (requestId !== undefined) {
+      const request = swarm.board.requests[requestId]
+      if (request === undefined) return { found: false as const, requestId, code: 'unknown_request' as const }
+      const satisfyingWork = []
+      for (const workId of request.satisfyingWorkIds) {
+        const work = swarm.board.work[workId]
+        if (work !== undefined) satisfyingWork.push(work)
+      }
+      return { found: true as const, request, satisfyingWork }
+    }
+    const requests = []
+    for (const id in swarm.board.requests) requests.push(swarm.board.requests[id])
+    requests.sort((a, b) => a.createdTick - b.createdTick || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    return { requests }
   }
 
   function context_for(actorId: ActorId) {
@@ -278,7 +374,11 @@ export function new_swarm_runtime_service() {
   }
 
   function tick_all() {
+    reconcile_recovered_agents(swarm, registry, game.tick)
+    requestCoordinator.tick(game.tick)
     coordinator.tick(game.tick)
+    reconcile_mission_work_completion(swarm, game.tick)
+    requestCoordinator.satisfy_completed_requests(game.tick)
     return router.tick_all()
   }
 
@@ -290,11 +390,31 @@ export function new_swarm_runtime_service() {
     return router.on_player_mined_entity(playerIndex)
   }
 
+  remote.add_interface('autorio_swarm_coordination', {
+    create_survey_mission: (title: string, targets: SurveyMissionTarget[], priority: number = 60) =>
+      create_survey_mission(title, targets, priority),
+    mission_status: (mission_id?: MissionId) => mission_status(mission_id),
+    work_status: (work_id?: WorkId) => work_status(work_id),
+    block_work_for_observation: (
+      work_id: WorkId,
+      x: number,
+      y: number,
+      radius: number = 1.5,
+      priority: number = 80,
+      surface_index: number = 1,
+    ) => block_work_for_observation(work_id, x, y, radius, priority, surface_index),
+    request_status: (request_id?: RequestId) => request_status(request_id),
+  })
+
   return {
     create_actor,
     status,
     create_survey_work,
+    create_survey_mission,
+    mission_status,
     work_status,
+    block_work_for_observation,
+    request_status,
     wait,
     walk_to_position,
     cancel,

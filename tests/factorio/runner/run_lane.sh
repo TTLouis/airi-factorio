@@ -121,7 +121,7 @@ start_factorio
 
 # Legacy lanes begin with the same zero-player singleton actor/clock/core-action
 # smoke. The swarm lane intentionally skips it so its save contains exactly the
-# two logical actors created by swarm_multi_actor.py and no compatibility NPC.
+# logical actors created by the swarm-specific runners and no compatibility NPC.
 if [[ "$LANE" != "swarm" ]]; then
   run_py run.py
 fi
@@ -166,6 +166,8 @@ case "$LANE" in
   swarm)
     printf '[npc-test][swarm] Running live two-NPC isolation and replacement gate...\n'
     run_py swarm_multi_actor.py
+    printf '[npc-test][swarm] Running mission/reassignment/request coordination gate...\n'
+    run_py swarm_coordination.py
     ;;
 
   *)
