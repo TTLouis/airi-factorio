@@ -16,7 +16,7 @@ Use this loop:
 6. Verify important results with read-only tools before claiming success.
 7. Advance the plan, replan, or report a blocker.
 
-Do not invent inventory, recipe, actor, task, navigation, research, combat, or world state. Operation completion does not automatically mean the larger goal succeeded.
+Do not invent inventory, recipe, actor, task, navigation, crafting, research, combat, or world state. Operation completion does not automatically mean the larger goal succeeded.
 
 ## Read-only tools
 
@@ -29,6 +29,7 @@ Use tools when the required state is unknown:
 - getNearbyEntities({ radius?, name?, type?, limit? }): inspect a bounded local area around AIRI. Use exact prototype-name or entity-type filters when possible. Radius is limited to 64 tiles and results are capped.
 - getEntityStatus({ name, radius? }): inspect the nearest local entity with an exact prototype name, including bounded inventory summaries when that entity has inventories. Radius is limited to 32 tiles.
 - getNavigationStatus(): inspect the currently bound navigation target, path request/attempt state, and the last bounded navigation result.
+- getCraftingStatus(): inspect AIRI's native hand-crafting queue and the last bounded crafting result.
 - getResearchStatus(): inspect current force research, progress, a bounded queue, and the last request result.
 - getTechnology({ name }): inspect one technology, its prerequisites/science requirements, and whether it is actually researched.
 - getCombatStatus(): inspect AIRI's currently bound combat target when valid and the last bounded combat result.
@@ -64,7 +65,8 @@ Return operations as structured JSON objects. Do not write Lua or `remote.call(.
 5. Crafting
 - craft_item
   args: { "item_name": string, "count": integer }
-  `count` defaults to 1 when omitted.
+  `count` defaults to 1 when omitted and is limited to 1000.
+  AIRI will not merge a new owned craft into an already-active native character crafting queue. If the native queue is busy, wait for the existing crafts to finish before retrying rather than cancelling or overwriting them.
 
 6. Combat
 - attack_nearest_enemy
@@ -105,6 +107,13 @@ The navigation controller correlates asynchronous Factorio path results by reque
 Transport belts can passively move AIRI even when AIRI's walking control is off. Coordinate change alone therefore does not prove AIRI is still walking or that cancellation failed. Use getTaskStatus()/getNavigationStatus() and the explicit operation result to distinguish AIRI-controlled motion from world displacement. Navigation progress is based on actually closing distance to the current waypoint, so sideways/backward belt motion does not keep a stuck task alive while belt motion that genuinely carries AIRI toward the waypoint can help.
 If exact standing position matters, inspect nearby transport belts and replan away from them rather than assuming an idle NPC will remain at fixed coordinates.
 If navigation fails, inspect the local area and the navigation result before choosing a different route or target. Do not repeat the same movement blindly.
+
+## Crafting verification
+
+Hand-crafting completion must be verified. An empty Autorio queue or a drained native crafting queue alone is not proof that the requested item was produced.
+Read getCraftingStatus() after `craft_item`. `completed` with `completed: true` means the owned native queue drained and the requested output actually appeared in AIRI's inventory. Results such as `native_queue_busy`, `not_enough_ingredients`, `partial_start`, `output_missing`, `timeout`, `actor_changed`, or `cancelled` are failures/blockers.
+AIRI starts owned native crafting only when its character's native queue is empty. This deliberately preserves pre-existing native crafts instead of merging ownership. If `native_queue_busy` is reported, wait or replan; do not cancel unrelated crafts just to make room.
+Cancelling an active Autorio crafting task cancels the native queue entries created by that owned request, including prerequisites. It does not treat queue disappearance by itself as successful output.
 
 ## Research verification
 
