@@ -22,7 +22,7 @@
     },
     "scripts": {
         "installation": {
-            "script": "#!/usr/bin/env bash\n# Generated AIRI Factorio standalone-NPC v8 installer loader.\n# Immutable source: deploy/pterodactyl/payload-src/installer.sh\nset -Eeuo pipefail\numask 077\nREF=\"d29b0943d7cdaf4e4d5b22a4085fc0909e2f1d0c\"\nEXPECTED_SOURCE_SHA256=\"afa0a0971b2c4082b14bf33684810d1033514e4de8dafb3cb4400fe6c8962361\"\nURL=\"https://raw.githubusercontent.com/TTLouis/airi-factorio/$REF/deploy/pterodactyl/payload-src/installer.sh\"\nTMP=\"$(mktemp)\"\nlog() { printf '[AIRI bootstrap] %s\\n' \"$*\"; }\nfail() { log \"ERROR: $*\" >&2; exit 78; }\ncleanup() { local code=$?; trap - EXIT; rm -f -- \"$TMP\"; exit \"$code\"; }\ntrap cleanup EXIT\ntrap 'exit 130' INT\ntrap 'exit 143' TERM HUP\nfor tool in bash curl sha256sum awk mktemp rm; do command -v \"$tool\" >/dev/null || fail \"Missing installer loader tool: $tool\"; done\ncurl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' \"$URL\" --output \"$TMP\" || fail 'Unable to download pinned AIRI installer source'\nACTUAL_SOURCE_SHA256=\"$(sha256sum \"$TMP\" | awk '{print $1}')\"\n[[ \"$ACTUAL_SOURCE_SHA256\" == \"$EXPECTED_SOURCE_SHA256\" ]] || fail 'Pinned AIRI installer source checksum mismatch'\nif [[ \"${1:-}\" == '--verify-only' ]]; then log \"Pinned payload verified at $REF; installation was not run.\"; exit 0; fi\n[[ $# == 0 ]] || fail 'Only --verify-only is supported as a loader argument.'\nlog \"Using immutable installer payload $REF\"\nbash \"$TMP\"\n",
+            "script": "#!/usr/bin/env bash\n# Generated AIRI Factorio standalone-NPC v8 installer loader.\n# Immutable source: deploy/pterodactyl/payload-src/installer.sh\nset -Eeuo pipefail\numask 077\nREF=\"301cab56d649926ac193ec4e071e271344401d11\"\nEXPECTED_SOURCE_SHA256=\"c550cfc611758aae70803092019af82fc32587ca8ce5e02cb6f2fc6e99a3bd5f\"\nURL=\"https://raw.githubusercontent.com/TTLouis/airi-factorio/$REF/deploy/pterodactyl/payload-src/installer.sh\"\nTMP=\"$(mktemp)\"\nlog() { printf '[AIRI bootstrap] %s\\n' \"$*\"; }\nfail() { log \"ERROR: $*\" >&2; exit 78; }\ncleanup() { local code=$?; trap - EXIT; rm -f -- \"$TMP\"; exit \"$code\"; }\ntrap cleanup EXIT\ntrap 'exit 130' INT\ntrap 'exit 143' TERM HUP\nfor tool in bash curl sha256sum awk mktemp rm; do command -v \"$tool\" >/dev/null || fail \"Missing installer loader tool: $tool\"; done\ncurl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' \"$URL\" --output \"$TMP\" || fail 'Unable to download pinned AIRI installer source'\nACTUAL_SOURCE_SHA256=\"$(sha256sum \"$TMP\" | awk '{print $1}')\"\n[[ \"$ACTUAL_SOURCE_SHA256\" == \"$EXPECTED_SOURCE_SHA256\" ]] || fail 'Pinned AIRI installer source checksum mismatch'\nif [[ \"${1:-}\" == '--verify-only' ]]; then log \"Pinned payload verified at $REF; installation was not run.\"; exit 0; fi\n[[ $# == 0 ]] || fail 'Only --verify-only is supported as a loader argument.'\nlog \"Using immutable installer payload $REF\"\nbash \"$TMP\"\n",
             "container": "ghcr.io/ptero-eggs/yolks:debian_bookworm",
             "entrypoint": "bash"
         }
@@ -76,6 +76,16 @@
             "user_viewable": true,
             "user_editable": true,
             "rules": "required|string|url|max:255",
+            "field_type": "text"
+        },
+        {
+            "name": "Provider Timeout (ms)",
+            "description": "Maximum time for one provider response before the AIRI turn is cancelled and reported in game.",
+            "env_variable": "PROVIDER_TIMEOUT_MS",
+            "default_value": "120000",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|between:1000,600000",
             "field_type": "text"
         },
         {
