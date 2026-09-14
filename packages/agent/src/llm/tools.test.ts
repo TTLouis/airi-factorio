@@ -33,6 +33,7 @@ describe('agent observation tools', () => {
       'getRecipe',
       'getNearbyEntities',
       'getEntityStatus',
+      'getNavigationStatus',
       'getResearchStatus',
       'getTechnology',
       'getCombatStatus',
@@ -134,6 +135,17 @@ describe('agent observation tools', () => {
   })
 })
 
+describe('navigation observation tool', () => {
+  it('reads bounded navigation target/path and last-result state', async () => {
+    const output = '{"task_active":false,"last_result":{"code":"unreachable","completed":false}}'
+    mocks.raw.mockResolvedValue({ data: { output } })
+    expect(await getTool('getNavigationStatus').fn({ parameters: {} })).toBe(output)
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_navigation", "status")))',
+    } })
+  })
+})
+
 describe('research observation tools', () => {
   it('reads force research without treating the request result as completion', async () => {
     const output = '{"current":{"name":"automation"},"progress":0.1,"last_request_result":{"accepted":true}}'
@@ -170,12 +182,19 @@ describe('combat observation tool', () => {
   })
 })
 
-describe('research and combat prompt contract', () => {
+describe('navigation, research, and combat prompt contract', () => {
   it('documents the actual observation tools', () => {
-    for (const name of ['getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+    for (const name of ['getNavigationStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
+  })
+
+  it('distinguishes navigation idle from verified arrival and bounded failures', () => {
+    expect(prompt).toContain('Navigation completion must be verified')
+    expect(prompt).toContain('reached')
+    expect(prompt).toContain('unreachable')
+    expect(prompt).toContain('path_timeout')
   })
 
   it('distinguishes research submission from technology completion and shared research cancellation', () => {
