@@ -129,7 +129,13 @@ export const toolDefinitions = [
   }),
   functionTool('getNavigationStatus', 'Read bounded navigation target and last result.', emptyObjectSchema),
   functionTool('getCraftingStatus', 'Read bounded native crafting ownership and last result.', emptyObjectSchema),
-  functionTool('getResearchStatus', 'Read force research and last request result.', emptyObjectSchema),
+  functionTool('getResearchStatus', 'Read force research and latest request/follow-through state.', emptyObjectSchema),
+  functionTool('getResearchRequest', 'Read one exact correlated research request and follow-through record by request ID.', {
+    type: 'object',
+    properties: { request_id: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } },
+    required: ['request_id'],
+    additionalProperties: false,
+  }),
   functionTool('getTechnology', 'Read one exact technology.', {
     type: 'object', properties: { name: nameStringSchema }, required: ['name'], additionalProperties: false,
   }),
@@ -182,6 +188,11 @@ export function toolCommand(name, rawArgs = {}) {
     case 'getResearchStatus':
       noExtra(args, [])
       return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","status")))'
+    case 'getResearchRequest': {
+      noExtra(args, ['request_id'])
+      const requestId = integer(args.request_id, 'request_id', 1, Number.MAX_SAFE_INTEGER)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","request_result",${requestId})))`
+    }
     case 'getTechnology':
       noExtra(args, ['name'])
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","technology",${luaString(factorioName(args.name))})))`
