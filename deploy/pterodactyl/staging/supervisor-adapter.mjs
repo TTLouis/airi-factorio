@@ -46,15 +46,22 @@ export async function deploymentStatus(rcon) {
   return status
 }
 
-export async function configureNpcSession(rcon, session) {
+export async function configureNpcSession(rcon, session, marker = `AIRI_CONFIG_${crypto.randomBytes(12).toString('hex')}:`) {
   check(typeof session === 'string' && session.length >= 16 && session.length <= 256 && !/[\x00-\x1f\x7f]/.test(session), 'Invalid deployment session token')
-  const command = `/silent-command rcon.print(remote.call("airi_deployment","configure","npc",${luaString(session)}))`
-  let configured = await rcon.command(command)
-  // Factorio can ask that the first Lua command be repeated before achievements
-  // are disabled. This configure call is intentionally idempotent enough for the
-  // same single retry pattern used by the existing supervisor startup handshake.
-  if (String(configured).trim() !== session) configured = await rcon.command(command)
-  check(String(configured).trim() === session, 'NPC deployment configure handshake failed')
+  check(/^AIRI_CONFIG_[a-f0-9]{24}:$/.test(marker), 'Invalid configure acknowledgement marker')
+
+  // Factorio's first Lua-console command can be blocked by the achievement
+  // warning and must then be repeated exactly. Do not infer execution from the
+  // warning text: it may echo the complete command, including the session token.
+  // A marker printed from inside the command proves that the command actually
+  // executed. Reuse the exact same command string once so Factorio's confirmation
+  // gate sees an identical repeat.
+  const command = `/silent-command local ok,result=pcall(function() return remote.call("airi_deployment","configure","npc",${luaString(session)}) end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
+  let raw = await rcon.command(command)
+  if (!String(raw).includes(marker)) raw = await rcon.command(command)
+  const parsed = acknowledgement(raw, marker, 'configure')
+  check(parsed.data.result === session, 'NPC deployment configure handshake failed')
+
   const status = await deploymentStatus(rcon)
   check(status.session === session, 'Deployment status session does not match configure token')
   return status
