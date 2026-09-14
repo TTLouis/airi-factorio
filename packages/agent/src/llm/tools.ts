@@ -24,7 +24,7 @@ const entityStatusSchema = z.object({
   radius: z.number().int().min(1).max(32).default(8),
 }).strict()
 
-async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_research' | 'autorio_combat') {
+async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
   return response.data.output
@@ -113,6 +113,12 @@ export const tools: ToolFunction[] = [
     description: 'Read AIRI navigation state, bound target, active path request/attempt count, and last bounded navigation result. Use it to distinguish reached from no-target, unreachable, path timeout, stuck, or ownership failures.',
     schema: z.object({}).strict(),
     fn: async () => readRemoteStatus('autorio_navigation'),
+  },
+  {
+    name: 'getCraftingStatus',
+    description: 'Read AIRI native hand-crafting state and last bounded crafting result. Use it to distinguish verified output completion from a busy native queue, missing ingredients/output, cancellation, timeout, or ownership failure.',
+    schema: z.object({}).strict(),
+    fn: async () => readRemoteStatus('autorio_crafting'),
   },
   {
     name: 'getResearchStatus',
