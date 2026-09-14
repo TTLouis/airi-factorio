@@ -173,11 +173,15 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return false
     }
 
+    // Validate the start with the character prototype, not an iron-chest proxy.
+    // A character can legally stand on transport belts and other walkable
+    // entities that a chest cannot occupy; using a chest could move the
+    // pathfinder's start away from AIRI's real position.
     const start = actor.surface.find_non_colliding_position(
-      'iron-chest',
+      character.name,
       character.position,
-      10,
-      0.5,
+      2,
+      0.25,
       false,
     )
     if (!start) {
