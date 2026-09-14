@@ -117,7 +117,7 @@ describe('Player-sourced completion events are gated by actor identity', () => {
     expect(task_manager.player_state.parameters_craft_item?.crafted).toBe(0)
   })
 
-  it('counts a crafted-item event from the controlled actor\'s own player_index', () => {
+  it('does not let a controlled-player craft event bypass native queue/output verification', () => {
     connect_controlled_actor(1)
 
     task_manager.add_task({
@@ -130,7 +130,8 @@ describe('Player-sourced completion events are gated by actor identity', () => {
     const on_player_crafted_item = get_handler('on_player_crafted_item')
     on_player_crafted_item({ player_index: 1, item_stack: { name: 'iron-gear-wheel', count: 1 } })
 
-    expect(task_manager.player_state.parameters_craft_item?.crafted).toBe(1)
+    expect(task_manager.player_state.parameters_craft_item?.crafted).toBe(0)
+    expect(task_manager.player_state.task_state).toBe(TaskStates.CRAFTING)
   })
 
   it('ignores a mined-entity event from another player', () => {
