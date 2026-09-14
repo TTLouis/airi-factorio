@@ -13,6 +13,8 @@ import { new_basic_operation_runtime } from './basic_operation_runtime'
 import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
 import { new_crafting_controller } from './crafting'
+import { create_discovery_remote_interface } from './discovery'
+import { new_follow_controller } from './follow'
 import { new_navigation_controller } from './navigation'
 import { new_research_controller } from './research'
 import { new_task_manager } from './task_manager'
@@ -22,6 +24,7 @@ import { direction_towards } from './utils/direction'
 import { get_actor_inventory_items } from './utils/inventory'
 
 create_tools_remote_interface()
+create_discovery_remote_interface(get_controlled_actor)
 
 let setup_complete = false
 
@@ -32,9 +35,14 @@ const navigation_controller = new_navigation_controller(get_controlled_actor, ta
 const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
+const follow_controller = new_follow_controller(get_controlled_actor)
 
 remote.add_interface('autorio_navigation', {
   status: () => navigation_controller.status(),
+})
+
+remote.add_interface('autorio_follow', {
+  status: () => follow_controller.status(),
 })
 
 remote.add_interface('autorio_crafting', {
@@ -104,6 +112,12 @@ remote.add_interface('autorio_operations', {
     log(`[AUTORIO] New walk_to_entity task: ${entity_name}, radius: ${search_radius}`)
     return navigation_controller.submit(entity_name, search_radius)
   },
+  follow_player: (player_name: string, follow_distance: number = 4): [boolean, string] => {
+    const result = follow_controller.submit(player_name, follow_distance)
+    if (result[0]) log(`[AUTORIO] Follow mode enabled for ${player_name} at distance ${follow_distance}`)
+    return result
+  },
+  stop_follow_player: (): [boolean, string] => follow_controller.stop(),
   mine_entity: (entity_name: string, count: number = 1) => {
     const accepted = basic_operation_controller.submit_mining(entity_name, count)
     if (accepted) log(`[AUTORIO] New mine_entity task: ${entity_name} x${count}`)
@@ -139,6 +153,7 @@ remote.add_interface('autorio_operations', {
       ...task_manager.get_status_snapshot(),
       actor: actor?.status_snapshot(),
       basic_operation: basic_operation_controller.status(),
+      follow: follow_controller.status(),
     }
   },
   log_actor_info: () => log_actor_info(),
@@ -231,7 +246,14 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   }
   no_actor_found = false
 
-  if (task_manager.player_state.task_state === TaskStates.IDLE) return
+  if (task_manager.player_state.task_state === TaskStates.IDLE) {
+    follow_controller.tick(actor)
+    return
+  }
+
+  // Persistent follow is a background mode. Any explicit task temporarily owns
+  // movement/control; follow resumes automatically when the task queue returns idle.
+  follow_controller.suspend(actor)
 
   if (task_manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
     navigation_controller.tick(actor)
