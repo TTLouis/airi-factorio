@@ -13,7 +13,7 @@ const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
 // Immutable commit that contains the exact payload-src/installer.sh used by this
 // release candidate. Both the standalone bootstrap and the PTDL egg embed the
 // same small loader, so there is only one installer transport contract to audit.
-const PAYLOAD_REF = 'c60728afc4d348d9739a3c7de70bec86cc9c708a'
+const PAYLOAD_REF = '5e56255fcfcd9f79e21838d452c20de3dbed829c'
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
@@ -105,12 +105,12 @@ function egg(installScript) {
     variables: [
       variable('AIRI Actor Mode', 'Controlled actor mode. The v8 egg intentionally supports standalone NPC ownership only.', 'AIRI_ACTOR_MODE', 'npc', 'required|string|in:npc'),
       variable('AIRI Chat Player', 'Optional exact in-game player name allowed to issue !airi chat requests. This does not control that player character.', 'AIRI_CHAT_PLAYER', '', 'nullable|string|max:64'),
-      variable('OpenAI API Key', 'Provider credential. Kept environment-only and never written to airi-config.json.', 'OPENAI_API_KEY', '', 'required|string|max:512', { viewable: false }),
+      variable('OpenAI API Key', 'Provider credential. Kept environment-only and never written into airi-config.json.', 'OPENAI_API_KEY', '', 'required|string|max:512', { viewable: false }),
       variable('AI Model', 'OpenAI-compatible model identifier used by AIRI.', 'OPENAI_MODEL', 'gpt-5.6', 'required|string|max:200'),
       variable('Provider Base URL', 'OpenAI-compatible API base URL. Remote endpoints must use HTTPS.', 'OPENAI_API_BASEURL', 'https://api.openai.com/v1', 'required|string|url|max:255'),
       variable('Save File Name', 'Save under /saves. Leave blank to use the newest existing save or create airi-world.zip.', 'SAVE_NAME', '', 'nullable|string|max:160'),
       variable('Max AI Requests Per Hour', 'Persisted hourly provider request cap.', 'MAX_PROVIDER_REQUESTS_PER_HOUR', '30', 'required|numeric|between:1,1200'),
-      variable('Shutdown Timeout (ms)', 'Graceful Factorio save/stop timeout before forced termination.', 'SHUTDOWN_TIMEOUT_MS', '60000', 'required|numeric|between:1000,300000'),
+      variable('Shutdown Timeout (ms)', 'Graceful Factorio save/stop timeout before forced fallback.', 'SHUTDOWN_TIMEOUT_MS', '60000', 'required|numeric|between:1000,300000'),
       variable('Factorio Version', 'Factorio 2.0 headless version: latest, experimental, or exact 2.0.x.', 'FACTORIO_VERSION', 'latest', 'required|string|max:20'),
     ],
   }
