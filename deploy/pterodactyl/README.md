@@ -6,9 +6,9 @@ This directory contains this fork's Pterodactyl deployment for the standalone AI
 
 The Factorio runtime has a **user-verified standalone-NPC baseline**: the parallel zero-player `core`, `research-combat`, and `resilience` lanes pass, including real restarts, death recovery, navigation, native crafting ownership/reconciliation, research follow-through, combat, actor-mode boundaries, and explicit operation outcomes.
 
-The checked-in [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) is now a **generated v8 standalone-NPC release candidate**, not the previous connected-player v7 package. The installed runtime is pinned to source commit `c5dc39e57285695f122603dbafc9abf4e0a2ef81`, including the real-Factorio first-Lua-command confirmation regression, acknowledgement-based retry, and production Source-RCON fixture for that warning path.
+The checked-in [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) is now a **generated v8 standalone-NPC release candidate**, not the previous connected-player v7 package. The installed runtime is pinned to source commit `76615f72a3a69390c5104601046d6fecb51f12f8`, including the real-Factorio first-Lua-command confirmation regression, acknowledgement-based retry, production Source-RCON fixture for that warning path, and the spawn-chunk-generation fix for zero-player worlds.
 
-The candidate still stays on `feat/npc-transition-work` until the packaged Docker smoke is green. Do not merge/publish it to `main` merely because the JSON imports successfully.
+The packaged Docker smoke (`deploy/pterodactyl/package-smoke.ps1`) is green on this candidate: clean install through the committed egg loader, packaged Factorio boot with zero connected players, standalone NPC readiness, graceful save, and clean shutdown all verified. See [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) for the full gate list and root-cause writeup.
 
 ## What v8 changes
 
@@ -63,7 +63,7 @@ There is deliberately no `AIRI_PLAYER` actor-ownership variable in the v8 egg. Z
 
 ## Generated artifacts
 
-- [`payload-src/installer.sh`](payload-src/installer.sh) — human-readable installer source of truth. The current release payload is frozen at immutable commit `5e56255fcfcd9f79e21838d452c20de3dbed829c` with SHA-256 `014e965de0cb1e753bb42d992d10ba9762e7abe0681da020a3ed9c6e5949eb1f`.
+- [`payload-src/installer.sh`](payload-src/installer.sh) — human-readable installer source of truth. The current release payload is frozen at immutable commit `867031bf2364ffdc4359545f59a0daac5eb710f5` with SHA-256 `d0224f5af1ec5ade147b20a41917f8acc2f5470920a0fd9b25a32970ac769470`.
 - [`build-payload.mjs`](build-payload.mjs) — generator and integrity/drift checker.
 - [`install.sh`](install.sh) — small generated loader that downloads the immutable payload source, verifies its SHA-256, and executes it.
 - [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) — PTDL_v2 egg embedding that **same loader exactly**.
