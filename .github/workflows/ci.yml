@@ -89,8 +89,8 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Test standalone-NPC deployment protocol
-        run: node --test deploy/pterodactyl/staging/*.test.mjs
+      - name: Test standalone-NPC deployment protocol and production runtime
+        run: node --test deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
 
   npc-factorio-integration:
     if: github.ref == 'refs/heads/feat/npc-transition-work'
