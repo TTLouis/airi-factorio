@@ -5,7 +5,7 @@ import { activate_claim, claim_work, heartbeat_claim, release_claim } from './cl
 import type { new_actor_registry } from './actor_registry'
 import type { new_actor_runtime_router } from './actor_runtime_router'
 import { rank_work_candidates } from './selection'
-import type { ActorId, ClaimId, SimulationTick, SwarmStorage, WorkClaim, WorkItem } from './types'
+import type { ActorAdmissionSnapshot, ActorId, ClaimId, SimulationTick, SwarmStorage, WorkClaim, WorkId, WorkItem } from './types'
 
 type ActorRegistry = ReturnType<typeof new_actor_registry>
 type ActorRuntimeRouter = ReturnType<typeof new_actor_runtime_router>
@@ -220,8 +220,14 @@ export function new_work_coordinator(
     maybe_heartbeat(claim, work, tick)
   }
 
-  function assign_open_work(tick: SimulationTick) {
-    const assignments: Array<{ actorId: ActorId, workId: string, claimId: ClaimId }> = []
+  interface AssignmentCandidate {
+    admission: ActorAdmissionSnapshot
+    workId: WorkId
+    finalScore: number
+  }
+
+  function collect_assignment_candidates(tick: SimulationTick) {
+    const candidates: AssignmentCandidate[] = []
     for (const admission of registry.list_admission_snapshots(tick)) {
       if (!admission.available) continue
       const context = context_for(admission.actorId)
@@ -247,27 +253,57 @@ export function new_work_coordinator(
       for (const candidate of ranked) {
         const work = swarm.board.work[candidate.workId]
         if (work === undefined || !supports_runtime_execution(work)) continue
-        const claimed = claim_work(swarm, {
-          workId: work.id,
-          expectedRevision: work.revision,
-          actor: admission,
-          tick,
-          leaseTicks,
-        })
-        if (!claimed.ok) continue
-        const activated = activate_claim(swarm, claimed.claim.id, tick)
-        if (!activated.ok) {
-          release_claim(swarm, { claimId: claimed.claim.id, tick, reason: 'voluntary' })
-          continue
-        }
-        const dispatched = dispatch_survey(claimed.claim, work)
-        if (!dispatched.ok) {
-          release_claim(swarm, { claimId: claimed.claim.id, tick, reason: 'voluntary' })
-          continue
-        }
-        assignments.push({ actorId: admission.actorId, workId: work.id, claimId: claimed.claim.id })
-        break
+        candidates.push({ admission, workId: work.id, finalScore: candidate.finalScore })
       }
+    }
+    candidates.sort((left, right) =>
+      right.finalScore - left.finalScore
+      || (left.admission.actorId < right.admission.actorId ? -1 : left.admission.actorId > right.admission.actorId ? 1 : 0)
+      || (left.workId < right.workId ? -1 : left.workId > right.workId ? 1 : 0))
+    return candidates
+  }
+
+  function assign_open_work(tick: SimulationTick) {
+    const assignments: Array<{ actorId: ActorId, workId: WorkId, claimId: ClaimId }> = []
+    const assignedActors: Record<ActorId, boolean> = {}
+    const assignedWorks: Record<WorkId, boolean> = {}
+
+    for (const candidate of collect_assignment_candidates(tick)) {
+      const admission = candidate.admission
+      if (assignedActors[admission.actorId] === true || assignedWorks[candidate.workId] === true) continue
+
+      const context = context_for(admission.actorId)
+      if (context === undefined) continue
+      if (context.manager.player_state.task_state !== TaskStates.IDLE || !context.manager.is_task_queue_empty()) continue
+      const actor = registry.resolve_actor(admission.actorId, tick)
+      if (actor === undefined || !actor.is_valid) continue
+      const agent = swarm.agents[admission.agentId]
+      if (agent === undefined || agent.state !== 'available') continue
+      const work = swarm.board.work[candidate.workId]
+      if (work === undefined || work.status !== 'open' || !supports_runtime_execution(work)) continue
+
+      const claimed = claim_work(swarm, {
+        workId: work.id,
+        expectedRevision: work.revision,
+        actor: admission,
+        tick,
+        leaseTicks,
+      })
+      if (!claimed.ok) continue
+      const activated = activate_claim(swarm, claimed.claim.id, tick)
+      if (!activated.ok) {
+        release_claim(swarm, { claimId: claimed.claim.id, tick, reason: 'voluntary' })
+        continue
+      }
+      const dispatched = dispatch_survey(claimed.claim, work)
+      if (!dispatched.ok) {
+        release_claim(swarm, { claimId: claimed.claim.id, tick, reason: 'voluntary' })
+        continue
+      }
+
+      assignedActors[admission.actorId] = true
+      assignedWorks[work.id] = true
+      assignments.push({ actorId: admission.actorId, workId: work.id, claimId: claimed.claim.id })
     }
     return assignments
   }
