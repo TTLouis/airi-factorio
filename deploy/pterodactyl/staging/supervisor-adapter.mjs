@@ -20,6 +20,31 @@ function parseJson(text, context) {
   }
 }
 
+function parseAcknowledgement(raw, marker) {
+  const text = String(raw)
+  const position = text.lastIndexOf(marker)
+  if (position < 0) return null
+  try {
+    return {
+      data: JSON.parse(text.slice(position + marker.length).trim()),
+      output: text.slice(0, position).trim(),
+    }
+  }
+  catch {
+    // The first-use Factorio warning can echo the entire Lua command, including
+    // the marker literal embedded in its source. That is not execution proof:
+    // only marker + parseable JSON at the end of the RCON response is an ack.
+    return null
+  }
+}
+
+function acknowledgement(raw, marker, context) {
+  const parsed = parseAcknowledgement(raw, marker)
+  check(parsed, `Game command acknowledgement missing; ${context} will not be retried`)
+  check(parsed.data.ok === true, `Game command failed; ${context} will not be retried`)
+  return parsed
+}
+
 export async function deploymentStatus(rcon) {
   const raw = await rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("airi_deployment","status")))')
   const status = parseJson(raw, 'airi_deployment.status')
@@ -34,15 +59,26 @@ export async function deploymentStatus(rcon) {
   return status
 }
 
-export async function configureNpcSession(rcon, session) {
+export async function configureNpcSession(rcon, session, marker = `AIRI_CONFIG_${crypto.randomBytes(12).toString('hex')}:`) {
   check(typeof session === 'string' && session.length >= 16 && session.length <= 256 && !/[\x00-\x1f\x7f]/.test(session), 'Invalid deployment session token')
-  const command = `/silent-command rcon.print(remote.call("airi_deployment","configure","npc",${luaString(session)}))`
-  let configured = await rcon.command(command)
-  // Factorio can ask that the first Lua command be repeated before achievements
-  // are disabled. This configure call is intentionally idempotent enough for the
-  // same single retry pattern used by the existing supervisor startup handshake.
-  if (String(configured).trim() !== session) configured = await rcon.command(command)
-  check(String(configured).trim() === session, 'NPC deployment configure handshake failed')
+  check(/^AIRI_CONFIG_[a-f0-9]{24}:$/.test(marker), 'Invalid configure acknowledgement marker')
+
+  // Factorio's first Lua-console command can be blocked by the achievement
+  // warning and must then be repeated exactly. The warning itself can echo this
+  // entire command, including both the session and marker literals, so neither
+  // substring is sufficient execution proof. Only marker + parseable JSON at
+  // the end of the RCON response proves the command actually ran.
+  const command = `/silent-command local ok,result=pcall(function() return remote.call("airi_deployment","configure","npc",${luaString(session)}) end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
+  let raw = await rcon.command(command)
+  let parsed = parseAcknowledgement(raw, marker)
+  if (!parsed) {
+    raw = await rcon.command(command)
+    parsed = parseAcknowledgement(raw, marker)
+  }
+  check(parsed, 'Game command acknowledgement missing; configure retry exhausted')
+  check(parsed.data.ok === true, `Game command failed; configure retry exhausted: ${JSON.stringify(parsed.data.result)}`)
+  check(parsed.data.result === session, `NPC deployment configure handshake failed: ${JSON.stringify(parsed.data.result)}`)
+
   const status = await deploymentStatus(rcon)
   check(status.session === session, 'Deployment status session does not match configure token')
   return status
@@ -61,16 +97,38 @@ export async function executeAuthorizedOperation(rcon, epoch, command, marker = 
   check(/^AIRI_RESULT_[a-f0-9]{24}:$/.test(marker), 'Invalid operation acknowledgement marker')
 
   const wrapped = `/silent-command local ok,result=pcall(function() if not remote.call("airi_deployment","authorize",${epoch}) then error("stale npc actor epoch") end; return ${command} end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
-  const raw = await rcon.command(wrapped)
-  const text = String(raw)
-  const position = text.lastIndexOf(marker)
-  check(position >= 0, 'Game command acknowledgement missing; operation will not be retried')
-  const data = parseJson(text.slice(position + marker.length), 'operation acknowledgement')
-  check(data.ok === true, 'Game command failed; operation will not be retried')
-  check(data.result !== false && !(Array.isArray(data.result) && data.result[0] === false), 'Autorio rejected operation')
+  const parsed = acknowledgement(await rcon.command(wrapped), marker, 'operation')
+  check(parsed.data.result !== false && !(Array.isArray(parsed.data.result) && parsed.data.result[0] === false), 'Autorio rejected operation')
   return {
-    result: data.result,
-    output: text.slice(0, position).trim(),
+    result: parsed.data.result,
+    output: parsed.output,
+  }
+}
+
+export async function executeAuthorizedBatch(rcon, epoch, commands, marker = `AIRI_RESULT_${crypto.randomBytes(12).toString('hex')}:`) {
+  check(Number.isSafeInteger(epoch) && epoch > 0, 'Invalid deployment epoch')
+  check(Array.isArray(commands) && commands.length >= 1 && commands.length <= 16, 'Invalid operation batch')
+  const validated = commands.map(validatedOperationCall)
+  check(/^AIRI_RESULT_[a-f0-9]{24}:$/.test(marker), 'Invalid operation acknowledgement marker')
+
+  // A model plan is a dependency batch. All operations must enter Autorio's
+  // logical queue during one Lua/RCON command so Factorio cannot advance a tick
+  // between operation N and N+1. Runtime failure of an earlier owned operation
+  // can then reliably cancel the already-queued dependent work.
+  //
+  // Keep each remote.call return value in its native shape: some Autorio calls
+  // return a boolean while others return a tuple-table such as {true, message}.
+  // Reject either a literal false or a tuple whose first element is false.
+  const admissions = validated.map((command, index) => {
+    const slot = index + 1
+    return `local r${slot}=${command}; if r${slot}==false or (type(r${slot})=="table" and r${slot}[1]==false) then error("autorio rejected operation ${slot}") end; results[${slot}]=r${slot}`
+  }).join('; ')
+  const wrapped = `/silent-command local ok,result=pcall(function() if not remote.call("airi_deployment","authorize",${epoch}) then error("stale npc actor epoch") end; local results={}; ${admissions}; return results end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
+  const parsed = acknowledgement(await rcon.command(wrapped), marker, 'operation batch')
+  check(Array.isArray(parsed.data.result) && parsed.data.result.length === validated.length, 'Invalid Autorio batch acknowledgement')
+  return {
+    results: parsed.data.result,
+    output: parsed.output,
   }
 }
 

@@ -59,7 +59,7 @@ async function fixture() {
     },
   }
 
-  const context = { storage, remote }
+  const context = { storage, remote, log: () => {}, helpers: { table_to_json: value => JSON.stringify(value) } }
   vm.createContext(context)
   const js = stripTypeScriptTypes(source, { mode: 'strip' })
     .replaceAll('export function', 'function')
