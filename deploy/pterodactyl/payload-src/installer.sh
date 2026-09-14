@@ -7,8 +7,8 @@ umask 077
 SERVER_DIR="${AIRI_INSTALL_ROOT:-/mnt/server}"
 NODE_VERSION="v24.21.0"
 PNPM_VERSION="10.30.1"
-AIRI_REF="c5dc39e57285695f122603dbafc9abf4e0a2ef81"
-REVISION="2026-09-14.5"
+AIRI_REF="117854099f977660086758d890eaa0f89890c263"
+REVISION="2026-09-14.6-debug"
 DEPLOYMENT_REVISION="airi-deploy-v8-npc-staging"
 AIRI_ACTOR_MODE="${AIRI_ACTOR_MODE:-npc}"
 [[ "$AIRI_ACTOR_MODE" == "npc" ]] || { echo "[AIRI install] ERROR: v8 egg currently requires AIRI_ACTOR_MODE=npc" >&2; exit 1; }
