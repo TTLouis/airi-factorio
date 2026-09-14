@@ -14,12 +14,17 @@ SERVER_SETTINGS="$TEST_ROOT/fixtures/server-settings.json"
 RCON_PASSWORD="${RCON_PASSWORD:-airi-test}"
 LANE_ROOT="$(dirname "$RESULTS")"
 WRITE_DATA="$LANE_ROOT/factorio-data"
+MODS="$LANE_ROOT/mods"
 CONFIG="$LANE_ROOT/config.ini"
 FACTORIO_PID=""
 START_COUNT=0
 export PYTHONUNBUFFERED=1
 
-mkdir -p "$RESULTS" "$WRITE_DATA"
+mkdir -p "$RESULTS" "$WRITE_DATA" "$MODS"
+# Parallel Factorio instances must not share a writable mod directory. Factorio
+# may maintain per-instance mod metadata/caches there, so clone the prepared test
+# mod tree once per lane just like save/write-data/ports are isolated.
+cp -a "$FACTORIO_ROOT/mods/." "$MODS/"
 cat >"$CONFIG" <<EOF
 [path]
 read-data=$FACTORIO_ROOT/data
@@ -72,7 +77,7 @@ start_factorio() {
 
   "$FACTORIO_BIN" \
     --config "$CONFIG" \
-    --mod-directory "$FACTORIO_ROOT/mods" \
+    --mod-directory "$MODS" \
     --start-server "$SAVE" \
     --server-settings "$SERVER_SETTINGS" \
     --port "$SERVER_PORT" \
