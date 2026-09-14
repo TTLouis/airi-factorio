@@ -94,19 +94,22 @@ log 'Running v8 deployment/runtime protocol tests'
   node --test deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
 )
 
-log 'Preparing native actor-aware Autorio source'
-node "$WORK/source/deploy/pterodactyl/staging/source-preparer.mjs" \
-  "$WORK/source" \
-  "$WORK/source/deploy/pterodactyl/staging/guard.ts" \
-  > "$WORK/source-preparation.json"
-grep -q 'native-actor-aware-autorio' "$WORK/source-preparation.json" || fail 'Native NPC source preparation did not confirm its contract'
-
-log 'Installing the Autorio build graph and compiling the deployment guard'
+log 'Installing the Autorio build graph and testing the native NPC source'
 (
   cd "$WORK/source"
   NODE_ENV=development pnpm install --filter 'autorio.ts...' --frozen-lockfile --ignore-scripts --store-dir "$WORK/pnpm-store" --package-import-method=copy
   pnpm --filter @proj-airi/tstl-plugin-reload-factorio-mod run build
   pnpm --filter autorio.ts run test
+)
+
+log 'Preparing native actor-aware Autorio source and compiling the deployment guard'
+node "$WORK/source/deploy/pterodactyl/staging/source-preparer.mjs" \
+  "$WORK/source" \
+  "$WORK/source/deploy/pterodactyl/staging/guard.ts" \
+  > "$WORK/source-preparation.json"
+grep -q 'native-actor-aware-autorio' "$WORK/source-preparation.json" || fail 'Native NPC source preparation did not confirm its contract'
+(
+  cd "$WORK/source"
   pnpm --filter autorio.ts run typecheck
   pnpm --filter autorio.ts run build
 )
@@ -153,6 +156,9 @@ xz -t "$WORK/$FACTORIO_ARCHIVE"
 while IFS= read -r name; do
   [[ "$name" == factorio/* && "$name" != *'..'* && "$name" != *'\\'* ]] || fail "Unsafe Factorio archive path: $name"
 done < <(tar -tJf "$WORK/$FACTORIO_ARCHIVE")
+while IFS= read -r line; do
+  [[ "${line:0:1}" == '-' || "${line:0:1}" == 'd' ]] || fail 'Factorio archive contains a link or special file'
+done < <(tar -tvJf "$WORK/$FACTORIO_ARCHIVE")
 tar -xJf "$WORK/$FACTORIO_ARCHIVE" --strip-components=1 --no-same-owner --no-same-permissions -C "$APP/factorio"
 [[ "$($APP/factorio/bin/x64/factorio --version | awk '/Version:/ {print $2; exit}')" == "$FACTORIO_TARGET" ]] || fail 'Factorio executable version mismatch'
 
