@@ -57,10 +57,10 @@ export function audit_swarm_invariants(swarm: SwarmStorage) {
   for (const claimId in swarm.board.claims) {
     const claim = swarm.board.claims[claimId]
     const priorAgentClaim = claimsByAgent[claim.agentId]
-    if (priorAgentClaim) add('error', 'agent_multiple_claims', claim.id, 'Agent owns more than one active claim.', priorAgentClaim)
+    if (priorAgentClaim !== undefined) add('error', 'agent_multiple_claims', claim.id, 'Agent owns more than one active claim.', priorAgentClaim)
     else claimsByAgent[claim.agentId] = claim.id
     const priorActorClaim = claimsByActor[claim.actorId]
-    if (priorActorClaim) add('error', 'actor_multiple_claims', claim.id, 'Actor owns more than one active claim.', priorActorClaim)
+    if (priorActorClaim !== undefined) add('error', 'actor_multiple_claims', claim.id, 'Actor owns more than one active claim.', priorActorClaim)
     else claimsByActor[claim.actorId] = claim.id
 
     const work = swarm.board.work[claim.workId]

@@ -240,7 +240,7 @@ export function post_result(swarm: SwarmStorage, input: PostResultInput) {
   const result: WorkResult = { id, ...input }
   swarm.board.results[id] = result
   const work = swarm.board.work[input.workId]
-  if (work) for (const ref of input.evidence) work.evidence.push(ref)
+  if (work !== undefined) for (const ref of input.evidence) work.evidence.push(ref)
   record_blackboard_event(swarm, { recordId: id, event: 'created', agentId: input.agentId, tick: input.tick, revision: 1 })
   return result
 }
