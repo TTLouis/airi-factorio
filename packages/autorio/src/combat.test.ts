@@ -21,8 +21,10 @@ function world() {
   }
   const gun = { valid_for_read: true }
   const ammo = { valid_for_read: true }
-  const guns: any = { 1: gun }
-  const magazines: any = { 1: ammo }
+  // typed-factorio exposes LuaInventory with normal TypeScript array semantics:
+  // Factorio slot 1 is TypeScript index 0.
+  const guns: any = [gun]
+  const magazines: any = [ammo]
   const character: any = {
     selected_gun_index: 1,
     can_shoot: vi.fn(() => false),
@@ -80,6 +82,14 @@ describe('bounded combat controller', () => {
     expect(controller.status()).toMatchObject({ last_result: { code: 'no_target', accepted: false } })
   })
 
+  it('converts the 1-based Factorio selected gun slot to the 0-based typed-factorio inventory view', () => {
+    const { actor, manager, controller } = world()
+    controller.submit(40)
+    controller.tick(actor)
+    expect(manager.player_state.task_state).toBe(TaskStates.ATTACKING)
+    expect(controller.status()).toMatchObject({ last_result: { code: 'started', accepted: true } })
+  })
+
   it('walks while out of range, then stops walking and shoots the selected target', () => {
     const { actor, target, character, controller } = world()
     controller.submit(40)
@@ -119,6 +129,16 @@ describe('bounded combat controller', () => {
     expect(manager.get_status_snapshot().queue_length).toBe(0)
     expect(actor.set_walking_state).toHaveBeenCalledWith({ walking: false, direction: 'north' })
     expect(actor.set_shooting_state).toHaveBeenCalledWith({ state: 'not_shooting', position: actor.position })
+  })
+
+  it('fails if Factorio selects another slot that has no gun or matching ammo stack', () => {
+    const { actor, character, manager, controller } = world()
+    character.selected_gun_index = 2
+    controller.submit(40)
+    manager.add_task({ type: TaskStates.WAITING, remaining_ticks: 60 })
+    controller.tick(actor)
+    expect(controller.status()).toMatchObject({ last_result: { code: 'no_weapon_or_ammo' } })
+    expect(manager.get_status_snapshot()).toMatchObject({ task_state: 'idle', queue_length: 0 })
   })
 
   it.each(['actor', 'kind', 'force'] as const)('does not let a changed %s inherit combat', (change) => {
