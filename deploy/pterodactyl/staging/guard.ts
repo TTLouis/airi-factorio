@@ -61,21 +61,26 @@ function cancel_tasks() {
 
 function configure(mode: ActorMode, session: string) {
   if ((mode !== 'npc' && mode !== 'player') || session === '') {
+    log('[AIRI-DEBUG] configure: early-return, invalid mode or empty session')
     return false
   }
 
   cancel_tasks()
   const changed = remote.call('autorio_actor', 'set_mode', mode) as [boolean, unknown]
+  log(`[AIRI-DEBUG] configure: set_mode returned changed=${helpers.table_to_json(changed)}`)
   if (!changed || changed[0] !== true) {
     return false
   }
 
   const status = actor_status()
+  log(`[AIRI-DEBUG] configure: post-set_mode status=${helpers.table_to_json(status)}`)
   const actor = status.actor
   if (!actor || status.mode !== mode || actor.valid !== true || actor.has_character !== true || actor.actor_id === undefined) {
+    log('[AIRI-DEBUG] configure: actor validity check failed')
     return false
   }
   if (mode === 'npc' && actor.kind !== 'standalone_character') {
+    log(`[AIRI-DEBUG] configure: npc kind mismatch, actor.kind=${actor.kind}`)
     return false
   }
   if (mode === 'player' && actor.kind !== 'connected_player') {

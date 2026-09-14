@@ -39,6 +39,10 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   block: (value: unknown) => String(value),
 }
 
+;(globalThis as any).helpers = {
+  table_to_json: (value: unknown) => JSON.stringify(value),
+}
+
 // Factorio 2.0 exposes prototype tables globally. Production runtime guards use
 // prototypes.entity before calling find_entities_filtered because Factorio throws
 // for unknown prototype names. Unit tests only need the common fixture prototypes
