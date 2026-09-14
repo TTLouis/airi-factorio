@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from run import Rcon, connect_with_retry, decode_json, lua_json, remote_call
+from run import Rcon, connect_with_retry, decode_json, lua_json, lua_text, remote_call
 from runtime import operation_status_command, validate_clock
 
 
@@ -57,8 +57,8 @@ def run(client: Rcon, results: Path, save_path: Path) -> None:
     require(fixture['actor_id'] == original_id, fixture)
     require(fixture['iron'] == 17 and fixture['copper'] == 13, fixture)
 
-    result = json_command(lua_json(remote_call('autorio_operations', 'walk_to_entity', repr('steel-chest'), '40')), 'restart movement start')
-    require(result is True, result)
+    result = command(lua_text(remote_call('autorio_operations', 'walk_to_entity', repr('steel-chest'), '40')))
+    require(result == 'true', f'restart movement start failed: {result!r}')
     queued = json_command(lua_json(remote_call('autorio_operations', 'wait', '300')), 'restart queued wait')
     require(queued[0] is True, queued)
 
