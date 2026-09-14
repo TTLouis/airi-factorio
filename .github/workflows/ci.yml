@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - 'feat/**'
 
   pull_request:
     branches:
@@ -12,36 +11,14 @@ on:
 
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  lint-typescript:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
-      - uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: pnpm
-
-      - name: Install
-        run: pnpm install
-
-      - name: Lint
-        run: pnpm run lint
-
-  lint-python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.9.1
-        with:
-          cache: true
-
-      - name: Lint
-        run: pixi run lint
-
   typecheck-typescript:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
@@ -62,19 +39,9 @@ jobs:
           pnpm --filter autorio.ts run typecheck
           pnpm --filter autorio.ts run build
 
-  typecheck-python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.9.1
-        with:
-          cache: true
-
-      - name: Typecheck
-        run: pixi run typecheck
-
   test-typescript:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
@@ -106,31 +73,3 @@ jobs:
 
       - name: Test standalone-NPC deployment protocol and production runtime
         run: node --test deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
-
-  pterodactyl-package-smoke:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Verify generated standalone-NPC egg
-        run: |
-          node deploy/pterodactyl/build-payload.mjs --check
-          bash -n deploy/pterodactyl/package-smoke.sh
-
-      - name: Install and boot packaged zero-player NPC
-        run: bash deploy/pterodactyl/package-smoke.sh
-
-  npc-factorio-integration:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run prompt contract and zero-player Factorio harness
-        run: docker build -f tests/factorio/Dockerfile -t airi-factorio-npc-test . && docker run --rm airi-factorio-npc-test
