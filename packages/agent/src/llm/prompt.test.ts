@@ -29,6 +29,7 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('getNearbyEntities({ radius?, name?, type?, limit? })')
     expect(prompt).toContain('getEntityStatus({ name, radius? })')
     expect(prompt).toContain('getNavigationStatus()')
+    expect(prompt).toContain('getCraftingStatus()')
     expect(prompt).toContain('getCombatStatus()')
     expect(prompt).toContain('Radius is limited to 64 tiles')
     expect(prompt).toContain('Radius is limited to 32 tiles')
@@ -39,6 +40,9 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('Verify important results with read-only tools before claiming success')
     expect(prompt).toContain('Operation completion does not automatically mean the larger goal succeeded')
     expect(prompt).toContain('Navigation completion must be verified')
+    expect(prompt).toContain('Hand-crafting completion must be verified')
+    expect(prompt).toContain('native_queue_busy')
+    expect(prompt).toContain('output_missing')
     expect(prompt).toContain('unreachable')
     expect(prompt).toContain('path_timeout')
     expect(prompt).toContain('replan instead of repeating blindly')
@@ -51,6 +55,13 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('Coordinate change alone therefore does not prove AIRI is still walking')
     expect(prompt).toContain('sideways/backward belt motion does not keep a stuck task alive')
     expect(prompt).toContain('inspect nearby transport belts')
+  })
+
+  it('preserves unrelated native crafting work and verifies actual output', () => {
+    expect(prompt).toContain('will not merge a new owned craft into an already-active native character crafting queue')
+    expect(prompt).toContain('preserves pre-existing native crafts')
+    expect(prompt).toContain('requested output actually appeared')
+    expect(prompt).toContain('Cancelling an active Autorio crafting task cancels the native queue entries created by that owned request')
   })
 
   it('documents every currently supported Autorio operation', () => {
