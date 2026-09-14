@@ -84,8 +84,6 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
         basicRuntime.state_waiting(actor)
         return true
       case TaskStates.RESEARCHING:
-        // Research is force-scoped and intentionally not owned by an actor
-        // runtime context. Fail closed if such a task is injected here.
         manager.cancel_all_tasks()
         log(`[AUTORIO] [ERROR] Actor runtime ${actorId} rejected force-scoped research task`)
         return false
@@ -100,9 +98,14 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
     return navigation.on_path_finished(event)
   }
 
+  function owns_player_index(playerIndex: number) {
+    const actor = get_actor()
+    return actor !== undefined && actor.is_valid && actor.owns_player_index(playerIndex)
+  }
+
   function on_player_mined_entity(playerIndex: number) {
     const actor = get_actor()
-    if (actor === undefined) return false
+    if (actor === undefined || !actor.is_valid || !actor.owns_player_index(playerIndex)) return false
     basicRuntime.on_player_mined_entity(actor, playerIndex)
     return true
   }
@@ -126,6 +129,7 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
     crafting,
     combat,
     tick,
+    owns_player_index,
     on_path_finished,
     on_player_mined_entity,
     discard_volatile_work_after_actor_loss,
