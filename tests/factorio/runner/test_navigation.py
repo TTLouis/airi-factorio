@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from navigation import assert_reached, assert_unreachable
+from navigation import assert_passive_belt_displacement, assert_reached, assert_unreachable
 
 
 ACTOR_ID = 18
@@ -150,6 +150,37 @@ class NavigationTests(unittest.TestCase):
         for name, after, result in cases:
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 assert_unreachable(before, after, result, ACTOR_ID, TARGET_ID)
+
+    def test_stopped_npc_can_be_passively_displaced_by_transport_belt(self):
+        before = observation(100)
+        before['belt_count'] = 1
+        after = observation(220)
+        after['belt_count'] = 1
+        after['position'] = {'x': 10.0, 'y': 0.0}
+
+        assert_passive_belt_displacement(before, after, ACTOR_ID)
+
+    def test_belt_displacement_requires_released_controls_and_real_motion(self):
+        base = observation(100)
+        base['belt_count'] = 1
+
+        no_motion = observation(220)
+        no_motion['belt_count'] = 1
+        with self.assertRaises(AssertionError):
+            assert_passive_belt_displacement(base, no_motion, ACTOR_ID)
+
+        walking = observation(220)
+        walking['belt_count'] = 1
+        walking['position'] = {'x': 10.0, 'y': 0.0}
+        walking['walking'] = True
+        with self.assertRaises(AssertionError):
+            assert_passive_belt_displacement(base, walking, ACTOR_ID)
+
+        off_belt = observation(220)
+        off_belt['belt_count'] = 0
+        off_belt['position'] = {'x': 10.0, 'y': 0.0}
+        with self.assertRaises(AssertionError):
+            assert_passive_belt_displacement(base, off_belt, ACTOR_ID)
 
 
 if __name__ == '__main__':
