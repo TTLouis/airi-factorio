@@ -53,6 +53,10 @@ import { event_handlers } from './test-event-registry'
     shooting_enemies: 'shooting_enemies',
     shooting_selected: 'shooting_selected',
   },
+  inventory: {
+    character_guns: 'character_guns',
+    character_ammo: 'character_ammo',
+  },
 }
 
 ;(globalThis as any).math = {
