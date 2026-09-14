@@ -28,6 +28,7 @@ const eggJsonPath = join(here, 'egg-airi-factorio-server.json')
 
 const HEREDOC_START = `cat > "$PAYLOAD" <<'AIRI_PAYLOAD'`
 const HEREDOC_END = `AIRI_PAYLOAD`
+const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
 
 function wrap_base64(base64) {
   // Matches GNU coreutils `base64`'s default 76-column wrapping, which is
@@ -50,6 +51,21 @@ function gzip_deterministic(buffer) {
   compressed[6] = 0
   compressed[7] = 0
   return compressed
+}
+
+function assertNpcV8Source(source) {
+  const text = source.toString('utf8')
+  const failures = []
+  if (!text.includes('airi-deploy-v8')) failures.push('missing v8 deployment guard revision')
+  if (!text.includes('AIRI_ACTOR_MODE')) failures.push('missing AIRI_ACTOR_MODE configuration')
+  if (!text.includes('AIRI_CHAT_PLAYER')) failures.push('missing AIRI_CHAT_PLAYER chat-authorization separation')
+  if (text.includes('airi-deploy-v7')) failures.push('still contains the v7 deployment guard')
+  if (text.includes('explicit-authorized-single-connected-player')) failures.push('still contains the connected-player source patch contract')
+  if (text.includes(`AIRI_REF="${LEGACY_SOURCE_PIN}"`)) failures.push('still pins the legacy connected-player source revision')
+  if (text.includes('operationCommands')) failures.push('still exposes the legacy operationCommands model contract')
+  if (failures.length) {
+    throw new Error(`REFUSING to regenerate Pterodactyl artifacts from a legacy payload source: ${failures.join('; ')}. Finish the v8 NPC payload integration first.`)
+  }
 }
 
 function splice_between(text, startMarker, endMarker, replacement) {
@@ -75,6 +91,13 @@ function replace_constant(text, name, value) {
 
 function main() {
   const source = readFileSync(sourcePath)
+
+  // The repository has moved to the validated standalone-NPC runtime. Do not
+  // accidentally publish a freshly checksummed egg that still contains the
+  // previous connected-player v7 deployment contract while v8 integration is
+  // in progress.
+  assertNpcV8Source(source)
+
   const compressed = gzip_deterministic(source)
   const base64 = compressed.toString('base64')
   const base64Lines = wrap_base64(base64)
