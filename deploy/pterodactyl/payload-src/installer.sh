@@ -7,8 +7,8 @@ umask 077
 SERVER_DIR="${AIRI_INSTALL_ROOT:-/mnt/server}"
 NODE_VERSION="v24.21.0"
 PNPM_VERSION="10.30.1"
-AIRI_REF="fd46f2889c0636011c4fe0528bceb8223d17ec85"
-REVISION="2026-09-14.19"
+AIRI_REF="d39efc39ca772aaf188370d637c3f1dd706529a5"
+REVISION="2026-09-14.20"
 DEPLOYMENT_REVISION="airi-deploy-v8-npc-staging"
 AIRI_ACTOR_MODE="${AIRI_ACTOR_MODE:-npc}"
 [[ "$AIRI_ACTOR_MODE" == "npc" ]] || { echo "[AIRI install] ERROR: v8 egg currently requires AIRI_ACTOR_MODE=npc" >&2; exit 1; }
@@ -190,7 +190,7 @@ START_AIRI
 chmod 755 "$APP/start-airi.sh"
 
 log 'Writing checksummed release manifest'
-APP_ROOT="$APP" AIRI_REF_VALUE="$AIRI_REF" FACTORIO_TARGET_VALUE="$FACTORIO_TARGET" node --input-type=module <<'MANIFEST'
+APP_ROOT="$APP" AIRI_REF_VALUE="$AIRI_REF" RELEASE_REVISION_VALUE="$REVISION" FACTORIO_TARGET_VALUE="$FACTORIO_TARGET" node --input-type=module <<'MANIFEST'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -219,6 +219,7 @@ for (const name of names) {
 }
 await fs.writeFile(path.join(root, 'manifest.json'), JSON.stringify({
   revision: 'airi-pterodactyl-v8',
+  releaseRevision: process.env.RELEASE_REVISION_VALUE,
   source: process.env.AIRI_REF_VALUE,
   factorio: process.env.FACTORIO_TARGET_VALUE,
   files,
