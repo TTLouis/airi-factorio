@@ -4,11 +4,13 @@ on:
   push:
     branches:
       - main
-      - feat/npc-transition-work
+      - 'feat/**'
 
   pull_request:
     branches:
       - main
+
+  workflow_dispatch:
 
 jobs:
   lint-typescript:
@@ -105,7 +107,7 @@ jobs:
         run: node --test deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
 
   pterodactyl-package-smoke:
-    if: github.ref == 'refs/heads/feat/npc-transition-work'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -123,7 +125,7 @@ jobs:
         run: bash deploy/pterodactyl/package-smoke.sh
 
   npc-factorio-integration:
-    if: github.ref == 'refs/heads/feat/npc-transition-work'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

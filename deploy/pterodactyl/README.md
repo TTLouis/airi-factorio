@@ -155,7 +155,8 @@ For the same candidate revision, require:
 3. injected guard typecheck/build;
 4. full zero-player Factorio acceptance harness;
 5. generated package smoke on a Docker-capable runner, executing the committed egg loader;
-6. existing-save upgrade/rollback check;
-7. one real provider-to-NPC goal on the packaged server before calling the deployment production-ready.
+6. existing-save upgrade/rollback check.
 
-Until those external package gates are green, PR #3 remains a draft and `main` remains the last validated checkpoint.
+Gates 1-6 are **engineering/package validated** and gate merge readiness. See [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) for the current pass/fail state of each.
+
+A separate, later concern is **production provider validation**: running one real provider-to-NPC goal against a packaged server with real OpenAI-compatible credentials. This is intentionally deferred to production deployment and is not part of gates 1-6 — no production credentials are used in repository CI or package smoke, and standalone NPC readiness/runtime correctness do not require provider contact. It is an operational checklist item for whoever deploys the egg, not a merge blocker for this repository.

@@ -16,7 +16,11 @@
 > [`deploy/pterodactyl/`](./deploy/pterodactyl) and its [`staging/`](./deploy/pterodactyl/staging)
 > v8 work for the actor-epoch guard, structured operation policy, and zero-player agent loop.
 > The generated egg should only be treated as updated once that v8 payload is regenerated and
-> passes its clean-install, upgrade, rollback, and real-agent acceptance gates.
+> passes its clean-install, upgrade, and rollback gates; see
+> [`deploy/pterodactyl/RELEASE_CANDIDATE.md`](./deploy/pterodactyl/RELEASE_CANDIDATE.md) for the
+> current pass/fail state. Real-provider-to-NPC acceptance against a packaged server is a separate,
+> production-side validation step deferred to deployment — it is not required for these
+> engineering/package gates.
 >
 > Everything below this notice is the original project's README. Development on this fork uses
 > AI coding assistants/tools including Claude Code and OpenAI ChatGPT/Codex.
