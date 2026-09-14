@@ -7,6 +7,7 @@ FACTORIO_SMOKE_VERSION="${FACTORIO_SMOKE_VERSION:-2.0.77}"
 ROOT="$(mktemp -d)"
 NAME="airi-ptero-smoke-$RANDOM-$$"
 LOG="$ROOT/runtime.log"
+EGG_INSTALL="$ROOT/egg-install.sh"
 
 cleanup() {
   local code=$?
@@ -18,10 +19,26 @@ cleanup() {
 trap cleanup EXIT
 
 command -v docker >/dev/null || { echo '[pterodactyl-smoke] docker is required' >&2; exit 1; }
+command -v node >/dev/null || { echo '[pterodactyl-smoke] node is required to parse the committed egg' >&2; exit 1; }
 [[ -f "$HERE/install.sh" ]] || { echo '[pterodactyl-smoke] generated install.sh is missing' >&2; exit 1; }
+[[ -f "$HERE/egg-airi-factorio-server.json" ]] || { echo '[pterodactyl-smoke] generated egg is missing' >&2; exit 1; }
 
 chmod 0777 "$ROOT"
-echo '[pterodactyl-smoke] Verifying generated bootstrap payload.'
+echo '[pterodactyl-smoke] Verifying generated artifacts.'
+node "$HERE/build-payload.mjs" --check
+
+echo '[pterodactyl-smoke] Extracting the committed egg installation script.'
+node --input-type=module - "$HERE/egg-airi-factorio-server.json" "$EGG_INSTALL" <<'NODE'
+import fs from 'node:fs'
+const [, , eggPath, outPath] = process.argv
+const egg = JSON.parse(fs.readFileSync(eggPath, 'utf8'))
+const script = egg?.scripts?.installation?.script
+if (typeof script !== 'string' || script.length === 0) throw new Error('egg installation script is missing')
+fs.writeFileSync(outPath, script)
+NODE
+chmod 755 "$EGG_INSTALL"
+
+echo '[pterodactyl-smoke] Verifying standalone generated bootstrap payload.'
 docker run --rm \
   -v "$HERE/install.sh:/tmp/install.sh:ro" \
   -v "$ROOT:/mnt/server" \
@@ -29,16 +46,16 @@ docker run --rm \
   "$IMAGE" \
   bash /tmp/install.sh --verify-only
 
-echo '[pterodactyl-smoke] Performing clean standalone-NPC installation.'
+echo '[pterodactyl-smoke] Performing clean installation through the egg loader.'
 docker run --rm \
-  -v "$HERE/install.sh:/tmp/install.sh:ro" \
+  -v "$EGG_INSTALL:/tmp/egg-install.sh:ro" \
   -v "$ROOT:/mnt/server" \
   -e AIRI_INSTALL_ROOT=/mnt/server \
   -e AIRI_ACTOR_MODE=npc \
   -e AIRI_CHAT_PLAYER=SmokeOperator \
   -e FACTORIO_VERSION="$FACTORIO_SMOKE_VERSION" \
   "$IMAGE" \
-  bash /tmp/install.sh
+  bash /tmp/egg-install.sh
 
 [[ -L "$ROOT/start-airi.sh" ]] || { echo '[pterodactyl-smoke] installer did not activate start-airi.sh' >&2; exit 1; }
 [[ -x "$ROOT/rollback-airi.sh" ]] || { echo '[pterodactyl-smoke] rollback helper is missing' >&2; exit 1; }
@@ -90,4 +107,4 @@ cat "$LOG"
 grep -q 'AIRI Factorio stopped cleanly' "$LOG" || { echo '[pterodactyl-smoke] clean shutdown acknowledgement missing' >&2; exit 1; }
 find "$ROOT/saves" -maxdepth 1 -type f -name '*.zip' -size +0c | grep -q . || { echo '[pterodactyl-smoke] no saved Factorio world was produced' >&2; exit 1; }
 
-echo '[pterodactyl-smoke] PASS: generated egg payload installed, started a zero-player standalone NPC, saved, and stopped cleanly.'
+echo '[pterodactyl-smoke] PASS: generated PTDL_v2 egg installed, started a zero-player standalone NPC, saved, and stopped cleanly.'
