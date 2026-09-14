@@ -24,13 +24,19 @@ describe('structured Autorio operations', () => {
     ])).toThrow()
   })
 
-  it('bounds operation batches', () => {
+  it('bounds operation batches and combat scans', () => {
     const operations = Array.from({ length: 17 }, () => ({
       name: 'wait',
       args: { ticks: 1 },
     }))
 
     expect(() => parseStructuredOperations(operations)).toThrow()
+    expect(() => parseStructuredOperations([
+      { name: 'attack_nearest_enemy', args: { search_radius: 257 } },
+    ])).toThrow()
+    expect(parseStructuredOperations([
+      { name: 'attack_nearest_enemy', args: { search_radius: 256 } },
+    ])[0]).toEqual({ name: 'attack_nearest_enemy', args: { search_radius: 256 } })
   })
 
   it('renders validated operations into the existing Autorio remote-call format', () => {
