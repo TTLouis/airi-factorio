@@ -35,6 +35,7 @@ describe('agent observation tools', () => {
       'getEntityStatus',
       'getResearchStatus',
       'getTechnology',
+      'getCombatStatus',
     ])
   })
 
@@ -158,19 +159,38 @@ describe('research observation tools', () => {
   })
 })
 
-describe('research prompt contract', () => {
+describe('combat observation tool', () => {
+  it('reads bounded combat target and last-result state', async () => {
+    const output = '{"task_active":false,"last_result":{"code":"target_destroyed","completed":true}}'
+    mocks.raw.mockResolvedValue({ data: { output } })
+    expect(await getTool('getCombatStatus').fn({ parameters: {} })).toBe(output)
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_combat", "status")))',
+    } })
+  })
+})
+
+describe('research and combat prompt contract', () => {
   it('documents the actual observation tools', () => {
-    for (const name of ['getResearchStatus', 'getTechnology']) {
+    for (const name of ['getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
   })
 
-  it('distinguishes submission from technology completion and shared research cancellation', () => {
+  it('distinguishes research submission from technology completion and shared research cancellation', () => {
     expect(prompt).toContain('A queued/accepted request is not completed research')
     expect(prompt).toContain('does not mean the technology is unlocked')
     expect(prompt).toContain('does not cancel already-started shared force research')
     expect(prompt).toContain('force_busy')
     expect(prompt).toContain('Gameplay-trigger technologies require their actual trigger')
+  })
+
+  it('requires combat result verification instead of treating idle as a kill', () => {
+    expect(prompt).toContain('Combat completion must be verified')
+    expect(prompt).toContain('target_destroyed')
+    expect(prompt).toContain('no_weapon_or_ammo')
+    expect(prompt).toContain('stuck')
+    expect(prompt).toContain('timeout')
   })
 })
