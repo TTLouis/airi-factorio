@@ -92,11 +92,25 @@ The release gate for the generated artifact is:
 bash deploy/pterodactyl/package-smoke.sh
 ```
 
-On Windows with Docker Desktop:
+On Windows with Docker Desktop, run the smoke directly only if the calling environment permits a long foreground process:
 
 ```powershell
 .\deploy\pterodactyl\package-smoke.ps1
 ```
+
+If the caller imposes a short command timeout, use the detached wrapper instead. It launches the exact same `package-smoke.ps1` through one UTF-16LE PowerShell `-EncodedCommand`, avoiding `Start-Process` argument splitting of nested Docker `bash -lc` validation scripts:
+
+```powershell
+.\deploy\pterodactyl\package-smoke-background.ps1 -Action Start
+```
+
+The start command returns immediately and records the exact candidate commit plus its PID. Query progress/result with a short command:
+
+```powershell
+.\deploy\pterodactyl\package-smoke-background.ps1 -Action Status
+```
+
+Detached state is written to `.package-smoke-last.log`, `.package-smoke-last.err.log`, `.package-smoke-last.pid`, and `.package-smoke-last.result.json`. A completed run is only a pass when the result JSON says `PASS` with exit code `0`; a dead PID without a result file is explicitly **inconclusive**, not a package failure or success.
 
 On a Docker-capable machine the smoke performs:
 
