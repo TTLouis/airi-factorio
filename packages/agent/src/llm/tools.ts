@@ -24,7 +24,7 @@ const entityStatusSchema = z.object({
   radius: z.number().int().min(1).max(32).default(8),
 }).strict()
 
-async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_research') {
+async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_research' | 'autorio_combat') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
   return response.data.output
@@ -124,5 +124,11 @@ export const tools: ToolFunction[] = [
       const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
       return response.data.output
     },
+  },
+  {
+    name: 'getCombatStatus',
+    description: 'Read AIRI combat state, the currently bound target when valid, and the last bounded combat result. Use it to distinguish a destroyed target from no-target, no-ammo, stuck, timeout, or ownership failures.',
+    schema: z.object({}).strict(),
+    fn: async () => readRemoteStatus('autorio_combat'),
   },
 ]
