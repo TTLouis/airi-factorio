@@ -13,18 +13,36 @@ export interface NpcRecoveryReceipt {
   inventory_policy: 'no_transfer'
 }
 
+interface OwnedCraftingMarker {
+  actor_id: number
+  actor_kind: string
+  force_index: number
+  item_name: string
+  requested_count: number
+  started_tick: number
+}
+
+interface OwnedCraftingLoadReceipt {
+  actor_id: number
+  item_name: string
+  requested_count: number
+  cancelled_queue_count: number
+}
+
 type NpcRecoveryHandler = (event: { previous_actor_id: number }) => void
 
 declare const storage: {
   airi_actor_mode?: ActorMode
   standalone_character_unit_number?: number
   airi_last_npc_recovery?: NpcRecoveryReceipt
+  airi_owned_crafting?: OwnedCraftingMarker
 }
 
 let standalone_actor: StandaloneCharacterActor | undefined
 let post_load_reconciliation_pending = false
 let last_reconciled_actor_id: number | undefined
 let last_reconciled_tick: number | undefined
+let last_reconciled_owned_crafting: OwnedCraftingLoadReceipt | undefined
 let npc_recovery_handler: NpcRecoveryHandler | undefined
 let recovery_invalidated_actor_id: number | undefined
 
@@ -38,6 +56,7 @@ script.on_load(() => {
   post_load_reconciliation_pending = true
   last_reconciled_actor_id = undefined
   last_reconciled_tick = undefined
+  last_reconciled_owned_crafting = undefined
   recovery_invalidated_actor_id = undefined
 })
 
@@ -64,6 +83,46 @@ function get_player_actor(): ControlledActor | undefined {
   return new ConnectedPlayerActor(player)
 }
 
+function reconcile_owned_crafting_after_load(actor: StandaloneCharacterActor) {
+  const marker = storage.airi_owned_crafting
+  if (!marker) {
+    return undefined
+  }
+
+  const identity = actor.status_snapshot()
+  if (identity.actor_id === undefined
+    || marker.actor_id !== identity.actor_id
+    || marker.actor_kind !== identity.kind
+    || marker.force_index !== actor.force.index) {
+    return undefined
+  }
+
+  // The logical task that owned this native queue was module-local and is gone
+  // after load. Admission was allowed only from an empty native queue, so every
+  // remaining queue entry belongs to that persisted request. Cancel from the
+  // tail to avoid leaving orphaned prerequisite/target crafts running.
+  const queue = actor.get_crafting_queue()
+  let cancelled_queue_count = 0
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const item = queue[i]
+    if (!item) {
+      continue
+    }
+    actor.cancel_crafting({ index: item.index, count: item.count })
+    cancelled_queue_count += item.count
+  }
+
+  storage.airi_owned_crafting = undefined
+  const receipt: OwnedCraftingLoadReceipt = {
+    actor_id: identity.actor_id,
+    item_name: marker.item_name,
+    requested_count: marker.requested_count,
+    cancelled_queue_count,
+  }
+  log(`[AUTORIO] Reconciled persisted owned crafting for actor_id=${identity.actor_id}: ${marker.item_name}, cancelled_queue_count=${cancelled_queue_count}`)
+  return receipt
+}
+
 function reconcile_loaded_npc(actor: StandaloneCharacterActor) {
   if (!post_load_reconciliation_pending) {
     return
@@ -72,7 +131,10 @@ function reconcile_loaded_npc(actor: StandaloneCharacterActor) {
   // Logical Autorio tasks are not resumed across a save/load boundary. Clear
   // the engine-owned physical inputs that *are* serialized with the character,
   // otherwise a freshly loaded NPC could keep walking/mining/shooting with no
-  // task left to own or stop that action.
+  // task left to own or stop that action. Owned native crafting gets the same
+  // treatment, but only when a persisted ownership marker proves Autorio owned
+  // the queue before the save.
+  last_reconciled_owned_crafting = reconcile_owned_crafting_after_load(actor)
   actor.set_walking_state({ walking: false, direction: defines.direction.north })
   actor.set_mining_state({ mining: false })
   actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
@@ -96,6 +158,11 @@ function invalidate_missing_npc(previous_actor_id: number) {
   // invalidation handler for this boundary.
   recovery_invalidated_actor_id = previous_actor_id
   npc_recovery_handler?.({ previous_actor_id })
+  if (storage.airi_owned_crafting?.actor_id === previous_actor_id) {
+    // The dead/missing body took its native queue with it. Drop the marker so a
+    // replacement body can never inherit or cancel work it did not own.
+    storage.airi_owned_crafting = undefined
+  }
   rendering.clear()
   log(`[AUTORIO] Invalidated work owned by missing NPC actor_id=${previous_actor_id}`)
 }
@@ -164,9 +231,11 @@ export function get_controlled_actor(): ControlledActor | undefined {
 export function get_load_reconciliation_status() {
   return {
     policy: 'discard_autorio_tasks_and_stop_npc_controls_on_load',
+    owned_crafting_policy: 'cancel_persisted_autorio_owned_native_queue_on_load',
     pending: post_load_reconciliation_pending,
     last_actor_id: last_reconciled_actor_id,
     last_tick: last_reconciled_tick,
+    owned_crafting: last_reconciled_owned_crafting,
   }
 }
 
