@@ -83,29 +83,21 @@ export interface PlayerParametersMoveItems {
   item_name: string
   entity_name: string
   max_count: number
-  to_entity: boolean // If true, the items will be moved to the entity, otherwise, the items will be moved to the player's inventory
+  to_entity: boolean
 }
 
 export interface PlayerParametersCraftItem {
   type: TaskStates.CRAFTING
   item_name: string
-  /** Requested number of recipe crafts. */
   count: number
   crafted: number
-  /** Bind deferred/native crafting work to the body and force that requested it. */
   owner_actor_id?: number
   owner_actor_kind?: string
   owner_force_index?: number
-  /** Number of recipe crafts actually accepted by begin_crafting. */
   started?: number
-  /** Tick on which the native queue was started. */
   started_tick?: number
-  /** Inventory count of the requested output before the native queue started. */
   output_count_before?: number
-  /** Minimum deterministic output increase required before declaring success. */
   expected_output_delta?: number
-  /** This request started when the native queue was empty, so its generated
-   * target/prerequisite queue entries are owned by this task. */
   owns_native_queue?: boolean
 }
 
@@ -127,6 +119,11 @@ export interface PlayerParametersAttackNearestEnemy {
 export interface PlayerParametersResearchTechnology {
   type: TaskStates.RESEARCHING
   technology_name: string
+  /** Monotonic Autorio request identifier used to correlate asynchronous native research. */
+  request_id?: number
+  /** Technology level observed when the request was admitted. Repeatable technologies
+   * are complete only after a later native completion advances beyond this level. */
+  requested_level?: number
   /** Bind deferred research submission to the requesting actor and force. */
   owner_actor_id?: number
   owner_actor_kind?: string
