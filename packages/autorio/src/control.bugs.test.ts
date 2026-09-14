@@ -202,6 +202,9 @@ describe('Player-sourced completion events are gated by actor identity', () => {
       find_entities_filtered: vi.fn(() => []),
       find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
       create_entity: vi.fn(() => character),
+      is_chunk_generated: vi.fn(() => true),
+      request_to_generate_chunks: vi.fn(),
+      force_generate_chunk_requests: vi.fn(),
     }
     character.surface = surface
     ;(globalThis as any).game.surfaces[1] = surface

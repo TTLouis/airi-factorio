@@ -56,6 +56,9 @@ function configureNpcWorld(resource?: Record<string, any>) {
     wind_speed: 0,
     wind_orientation: 0,
     find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
+    is_chunk_generated: vi.fn(() => true),
+    request_to_generate_chunks: vi.fn(),
+    force_generate_chunk_requests: vi.fn(),
     create_entity: vi.fn(({ name }: { name: string }) => {
       if (name !== 'character') return undefined
       character_created = true

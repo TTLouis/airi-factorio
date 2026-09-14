@@ -223,6 +223,14 @@ function get_npc_actor(): ControlledActor | undefined {
   }
 
   const spawn_position = force.get_spawn_position(surface)
+  // With zero human players ever connecting, nothing else ever triggers chunk
+  // generation around spawn: normally a joining client's position does that.
+  // Without this, create_entity silently fails on a freshly created save
+  // because the target chunk was never generated.
+  if (!surface.is_chunk_generated({ x: Math.floor(spawn_position.x / 32), y: Math.floor(spawn_position.y / 32) })) {
+    surface.request_to_generate_chunks(spawn_position, 3)
+    surface.force_generate_chunk_requests()
+  }
   const position = surface.find_non_colliding_position('character', spawn_position, 32, 0.5) ?? spawn_position
   standalone_actor = StandaloneCharacterActor.create(surface, force, position)
   if (standalone_actor?.is_valid) {

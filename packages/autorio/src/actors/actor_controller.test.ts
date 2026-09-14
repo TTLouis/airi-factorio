@@ -38,6 +38,9 @@ function make_world() {
     find_entities_filtered: vi.fn(() => [] as any[]),
     find_non_colliding_position: vi.fn(() => ({ x: 1, y: 2 })),
     create_entity: vi.fn(),
+    is_chunk_generated: vi.fn(() => true),
+    request_to_generate_chunks: vi.fn(),
+    force_generate_chunk_requests: vi.fn(),
   }
   return { force, surface }
 }
@@ -106,6 +109,39 @@ describe('actor mode', () => {
     expect(actor?.status_snapshot().kind).toBe('standalone_character')
     expect((globalThis as any).storage.standalone_character_unit_number).toBe(42)
     expect(get_npc_recovery_status().last_result).toBeUndefined()
+  })
+
+  it('requests and forces spawn chunk generation before creating the NPC when no player ever generated it', () => {
+    const surface = (globalThis as any).game.surfaces[1]
+    const force = (globalThis as any).game.forces.player
+    const character = fake_character(42)
+    character.surface = surface
+    character.force = force
+    surface.is_chunk_generated.mockReturnValue(false)
+    surface.create_entity.mockReturnValue(character)
+
+    set_actor_mode('npc')
+    const actor = get_controlled_actor()
+
+    expect(surface.is_chunk_generated).toHaveBeenCalledWith({ x: 0, y: 0 })
+    expect(surface.request_to_generate_chunks).toHaveBeenCalledWith({ x: 0, y: 0 }, 3)
+    expect(surface.force_generate_chunk_requests).toHaveBeenCalled()
+    expect(actor?.status_snapshot().kind).toBe('standalone_character')
+  })
+
+  it('skips chunk generation requests when the spawn chunk already exists', () => {
+    const surface = (globalThis as any).game.surfaces[1]
+    const force = (globalThis as any).game.forces.player
+    const character = fake_character(42)
+    character.surface = surface
+    character.force = force
+    surface.create_entity.mockReturnValue(character)
+
+    set_actor_mode('npc')
+    get_controlled_actor()
+
+    expect(surface.request_to_generate_chunks).not.toHaveBeenCalled()
+    expect(surface.force_generate_chunk_requests).not.toHaveBeenCalled()
   })
 
   it('reacquires a persisted standalone character instead of creating a duplicate', () => {
