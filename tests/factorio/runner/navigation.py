@@ -50,6 +50,15 @@ def assert_unreachable(before: dict, after: dict, navigation: dict, actor_id: in
     require(result.get('target_unit_number') == target_id, navigation)
 
 
+def assert_passive_belt_displacement(before: dict, after: dict, actor_id: int) -> None:
+    """A stopped NPC may still move because the world moves it (e.g. belts)."""
+    assert_stopped(before, actor_id)
+    assert_stopped(after, actor_id)
+    require(after['runtime']['tick'] > before['runtime']['tick'], (before, after))
+    require(before.get('belt_count', 0) > 0 and after.get('belt_count', 0) > 0, (before, after))
+    require(squared_distance(before['position'], after['position']) > 0.0625, (before, after))
+
+
 def run(client: Rcon, results: Path) -> None:
     results.mkdir(parents=True, exist_ok=True)
     death = json.loads((results / 'death-recovery.json').read_text())
@@ -101,7 +110,7 @@ def run(client: Rcon, results: Path) -> None:
         "/silent-command local s=game.surfaces[1]; local a=nil; "
         "for _,e in pairs(s.find_entities_filtered{name='character'}) do "
         f"if e.unit_number=={actor_id} then a=e end end; assert(a); "
-        "for _,name in pairs({'steel-chest','stone-wall','wooden-chest','iron-chest'}) do "
+        "for _,name in pairs({'steel-chest','stone-wall','wooden-chest','iron-chest','transport-belt'}) do "
         "for _,e in pairs(s.find_entities_filtered{name=name,position=a.position,radius=70}) do e.destroy() end end; "
         "local x0=math.floor(a.position.x); local y0=math.floor(a.position.y); local tiles={}; "
         "for x=x0-5,x0+45 do for y=y0-12,y0+12 do tiles[#tiles+1]={name='landfill',position={x=x,y=y}} end end; "
@@ -196,17 +205,56 @@ def run(client: Rcon, results: Path) -> None:
     assert_unreachable(unreachable_before, quiet, unreachable_nav, actor_id, unreachable_fixture['target_id'])
     require(squared_distance(quiet_position, quiet['position']) < 0.01, (quiet_position, quiet['position']))
 
+    # Case 4: prove stopped controls are not synonymous with a stationary
+    # coordinate. A live transport belt can move the character while AIRI's
+    # walking/mining/shooting inputs remain fully released.
+    belt_fixture = json_command(
+        "/silent-command local s=game.surfaces[1]; local a=nil; "
+        "for _,e in pairs(s.find_entities_filtered{name='character'}) do "
+        f"if e.unit_number=={actor_id} then a=e end end; assert(a); "
+        "remote.call('autorio_operations','cancel_all_tasks'); "
+        "for _,e in pairs(s.find_entities_filtered{name='transport-belt',position=a.position,radius=40}) do e.destroy() end; "
+        "local x0=math.floor(a.position.x); local y0=math.floor(a.position.y); local tiles={}; "
+        "for x=x0-3,x0+30 do for y=y0-2,y0+2 do tiles[#tiles+1]={name='landfill',position={x=x,y=y}} end end; s.set_tiles(tiles,true,false,true); "
+        "local origin={x=x0+0.5,y=y0+0.5}; assert(a.teleport(origin)); "
+        "local belts=0; for x=x0-1,x0+24 do local b=s.create_entity{name='transport-belt',position={x=x+0.5,y=y0+0.5},direction=defines.direction.east,force=a.force}; if b then belts=belts+1 end end; "
+        "a.walking_state={walking=false,direction=defines.direction.east}; a.mining_state={mining=false}; a.shooting_state={state=defines.shooting.not_shooting,position=a.position}; "
+        "rcon.print(helpers.table_to_json({belts=belts,position=a.position,tick=game.tick}))",
+        'transport belt fixture',
+    )
+    require(belt_fixture['belts'] >= 20, belt_fixture)
+
+    belt_observation_command = (
+        "/silent-command local s=game.surfaces[1]; local a=nil; "
+        "for _,e in pairs(s.find_entities_filtered{name='character'}) do "
+        f"if e.unit_number=={actor_id} then a=e end end; assert(a); "
+        "local o=remote.call('autorio_operations','status'); "
+        "o.runtime={tick=game.tick,tick_paused=game.tick_paused,speed=game.speed,connected_players=#game.connected_players}; "
+        "o.walking=a.walking_state.walking; o.mining=a.mining_state.mining; "
+        "o.shooting=a.shooting_state.state~=defines.shooting.not_shooting; o.position=a.position; "
+        "o.belt_count=#s.find_entities_filtered{name='transport-belt',position=a.position,radius=0.8}; "
+        "rcon.print(helpers.table_to_json(o))"
+    )
+    belt_before = json_command(belt_observation_command, 'belt passive displacement before')
+    assert_stopped(belt_before, actor_id)
+    require(belt_before['belt_count'] > 0, belt_before)
+    time.sleep(2.0)
+    belt_after = json_command(belt_observation_command, 'belt passive displacement after')
+    assert_passive_belt_displacement(belt_before, belt_after, actor_id)
+    require(belt_after['position']['x'] > belt_before['position']['x'], (belt_before, belt_after))
+
     payload = {
         'status': 'pass',
         'actor_id': actor_id,
         'obstacle': {'before': obstacle_before, 'after': obstacle_after, 'navigation': obstacle_nav},
         'moving_target': {'before': moving_before, 'after': moving_after, 'navigation': moving_nav, 'relocation': moved},
         'unreachable': {'before': unreachable_before, 'after': unreachable_after, 'navigation': unreachable_nav, 'quiet': quiet},
+        'transport_belt': {'fixture': belt_fixture, 'before': belt_before, 'after': belt_after},
     }
     (results / 'navigation.json').write_text(json.dumps(payload, indent=2))
     print(
         f'PASS: zero-player NPC bounded navigation routed obstacles, repathed moving target, '
-        f'and failed unreachable target with actor_id={actor_id}',
+        f'failed unreachable target, and distinguished passive belt displacement with actor_id={actor_id}',
         flush=True,
     )
 
