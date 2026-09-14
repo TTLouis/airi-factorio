@@ -9,6 +9,7 @@ LANES_ROOT="$TEST_ROOT/lanes"
 BASE_SAVE="$SAVES/npc-test-base.zip"
 MAP_GEN_SETTINGS="$TEST_ROOT/fixtures/map-gen-settings.json"
 PARALLEL="${NPC_TEST_PARALLEL:-1}"
+LANE_FILTER="${NPC_TEST_LANES:-core,research-combat,resilience}"
 GAME_PORT_BASE="${GAME_PORT_BASE:-34197}"
 RCON_PORT_BASE="${RCON_PORT_BASE:-27015}"
 export PYTHONUNBUFFERED=1
@@ -98,32 +99,54 @@ launch_lane() {
   CHILD_PIDS+=("$!")
 }
 
-LANES=(core research-combat resilience)
+lane_offset() {
+  case "$1" in
+    core) printf '0' ;;
+    research-combat) printf '1' ;;
+    resilience) printf '2' ;;
+    *) printf '[npc-test] Unknown lane requested: %s\n' "$1" >&2; return 2 ;;
+  esac
+}
+
+IFS=',' read -r -a REQUESTED_LANES <<< "$LANE_FILTER"
+LANES=()
+for raw_lane in "${REQUESTED_LANES[@]}"; do
+  lane="${raw_lane//[[:space:]]/}"
+  [[ -n "$lane" ]] || continue
+  lane_offset "$lane" >/dev/null
+  LANES+=("$lane")
+done
+if (( ${#LANES[@]} == 0 )); then
+  printf '[npc-test] NPC_TEST_LANES selected no runtime lanes.\n' >&2
+  exit 2
+fi
+
 for lane in "${LANES[@]}"; do
   prepare_lane "$lane"
 done
 
 printf '[npc-test] Runtime lane mode: %s\n' "$([[ "$PARALLEL" == "0" ]] && printf 'sequential-debug' || printf 'parallel')"
-printf '[npc-test] Lanes: core | research-combat | resilience\n'
+printf '[npc-test] Selected lanes: %s\n' "$(IFS=' | '; echo "${LANES[*]}")"
 
 OVERALL=0
 if [[ "$PARALLEL" == "0" ]]; then
-  # Debug mode preserves lane isolation while making logs strictly ordered.
-  CHILD_PIDS=()
-  launch_lane core "$GAME_PORT_BASE" "$RCON_PORT_BASE"
-  wait "${CHILD_PIDS[0]}" || OVERALL=1
-
-  CHILD_PIDS=()
-  launch_lane research-combat "$((GAME_PORT_BASE + 1))" "$((RCON_PORT_BASE + 1))"
-  wait "${CHILD_PIDS[0]}" || OVERALL=1
-
-  CHILD_PIDS=()
-  launch_lane resilience "$((GAME_PORT_BASE + 2))" "$((RCON_PORT_BASE + 2))"
-  wait "${CHILD_PIDS[0]}" || OVERALL=1
+  # Debug mode preserves lane isolation while making logs strictly ordered and
+  # stops after the first failing lane so the relevant process tail stays near
+  # the failure.
+  for lane in "${LANES[@]}"; do
+    offset="$(lane_offset "$lane")"
+    CHILD_PIDS=()
+    launch_lane "$lane" "$((GAME_PORT_BASE + offset))" "$((RCON_PORT_BASE + offset))"
+    if ! wait "${CHILD_PIDS[0]}"; then
+      OVERALL=1
+      break
+    fi
+  done
 else
-  launch_lane core "$GAME_PORT_BASE" "$RCON_PORT_BASE"
-  launch_lane research-combat "$((GAME_PORT_BASE + 1))" "$((RCON_PORT_BASE + 1))"
-  launch_lane resilience "$((GAME_PORT_BASE + 2))" "$((RCON_PORT_BASE + 2))"
+  for lane in "${LANES[@]}"; do
+    offset="$(lane_offset "$lane")"
+    launch_lane "$lane" "$((GAME_PORT_BASE + offset))" "$((RCON_PORT_BASE + offset))"
+  done
 
   for pid in "${CHILD_PIDS[@]}"; do
     if ! wait "$pid"; then
@@ -146,5 +169,5 @@ if (( OVERALL != 0 )); then
   exit 1
 fi
 
-printf '[npc-test] PASS: isolated parallel runtime lanes completed successfully: core + research-combat + resilience\n'
+printf '[npc-test] PASS: selected isolated runtime lanes completed successfully: %s\n' "$(IFS=' + '; echo "${LANES[*]}")"
 printf '[npc-test] Runtime smoke completed successfully.\n'
