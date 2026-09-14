@@ -13,10 +13,18 @@ function make_context() {
     unit_number: 88,
     position: { x: 20, y: 0 },
   }
+  const character_prototype = {
+    collision_box: [[-0.2, -0.2], [0.2, 0.2]],
+    collision_mask: {
+      layers: { player: true, train: true, is_object: true },
+      consider_tile_transitions: true,
+    },
+  }
   const character = {
     valid: true,
     name: 'character',
     position,
+    prototype: character_prototype,
   }
   const surface = {
     find_entities_filtered: vi.fn(() => [target] as any[]),
@@ -44,7 +52,7 @@ function make_context() {
   const resolve = vi.fn(() => actor)
   const manager = new_task_manager(resolve)
   const controller = new_navigation_controller(resolve, manager)
-  return { actor, character, position, target, surface, resolve, manager, controller }
+  return { actor, character, character_prototype, position, target, surface, resolve, manager, controller }
 }
 
 function waypoint(x: number, y = 0) {
@@ -66,8 +74,8 @@ describe('bounded navigation controller', () => {
     expect(controller.status().last_result?.code).toBe('invalid_radius')
   })
 
-  it('binds the task to actor identity and records the exact path request id', () => {
-    const { actor, controller, manager, surface, position } = make_context()
+  it('binds the task to actor identity and paths with the character collision prototype', () => {
+    const { actor, character_prototype, controller, manager, surface, position } = make_context()
 
     expect(controller.submit('steel-chest', 40)).toBe(true)
     controller.tick(actor)
@@ -79,6 +87,10 @@ describe('bounded navigation controller', () => {
     expect(task.path_request_id).toBe(101)
     expect(task.calculating_path).toBe(true)
     expect(surface.find_non_colliding_position).toHaveBeenCalledWith('character', position, 2, 0.25, false)
+    expect(surface.request_path).toHaveBeenCalledWith(expect.objectContaining({
+      bounding_box: character_prototype.collision_box,
+      collision_mask: character_prototype.collision_mask,
+    }))
     expect(surface.request_path).toHaveBeenCalledTimes(1)
   })
 
