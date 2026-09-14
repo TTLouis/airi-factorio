@@ -46,6 +46,13 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('verify the relevant inventory/entity state before depending on that result')
   })
 
+  it('distinguishes passive transport-belt displacement from AIRI walking', () => {
+    expect(prompt).toContain('Transport belts can passively move AIRI')
+    expect(prompt).toContain('Coordinate change alone therefore does not prove AIRI is still walking')
+    expect(prompt).toContain('sideways/backward belt motion does not keep a stuck task alive')
+    expect(prompt).toContain('inspect nearby transport belts')
+  })
+
   it('documents every currently supported Autorio operation', () => {
     for (const operation of documentedOperations) {
       expect(prompt).toContain(operation)
