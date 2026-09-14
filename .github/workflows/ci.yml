@@ -54,6 +54,12 @@ jobs:
       - name: Typecheck
         run: pnpm run build && pnpm run typecheck
 
+      - name: Compile native NPC Pterodactyl guard
+        run: |
+          node deploy/pterodactyl/staging/source-preparer.mjs . deploy/pterodactyl/staging/guard.ts
+          pnpm --filter autorio.ts run typecheck
+          pnpm --filter autorio.ts run build
+
   typecheck-python:
     runs-on: ubuntu-latest
     steps:
