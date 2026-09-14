@@ -118,12 +118,16 @@ export class StandaloneCharacterActor implements ControlledActor {
   }
 
   get_crafting_queue(): ActorCraftingQueueItem[] {
-    return (this.character_entity.crafting_queue ?? []).map(item => ({
-      index: item.index,
-      recipe: item.recipe,
-      count: item.count,
-      prerequisite: item.prerequisite,
-    }))
+    const result: ActorCraftingQueueItem[] = []
+    for (const item of this.character_entity.crafting_queue ?? []) {
+      result.push({
+        index: item.index,
+        recipe: item.recipe,
+        count: item.count,
+        prerequisite: item.prerequisite,
+      })
+    }
+    return result
   }
 
   get_crafting_queue_count(recipe: string) {
