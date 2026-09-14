@@ -1,126 +1,105 @@
+# AIRI Factorio — standalone NPC fork
+
 > [!IMPORTANT]
->
-> **This is an independently maintained fork** of
-> [`moeru-ai/airi-factorio`](https://github.com/moeru-ai/airi-factorio). It now intentionally
-> diverges from upstream in architecture as well as deployment: AIRI can run as a persistent
-> **standalone Factorio NPC** instead of requiring ownership of a connected human player's
-> character.
->
-> The fork's current validated baseline covers zero-player movement, mining, placement and
-> transfer, native crafting, research follow-through, combat, navigation, save/restart
-> reconciliation, death recovery, actor-ownership boundaries, and isolated parallel Factorio
-> acceptance lanes. `main` tracks validated checkpoints; `feat/npc-transition-work` remains the
-> active integration/testing branch for the next deployment and agent slices.
->
-> Pterodactyl deployment is being migrated to the same standalone-NPC model. See
-> [`deploy/pterodactyl/`](./deploy/pterodactyl) and its [`staging/`](./deploy/pterodactyl/staging)
-> v8 work for the actor-epoch guard, structured operation policy, and zero-player agent loop.
-> The generated egg should only be treated as updated once that v8 payload is regenerated and
-> passes its clean-install, upgrade, and rollback gates; see
-> [`deploy/pterodactyl/RELEASE_CANDIDATE.md`](./deploy/pterodactyl/RELEASE_CANDIDATE.md) for the
-> current pass/fail state. Real-provider-to-NPC acceptance against a packaged server is a separate,
-> production-side validation step deferred to deployment — it is not required for these
-> engineering/package gates.
->
-> Everything below this notice is the original project's README. Development on this fork uses
-> AI coding assistants/tools including Claude Code and OpenAI ChatGPT/Codex.
+> This repository is an independent fork of [`moeru-ai/airi-factorio`](https://github.com/moeru-ai/airi-factorio). It has diverged toward a **standalone, zero-player AIRI NPC** and a production-oriented Pterodactyl deployment. It is not guaranteed to stay API- or behavior-compatible with upstream.
 
-<p align="center">
-  <picture>
-    <img width="100%" src="./docs/banner-1280x640.png" />
-  </picture>
-</p>
+AIRI can run as a persistent Factorio NPC without owning or impersonating a connected human player. Human players may still talk to the NPC through `!airi ...`, but chat authorization is separate from NPC ownership.
 
-<h1 align="center">
-  Factorio for <a href="https://github.com/moeru-ai/airi">Project AIRI</a>
-</h1>
+## Current fork status
 
-> [!NOTE]
->
-> This project is part of the [Project AIRI](https://github.com/moeru-ai/airi), we aim to build a wishing to achieve [Neuro-sama](https://www.youtube.com/@Neurosama)'s (subscribe if you didn't!) altitude, completely LLM and AI driven, capable of realtime voice chat, Minecraft playing, Factorio playing. If you are interested in, please do give it a try on [live demo](https://airi.moeru.ai).
+The Pterodactyl deployment currently includes:
+
+- standalone NPC ownership with zero connected players;
+- structured model operations instead of model-generated Lua;
+- actor-aware inventory, entity, navigation, crafting, research, and combat operations;
+- transactional operation-batch admission and correlated operation outcomes;
+- persistent saves plus managed release rollback;
+- loopback-only supervisor-owned RCON;
+- Pterodactyl console input forwarded to the real Factorio child process;
+- reconciliation of `data/server-settings.json` on every startup without overwriting unrelated Factorio settings;
+- environment-only provider secrets, with non-secret model/provider settings synchronized into `airi-config.json`;
+- provider timeout/recovery handling so a failed model request does not permanently stall the NPC;
+- configurable provider request budgeting, currently defaulting to **300 requests/hour** in the Pterodactyl eggs.
+
+The active NPC/E2E development branch is [`feat/npc-transition-work`](https://github.com/TTLouis/airi-factorio/tree/feat/npc-transition-work). The stable integration branch is `main`.
+
+## Pterodactyl deployment channels
+
+Two separate eggs are provided so stable servers and active NPC E2E testing cannot be confused:
+
+| Egg | Default source ref | Purpose |
+| --- | --- | --- |
+| [`deploy/pterodactyl/egg-airi-factorio-server.json`](./deploy/pterodactyl/egg-airi-factorio-server.json) | `main` | Stable/main deployment |
+| [`deploy/pterodactyl/egg-airi-factorio-npc-e2e.json`](./deploy/pterodactyl/egg-airi-factorio-npc-e2e.json) | `feat/npc-transition-work` | Active NPC/E2E testing |
+
+### Update behavior
+
+**Restart does not update AIRI code.** A normal server restart keeps the already installed managed release.
+
+**Reinstall resolves the egg's `AIRI_SOURCE_REF` again.** The installer resolves that branch/tag to one exact Git commit SHA, validates and builds that exact snapshot transactionally, records the SHA in the installed manifest, then atomically activates the new release. If installation fails, the previously completed release remains active.
+
+This means the intended workflow is:
+
+```text
+push/merge harness changes
+        ↓
+Pterodactyl Reinstall
+        ↓
+resolve configured branch to an exact SHA
+        ↓
+test + build that exact snapshot
+        ↓
+activate it and record the SHA
+```
+
+Set `AIRI_SOURCE_REF` to a full 40-character commit SHA when reproducing a specific E2E failure. Managed installs also provide `rollback-airi.sh` to return to the previously completed release without rewriting saves, user mods, or `airi-config.json`.
+
+See [`deploy/pterodactyl/README.md`](./deploy/pterodactyl/README.md) for import, configuration, testing, and rollback details.
+
+## Important Pterodactyl defaults
+
+The eggs intentionally do **not** ship a real provider/model configuration:
+
+- `OPENAI_MODEL=replace-me`
+- `OPENAI_API_BASEURL=https://provider.invalid/v1`
+- `PROVIDER_TIMEOUT_MS=120000`
+- `MAX_PROVIDER_REQUESTS_PER_HOUR=300`
+
+`OPENAI_API_KEY` remains environment-only and is never persisted to `airi-config.json`. `OPENAI_MODEL` and `OPENAI_API_BASEURL` are synchronized into the non-secret config on startup so the file reflects the effective Pterodactyl settings.
+
+`FACTORIO_USERNAME` and `FACTORIO_TOKEN` must either both be blank or both be configured. Blank credentials keep the server hidden/private; configured credentials enable the public Factorio listing path. These credentials are not stored in `airi-config.json`.
+
+The current Pterodactyl install/runtime image is `ghcr.io/ptero-eggs/yolks:debian_bookworm`. Pinning that image to an immutable digest remains a hardening roadmap item.
 
 ## Development
 
-### Project Structure
+Install workspace dependencies with:
 
-It's hard to describe the project structure in a few words, but it currently looks like this:
+```bash
+pnpm install
+```
 
-<div style="max-width: 500px; margin: 0 auto;">
+The standalone-NPC deployment and E2E harness live primarily under:
 
-![project-structure](./project-structure.png)
+```text
+deploy/pterodactyl/
+packages/autorio/
+tests/factorio/
+```
 
-</div>
+Useful deployment checks include:
 
-### Start to develop
+```bash
+node deploy/pterodactyl/build-payload.mjs --check
+node --test deploy/pterodactyl/build-payload.test.mjs deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
+```
 
-1. Clone the repository:
+The real Factorio harness and package-smoke gates are intentionally separate from provider validation; repository CI does not use production provider credentials.
 
-    ```bash
-    git clone https://github.com/moeru-ai/airi-factorio
-    ```
+## Roadmap
 
-2. Install dependencies:
+Near-term work is focused on deeper NPC E2E coverage and improving the AI harness. Longer-term work includes swarm/multi-agent coordination, an in-game message board, richer production-line reasoning, and pinning the Pterodactyl container image by digest.
 
-    ```bash
-    pnpm i
-    ```
+## Upstream and credits
 
-3. Create a symlink for the `autorio` mod:
-
-    ```bash
-    cd /path/to/airi-factorio
-
-    ln -s /path/to/airi-factorio/packages/autorio/dist /path/to/factorio/data/autorio
-    # If you are using DevContainer, you can use the following command:
-    ln -s /workspace/airi-factorio/packages/autorio/dist /opt/factorio/data/autorio
-    ```
-
-4. Copy and fill the `.env` file:
-
-    ```bash
-    cp packages/agent/.env.example packages/agent/.env.local
-    cp packages/factorio-wrapper/.env.example packages/factorio-wrapper/.env.local
-    ```
-
-    If you are using DevContainer, you can set `WS_SERVER_HOST` and `FACTORIO_WS_HOST` and `RCON_API_SERVER_HOST` to `localhost`.
-
-5. Create a game save file, the save file path should be the same as the one in the `.env` file:
-
-    ```bash
-    /path/to/factorio/bin/x64/factorio --create /path/to/factorio/the-save-file.zip
-    # If you are using DevContainer, you can use the following command:
-    /opt/factorio/bin/x64/factorio --create /path/to/factorio/the-save-file.zip
-    # If your machine is not x64, you can use the following command:
-    box64 /opt/factorio/bin/x64/factorio --create /path/to/factorio/the-save-file.zip
-    ```
-
-6. Run the development script:
-
-    ```bash
-    pnpm run dev
-    ```
-
-Now you can use the commands in Factorio, the script will be compiled automatically, but you need to exit and re-enter the game to see the changes(no need to restart the game).
-
-## Other side projects born from Project AIRI like this one
-
-- [Awesome AI VTuber](https://github.com/proj-airi/awesome-ai-vtuber): A curated list of AI VTubers and related projects
-- [`unspeech`](https://github.com/moeru-ai/unspeech): Universal endpoint proxy server for `/audio/transcriptions` and `/audio/speech`, like LiteLLM but for any ASR and TTS
-- [`hfup`](https://github.com/moeru-ai/hfup): tools to help on deploying, bundling to HuggingFace Spaces
-- [`xsai-transformers`](https://github.com/moeru-ai/xsai-transformers): Experimental [🤗 Transformers.js](https://github.com/huggingface/transformers.js) provider for [xsAI](https://github.com/moeru-ai/xsai).
-- [WebAI: Realtime Voice Chat](https://github.com/proj-airi/webai-realtime-voice-chat): Full example of implementing ChatGPT's realtime voice from scratch with VAD + STT + LLM + TTS.
-- [`@proj-airi/drizzle-duckdb-wasm`](https://github.com/moeru-ai/airi/tree/main/packages/drizzle-duckdb-wasm/README.md): Drizzle ORM driver for DuckDB WASM
-- [`@proj-airi/duckdb-wasm`](https://github.com/moeru-ai/airi/tree/main/packages/duckdb-wasm/README.md): Easy to use wrapper for `@duckdb/duckdb-wasm`
-- [Airi Factorio](https://github.com/moeru-ai/airi-factorio): Allow Airi to play Factorio
-- [Factorio RCON API](https://github.com/nekomeowww/factorio-rcon-api): RESTful API wrapper for Factorio headless server console
-- [`autorio`](https://github.com/moeru-ai/airi-factorio/tree/main/packages/autorio): Factorio automation library
-- [`tstl-plugin-reload-factorio-mod`](https://github.com/moeru-ai/airi-factorio/tree/main/packages/tstl-plugin-reload-factorio-mod): Reload Factorio mod when developing
-- [`@velin-dev/ml`](https://github.com/luoling8192/velin): Use Vue SFC and Markdown to write easy to manage stateful prompts for LLM
-- [`demodel`](https://github.com/moeru-ai/demodel): Easily boost the speed of pulling your models and datasets from various of inference runtimes.
-- [`inventory`](https://github.com/moeru-ai/inventory): Centralized model catalog and default provider configurations backend service
-- [MCP Launcher](https://github.com/moeru-ai/mcp-launcher): Easy to use MCP builder & launcher for all possible MCP servers, just like Ollama for models!
-- [🥺 SAD](https://github.com/moeru-ai/sad): Documentation and notes for self-host and browser running LLMs.
-
-## Credits
-
-Thanks for the original idea and code: https://github.com/naklecha/factorio-automation
+This fork builds on the original [`moeru-ai/airi-factorio`](https://github.com/moeru-ai/airi-factorio) project and its `autorio` work. See the upstream repository for the original development setup, related Project AIRI projects, and upstream credits.
