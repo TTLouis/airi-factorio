@@ -4,6 +4,7 @@ import { complete_work_from_result, post_observation, post_result } from './blac
 import { activate_claim, claim_work, heartbeat_claim, release_claim } from './claims'
 import type { new_actor_registry } from './actor_registry'
 import type { new_actor_runtime_router } from './actor_runtime_router'
+import { new_item_work_executor, supports_item_work } from './item_work_executor'
 import { rank_work_candidates } from './selection'
 import type { ActorAdmissionSnapshot, ActorId, ClaimId, SimulationTick, SwarmStorage, WorkClaim, WorkId, WorkItem } from './types'
 
@@ -28,7 +29,7 @@ function squared_distance(ax: number, ay: number, bx: number, by: number) {
 }
 
 function supports_runtime_execution(work: WorkItem) {
-  return work.goal.kind === 'survey_area'
+  return work.goal.kind === 'survey_area' || supports_item_work(work)
 }
 
 function survey_radius(work: WorkItem) {
@@ -53,6 +54,11 @@ export function new_work_coordinator(
   const heartbeatIntervalTicks = options.heartbeatIntervalTicks ?? DEFAULT_HEARTBEAT_INTERVAL_TICKS
   const minimumProgressDistance = options.minimumProgressDistance ?? DEFAULT_MINIMUM_PROGRESS_DISTANCE
   const lastDistanceByClaim: Record<ClaimId, number> = {}
+  const itemExecutor = new_item_work_executor(swarm, registry, router, {
+    leaseTicks,
+    heartbeatIntervalTicks,
+    minimumProgressDistance,
+  })
 
   function context_for(actorId: ActorId) {
     return router.get_context(actorId)
@@ -171,7 +177,7 @@ export function new_work_coordinator(
 
   function process_survey_claim(claim: WorkClaim, tick: SimulationTick) {
     const work = swarm.board.work[claim.workId]
-    if (work === undefined || !supports_runtime_execution(work)) return
+    if (work === undefined || work.goal.kind !== 'survey_area') return
     const runtime = registry.runtime_snapshot(claim.actorId, tick)
     if (runtime === undefined || !runtime.registered || runtime.state !== 'online') {
       cancel_context_work(claim.actorId)
@@ -194,7 +200,6 @@ export function new_work_coordinator(
     const actor = registry.resolve_actor(claim.actorId, tick)
     if (actor === undefined || !actor.is_valid) return
 
-    if (work.goal.kind !== 'survey_area') return
     const radius = survey_radius(work)
     if (squared_distance(
       actor.position.x,
@@ -218,6 +223,11 @@ export function new_work_coordinator(
       return
     }
     maybe_heartbeat(claim, work, tick)
+  }
+
+  function dispatch_work(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
+    if (work.goal.kind === 'survey_area') return dispatch_survey(claim, work)
+    return itemExecutor.dispatch(claim, work, tick)
   }
 
   interface AssignmentCandidate {
@@ -295,9 +305,10 @@ export function new_work_coordinator(
         release_claim(swarm, { claimId: claimed.claim.id, tick, reason: 'voluntary' })
         continue
       }
-      const dispatched = dispatch_survey(claimed.claim, work)
+      const dispatched = dispatch_work(claimed.claim, work, tick)
       if (!dispatched.ok) {
         release_claim(swarm, { claimId: claimed.claim.id, tick, reason: 'voluntary' })
+        itemExecutor.clear_claim_state(claimed.claim.id)
         continue
       }
 
@@ -314,7 +325,11 @@ export function new_work_coordinator(
     claimIds.sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
     for (const claimId of claimIds) {
       const claim = swarm.board.claims[claimId]
-      if (claim !== undefined) process_survey_claim(claim, tick)
+      if (claim === undefined) continue
+      const work = swarm.board.work[claim.workId]
+      if (work === undefined) continue
+      if (work.goal.kind === 'survey_area') process_survey_claim(claim, tick)
+      else itemExecutor.process(claim, work, tick)
     }
     return { assignments: assign_open_work(tick) }
   }
