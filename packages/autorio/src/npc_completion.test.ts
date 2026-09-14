@@ -5,9 +5,9 @@ import { get_handler } from './test-event-registry'
 import { TaskStates } from './types'
 
 beforeEach(() => {
-  task_manager.cancel_all_tasks()
   ;(globalThis as any).game.connected_players = []
   ;(globalThis as any).storage.airi_actor_mode = 'player'
+  task_manager.cancel_all_tasks()
   ;(globalThis as any).storage.standalone_character_unit_number = undefined
   ;(globalThis as any).serpent = {
     line: (value: unknown) => JSON.stringify(value),
@@ -18,6 +18,7 @@ beforeEach(() => {
 function configureNpcWorld(resource?: Record<string, any>) {
   const force: Record<string, any> = {
     name: 'player',
+    index: 1,
     technologies: {},
     recipes: {},
     current_research: undefined,
@@ -39,9 +40,10 @@ function configureNpcWorld(resource?: Record<string, any>) {
     walking_state: { walking: false, direction: 'north' },
     shooting_state: { state: 'not_shooting', position: { x: 0, y: 0 } },
     crafting_queue: [],
-    get_main_inventory: vi.fn(() => ({
-      get_item_count: vi.fn(() => 0),
-    })),
+    get_main_inventory: vi.fn(() => ({ get_item_count: vi.fn(() => 0) })),
+    get_craftable_count: vi.fn(() => 0),
+    begin_crafting: vi.fn(() => 0),
+    cancel_crafting: vi.fn(),
   }
 
   character.update_selected_entity = vi.fn(() => {
@@ -55,36 +57,38 @@ function configureNpcWorld(resource?: Record<string, any>) {
     wind_orientation: 0,
     find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
     create_entity: vi.fn(({ name }: { name: string }) => {
-      if (name !== 'character') {
-        return undefined
-      }
+      if (name !== 'character') return undefined
       character_created = true
       return character
     }),
     find_entities_filtered: vi.fn((filter: Record<string, any>) => {
-      if (filter.force === 'enemy') {
-        return []
-      }
-      if (filter.name === 'character') {
-        return character_created ? [character] : []
-      }
-      if (resource && filter.name === resource.name && resource.valid !== false) {
-        return [resource]
-      }
+      if (filter.force === 'enemy') return []
+      if (filter.name === 'character') return character_created ? [character] : []
+      if (resource && filter.name === resource.name && resource.valid !== false) return [resource]
       return []
     }),
   }
 
   character.surface = surface
-  if (resource) {
-    resource.surface = surface
-  }
-
+  if (resource) resource.surface = surface
   ;(globalThis as any).game.surfaces[1] = surface
   ;(globalThis as any).game.forces = { player: force }
 
   set_actor_mode('npc')
   return { character, force, surface }
+}
+
+function add_owned_npc_mining(count: number) {
+  task_manager.add_task({
+    type: TaskStates.MINING,
+    operation_id: 1,
+    owner_actor_id: 42,
+    owner_actor_kind: 'standalone_character',
+    owner_force_index: 1,
+    entity_name: 'iron-ore',
+    count,
+    requested_count: count,
+  })
 }
 
 describe('standalone NPC completion polling', () => {
@@ -99,11 +103,7 @@ describe('standalone NPC completion polling', () => {
     const { character } = configureNpcWorld(resource)
     const on_tick = get_handler('on_tick')
 
-    task_manager.add_task({
-      type: TaskStates.MINING,
-      entity_name: 'iron-ore',
-      count: 2,
-    })
+    add_owned_npc_mining(2)
 
     on_tick({})
     expect(character.update_selected_entity).toHaveBeenCalledWith(resource.position)
@@ -139,11 +139,7 @@ describe('standalone NPC completion polling', () => {
     const { character } = configureNpcWorld(resource)
     const on_tick = get_handler('on_tick')
 
-    task_manager.add_task({
-      type: TaskStates.MINING,
-      entity_name: 'iron-ore',
-      count: 2,
-    })
+    add_owned_npc_mining(2)
 
     on_tick({})
     resource.amount = 9
@@ -166,7 +162,7 @@ describe('connected player completion compatibility', () => {
       character: {},
       position: { x: 0, y: 0 },
       surface: { find_entities_filtered: () => [] },
-      force: {},
+      force: { index: 1 },
       mining_state: { mining: true, position: { x: 1, y: 0 } },
       crafting_queue: [],
       begin_crafting: vi.fn(() => 0),
@@ -176,8 +172,13 @@ describe('connected player completion compatibility', () => {
 
     task_manager.add_task({
       type: TaskStates.MINING,
+      operation_id: 1,
+      owner_actor_id: 1,
+      owner_actor_kind: 'connected_player',
+      owner_force_index: 1,
       entity_name: 'iron-ore',
       count: 1,
+      requested_count: 1,
     })
 
     const on_player_mined_entity = get_handler('on_player_mined_entity')
