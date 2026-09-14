@@ -44,6 +44,7 @@ remote.add_interface('autorio_crafting', {
 remote.add_interface('autorio_research', {
   status: () => research_controller.status(),
   technology: (name: string) => research_controller.technology(name),
+  request_result: (request_id: number) => research_controller.request_result(request_id),
 })
 
 remote.add_interface('autorio_combat', {
@@ -127,7 +128,7 @@ remote.add_interface('autorio_operations', {
   },
   craft_item: (item_name: string, count: number = 1): [boolean, string] => crafting_controller.submit(item_name, count),
   attack_nearest_enemy: (search_radius: number = 50): [boolean, string] => combat_controller.submit(search_radius),
-  research_technology: (name: string): [boolean, string] => research_controller.submit(name),
+  research_technology: (name: string): [boolean, string, number] => research_controller.submit(name),
   cancel_all_tasks: () => {
     task_manager.cancel_all_tasks()
     return true
