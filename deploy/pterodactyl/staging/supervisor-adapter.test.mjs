@@ -4,6 +4,7 @@ import {
   actorChanged,
   configureNpcSession,
   deploymentStatus,
+  executeAuthorizedBatch,
   executeAuthorizedOperation,
   validatedOperationCall,
 } from './supervisor-adapter.mjs'
@@ -98,6 +99,26 @@ test('authorized operation wraps the mutation with an atomic actor-epoch check',
   assert.match(rcon.commands[0], /autorio_operations","wait",60/)
 })
 
+test('authorized dependency batch admits every operation in one RCON/Lua transaction', async () => {
+  const marker = 'AIRI_RESULT_0123456789abcdef01234567:'
+  const rcon = new FakeRcon([
+    `${marker}${JSON.stringify({ ok: true, result: [[true, 'first'], [true, 'second']] })}`,
+  ])
+  const result = await executeAuthorizedBatch(rcon, 3, [
+    'remote.call("autorio_operations","mine_entity","iron-ore",1)',
+    'remote.call("autorio_operations","wait",300)',
+  ], marker)
+
+  assert.equal(rcon.commands.length, 1)
+  assert.equal(result.results.length, 2)
+  assert.equal((rcon.commands[0].match(/airi_deployment","authorize",3/g) ?? []).length, 1)
+  const first = rcon.commands[0].indexOf('autorio_operations","mine_entity"')
+  const second = rcon.commands[0].indexOf('autorio_operations","wait"')
+  assert.ok(first >= 0 && second > first)
+  assert.match(rcon.commands[0], /local r1=\{remote\.call/)
+  assert.match(rcon.commands[0], /local r2=\{remote\.call/)
+})
+
 test('mutation rejection, missing acknowledgement, and stale authorization fail closed without retries', async () => {
   const marker = 'AIRI_RESULT_0123456789abcdef01234567:'
   for (const raw of [
@@ -108,6 +129,21 @@ test('mutation rejection, missing acknowledgement, and stale authorization fail 
   ]) {
     const rcon = new FakeRcon([raw])
     await assert.rejects(() => executeAuthorizedOperation(rcon, 3, 'remote.call("autorio_operations","wait",60)', marker))
+    assert.equal(rcon.commands.length, 1)
+  }
+})
+
+test('batch rejection or missing acknowledgement fails closed without replaying admissions', async () => {
+  const marker = 'AIRI_RESULT_0123456789abcdef01234567:'
+  for (const raw of [
+    `${marker}${JSON.stringify({ ok: false, result: 'autorio rejected operation 1' })}`,
+    'no acknowledgement here',
+  ]) {
+    const rcon = new FakeRcon([raw])
+    await assert.rejects(() => executeAuthorizedBatch(rcon, 3, [
+      'remote.call("autorio_operations","wait",60)',
+      'remote.call("autorio_operations","wait",60)',
+    ], marker))
     assert.equal(rcon.commands.length, 1)
   }
 })
