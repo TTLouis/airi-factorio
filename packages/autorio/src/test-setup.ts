@@ -51,6 +51,7 @@ import { event_handlers, set_load_handler } from './test-event-registry'
     on_player_mined_entity: 'on_player_mined_entity',
     on_tick: 'on_tick',
     on_player_crafted_item: 'on_player_crafted_item',
+    on_research_finished: 'on_research_finished',
   },
   direction: {
     north: 'north',
