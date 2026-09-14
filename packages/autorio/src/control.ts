@@ -14,6 +14,7 @@ import type {
 
 import type { ControlledActor } from './actors/types'
 import { get_controlled_actor } from './actors/actor_controller'
+import { new_combat_controller } from './combat'
 import { new_research_controller } from './research'
 import { new_task_manager } from './task_manager'
 import { create_tools_remote_interface } from './tools'
@@ -27,10 +28,15 @@ let setup_complete = false
 
 export const task_manager = new_task_manager(get_controlled_actor)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
+const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
 
 remote.add_interface('autorio_research', {
   status: () => research_controller.status(),
   technology: (name: string) => research_controller.technology(name),
+})
+
+remote.add_interface('autorio_combat', {
+  status: () => combat_controller.status(),
 })
 
 function log_actor_info() {
@@ -177,16 +183,7 @@ remote.add_interface('autorio_operations', {
     log(`[AUTORIO] New craft_item task: ${item_name} x${count}`)
     return [true, 'Task started']
   },
-  attack_nearest_enemy: (search_radius: number = 50): [boolean, string] => {
-    task_manager.add_task({
-      type: TaskStates.ATTACKING,
-      search_radius,
-      target: null,
-    })
-
-    log(`[AUTORIO] New attack nearest enemy task, search radius: ${search_radius}`)
-    return [true, 'Task started']
-  },
+  attack_nearest_enemy: (search_radius: number = 50): [boolean, string] => combat_controller.submit(search_radius),
   research_technology: (name: string): [boolean, string] => research_controller.submit(name),
   cancel_all_tasks: () => {
     task_manager.cancel_all_tasks()
@@ -389,13 +386,8 @@ script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEnti
 })
 
 function setup() {
-  const surface = game.surfaces[1]
-  const enemies = surface.find_entities_filtered({ force: 'enemy' })
-  log(`[AUTORIO] Removing ${enemies.length} enemies`)
-  for (const enemy of enemies) {
-    enemy.destroy()
-  }
-
+  // Production setup must never delete world enemies. Deterministic tests own
+  // their fixtures explicitly; combat must interact with real enemy entities.
   setup_complete = true
   log('[AUTORIO] Setup complete')
 }
@@ -903,46 +895,6 @@ function state_walking_direct(actor: ControlledActor) {
   }
 }
 
-// Distance within which the actor stops closing in and starts shooting
-// instead. Not derived from the equipped weapon's actual range — a fixed,
-// conservative value keeps this bounded without needing prototype lookups.
-const ATTACK_ENGAGE_RANGE = 10
-
-function state_attacking(actor: ControlledActor) {
-  const parameters = task_manager.player_state.parameters_attack_nearest_enemy
-  if (!parameters) {
-    log('[AUTORIO] No parameters found when attacking')
-    return
-  }
-
-  if (!parameters.target || !parameters.target.valid) {
-    const enemies = actor.surface.find_entities_filtered({
-      position: actor.position,
-      radius: parameters.search_radius,
-      force: 'enemy',
-    })
-
-    parameters.target = get_nearest_entity(actor, enemies)
-
-    if (!parameters.target) {
-      log('[AUTORIO] No enemy found to attack, switching to IDLE state')
-      task_manager.reset_task_state()
-      task_manager.next_task()
-      return
-    }
-  }
-
-  const target = parameters.target
-
-  if (distance(actor.position, target.position) > ATTACK_ENGAGE_RANGE) {
-    const direction = get_direction(actor.position, target.position)
-    actor.set_walking_state({ walking: true, direction })
-    return
-  }
-
-  actor.set_shooting_state({ state: defines.shooting.shooting_enemies, position: target.position })
-}
-
 function state_waiting() {
   if (!task_manager.player_state.parameters_waiting) {
     log('[AUTORIO] No parameters found when waiting')
@@ -1002,7 +954,7 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     state_walking_direct(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.ATTACKING) {
-    state_attacking(actor)
+    combat_controller.tick(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.WAITING) {
     state_waiting()
