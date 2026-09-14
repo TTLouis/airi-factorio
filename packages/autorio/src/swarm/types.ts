@@ -60,6 +60,7 @@ export interface PhysicalActorIdentity {
   physicalActorId: number
   kind: string
   forceIndex: number
+  surfaceIndex: number
 }
 
 export interface PersistedActorState {

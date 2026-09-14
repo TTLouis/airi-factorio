@@ -4,7 +4,7 @@ import { allocate_logical_actor_id, create_agent } from './agents'
 import { new_actor_registry } from './actor_registry'
 import { create_empty_swarm_storage } from './storage'
 
-function fake_actor(physicalActorId: number, kind = 'standalone-character', forceIndex = 1, valid = true): ControlledActor {
+function fake_actor(physicalActorId: number, kind = 'standalone-character', forceIndex = 1, valid = true, surfaceIndex = 1): ControlledActor {
   const status = {
     kind,
     valid,
@@ -16,7 +16,7 @@ function fake_actor(physicalActorId: number, kind = 'standalone-character', forc
   return {
     is_valid: valid,
     character: valid ? {} as any : undefined,
-    surface: {} as any,
+    surface: { index: surfaceIndex } as any,
     force: { index: forceIndex } as any,
     position: { x: 0, y: 0 },
     get_main_inventory: () => undefined,
@@ -58,7 +58,7 @@ describe('logical actor registry', () => {
       available: true,
       state: 'online',
       bodyRevision: 1,
-      physical: { physicalActorId: 101, kind: 'standalone-character', forceIndex: 1 },
+      physical: { physicalActorId: 101, kind: 'standalone-character', forceIndex: 1, surfaceIndex: 1 },
     })
     expect(registry.admission_snapshot(actorId, 21)).toEqual({
       actorId,
@@ -106,7 +106,24 @@ describe('logical actor registry', () => {
     expect(swarm.actors[actorId]).toMatchObject({
       state: 'online',
       bodyRevision: 2,
-      physical: { physicalActorId: 8 },
+      physical: { physicalActorId: 8, surfaceIndex: 1 },
+    })
+  })
+
+  it('treats moving the logical actor to another surface as a new body generation', () => {
+    const swarm = create_empty_swarm_storage()
+    const actorId = allocate_logical_actor_id(swarm)
+    create_agent(swarm, actorId)
+    let current: ControlledActor | undefined = fake_actor(9, 'standalone-character', 1, true, 1)
+    const registry = new_actor_registry(swarm)
+    registry.register_actor(actorId, { resolve: () => current, capabilities: ['move'] }, 1)
+
+    current = fake_actor(9, 'standalone-character', 1, true, 2)
+    registry.reconcile_actor(actorId, 2)
+
+    expect(swarm.actors[actorId]).toMatchObject({
+      bodyRevision: 2,
+      physical: { physicalActorId: 9, surfaceIndex: 2 },
     })
   })
 
@@ -131,11 +148,12 @@ describe('logical actor registry', () => {
     const registry = new_actor_registry(swarm)
 
     registry.register_actor(firstId, { resolve: () => fake_actor(101), capabilities: ['move'] }, 1)
-    registry.register_actor(secondId, { resolve: () => fake_actor(202), capabilities: ['mine'] }, 1)
+    registry.register_actor(secondId, { resolve: () => fake_actor(202, 'standalone-character', 1, true, 2), capabilities: ['mine'] }, 1)
 
     expect(registry.list_admission_snapshots(2)).toEqual([
       expect.objectContaining({ actorId: firstId, bodyRevision: 1, capabilities: ['move'] }),
       expect.objectContaining({ actorId: secondId, bodyRevision: 1, capabilities: ['mine'] }),
     ])
+    expect(registry.runtime_snapshot(secondId, 2)?.physical?.surfaceIndex).toBe(2)
   })
 })

@@ -33,6 +33,7 @@ function same_physical_identity(left: PhysicalActorIdentity, right: PhysicalActo
   return left.physicalActorId === right.physicalActorId
     && left.kind === right.kind
     && left.forceIndex === right.forceIndex
+    && left.surfaceIndex === right.surfaceIndex
 }
 
 function find_bound_agent_id(swarm: SwarmStorage, actorId: ActorId) {
@@ -104,6 +105,7 @@ export function new_actor_registry(swarm: SwarmStorage) {
       physicalActorId: status.actor_id,
       kind: status.kind,
       forceIndex: actor.force.index,
+      surfaceIndex: actor.surface.index,
     }
     mark_online(state, identity, tick)
     return { ok: true as const, state, actor }
