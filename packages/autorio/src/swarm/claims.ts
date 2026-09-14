@@ -7,6 +7,7 @@ import type {
   WorkClaim,
   WorkItem,
 } from './types'
+import { clear_agent_commitment_for_work, commit_agent_to_work } from './agents'
 import { post_warning, record_blackboard_event, refresh_work_eligibility } from './blackboard'
 import { allocate_swarm_id } from './storage'
 
@@ -42,7 +43,7 @@ export interface ClaimWorkInput {
 
 export type ClaimWorkResult
   = { ok: true, claim: WorkClaim, work: WorkItem }
-    | { ok: false, code: 'not_found' | 'revision_mismatch' | 'not_claimable' | 'dependency_blocked' | 'already_claimed' | 'agent_already_committed' | 'actor_already_committed' | 'capability_mismatch' | 'invalid_lease', currentRevision?: number }
+    | { ok: false, code: 'not_found' | 'revision_mismatch' | 'not_claimable' | 'dependency_blocked' | 'already_claimed' | 'agent_not_found' | 'actor_binding_mismatch' | 'agent_not_available' | 'agent_already_committed' | 'actor_already_committed' | 'capability_mismatch' | 'invalid_lease', currentRevision?: number }
 
 export function claim_work(swarm: SwarmStorage, input: ClaimWorkInput): ClaimWorkResult {
   const work = swarm.board.work[input.workId]
@@ -52,6 +53,10 @@ export function claim_work(swarm: SwarmStorage, input: ClaimWorkInput): ClaimWor
   if (work.status !== 'open') return { ok: false, code: 'not_claimable' }
   if (!dependencies_satisfied(swarm, work)) return { ok: false, code: 'dependency_blocked' }
   if (work.claimId && swarm.board.claims[work.claimId]) return { ok: false, code: 'already_claimed' }
+  const agent = swarm.agents[input.actor.agentId]
+  if (!agent) return { ok: false, code: 'agent_not_found' }
+  if (agent.actorId !== input.actor.actorId) return { ok: false, code: 'actor_binding_mismatch' }
+  if (agent.state !== 'available' || agent.currentWorkId) return { ok: false, code: 'agent_not_available' }
   for (const claimId in swarm.board.claims) {
     const existing = swarm.board.claims[claimId]
     if (existing.agentId === input.actor.agentId) return { ok: false, code: 'agent_already_committed' }
@@ -78,6 +83,7 @@ export function claim_work(swarm: SwarmStorage, input: ClaimWorkInput): ClaimWor
     state: 'claimed',
   }
   swarm.board.claims[id] = claim
+  commit_agent_to_work(swarm, claim.agentId, claim.actorId, work.id, work.projectId, work.missionId, input.tick)
   record_blackboard_event(swarm, {
     recordId: work.id,
     event: 'claimed',
@@ -181,6 +187,8 @@ export function release_claim(swarm: SwarmStorage, input: ReleaseClaimInput) {
   work.updatedTick = input.tick
   work.revision += 1
   delete swarm.board.claims[claim.id]
+  const nextAgentState = input.reason === 'actor_recovery' || input.reason === 'actor_death' ? 'recovering' : 'available'
+  clear_agent_commitment_for_work(swarm, claim.agentId, work.id, input.tick, nextAgentState)
   refresh_work_eligibility(swarm, work.id, input.tick)
   record_blackboard_event(swarm, {
     recordId: work.id,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { create_agent } from './agents'
 import { complete_work_from_result, create_request, create_work, post_observation, post_result, set_request_status } from './blackboard'
 import { activate_claim, claim_work, release_claim } from './claims'
 import { create_empty_swarm_storage } from './storage'
@@ -16,6 +17,7 @@ describe('blackboard deterministic transitions', () => {
 
   it('reopens blocked work only after an evidenced request satisfaction', () => {
     const swarm = create_empty_swarm_storage()
+    create_agent(swarm, 'actor-1')
     const work = create_work(swarm, { createdBy: 'system', goal: { kind: 'custom', description: 'work' }, requirements: { capabilities: ['move'] }, priority: 10, createdTick: 1 })
     const claimed = claim_work(swarm, { workId: work.id, expectedRevision: work.revision, actor: { ...actor, capabilities: ['move'] }, tick: 2, leaseTicks: 30 })
     expect(claimed.ok).toBe(true)
@@ -31,15 +33,20 @@ describe('blackboard deterministic transitions', () => {
     expect(swarm.board.work[work.id].status).toBe('open')
   })
 
-  it('requires evidence from the current claim owner to complete work', () => {
+  it('requires evidence from the current claim owner to complete work and clears the commitment', () => {
     const swarm = create_empty_swarm_storage()
+    const agent = create_agent(swarm, 'actor-1')
     const work = create_work(swarm, { createdBy: 'system', goal: { kind: 'custom', description: 'work' }, requirements: { capabilities: ['move'] }, priority: 10, createdTick: 1 })
     const claimed = claim_work(swarm, { workId: work.id, expectedRevision: work.revision, actor: { ...actor, capabilities: ['move'] }, tick: 2, leaseTicks: 30 })
     expect(claimed.ok).toBe(true)
     if (!claimed.ok) return
     activate_claim(swarm, claimed.claim.id, 3)
-    const observation = post_observation(swarm, { observer: 'agent-2', subject: 'done', evidenceClass: 'engine_read', data: { done: true }, observedTick: 4 })
-    const result = post_result(swarm, { workId: work.id, agentId: 'agent-2', status: 'success', evidence: [{ kind: 'observation', id: observation.id, tick: 4 }], summary: 'foreign result', tick: 4 })
-    expect(complete_work_from_result(swarm, work.id, work.revision, result.id, 4)).toMatchObject({ ok: false, code: 'claim_owner_mismatch' })
+    const foreignObservation = post_observation(swarm, { observer: 'agent-2', subject: 'done', evidenceClass: 'engine_read', data: { done: true }, observedTick: 4 })
+    const foreignResult = post_result(swarm, { workId: work.id, agentId: 'agent-2', status: 'success', evidence: [{ kind: 'observation', id: foreignObservation.id, tick: 4 }], summary: 'foreign result', tick: 4 })
+    expect(complete_work_from_result(swarm, work.id, work.revision, foreignResult.id, 4)).toMatchObject({ ok: false, code: 'claim_owner_mismatch' })
+    const ownObservation = post_observation(swarm, { observer: agent.id, subject: 'done', evidenceClass: 'engine_read', data: { done: true }, observedTick: 5 })
+    const ownResult = post_result(swarm, { workId: work.id, agentId: agent.id, status: 'success', evidence: [{ kind: 'observation', id: ownObservation.id, tick: 5 }], summary: 'done', tick: 5 })
+    expect(complete_work_from_result(swarm, work.id, work.revision, ownResult.id, 5).ok).toBe(true)
+    expect(agent).toMatchObject({ state: 'available', currentWorkId: undefined })
   })
 })

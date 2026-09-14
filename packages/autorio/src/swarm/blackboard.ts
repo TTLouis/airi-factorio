@@ -14,6 +14,7 @@ import type {
   WorkResult,
   WorldLocation,
 } from './types'
+import { clear_agent_commitment_for_work } from './agents'
 import { allocate_swarm_id } from './storage'
 
 export const MAX_BLACKBOARD_EVENTS = 512
@@ -24,47 +25,32 @@ export function record_blackboard_event(swarm: SwarmStorage, event: Omit<Blackbo
     ...event,
   }
   swarm.board.events.push(record)
-  if (swarm.board.events.length > MAX_BLACKBOARD_EVENTS) {
-    swarm.board.events.shift()
-  }
+  if (swarm.board.events.length > MAX_BLACKBOARD_EVENTS) swarm.board.events.shift()
   return record
 }
 
 function dependencies_satisfied(swarm: SwarmStorage, work: WorkItem) {
-  for (const dependencyId of work.dependencies) {
-    if (swarm.board.work[dependencyId]?.status !== 'completed') return false
-  }
+  for (const dependencyId of work.dependencies) if (swarm.board.work[dependencyId]?.status !== 'completed') return false
   return true
 }
 
 function blockers_satisfied(swarm: SwarmStorage, work: WorkItem) {
-  for (const requestId of work.blockingRequests) {
-    if (swarm.board.requests[requestId]?.status !== 'satisfied') return false
-  }
+  for (const requestId of work.blockingRequests) if (swarm.board.requests[requestId]?.status !== 'satisfied') return false
   return true
 }
 
 export function refresh_work_eligibility(swarm: SwarmStorage, workId: string, tick: SimulationTick) {
   const work = swarm.board.work[workId]
-  if (!work || work.status === 'completed' || work.status === 'cancelled' || work.status === 'claimed' || work.status === 'active') {
-    return work
-  }
-
+  if (!work || work.status === 'completed' || work.status === 'cancelled' || work.status === 'claimed' || work.status === 'active') return work
   let next = work.status
   if (!dependencies_satisfied(swarm, work)) next = 'pending_dependency'
   else if (!blockers_satisfied(swarm, work)) next = 'blocked'
   else next = 'open'
-
   if (next !== work.status) {
     work.status = next
     work.updatedTick = tick
     work.revision += 1
-    record_blackboard_event(swarm, {
-      recordId: work.id,
-      event: next === 'blocked' ? 'blocked' : 'updated',
-      tick,
-      revision: work.revision,
-    })
+    record_blackboard_event(swarm, { recordId: work.id, event: next === 'blocked' ? 'blocked' : 'updated', tick, revision: work.revision })
   }
   return work
 }
@@ -86,9 +72,7 @@ export function create_work(swarm: SwarmStorage, input: CreateWorkInput): WorkIt
   const id = allocate_swarm_id('work', swarm)
   const dependencies = input.dependencies ? [...input.dependencies] : []
   let initialStatus: WorkItem['status'] = 'open'
-  for (const dependencyId of dependencies) {
-    if (swarm.board.work[dependencyId]?.status !== 'completed') initialStatus = 'pending_dependency'
-  }
+  for (const dependencyId of dependencies) if (swarm.board.work[dependencyId]?.status !== 'completed') initialStatus = 'pending_dependency'
   const work: WorkItem = {
     id,
     kind: 'work',
@@ -109,12 +93,7 @@ export function create_work(swarm: SwarmStorage, input: CreateWorkInput): WorkIt
     revision: 1,
   }
   swarm.board.work[id] = work
-  record_blackboard_event(swarm, {
-    recordId: id,
-    event: 'created',
-    tick: input.createdTick,
-    revision: work.revision,
-  })
+  record_blackboard_event(swarm, { recordId: id, event: 'created', tick: input.createdTick, revision: work.revision })
   return work
 }
 
@@ -163,18 +142,11 @@ export function create_request(swarm: SwarmStorage, input: CreateRequestInput): 
     const work = swarm.board.work[workId]
     if (!work) continue
     let seen = false
-    for (const existing of work.blockingRequests) {
-      if (existing === id) seen = true
-    }
+    for (const existing of work.blockingRequests) if (existing === id) seen = true
     if (!seen) work.blockingRequests.push(id)
     refresh_work_eligibility(swarm, workId, input.createdTick)
   }
-  record_blackboard_event(swarm, {
-    recordId: id,
-    event: 'created',
-    tick: input.createdTick,
-    revision: request.revision,
-  })
+  record_blackboard_event(swarm, { recordId: id, event: 'created', tick: input.createdTick, revision: request.revision })
   return request
 }
 
@@ -187,12 +159,7 @@ export function set_request_status(swarm: SwarmStorage, requestId: string, expec
   request.updatedTick = tick
   request.revision += 1
   for (const ref of evidence) request.evidence.push(ref)
-  record_blackboard_event(swarm, {
-    recordId: request.id,
-    event: status === 'satisfied' ? 'satisfied' : status === 'cancelled' ? 'cancelled' : 'updated',
-    tick,
-    revision: request.revision,
-  })
+  record_blackboard_event(swarm, { recordId: request.id, event: status === 'satisfied' ? 'satisfied' : status === 'cancelled' ? 'cancelled' : 'updated', tick, revision: request.revision })
   for (const workId of request.blocksWorkIds) refresh_work_eligibility(swarm, workId, tick)
   return { ok: true as const, request }
 }
@@ -273,9 +240,7 @@ export function post_result(swarm: SwarmStorage, input: PostResultInput) {
   const result: WorkResult = { id, ...input }
   swarm.board.results[id] = result
   const work = swarm.board.work[input.workId]
-  if (work) {
-    for (const ref of input.evidence) work.evidence.push(ref)
-  }
+  if (work) for (const ref of input.evidence) work.evidence.push(ref)
   record_blackboard_event(swarm, { recordId: id, event: 'created', agentId: input.agentId, tick: input.tick, revision: 1 })
   return result
 }
@@ -290,6 +255,7 @@ export function complete_work_from_result(swarm: SwarmStorage, workId: string, e
   if (!claim || claim.agentId !== result.agentId) return { ok: false as const, code: 'claim_owner_mismatch' as const }
   if (result.status !== 'success' || result.evidence.length === 0) return { ok: false as const, code: 'insufficient_evidence' as const }
   delete swarm.board.claims[claim.id]
+  clear_agent_commitment_for_work(swarm, claim.agentId, work.id, tick)
   work.claimId = undefined
   work.status = 'completed'
   work.updatedTick = tick
@@ -297,9 +263,7 @@ export function complete_work_from_result(swarm: SwarmStorage, workId: string, e
   record_blackboard_event(swarm, { recordId: workId, event: 'completed', agentId: result.agentId, tick, revision: work.revision })
   for (const id in swarm.board.work) {
     const candidate = swarm.board.work[id]
-    for (const dependencyId of candidate.dependencies) {
-      if (dependencyId === workId) refresh_work_eligibility(swarm, candidate.id, tick)
-    }
+    for (const dependencyId of candidate.dependencies) if (dependencyId === workId) refresh_work_eligibility(swarm, candidate.id, tick)
   }
   return { ok: true as const, work }
 }
