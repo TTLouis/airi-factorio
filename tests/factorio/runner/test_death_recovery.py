@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from death_recovery import assert_recovered
+from death_recovery import assert_navigation_reached, assert_recovered
 
 
 def observation(**changes):
@@ -45,6 +45,18 @@ def before_observation():
         'iron': 23,
         'copper': 11,
     }
+
+
+def reached_navigation(**result_changes):
+    result = {
+        'accepted': True,
+        'completed': True,
+        'code': 'reached',
+        'actor_id': 99,
+        'target_unit_number': 123,
+    }
+    result.update(result_changes)
+    return {'task_active': False, 'last_result': result}
 
 
 class DeathRecoveryTests(unittest.TestCase):
@@ -130,6 +142,20 @@ class DeathRecoveryTests(unittest.TestCase):
             with self.subTest(after=after):
                 with self.assertRaises(AssertionError):
                     assert_recovered(self.before, after)
+
+    def test_fresh_replacement_movement_requires_exact_reached_receipt(self):
+        assert_navigation_reached(reached_navigation(), 99, 123)
+
+        variants = [
+            {'task_active': True, 'last_result': reached_navigation()['last_result']},
+            reached_navigation(completed=False),
+            reached_navigation(code='unreachable', accepted=False, completed=False),
+            reached_navigation(actor_id=42),
+            reached_navigation(target_unit_number=124),
+        ]
+        for navigation in variants:
+            with self.subTest(navigation=navigation), self.assertRaises(AssertionError):
+                assert_navigation_reached(navigation, 99, 123)
 
 
 if __name__ == '__main__':
