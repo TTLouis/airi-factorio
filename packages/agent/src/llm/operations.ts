@@ -6,7 +6,7 @@ export const factorioNameSchema = z.string()
   .regex(/^[^\u0000-\u001f\u007f]+$/, 'Factorio names cannot contain control characters')
 
 const positiveCount = z.number().int().min(1).max(100000)
-const searchRadius = z.number().int().min(1).max(1024)
+const searchRadius = z.number().int().min(1).max(256)
 const combatSearchRadius = z.number().int().min(1).max(256)
 
 export const structuredOperationSchema = z.discriminatedUnion('name', [
