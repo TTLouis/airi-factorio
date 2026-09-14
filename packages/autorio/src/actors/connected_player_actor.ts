@@ -66,12 +66,16 @@ export class ConnectedPlayerActor implements ControlledActor {
   }
 
   get_crafting_queue(): ActorCraftingQueueItem[] {
-    return (this.player.crafting_queue ?? []).map(item => ({
-      index: item.index,
-      recipe: item.recipe,
-      count: item.count,
-      prerequisite: item.prerequisite,
-    }))
+    const result: ActorCraftingQueueItem[] = []
+    for (const item of this.player.crafting_queue ?? []) {
+      result.push({
+        index: item.index,
+        recipe: item.recipe,
+        count: item.count,
+        prerequisite: item.prerequisite,
+      })
+    }
+    return result
   }
 
   get_crafting_queue_count(recipe: string) {
