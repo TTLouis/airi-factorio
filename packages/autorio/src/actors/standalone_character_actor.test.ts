@@ -56,6 +56,18 @@ describe('StandaloneCharacterActor.create', () => {
     expect(actor).toBeUndefined()
     expect((globalThis as any).storage.standalone_character_unit_number).toBeUndefined()
   })
+
+  it('can create an untracked swarm body without changing legacy singleton storage', () => {
+    ;(globalThis as any).storage.standalone_character_unit_number = 99
+    const character = fake_character({ unit_number: 123 })
+    const surface = fake_surface()
+    surface.create_entity.mockReturnValue(character)
+
+    const actor = StandaloneCharacterActor.create_untracked(surface, {} as any, { x: 1, y: 2 })
+
+    expect(actor?.status_snapshot().actor_id).toBe(123)
+    expect((globalThis as any).storage.standalone_character_unit_number).toBe(99)
+  })
 })
 
 describe('StandaloneCharacterActor.reacquire', () => {
@@ -82,6 +94,18 @@ describe('StandaloneCharacterActor.reacquire', () => {
     const surface = fake_surface({ character: [] })
 
     expect(StandaloneCharacterActor.reacquire(surface)).toBeUndefined()
+  })
+
+  it('can reacquire an explicit swarm body without reading legacy singleton storage', () => {
+    ;(globalThis as any).storage.standalone_character_unit_number = 42
+    const legacy = fake_character({ unit_number: 42 })
+    const swarmBody = fake_character({ unit_number: 77 })
+    const surface = fake_surface({ character: [legacy, swarmBody] })
+
+    const actor = StandaloneCharacterActor.reacquire_unit(surface, 77)
+
+    expect(actor?.character).toBe(swarmBody)
+    expect((globalThis as any).storage.standalone_character_unit_number).toBe(42)
   })
 })
 
