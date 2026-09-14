@@ -49,9 +49,15 @@ export interface PlayerParametersWalkingDirect {
 
 export interface PlayerParametersMineEntity {
   type: TaskStates.MINING
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
   entity_name: string
   /** Remaining mining cycles requested by the operation. */
   count: number
+  /** Original requested cycle count, retained while count is decremented. */
+  requested_count?: number
   /** Current target position while a mining cycle is active. */
   position?: MapPositionStruct
   /** Resource amount seen on the previous tick for standalone-NPC polling. */
@@ -60,12 +66,20 @@ export interface PlayerParametersMineEntity {
 
 export interface PlayerParametersPlaceEntity {
   type: TaskStates.PLACING
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
   entity_name: string
   position?: MapPositionStruct
 }
 
 export interface PlayerParametersMoveItems {
   type: TaskStates.MOVING_ITEMS
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
   item_name: string
   entity_name: string
   max_count: number
@@ -121,7 +135,12 @@ export interface PlayerParametersResearchTechnology {
 
 export interface PlayerParametersWaiting {
   type: TaskStates.WAITING
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
   remaining_ticks: number
+  requested_ticks?: number
 }
 
 export type PlayerParameters
