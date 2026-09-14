@@ -59,45 +59,45 @@ function cancel_tasks() {
   }
 }
 
-// Declared as an arrow function, like every other handler in the
-// remote.add_interface table below. A plain `function` declaration used as a
-// bare table value gets an implicit Lua `self` parameter from TypeScriptToLua,
-// which silently shifts every argument by one (mode receives the session
-// token, session is left nil) since remote.call has no receiver to bind self.
-const configure = (mode: ActorMode, session: string) => {
-  if ((mode !== 'npc' && mode !== 'player') || session === '') {
-    return false
-  }
-
-  cancel_tasks()
-  const changed = remote.call('autorio_actor', 'set_mode', mode) as [boolean, unknown]
-  if (!changed || changed[0] !== true) {
-    return false
-  }
-
-  const status = actor_status()
-  const actor = status.actor
-  if (!actor || status.mode !== mode || actor.valid !== true || actor.has_character !== true || actor.actor_id === undefined) {
-    return false
-  }
-  if (mode === 'npc' && actor.kind !== 'standalone_character') {
-    return false
-  }
-  if (mode === 'player' && actor.kind !== 'connected_player') {
-    return false
-  }
-
-  const data = state()
-  data.airi_deployment_mode = mode
-  data.airi_deployment_session = session
-  data.airi_deployment_actor_id = actor.actor_id
-  data.airi_deployment_actor_kind = actor.kind
-  data.airi_deployment_epoch = (data.airi_deployment_epoch ?? 0) + 1
-  return session
-}
-
 remote.add_interface('airi_deployment', {
-  configure,
+  // Declared inline, like every other handler in this table. TypeScriptToLua
+  // gave a `const configure = (...) => {...}` referenced here by shorthand an
+  // implicit extra leading parameter (TSTL could not prove the standalone
+  // binding is never used as a method), which silently shifted every
+  // argument: mode received the session token and session was left nil.
+  // Declaring the handler directly as a table value compiles with no such
+  // parameter, matching status/authorize/cancel/disable below.
+  configure: (mode: ActorMode, session: string) => {
+    if ((mode !== 'npc' && mode !== 'player') || session === '') {
+      return false
+    }
+
+    cancel_tasks()
+    const changed = remote.call('autorio_actor', 'set_mode', mode) as [boolean, unknown]
+    if (!changed || changed[0] !== true) {
+      return false
+    }
+
+    const status = actor_status()
+    const actor = status.actor
+    if (!actor || status.mode !== mode || actor.valid !== true || actor.has_character !== true || actor.actor_id === undefined) {
+      return false
+    }
+    if (mode === 'npc' && actor.kind !== 'standalone_character') {
+      return false
+    }
+    if (mode === 'player' && actor.kind !== 'connected_player') {
+      return false
+    }
+
+    const data = state()
+    data.airi_deployment_mode = mode
+    data.airi_deployment_session = session
+    data.airi_deployment_actor_id = actor.actor_id
+    data.airi_deployment_actor_kind = actor.kind
+    data.airi_deployment_epoch = (data.airi_deployment_epoch ?? 0) + 1
+    return session
+  },
   status: () => {
     const actor = actor_status()
     const tasks = operation_status()
