@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from persistence_verify import assert_restarted
+from persistence_verify import assert_navigation_reached, assert_restarted
 
 
 def before_state():
@@ -37,6 +37,18 @@ def after_state(**changes):
     }
     value.update(changes)
     return value
+
+
+def reached_navigation(**result_changes):
+    result = {
+        'accepted': True,
+        'completed': True,
+        'code': 'reached',
+        'actor_id': 42,
+        'target_unit_number': 90,
+    }
+    result.update(result_changes)
+    return {'task_active': False, 'last_result': result}
 
 
 class PersistenceTests(unittest.TestCase):
@@ -95,6 +107,20 @@ class PersistenceTests(unittest.TestCase):
     def test_missing_persisted_target_does_not_pass(self):
         with self.assertRaises(AssertionError):
             assert_restarted(self.before, after_state(target_alive=False))
+
+    def test_post_restart_movement_requires_exact_reached_receipt(self):
+        assert_navigation_reached(reached_navigation(), 42, 90)
+
+        variants = [
+            {'task_active': True, 'last_result': reached_navigation()['last_result']},
+            reached_navigation(completed=False),
+            reached_navigation(code='stuck', accepted=False, completed=False),
+            reached_navigation(actor_id=99),
+            reached_navigation(target_unit_number=91),
+        ]
+        for navigation in variants:
+            with self.subTest(navigation=navigation), self.assertRaises(AssertionError):
+                assert_navigation_reached(navigation, 42, 90)
 
 
 if __name__ == '__main__':
