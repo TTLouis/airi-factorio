@@ -60,6 +60,7 @@ function cancel_tasks() {
 }
 
 function configure(mode: ActorMode, session: string) {
+  log(`[AIRI-DEBUG] configure: received mode=${helpers.table_to_json(mode)} (type ${typeof mode}), session=${helpers.table_to_json(session)} (type ${typeof session}, length ${session ? session.length : -1})`)
   if ((mode !== 'npc' && mode !== 'player') || session === '') {
     log('[AIRI-DEBUG] configure: early-return, invalid mode or empty session')
     return false
