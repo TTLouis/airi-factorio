@@ -13,7 +13,7 @@ const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
 // This immutable commit contains the synchronized standalone v8 install.sh.
 // Future installer revisions intentionally require advancing this pin after
 // the new install.sh has been committed, avoiding a mutable branch fetch.
-const EGG_INSTALL_REF = '2d9ea4cbcd65dcf850a5f6deed49cf5747433571'
+const EGG_INSTALL_REF = 'b75c93dd784509f78f04123e613fe618cdd8fb05'
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
