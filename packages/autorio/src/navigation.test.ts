@@ -15,6 +15,7 @@ function make_context() {
   }
   const character = {
     valid: true,
+    name: 'character',
     position,
   }
   const surface = {
@@ -66,7 +67,7 @@ describe('bounded navigation controller', () => {
   })
 
   it('binds the task to actor identity and records the exact path request id', () => {
-    const { actor, controller, manager, surface } = make_context()
+    const { actor, controller, manager, surface, position } = make_context()
 
     expect(controller.submit('steel-chest', 40)).toBe(true)
     controller.tick(actor)
@@ -77,6 +78,7 @@ describe('bounded navigation controller', () => {
     expect(task.owner_force_index).toBe(1)
     expect(task.path_request_id).toBe(101)
     expect(task.calculating_path).toBe(true)
+    expect(surface.find_non_colliding_position).toHaveBeenCalledWith('character', position, 2, 0.25, false)
     expect(surface.request_path).toHaveBeenCalledTimes(1)
   })
 
