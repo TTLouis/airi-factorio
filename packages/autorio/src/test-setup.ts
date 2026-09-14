@@ -31,6 +31,12 @@ import { event_handlers, set_load_handler } from './test-event-registry'
 
 ;(globalThis as any).rendering = {
   clear: () => {},
+  draw_line: () => {},
+}
+
+;(globalThis as any).serpent = {
+  line: (value: unknown) => String(value),
+  block: (value: unknown) => String(value),
 }
 
 // Factorio 2.0's per-save persistence table. Real shape is declared locally
