@@ -1,51 +1,22 @@
 #!/usr/bin/env node
-// Regenerates the checksummed AIRI_PAYLOAD blob embedded in install.sh and
-// egg-airi-factorio-server.json from the real, diffable source at
-// payload-src/installer.sh.
-//
-// What "byte-identical" means here, precisely: the thing that actually gets
-// installed on a server is whatever install.sh's own bootstrap logic
-// produces after `base64 -d | gzip -dc` — i.e. the *decompressed* payload.
-// This script's real safety guarantee is that decompressing its freshly
-// built blob reproduces payload-src/installer.sh exactly. The *compressed*
-// bytes are allowed to differ from what's currently embedded (gzip isn't a
-// canonical encoding — a different gzip implementation/version can compress
-// identical input to a different, equally valid bitstream), so
-// EXPECTED_BASE64_BYTES is expected to change even when nothing about the
-// installed content has changed. If the decompressed round-trip doesn't
-// match byte-for-byte, this script refuses to touch anything.
-import { execFileSync } from 'node:child_process'
-import { gzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
+import { gzipSync, gunzipSync } from 'node:zlib'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const sourcePath = join(here, 'payload-src', 'installer.sh')
-const installShPath = join(here, 'install.sh')
-const eggJsonPath = join(here, 'egg-airi-factorio-server.json')
-
-const HEREDOC_START = `cat > "$PAYLOAD" <<'AIRI_PAYLOAD'`
-const HEREDOC_END = `AIRI_PAYLOAD`
+const installPath = join(here, 'install.sh')
+const eggPath = join(here, 'egg-airi-factorio-server.json')
 const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
 
-function wrap_base64(base64) {
-  // Matches GNU coreutils `base64`'s default 76-column wrapping, which is
-  // what produced the payload currently embedded in both files.
-  const lines = []
-  for (let i = 0; i < base64.length; i += 76) {
-    lines.push(base64.slice(i, i + 76))
-  }
-  return lines
+function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex')
 }
 
-function gzip_deterministic(buffer) {
-  const compressed = gzipSync(buffer, { level: 9 })
-  // Zero the MTIME field (gzip header bytes 4-7) so the same input always
-  // compresses to the same bytes, regardless of when this script runs —
-  // matching the mtime=0 convention already present in the currently
-  // embedded blob (inspected directly: header is 1f 8b 08 00 00 00 00 00 ..).
+function deterministicGzip(bytes) {
+  const compressed = gzipSync(bytes, { level: 9 })
   compressed[4] = 0
   compressed[5] = 0
   compressed[6] = 0
@@ -53,101 +24,152 @@ function gzip_deterministic(buffer) {
   return compressed
 }
 
+function wrapBase64(text, width = 76) {
+  const lines = []
+  for (let offset = 0; offset < text.length; offset += width) lines.push(text.slice(offset, offset + width))
+  return lines.join('\n')
+}
+
 function assertNpcV8Source(source) {
   const text = source.toString('utf8')
   const failures = []
-  if (!text.includes('airi-deploy-v8')) failures.push('missing v8 deployment guard revision')
-  if (!text.includes('AIRI_ACTOR_MODE')) failures.push('missing AIRI_ACTOR_MODE configuration')
-  if (!text.includes('AIRI_CHAT_PLAYER')) failures.push('missing AIRI_CHAT_PLAYER chat-authorization separation')
-  if (text.includes('airi-deploy-v7')) failures.push('still contains the v7 deployment guard')
-  if (text.includes('explicit-authorized-single-connected-player')) failures.push('still contains the connected-player source patch contract')
-  if (text.includes(`AIRI_REF="${LEGACY_SOURCE_PIN}"`)) failures.push('still pins the legacy connected-player source revision')
-  if (text.includes('operationCommands')) failures.push('still exposes the legacy operationCommands model contract')
-  if (failures.length) {
-    throw new Error(`REFUSING to regenerate Pterodactyl artifacts from a legacy payload source: ${failures.join('; ')}. Finish the v8 NPC payload integration first.`)
+  if (!text.includes('airi-deploy-v8')) failures.push('missing v8 deployment revision')
+  if (!text.includes('AIRI_ACTOR_MODE')) failures.push('missing AIRI_ACTOR_MODE')
+  if (!text.includes('AIRI_CHAT_PLAYER')) failures.push('missing AIRI_CHAT_PLAYER')
+  if (!/AIRI_REF="[a-f0-9]{40}"/.test(text)) failures.push('missing immutable AIRI_REF pin')
+  if (text.includes('airi-deploy-v7')) failures.push('contains v7 deployment guard')
+  if (text.includes('explicit-authorized-single-connected-player')) failures.push('contains connected-player patch contract')
+  if (text.includes(`AIRI_REF="${LEGACY_SOURCE_PIN}"`)) failures.push('pins the legacy connected-player source')
+  if (text.includes('operationCommands')) failures.push('contains legacy operationCommands model contract')
+  if (failures.length) throw new Error(`Refusing to generate v8 artifacts: ${failures.join('; ')}`)
+}
+
+function bootstrap(source) {
+  assertNpcV8Source(source)
+  const archive = deterministicGzip(source)
+  if (!gunzipSync(archive).equals(source)) throw new Error('Deterministic payload round-trip failed')
+  const sourceHash = sha256(source)
+  const archiveHash = sha256(archive)
+  const encoded = wrapBase64(archive.toString('base64'))
+  return `#!/usr/bin/env bash
+# Generated AIRI Factorio standalone-NPC v8 Pterodactyl bootstrap.
+# Source of truth: deploy/pterodactyl/payload-src/installer.sh
+set -Eeuo pipefail
+umask 077
+BOOT_DIR=""
+EXPECTED_SOURCE_SHA256="${sourceHash}"
+EXPECTED_SOURCE_BYTES="${source.length}"
+EXPECTED_ARCHIVE_SHA256="${archiveHash}"
+log() { printf '[AIRI bootstrap] %s\\n' "$*"; }
+fail() { log "ERROR: $*" >&2; exit 78; }
+cleanup() { local code=$?; trap - EXIT; [[ -z "$BOOT_DIR" || ! -d "$BOOT_DIR" ]] || rm -rf -- "$BOOT_DIR"; exit "$code"; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+for tool in awk base64 gzip sha256sum mktemp wc bash mkdir rm; do command -v "$tool" >/dev/null || fail "Missing bootstrap tool: $tool"; done
+ROOT="\${AIRI_INSTALL_ROOT:-/mnt/server}"
+[[ "$ROOT" == /* && "$ROOT" != / ]] || fail 'Installer root must be an absolute directory other than /.'
+mkdir -p -- "$ROOT"
+BOOT_DIR="$(mktemp -d "$ROOT/.airi-bootstrap.XXXXXX")"
+PAYLOAD="$BOOT_DIR/installer.b64"
+ARCHIVE="$BOOT_DIR/installer.sh.gz"
+INSTALLER="$BOOT_DIR/installer.sh"
+cat > "$PAYLOAD" <<'AIRI_PAYLOAD'
+${encoded}
+AIRI_PAYLOAD
+base64 -d "$PAYLOAD" > "$ARCHIVE" || fail 'Payload base64 decode failed'
+[[ "$(sha256sum "$ARCHIVE" | awk '{print $1}')" == "$EXPECTED_ARCHIVE_SHA256" ]] || fail 'Compressed payload checksum mismatch'
+gzip -dc "$ARCHIVE" > "$INSTALLER" || fail 'Payload decompression failed'
+[[ "$(wc -c < "$INSTALLER" | tr -d '[:space:]')" == "$EXPECTED_SOURCE_BYTES" ]] || fail 'Installer payload size mismatch'
+[[ "$(sha256sum "$INSTALLER" | awk '{print $1}')" == "$EXPECTED_SOURCE_SHA256" ]] || fail 'Installer payload checksum mismatch'
+if [[ "\${1:-}" == '--verify-only' ]]; then log 'Payload verified; installation was not run.'; exit 0; fi
+[[ $# == 0 ]] || fail 'Only --verify-only is supported as a bootstrap argument.'
+log 'Payload verified; starting standalone-NPC v8 installer.'
+bash "$INSTALLER"
+`
+}
+
+function variable(name, description, envVariable, defaultValue, rules, { viewable = true } = {}) {
+  return {
+    name,
+    description,
+    env_variable: envVariable,
+    default_value: defaultValue,
+    user_viewable: viewable,
+    user_editable: true,
+    rules,
+    field_type: 'text',
   }
 }
 
-function splice_between(text, startMarker, endMarker, replacement) {
-  const startIdx = text.indexOf(startMarker)
-  if (startIdx === -1) {
-    throw new Error(`start marker not found: ${startMarker}`)
+function egg(installScript) {
+  return {
+    _comment: 'DO NOT EDIT: generated by deploy/pterodactyl/build-payload.mjs',
+    meta: { version: 'PTDL_v2', update_url: null },
+    exported_at: '2026-09-14T00:00:00+00:00',
+    name: 'AIRI Factorio Server (Standalone NPC v8)',
+    author: 'noreply@ttlouis.space',
+    description: 'Standalone-NPC AIRI Factorio server. AIRI owns a persistent zero-player character; optional human chat authorization is separate from NPC ownership. Loopback-only RCON is managed by the bundled supervisor.',
+    features: [],
+    docker_images: {
+      'ghcr.io/ptero-eggs/yolks:debian_bookworm': 'ghcr.io/ptero-eggs/yolks:debian_bookworm',
+    },
+    file_denylist: [],
+    startup: 'bash ./start-airi.sh',
+    config: {
+      files: '{}',
+      startup: '{"done": "AIRI Factorio ready"}',
+      logs: '{}',
+      stop: '^C',
+    },
+    scripts: {
+      installation: {
+        script: installScript,
+        container: 'ghcr.io/ptero-eggs/yolks:debian_bookworm',
+        entrypoint: 'bash',
+      },
+    },
+    variables: [
+      variable('AIRI Actor Mode', 'Controlled actor mode. The v8 egg intentionally supports standalone NPC ownership only.', 'AIRI_ACTOR_MODE', 'npc', 'required|string|in:npc'),
+      variable('AIRI Chat Player', 'Optional exact in-game player name allowed to issue !airi chat requests. This does not control that player character.', 'AIRI_CHAT_PLAYER', '', 'nullable|string|max:64'),
+      variable('OpenAI API Key', 'Provider credential. Kept environment-only and never written to airi-config.json.', 'OPENAI_API_KEY', '', 'required|string|max:512', { viewable: false }),
+      variable('AI Model', 'OpenAI-compatible model identifier used by AIRI.', 'OPENAI_MODEL', 'gpt-5.6', 'required|string|max:200|regex:/^[a-zA-Z0-9._:\\/-]+$/'),
+      variable('Provider Base URL', 'OpenAI-compatible API base URL. Remote endpoints must use HTTPS.', 'OPENAI_API_BASEURL', 'https://api.openai.com/v1', 'required|string|url|max:255'),
+      variable('Save File Name', 'Save under /saves. Leave blank to use the newest existing save or create airi-world.zip.', 'SAVE_NAME', '', 'nullable|string|max:160'),
+      variable('Max AI Requests Per Hour', 'Persisted hourly provider request cap.', 'MAX_PROVIDER_REQUESTS_PER_HOUR', '30', 'required|numeric|between:1,1200'),
+      variable('Shutdown Timeout (ms)', 'Graceful Factorio save/stop timeout before forced termination.', 'SHUTDOWN_TIMEOUT_MS', '60000', 'required|numeric|between:1000,300000'),
+      variable('Factorio Version', 'Factorio 2.0 headless version: latest, experimental, or exact 2.0.x.', 'FACTORIO_VERSION', 'latest', 'required|string|max:20'),
+    ],
   }
-  const bodyStart = text.indexOf('\n', startIdx) + 1
-  const endIdx = text.indexOf(endMarker, bodyStart)
-  if (endIdx === -1) {
-    throw new Error(`end marker not found: ${endMarker}`)
-  }
-  return text.slice(0, bodyStart) + replacement + text.slice(endIdx)
 }
 
-function replace_constant(text, name, value) {
-  const re = new RegExp(`^(${name}=")[^"]*(")`, 'm')
-  if (!re.test(text)) {
-    throw new Error(`constant not found: ${name}`)
-  }
-  return text.replace(re, `$1${value}$2`)
+export function buildArtifacts(source) {
+  const installScript = bootstrap(source)
+  const eggJson = `${JSON.stringify(egg(installScript), null, 4)}\n`
+  return { installScript, eggJson }
 }
 
 function main() {
+  const checkOnly = process.argv.includes('--check')
+  if (process.argv.length > 3 || (process.argv.length === 3 && !checkOnly)) throw new Error('Usage: node build-payload.mjs [--check]')
   const source = readFileSync(sourcePath)
+  const { installScript, eggJson } = buildArtifacts(source)
 
-  // The repository has moved to the validated standalone-NPC runtime. Do not
-  // accidentally publish a freshly checksummed egg that still contains the
-  // previous connected-player v7 deployment contract while v8 integration is
-  // in progress.
-  assertNpcV8Source(source)
-
-  const compressed = gzip_deterministic(source)
-  const base64 = compressed.toString('base64')
-  const base64Lines = wrap_base64(base64)
-
-  const expectedSha256 = createHash('sha256').update(source).digest('hex')
-  const expectedBytes = String(source.length)
-  const expectedBase64Bytes = String(base64.length)
-
-  // Verify round-trip BEFORE touching anything: decode our own freshly built
-  // blob exactly the way install.sh's bootstrap does, and confirm it
-  // reproduces payload-src/installer.sh byte-for-byte.
-  const roundTrip = execFileSync('gzip', ['-dc'], { input: compressed, maxBuffer: 1024 * 1024 * 16 })
-  if (Buffer.compare(roundTrip, source) !== 0) {
-    console.error('REFUSING to update install.sh / egg JSON: round-trip decode did not reproduce payload-src/installer.sh byte-for-byte.')
-    process.exit(1)
+  if (checkOnly) {
+    const currentInstall = readFileSync(installPath, 'utf8')
+    const currentEgg = readFileSync(eggPath, 'utf8')
+    if (currentInstall !== installScript || currentEgg !== eggJson) {
+      throw new Error('Generated Pterodactyl artifacts are stale; run node deploy/pterodactyl/build-payload.mjs')
+    }
+    console.log('Pterodactyl v8 artifacts are current and deterministic.')
+    return
   }
 
-  let installSh = readFileSync(installShPath, 'utf8')
-  const usesCrlf = installSh.includes('\r\n')
-  const newline = usesCrlf ? '\r\n' : '\n'
-  const newBody = base64Lines.join(newline) + newline
-
-  installSh = splice_between(installSh, HEREDOC_START, HEREDOC_END, newBody)
-  installSh = replace_constant(installSh, 'EXPECTED_SHA256', expectedSha256)
-  installSh = replace_constant(installSh, 'EXPECTED_BYTES', expectedBytes)
-  installSh = replace_constant(installSh, 'EXPECTED_BASE64_BYTES', expectedBase64Bytes)
-
-  // The egg JSON embeds the exact same script as a JSON string (this is an
-  // invariant the existing README already documents — see deploy/pterodactyl/README.md).
-  // JSON.stringify correctly escapes the CR/LF bytes now in installSh; we
-  // only need to additionally escape `/` as `\/` to match the panel
-  // exporter's own style (cosmetic — both are valid JSON) and strip the
-  // surrounding quotes JSON.stringify adds.
-  const escapedScript = JSON.stringify(installSh).slice(1, -1).replaceAll('/', '\\/')
-
-  let eggJson = readFileSync(eggJsonPath, 'utf8')
-  const scriptFieldRe = /("script":\s*")((?:[^"\\]|\\.)*)(")/
-  if (!scriptFieldRe.test(eggJson)) {
-    throw new Error('scripts.installation.script field not found in egg JSON')
-  }
-  eggJson = eggJson.replace(scriptFieldRe, (_match, prefix, _old, suffix) => `${prefix}${escapedScript}${suffix}`)
-
-  writeFileSync(installShPath, installSh)
-  writeFileSync(eggJsonPath, eggJson)
-
-  console.log('Payload rebuilt from payload-src/installer.sh.')
-  console.log(`  decompressed sha256: ${expectedSha256}`)
-  console.log(`  decompressed bytes:  ${expectedBytes}`)
-  console.log(`  base64 bytes:        ${expectedBase64Bytes}`)
-  console.log('Round-trip verified: decoding the new blob reproduces payload-src/installer.sh exactly.')
+  writeFileSync(installPath, installScript)
+  writeFileSync(eggPath, eggJson)
+  console.log('Generated standalone-NPC v8 install.sh and egg-airi-factorio-server.json.')
+  console.log(`  payload source sha256: ${sha256(source)}`)
+  console.log(`  install script bytes: ${Buffer.byteLength(installScript)}`)
 }
 
-main()
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main()
