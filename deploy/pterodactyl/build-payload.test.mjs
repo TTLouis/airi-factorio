@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { buildArtifacts, installerLoader, verifyGeneratedArtifacts } from './build-payload.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const PAYLOAD_REF = 'd29b0943d7cdaf4e4d5b22a4085fc0909e2f1d0c'
+const PAYLOAD_REF = '301cab56d649926ac193ec4e071e271344401d11'
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
 DEPLOYMENT_REVISION="airi-deploy-v8-test"
@@ -52,6 +52,11 @@ test('generated egg is valid PTDL_v2 JSON with the v8 variable contract', () => 
   assert.equal(chatPlayers.default_value, '')
   assert.equal(chatPlayers.rules, 'nullable|string|max:512')
 
+  const providerTimeout = egg.variables.find(entry => entry.env_variable === 'PROVIDER_TIMEOUT_MS')
+  assert.ok(providerTimeout)
+  assert.equal(providerTimeout.default_value, '120000')
+  assert.equal(providerTimeout.rules, 'required|numeric|between:1000,600000')
+
   const factorioUsername = egg.variables.find(entry => entry.env_variable === 'FACTORIO_USERNAME')
   assert.ok(factorioUsername)
   assert.equal(factorioUsername.default_value, '')
@@ -72,5 +77,5 @@ test('committed Pterodactyl artifacts are internally valid', () => {
   assert.equal(verifyGeneratedArtifacts(committedSource, committedInstall, committedEggText), true)
   assert.equal(egg.scripts.installation.script, committedInstall)
   assert.match(committedInstall, new RegExp(PAYLOAD_REF))
-  assert.match(committedInstall, /EXPECTED_SOURCE_SHA256="afa0a0971b2c4082b14bf33684810d1033514e4de8dafb3cb4400fe6c8962361"/)
+  assert.match(committedInstall, /EXPECTED_SOURCE_SHA256="5688c52687bec726b0414cd64c78668a44c1a9f674001803d330dd90f09e5c0e"/)
 })
