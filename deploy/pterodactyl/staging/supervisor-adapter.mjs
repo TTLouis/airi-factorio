@@ -91,9 +91,13 @@ export async function executeAuthorizedBatch(rcon, epoch, commands, marker = `AI
   // logical queue during one Lua/RCON command so Factorio cannot advance a tick
   // between operation N and N+1. Runtime failure of an earlier owned operation
   // can then reliably cancel the already-queued dependent work.
+  //
+  // Keep each remote.call return value in its native shape: some Autorio calls
+  // return a boolean while others return a tuple-table such as {true, message}.
+  // Reject either a literal false or a tuple whose first element is false.
   const admissions = validated.map((command, index) => {
     const slot = index + 1
-    return `local r${slot}={${command}}; if r${slot}[1]==false then error("autorio rejected operation ${slot}") end; results[${slot}]=r${slot}`
+    return `local r${slot}=${command}; if r${slot}==false or (type(r${slot})=="table" and r${slot}[1]==false) then error("autorio rejected operation ${slot}") end; results[${slot}]=r${slot}`
   }).join('; ')
   const wrapped = `/silent-command local ok,result=pcall(function() if not remote.call("airi_deployment","authorize",${epoch}) then error("stale npc actor epoch") end; local results={}; ${admissions}; return results end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
   const parsed = acknowledgement(await rcon.command(wrapped), marker, 'operation batch')
