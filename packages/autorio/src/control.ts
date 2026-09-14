@@ -15,6 +15,7 @@ import { new_combat_controller } from './combat'
 import { new_crafting_controller } from './crafting'
 import { new_navigation_controller } from './navigation'
 import { new_research_controller } from './research'
+import { new_swarm_runtime_service } from './swarm/runtime_service'
 import { new_task_manager } from './task_manager'
 import { create_tools_remote_interface } from './tools'
 import { TaskStates } from './types'
@@ -33,6 +34,13 @@ const crafting_controller = new_crafting_controller(get_controlled_actor, task_m
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
 
+let swarm_runtime: ReturnType<typeof new_swarm_runtime_service> | undefined
+
+function get_swarm_runtime() {
+  if (swarm_runtime === undefined) swarm_runtime = new_swarm_runtime_service()
+  return swarm_runtime
+}
+
 remote.add_interface('autorio_navigation', {
   status: () => navigation_controller.status(),
 })
@@ -49,6 +57,19 @@ remote.add_interface('autorio_research', {
 
 remote.add_interface('autorio_combat', {
   status: () => combat_controller.status(),
+})
+
+remote.add_interface('autorio_swarm', {
+  create_actor: (x?: number, y?: number, surface_index: number = 1, force_name: string = 'player') =>
+    get_swarm_runtime().create_actor(x, y, surface_index, force_name),
+  status: (actor_id?: string) => get_swarm_runtime().status(actor_id),
+  wait: (actor_id: string, ticks: number) => get_swarm_runtime().wait(actor_id, ticks),
+  walk_to_position: (actor_id: string, x: number, y: number) =>
+    get_swarm_runtime().walk_to_position(actor_id, x, y),
+  cancel: (actor_id: string) => get_swarm_runtime().cancel(actor_id),
+  destroy_body: (actor_id: string) => get_swarm_runtime().destroy_body(actor_id),
+  replace_body: (actor_id: string, x?: number, y?: number, surface_index: number = 1, force_name: string = 'player') =>
+    get_swarm_runtime().replace_body(actor_id, x, y, surface_index, force_name),
 })
 
 function log_actor_info() {
@@ -200,10 +221,15 @@ function state_walking_direct(actor: ControlledActor) {
 script.on_event(defines.events.on_selected_entity_changed, (unused_event: OnSelectedEntityChangedEvent) => {})
 
 script.on_event(defines.events.on_script_path_request_finished, (event: OnScriptPathRequestFinishedEvent) => {
-  navigation_controller.on_path_finished(event)
+  const routed = get_swarm_runtime().on_path_finished(event)
+  if ('code' in routed && routed.code === 'not_owned') {
+    navigation_controller.on_path_finished(event)
+  }
 })
 
 script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEntityEvent) => {
+  const routed = get_swarm_runtime().on_player_mined_entity(event.player_index)
+  if (!('code' in routed) || routed.code !== 'not_owned') return
   const actor = get_controlled_actor()
   if (!actor) return
   basic_operation_runtime.on_player_mined_entity(actor, event.player_index)
@@ -220,6 +246,10 @@ let no_actor_found = false
 
 script.on_event(defines.events.on_tick, (unused_event) => {
   if (!setup_complete) setup()
+
+  // Swarm actors are independent of the legacy selected actor. Always tick all
+  // attached logical actors before applying the compatibility singleton path.
+  get_swarm_runtime().tick_all()
 
   const actor = get_controlled_actor()
   if (actor === undefined || actor.character === undefined || !actor.is_valid) {
