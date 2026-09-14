@@ -6,8 +6,8 @@ import { TaskStates } from './types'
 import { direction_towards } from './utils/direction'
 import { distance } from './utils/math'
 
-const MAX_SEARCH_RADIUS = 256
-const MAX_NAVIGATION_TICKS = 60 * 60
+const MAX_SEARCH_RADIUS = 4096
+const MAX_NAVIGATION_TICKS = 10 * 60 * 60
 const PATH_REQUEST_TIMEOUT_TICKS = 15 * 60
 const STUCK_TICKS = 10 * 60
 const PATH_RETRY_DELAY_TICKS = 30
@@ -128,7 +128,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
   }
 
   function submit(entity_name: string, search_radius: number): boolean {
-    if (typeof entity_name !== 'string' || entity_name.length === 0) {
+    if (typeof entity_name !== 'string' || entity_name.length === 0 || !prototypes.entity[entity_name]) {
       record(get_actor(), undefined, false, false, 'invalid_entity_name')
       return false
     }
@@ -173,10 +173,6 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return false
     }
 
-    // Validate the start with the character prototype, not an iron-chest proxy.
-    // A character can legally stand on transport belts and other walkable
-    // entities that a chest cannot occupy; using a chest could move the
-    // pathfinder's start away from AIRI's real position.
     const start = actor.surface.find_non_colliding_position(
       character.name,
       character.position,
@@ -195,10 +191,6 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return false
     }
 
-    // Match Factorio's real character geometry. In 2.0.77 the character's
-    // collision mask deliberately does not collide with transport belts, while
-    // the previous hard-coded `object` layer did. Using the prototype keeps
-    // pathfinding aligned with places the NPC can physically occupy.
     const character_prototype = character.prototype
 
     task.path_attempts = (task.path_attempts ?? 0) + 1
@@ -269,18 +261,11 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
 
   function on_path_finished(event: OnScriptPathRequestFinishedEvent) {
     const task = manager.player_state.parameters_walk_to_entity
-    if (!task || manager.player_state.task_state !== TaskStates.WALKING_TO_ENTITY) {
-      return
-    }
-    if (task.path_request_id === undefined || event.id !== task.path_request_id) {
-      log(`[AUTORIO] Ignoring stale path result id=${event.id}; active=${task.path_request_id ?? 'none'}`)
-      return
-    }
+    if (!task || manager.player_state.task_state !== TaskStates.WALKING_TO_ENTITY) return
+    if (task.path_request_id === undefined || event.id !== task.path_request_id) return
 
     const actor = get_actor()
-    if (!actor || manager.player_state.parameters_walk_to_entity !== task) {
-      return
-    }
+    if (!actor || manager.player_state.parameters_walk_to_entity !== task) return
     if (!identity_matches(actor, task)) {
       fail(actor, task, 'actor_changed')
       return
@@ -296,7 +281,6 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
         return
       }
       task.next_retry_tick = game.tick + PATH_RETRY_DELAY_TICKS
-      log('[AUTORIO] Pathfinder busy; bounded retry scheduled')
       return
     }
 
@@ -310,14 +294,11 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     task.path_index = 1
     task.last_progress_tick = game.tick
     task.last_waypoint_distance = distance(actor.position, event.path[0].position)
-    log(`[AUTORIO] Accepted path result with ${event.path.length} waypoints`)
   }
 
   function follow_path(actor: ControlledActor, task: PlayerParametersWalkToEntity) {
     const path = task.path
-    if (!path || path.length === 0) {
-      return false
-    }
+    if (!path || path.length === 0) return false
 
     if (!task.path_drawn) {
       draw_path(actor, path)
@@ -335,9 +316,6 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return true
     }
 
-    // Position change alone is not navigation progress: a transport belt can
-    // move an idle/walking character sideways or backward. Only reset the stuck
-    // timer when AIRI materially closes distance to the current path waypoint.
     const best_distance = task.last_waypoint_distance
     if (best_distance === undefined || waypoint_distance <= best_distance - PROGRESS_DISTANCE) {
       task.last_waypoint_distance = waypoint_distance
@@ -355,17 +333,13 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
 
   function tick(actor: ControlledActor) {
     const task = manager.player_state.parameters_walk_to_entity
-    if (!task || manager.player_state.task_state !== TaskStates.WALKING_TO_ENTITY) {
-      return
-    }
+    if (!task || manager.player_state.task_state !== TaskStates.WALKING_TO_ENTITY) return
     if (!identity_matches(actor, task)) {
       fail(actor, task, 'actor_changed')
       return
     }
 
-    if (!task.target && !acquire(actor, task)) {
-      return
-    }
+    if (!task.target && !acquire(actor, task)) return
 
     const target = task.target
     if (!target || !target.valid) {
@@ -391,16 +365,12 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
 
     if (task.calculating_path) {
       const requested_tick = task.path_requested_tick ?? game.tick
-      if (game.tick - requested_tick > PATH_REQUEST_TIMEOUT_TICKS) {
-        repath(actor, task, 'path_timeout')
-      }
+      if (game.tick - requested_tick > PATH_REQUEST_TIMEOUT_TICKS) repath(actor, task, 'path_timeout')
       return
     }
 
     if (task.next_retry_tick !== undefined) {
-      if (game.tick >= task.next_retry_tick) {
-        request_path(actor, task)
-      }
+      if (game.tick >= task.next_retry_tick) request_path(actor, task)
       return
     }
 
