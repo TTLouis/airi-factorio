@@ -49,6 +49,12 @@ function valid_count(count: number) {
 }
 
 function identity_matches(actor: ControlledActor, task: PlayerParametersCraftItem) {
+  // Never infer ownership from whichever actor happens to be resolved now.
+  // Legacy/synthetic task data may not carry ownership metadata at all.
+  if (task.owner_actor_id === undefined || task.owner_actor_kind === undefined || task.owner_force_index === undefined) {
+    return false
+  }
+
   const identity = actor.status_snapshot()
   return identity.actor_id !== undefined
     && identity.actor_id === task.owner_actor_id
@@ -301,8 +307,12 @@ export function new_crafting_controller(get_actor: () => ControlledActor | undef
 
   manager.register_cancel_handler(TaskStates.CRAFTING, () => {
     const task = manager.player_state.parameters_craft_item
+    if (!task || task.owner_actor_id === undefined || task.owner_actor_kind === undefined || task.owner_force_index === undefined) {
+      return
+    }
+
     const actor = get_actor()
-    if (!task || !actor || !identity_matches(actor, task)) {
+    if (!actor || !identity_matches(actor, task)) {
       return
     }
 
