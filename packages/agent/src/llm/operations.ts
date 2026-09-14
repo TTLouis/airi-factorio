@@ -7,8 +7,9 @@ export const factorioNameSchema = z.string()
 
 const transferCount = z.number().int().min(1).max(100000)
 const boundedTaskCount = z.number().int().min(1).max(1000)
-const searchRadius = z.number().int().min(1).max(256)
+const searchRadius = z.number().int().min(1).max(4096)
 const combatSearchRadius = z.number().int().min(1).max(256)
+const followDistance = z.number().min(1).max(64).default(4)
 
 export const structuredOperationSchema = z.discriminatedUnion('name', [
   z.object({
@@ -17,6 +18,17 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
       entity_name: factorioNameSchema,
       search_radius: searchRadius,
     }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('follow_player'),
+    args: z.object({
+      player_name: factorioNameSchema,
+      follow_distance: followDistance,
+    }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('stop_follow_player'),
+    args: z.object({}).strict(),
   }).strict(),
   z.object({
     name: z.literal('mine_entity'),
@@ -79,6 +91,8 @@ const callEnd = `\\s*\\)$`
 
 const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]walk_to_entity['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
+  new RegExp(`${callStart}['"]follow_player['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
+  new RegExp(`${callStart}['"]stop_follow_player['"]${callEnd}`),
   new RegExp(`${callStart}['"]mine_entity['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]place_entity['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]move_items['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
@@ -112,6 +126,10 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
   switch (operation.name) {
     case 'walk_to_entity':
       return `remote.call('autorio_operations', 'walk_to_entity', ${renderLuaString(operation.args.entity_name)}, ${operation.args.search_radius})`
+    case 'follow_player':
+      return `remote.call('autorio_operations', 'follow_player', ${renderLuaString(operation.args.player_name)}, ${operation.args.follow_distance})`
+    case 'stop_follow_player':
+      return `remote.call('autorio_operations', 'stop_follow_player')`
     case 'mine_entity':
       return `remote.call('autorio_operations', 'mine_entity', ${renderLuaString(operation.args.entity_name)}, ${operation.args.count})`
     case 'place_entity':
