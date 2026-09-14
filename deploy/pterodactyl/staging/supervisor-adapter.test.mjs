@@ -10,6 +10,7 @@ import {
 } from './supervisor-adapter.mjs'
 
 const SESSION = '0123456789abcdef0123456789abcdef'
+const CONFIG_MARKER = 'AIRI_CONFIG_0123456789abcdef01234567:'
 
 function readyStatus(overrides = {}) {
   return {
@@ -43,26 +44,41 @@ class FakeRcon {
   }
 }
 
+function configureAck(result = SESSION) {
+  return `${CONFIG_MARKER}${JSON.stringify({ ok: true, result })}`
+}
+
 test('configure handshake selects npc and verifies the native deployment status', async () => {
   const rcon = new FakeRcon([
-    SESSION,
+    configureAck(),
     JSON.stringify(readyStatus()),
   ])
-  const status = await configureNpcSession(rcon, SESSION)
+  const status = await configureNpcSession(rcon, SESSION, CONFIG_MARKER)
   assert.equal(status.actor_id, 18)
   assert.match(rcon.commands[0], /"configure","npc"/)
+  assert.match(rcon.commands[0], /AIRI_CONFIG_0123456789abcdef01234567:/)
   assert.match(rcon.commands[1], /"airi_deployment","status"/)
 })
 
-test('configure handshake repeats only the idempotent startup command after the first-lua warning', async () => {
+test('configure handshake repeats the exact command after a real-style first-lua warning even when the warning echoes the session token', async () => {
   const rcon = new FakeRcon([
-    'Lua console commands will disable achievements. Please repeat the command to proceed.',
-    SESSION,
+    `Player <server> tried using the command rcon.print(remote.call("airi_deployment","configure","npc","${SESSION}")). Lua console commands will disable achievements. Please repeat the command to proceed.`,
+    configureAck(),
     JSON.stringify(readyStatus()),
   ])
-  await configureNpcSession(rcon, SESSION)
+  await configureNpcSession(rcon, SESSION, CONFIG_MARKER)
   assert.equal(rcon.commands[0], rcon.commands[1])
   assert.notEqual(rcon.commands[1], rcon.commands[2])
+})
+
+test('configure handshake fails closed when the repeated command still has no execution acknowledgement', async () => {
+  const rcon = new FakeRcon([
+    'Please repeat the command to proceed.',
+    'still no acknowledgement',
+  ])
+  await assert.rejects(() => configureNpcSession(rcon, SESSION, CONFIG_MARKER), /acknowledgement missing/)
+  assert.equal(rcon.commands.length, 2)
+  assert.equal(rcon.commands[0], rcon.commands[1])
 })
 
 test('deployment status requires native npc identity and interfaces', async () => {
