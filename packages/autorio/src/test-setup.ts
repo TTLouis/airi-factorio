@@ -39,6 +39,20 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   block: (value: unknown) => String(value),
 }
 
+// Factorio 2.0 exposes prototype tables globally. Production runtime guards use
+// prototypes.entity before calling find_entities_filtered because Factorio throws
+// for unknown prototype names. Unit tests only need the common fixture prototypes
+// they exercise; deliberately unknown names remain absent and can be rejected.
+;(globalThis as any).prototypes = {
+  entity: {
+    character: {},
+    'iron-ore': {},
+    'iron-chest': {},
+    'wooden-chest': {},
+    'steel-chest': {},
+  },
+}
+
 // Factorio 2.0's per-save persistence table. Real shape is declared locally
 // by whichever file uses it (see standalone_character_actor.ts); tests just
 // need the binding to exist so `storage.foo` doesn't throw ReferenceError.
