@@ -4,9 +4,11 @@ import { TaskStates } from '../types'
 import { allocate_logical_actor_id, create_agent } from './agents'
 import { new_actor_registry } from './actor_registry'
 import { new_actor_runtime_router } from './actor_runtime_router'
+import { create_work } from './blackboard'
 import { new_standalone_actor_pool } from './standalone_actor_pool'
 import { get_swarm_storage } from './storage'
-import type { ActorCapability, ActorId } from './types'
+import type { ActorCapability, ActorId, WorkId } from './types'
+import { new_work_coordinator } from './work_coordinator'
 
 const DEFAULT_STANDALONE_CAPABILITIES: ActorCapability[] = [
   'move',
@@ -23,11 +25,20 @@ function valid_coordinate(value: number | undefined) {
   return value === undefined || (typeof value === 'number' && value === value && math.abs(value) < 1000000)
 }
 
+function valid_radius(value: number) {
+  return typeof value === 'number' && value === value && value > 0 && value <= 128
+}
+
+function valid_priority(value: number) {
+  return typeof value === 'number' && value === value && value >= 0 && value <= 100
+}
+
 export function new_swarm_runtime_service() {
   const swarm = get_swarm_storage()
   const registry = new_actor_registry(swarm)
   const pool = new_standalone_actor_pool(swarm, registry)
   const router = new_actor_runtime_router(registry)
+  const coordinator = new_work_coordinator(swarm, registry, router)
 
   // Ordinary module locals are rebuilt after a save/load. Swarm storage keeps
   // logical and physical identity, so reconstruct runtime registrations and
@@ -134,6 +145,60 @@ export function new_swarm_runtime_service() {
     }
   }
 
+  function create_survey_work(
+    x: number,
+    y: number,
+    radius: number = 1.5,
+    priority: number = 50,
+    surfaceIndex: number = 1,
+  ) {
+    if (!valid_coordinate(x) || !valid_coordinate(y)) return { ok: false as const, code: 'invalid_position' as const }
+    if (!valid_radius(radius)) return { ok: false as const, code: 'invalid_radius' as const }
+    if (!valid_priority(priority)) return { ok: false as const, code: 'invalid_priority' as const }
+    if (game.surfaces[surfaceIndex] === undefined) return { ok: false as const, code: 'unknown_surface' as const }
+    const area = {
+      surfaceIndex,
+      position: { x, y },
+      radius,
+    }
+    const work = create_work(swarm, {
+      createdBy: 'system',
+      goal: {
+        kind: 'survey_area',
+        subject: `survey position ${x},${y}`,
+        area,
+      },
+      requirements: { capabilities: ['move', 'survey'] },
+      location: area,
+      priority,
+      createdTick: game.tick,
+    })
+    return { ok: true as const, work }
+  }
+
+  function work_status(workId?: WorkId) {
+    if (workId !== undefined) {
+      const work = swarm.board.work[workId]
+      if (work === undefined) return { found: false as const, workId, code: 'unknown_work' as const }
+      const results = []
+      for (const resultId in swarm.board.results) {
+        const result = swarm.board.results[resultId]
+        if (result.workId === workId) results.push(result)
+      }
+      results.sort((a, b) => a.tick - b.tick || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      return {
+        found: true as const,
+        work,
+        claim: work.claimId !== undefined ? swarm.board.claims[work.claimId] : undefined,
+        results,
+      }
+    }
+    const works = []
+    for (const id in swarm.board.work) works.push(swarm.board.work[id])
+    works.sort((a, b) => a.createdTick - b.createdTick || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    return { works }
+  }
+
   function context_for(actorId: ActorId) {
     return router.get_context(actorId)
   }
@@ -213,6 +278,7 @@ export function new_swarm_runtime_service() {
   }
 
   function tick_all() {
+    coordinator.tick(game.tick)
     return router.tick_all()
   }
 
@@ -227,6 +293,8 @@ export function new_swarm_runtime_service() {
   return {
     create_actor,
     status,
+    create_survey_work,
+    work_status,
     wait,
     walk_to_position,
     cancel,
