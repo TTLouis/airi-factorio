@@ -61,6 +61,10 @@ export function seedConfigFromEnv(env = process.env) {
   return config
 }
 
+export function installedAppRoot(moduleUrl = import.meta.url) {
+  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), '..', '..')
+}
+
 function parseStatus(text) {
   let value
   try { value = JSON.parse(String(text).trim()) }
@@ -291,7 +295,7 @@ export async function verifyManifest(app) {
 async function main() {
   check(os.arch() === 'x64', 'AIRI Pterodactyl v8 requires amd64')
   const root = path.resolve(process.env.CONTAINER_ROOT || '/home/container')
-  const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const app = installedAppRoot()
   await verifyManifest(app)
   await directory(path.join(root, '.airi'))
   await directory(path.join(root, '.airi', 'tmp'))
