@@ -25,18 +25,16 @@ function gzipAtLevel(bytes, level) {
   return archive
 }
 
-test('generated artifact verifier accepts a self-consistent payload without recompressing it', () => {
+test('generated artifact verifier accepts the same payload with a different gzip encoding', () => {
   const canonical = buildArtifacts(source)
   assert.equal(verifyGeneratedArtifacts(source, canonical.installScript, canonical.eggJson), true)
 
   const alternateInstall = bootstrapFromArchive(source, gzipAtLevel(source, 1))
   assert.notEqual(alternateInstall, canonical.installScript)
 
-  const alternateEgg = JSON.parse(canonical.eggJson)
-  alternateEgg.scripts.installation.script = alternateInstall
-  const alternateEggText = `${JSON.stringify(alternateEgg, null, 4)}\n`
-
-  assert.equal(verifyGeneratedArtifacts(source, alternateInstall, alternateEggText), true)
+  // The compact egg no longer embeds the gzip/bootstrap bytes, so it remains
+  // valid as long as the standalone install.sh decodes to the same source.
+  assert.equal(verifyGeneratedArtifacts(source, alternateInstall, canonical.eggJson), true)
 })
 
 test('generated artifact verifier rejects payload/source drift', () => {
@@ -44,14 +42,29 @@ test('generated artifact verifier rejects payload/source drift', () => {
   const changedSource = Buffer.concat([source, Buffer.from('# changed\n')])
   assert.throws(
     () => verifyGeneratedArtifacts(changedSource, canonical.installScript, canonical.eggJson),
-    /checksum is stale|does not reproduce/,
+    /checksum is stale|does not reproduce|schema is stale/,
   )
 })
 
-test('committed Pterodactyl egg is valid JSON with a valid model rule', () => {
-  const egg = JSON.parse(readFileSync(join(here, 'egg-airi-factorio-server.json'), 'utf8'))
+test('generated egg is valid JSON and uses the immutable compact installer loader', () => {
+  const canonical = buildArtifacts(source)
+  const egg = JSON.parse(canonical.eggJson)
   const model = egg.variables.find(entry => entry.env_variable === 'OPENAI_MODEL')
   assert.ok(model)
-  assert.equal(model.rules, 'required|string|max:200|regex:/^[a-zA-Z0-9._:\\\\/-]+$/')
-  assert.equal(egg.scripts.installation.script, readFileSync(join(here, 'install.sh'), 'utf8'))
+  assert.equal(model.rules, 'required|string|max:200')
+  assert.match(egg.scripts.installation.script, /raw\.githubusercontent\.com\/TTLouis\/airi-factorio\/2d9ea4cbcd65dcf850a5f6deed49cf5747433571\/deploy\/pterodactyl\/install\.sh/)
+  assert.match(egg.scripts.installation.script, /EXPECTED_SOURCE_SHA256=/)
+})
+
+test('committed Pterodactyl artifacts are internally valid', () => {
+  const committedSource = readFileSync(join(here, 'payload-src', 'installer.sh'))
+  const committedInstall = readFileSync(join(here, 'install.sh'), 'utf8')
+  const committedEggText = readFileSync(join(here, 'egg-airi-factorio-server.json'), 'utf8')
+  const egg = JSON.parse(committedEggText)
+
+  assert.equal(verifyGeneratedArtifacts(committedSource, committedInstall, committedEggText), true)
+  const model = egg.variables.find(entry => entry.env_variable === 'OPENAI_MODEL')
+  assert.equal(model.rules, 'required|string|max:200')
+  assert.match(egg.scripts.installation.script, /2d9ea4cbcd65dcf850a5f6deed49cf5747433571/)
+  assert.notEqual(egg.scripts.installation.script, committedInstall)
 })
