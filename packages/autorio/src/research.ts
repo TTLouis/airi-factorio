@@ -131,7 +131,13 @@ export function research_error(actor: ControlledActor | undefined, name: string)
 }
 
 function push_result(result: ResearchResult) {
-  storage.airi_last_research_result = result
+  // Follow-through for an older asynchronous request may finish after a newer
+  // request was submitted. Keep last_request_result pinned to the greatest
+  // request id while still updating the older request in correlated history.
+  const last = storage.airi_last_research_result
+  if (!last || result.request_id >= last.request_id) {
+    storage.airi_last_research_result = result
+  }
   const history = results()
   let replaced = false
   for (let i = 0; i < history.length; i++) {
@@ -419,7 +425,7 @@ export function new_research_controller(get_actor: () => ControlledActor | undef
       queue_length: queue.length,
       queue_truncated: queue.length > MAX_RESEARCH_QUEUE,
       next_request_id: storage.airi_next_research_request_id ?? 0,
-      last_request_result: result?.force_index === force.index ? result : undefined,
+      last_request_result: result,
       recent_requests: recent.slice(math.max(0, recent.length - MAX_RESEARCH_QUEUE)),
       follow_through: follows.slice(math.max(0, follows.length - MAX_RESEARCH_QUEUE)),
     }
