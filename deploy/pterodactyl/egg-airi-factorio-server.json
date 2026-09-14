@@ -122,7 +122,7 @@
             "name": "Max AI Requests Per Hour",
             "description": "Persisted hourly provider request cap.",
             "env_variable": "MAX_PROVIDER_REQUESTS_PER_HOUR",
-            "default_value": "30",
+            "default_value": "300",
             "user_viewable": true,
             "user_editable": true,
             "rules": "required|numeric|between:1,1200",
