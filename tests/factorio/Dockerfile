@@ -22,7 +22,18 @@ ENV TEST_ROOT=/test
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl python3 xz-utils \
   && rm -rf /var/lib/apt/lists/* \
-  && curl -fsSL "https://factorio.com/get-download/${FACTORIO_VERSION}/headless/linux64" -o /tmp/factorio.tar.xz \
+  && curl \
+    --fail \
+    --silent \
+    --show-error \
+    --location \
+    --retry 8 \
+    --retry-delay 5 \
+    --retry-max-time 240 \
+    --retry-all-errors \
+    --connect-timeout 30 \
+    "https://factorio.com/get-download/${FACTORIO_VERSION}/headless/linux64" \
+    -o /tmp/factorio.tar.xz \
   && mkdir -p /opt \
   && tar -xJf /tmp/factorio.tar.xz -C /opt \
   && rm /tmp/factorio.tar.xz
