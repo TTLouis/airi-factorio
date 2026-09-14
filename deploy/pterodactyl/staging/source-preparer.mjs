@@ -33,7 +33,8 @@ export async function prepareNativeNpcSource(sourceRoot, guardSource) {
   check(controlOriginal.includes('new_combat_controller'), 'Native bounded combat controller is missing')
   check(tools.includes('create_actor_remote_interface()'), 'Native actor interface is not wired through Autorio tools')
   check(actorController.includes("mode !== 'player' && mode !== 'npc'"), 'Native NPC actor mode control is missing')
-  check(actorController.includes("kind: 'standalone_character'") || actorController.includes("actor.kind !== 'standalone_character'"), 'Standalone NPC actor support is missing')
+  check(actorController.includes("get_actor_mode() === 'npc'"), 'Native NPC actor selection is missing')
+  check(actorController.includes('StandaloneCharacterActor.create'), 'Standalone NPC creation is missing')
   check(!controlOriginal.includes('airi_guarded_interface'), 'Legacy guarded-interface patch is already present')
   check(!controlOriginal.includes('airi_guard_ready'), 'Legacy connected-player tick guard is already present')
 
