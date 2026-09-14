@@ -1,10 +1,10 @@
-import { event_handlers } from './test-event-registry'
+import { event_handlers, set_load_handler } from './test-event-registry'
 
 // Minimal stand-ins for the Factorio/Lua globals that control.ts touches at module
-// load time (remote.add_interface, script.on_event registration, the closing log()
+// load time (remote.add_interface, script lifecycle registration, the closing log()
 // call) plus the Lua `math` stdlib used by pure logic like get_direction. This lets
-// vitest import control.ts under Node without a real Factorio runtime; it does not
-// attempt to emulate game state.
+// vitest import production modules under Node without a real Factorio runtime; it
+// does not attempt to emulate game state.
 (globalThis as any).log = () => {}
 
 ;(globalThis as any).remote = {
@@ -15,6 +15,9 @@ import { event_handlers } from './test-event-registry'
   on_event: (event_key: unknown, handler: (event: any) => void) => {
     event_handlers.set(event_key, handler)
   },
+  on_load: (handler: (() => void) | undefined) => {
+    set_load_handler(handler)
+  },
 }
 
 ;(globalThis as any).game = {
@@ -23,6 +26,31 @@ import { event_handlers } from './test-event-registry'
     1: { find_entities_filtered: () => [] },
   },
   print: () => {},
+  tick: 0,
+}
+
+;(globalThis as any).rendering = {
+  clear: () => {},
+  draw_line: () => {},
+}
+
+;(globalThis as any).serpent = {
+  line: (value: unknown) => String(value),
+  block: (value: unknown) => String(value),
+}
+
+// Factorio 2.0 exposes prototype tables globally. Production runtime guards use
+// prototypes.entity before calling find_entities_filtered because Factorio throws
+// for unknown prototype names. Unit tests only need the common fixture prototypes
+// they exercise; deliberately unknown names remain absent and can be rejected.
+;(globalThis as any).prototypes = {
+  entity: {
+    character: {},
+    'iron-ore': {},
+    'iron-chest': {},
+    'wooden-chest': {},
+    'steel-chest': {},
+  },
 }
 
 // Factorio 2.0's per-save persistence table. Real shape is declared locally
@@ -37,6 +65,7 @@ import { event_handlers } from './test-event-registry'
     on_player_mined_entity: 'on_player_mined_entity',
     on_tick: 'on_tick',
     on_player_crafted_item: 'on_player_crafted_item',
+    on_research_finished: 'on_research_finished',
   },
   direction: {
     north: 'north',
@@ -52,6 +81,10 @@ import { event_handlers } from './test-event-registry'
     not_shooting: 'not_shooting',
     shooting_enemies: 'shooting_enemies',
     shooting_selected: 'shooting_selected',
+  },
+  inventory: {
+    character_guns: 'character_guns',
+    character_ammo: 'character_ammo',
   },
 }
 

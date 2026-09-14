@@ -4,23 +4,21 @@ import type { ControlledActor } from './actors/types'
 import { get_direction, get_nearest_entity } from './control'
 
 describe('get_direction', () => {
-  it('resolves each open octant to its own direction', () => {
-    // These eight vectors sit well inside their respective octants (not on a
-    // boundary), so each assertion is unambiguous.
-    expect(get_direction({ x: 0, y: 0 }, { x: -1, y: 0 })).toBe('west')
-    expect(get_direction({ x: 0, y: 0 }, { x: 0, y: 1 })).toBe('south')
-    expect(get_direction({ x: 0, y: 0 }, { x: 0, y: -1 })).toBe('north')
-    expect(get_direction({ x: 0, y: 0 }, { x: 1, y: -1 })).toBe('northeast')
-    expect(get_direction({ x: 0, y: 0 }, { x: -1, y: 1 })).toBe('southwest')
-    expect(get_direction({ x: 0, y: 0 }, { x: -1, y: -1 })).toBe('northwest')
+  it.each([
+    [{ x: 1, y: 0 }, 'east'],
+    [{ x: 1, y: 1 }, 'southeast'],
+    [{ x: 0, y: 1 }, 'south'],
+    [{ x: -1, y: 1 }, 'southwest'],
+    [{ x: -1, y: 0 }, 'west'],
+    [{ x: -1, y: -1 }, 'northwest'],
+    [{ x: 0, y: -1 }, 'north'],
+    [{ x: 1, y: -1 }, 'northeast'],
+  ] as const)('resolves vector %j to %s', (offset, expected) => {
+    expect(get_direction({ x: 0, y: 0 }, offset)).toBe(expected)
   })
 
-  it('classifies a due-east vector as southeast, a known boundary quirk of the current octant math', () => {
-    // start.x - end.x for a pure +x move is exactly -1, so atan2(0, -1) lands
-    // exactly on the +pi/-pi wraparound the octant formula does not special-case.
-    // This locks in today's actual output as a regression baseline, not a claim
-    // that "southeast" is the intended answer for moving east.
-    expect(get_direction({ x: 0, y: 0 }, { x: 1, y: 0 })).toBe('southeast')
+  it('returns a stable value when start and target are identical', () => {
+    expect(get_direction({ x: 2, y: 3 }, { x: 2, y: 3 })).toBe('north')
   })
 })
 

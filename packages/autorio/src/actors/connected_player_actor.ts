@@ -1,11 +1,10 @@
 import type { LuaPlayer } from 'factorio:runtime'
-import type { ActorEntityBuildArgs, ActorMiningState, ActorShootingState, ActorStatusSnapshot, ActorWalkingState, ControlledActor } from './types'
+import type { ActorCraftingQueueItem, ActorEntityBuildArgs, ActorMiningState, ActorShootingState, ActorStatusSnapshot, ActorWalkingState, ControlledActor } from './types'
 
 /**
  * Wraps a connected LuaPlayer behind the ControlledActor interface,
- * reproducing today's `game.connected_players[0]`-driven behavior exactly.
- * This is the regression baseline for the migration in control.ts/task_manager.ts
- * — it must not change observable behavior versus using the LuaPlayer directly.
+ * reproducing today's single-player control behavior while the NPC path is
+ * being introduced.
  */
 export class ConnectedPlayerActor implements ControlledActor {
   constructor(private readonly player: LuaPlayer) {}
@@ -54,8 +53,39 @@ export class ConnectedPlayerActor implements ControlledActor {
     this.player.shooting_state = state
   }
 
+  get_craftable_count(recipe: string) {
+    return this.player.get_craftable_count(recipe)
+  }
+
   begin_crafting(params: { count: number, recipe: string }) {
-    this.player.begin_crafting(params)
+    return this.player.begin_crafting(params)
+  }
+
+  cancel_crafting(params: { index: number, count: number }) {
+    this.player.cancel_crafting(params)
+  }
+
+  get_crafting_queue(): ActorCraftingQueueItem[] {
+    const result: ActorCraftingQueueItem[] = []
+    for (const item of this.player.crafting_queue ?? []) {
+      result.push({
+        index: item.index,
+        recipe: item.recipe,
+        count: item.count,
+        prerequisite: item.prerequisite,
+      })
+    }
+    return result
+  }
+
+  get_crafting_queue_count(recipe: string) {
+    let count = 0
+    for (const item of this.player.crafting_queue ?? []) {
+      if (item.recipe === recipe) {
+        count += item.count
+      }
+    }
+    return count
   }
 
   owns_player_index(player_index: number): boolean {
@@ -76,6 +106,7 @@ export class ConnectedPlayerActor implements ControlledActor {
       name: this.player.name,
       position: this.player.position,
       has_character: this.player.character !== undefined,
+      actor_id: this.player.index,
     }
   }
 }

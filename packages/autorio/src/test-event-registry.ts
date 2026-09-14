@@ -1,7 +1,20 @@
-// Backing store for the stubbed `script.on_event` in test-setup.ts: control.ts
-// registers its real event handlers here at module load, and tests pull them
-// back out to invoke directly with synthetic events.
+// Backing store for the stubbed Factorio lifecycle registrations in test-setup.ts:
+// control.ts registers real event handlers here at module load, and actor_controller
+// registers its on_load handler here so tests can exercise save/load reconciliation.
 export const event_handlers = new Map<unknown, (event: any) => void>()
+
+let load_handler: (() => void) | undefined
+
+export function set_load_handler(handler: (() => void) | undefined) {
+  load_handler = handler
+}
+
+export function get_load_handler() {
+  if (!load_handler) {
+    throw new Error('No on_load handler registered')
+  }
+  return load_handler
+}
 
 export function get_handler(event_key: unknown) {
   const handler = event_handlers.get(event_key)

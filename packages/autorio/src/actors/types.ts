@@ -5,6 +5,13 @@ export type ActorMiningState = LuaPlayer['mining_state']
 export type ActorWalkingState = LuaPlayer['walking_state']
 export type ActorShootingState = LuaPlayer['shooting_state']
 
+export interface ActorCraftingQueueItem {
+  index: number
+  recipe: string
+  count: number
+  prerequisite: boolean
+}
+
 /**
  * Arguments to spread into `LuaSurface.create_entity` so a placed entity is
  * attributed to this actor's identity rather than to whichever LuaPlayer
@@ -21,14 +28,21 @@ export interface ActorStatusSnapshot {
   name: string
   position: MapPositionStruct
   has_character: boolean
+  actor_id?: number
+  selected_entity?: {
+    name: string
+    position: MapPositionStruct
+  }
+  mining_state?: ActorMiningState
+  mining_progress?: number
 }
 
 /**
  * The physical actor AIRI's control logic drives. `ConnectedPlayerActor`
- * wraps today's single connected LuaPlayer unchanged; a future
- * StandaloneCharacterActor will wrap an owned `character` entity with no
- * LuaPlayer behind it at all. Nothing in control.ts should depend on
- * LuaPlayer once migrated onto this interface.
+ * wraps today's single connected LuaPlayer unchanged; a standalone actor
+ * wraps an owned `character` entity with no LuaPlayer behind it at all.
+ * Nothing in control.ts should depend directly on LuaPlayer once migration
+ * is complete.
  */
 export interface ControlledActor {
   readonly is_valid: boolean
@@ -46,14 +60,15 @@ export interface ControlledActor {
   set_walking_state: (state: ActorWalkingState) => void
   set_shooting_state: (state: ActorShootingState) => void
 
-  begin_crafting: (params: { count: number, recipe: string }) => void
+  get_craftable_count: (recipe: string) => number
+  begin_crafting: (params: { count: number, recipe: string }) => number
+  cancel_crafting: (params: { index: number, count: number }) => void
+  get_crafting_queue: () => ActorCraftingQueueItem[]
+  get_crafting_queue_count: (recipe: string) => number
 
   /**
-   * Whether a LuaPlayer-sourced event (e.g. on_player_crafted_item's
-   * player_index) originated from this actor, so crafting/mining progress
-   * is only ever attributed to the actor AIRI is actually controlling.
-   * An actor with no underlying LuaPlayer (e.g. a future standalone
-   * character) should always return false here.
+   * Whether a LuaPlayer-sourced event originated from this actor. Standalone
+   * characters have no LuaPlayer and therefore always return false.
    */
   owns_player_index: (player_index: number) => boolean
 

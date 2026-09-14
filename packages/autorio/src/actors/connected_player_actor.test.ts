@@ -12,9 +12,12 @@ function fake_player(overrides: Record<string, unknown> = {}) {
     surface: { name: 'nauvis' },
     force: { name: 'player' },
     mining_state: { mining: false },
+    crafting_queue: [],
     get_main_inventory: vi.fn(() => 'main-inventory'),
     update_selected_entity: vi.fn(),
+    get_craftable_count: vi.fn(() => 9),
     begin_crafting: vi.fn(),
+    cancel_crafting: vi.fn(),
     ...overrides,
   } as unknown as LuaPlayer
 }
@@ -59,12 +62,25 @@ describe('ConnectedPlayerActor', () => {
     expect(player.walking_state).toEqual({ walking: true, direction: 4 })
   })
 
-  it('forwards begin_crafting args unchanged', () => {
-    const player = fake_player()
+  it('forwards native crafting admission, queue snapshots, and cancellation', () => {
+    const queue = [
+      { index: 1, recipe: 'copper-cable', count: 3, prerequisite: true },
+      { index: 2, recipe: 'electronic-circuit', count: 2, prerequisite: false },
+    ]
+    const player = fake_player({ crafting_queue: queue })
     const actor = new ConnectedPlayerActor(player)
+
+    expect(actor.get_craftable_count('iron-gear-wheel')).toBe(9)
+    expect(player.get_craftable_count).toHaveBeenCalledWith('iron-gear-wheel')
 
     actor.begin_crafting({ count: 3, recipe: 'iron-gear-wheel' })
     expect(player.begin_crafting).toHaveBeenCalledWith({ count: 3, recipe: 'iron-gear-wheel' })
+
+    expect(actor.get_crafting_queue()).toEqual(queue)
+    expect(actor.get_crafting_queue_count('electronic-circuit')).toBe(2)
+
+    actor.cancel_crafting({ index: 2, count: 1 })
+    expect(player.cancel_crafting).toHaveBeenCalledWith({ index: 2, count: 1 })
   })
 
   it('builds entity_build_args from the wrapped player, matching current placement attribution', () => {
@@ -84,6 +100,7 @@ describe('ConnectedPlayerActor', () => {
       name: 'Louis',
       position: { x: 1, y: 2 },
       has_character: true,
+      actor_id: 1,
     })
   })
 

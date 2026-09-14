@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feat/npc-transition-work
 
   pull_request:
     branches:
@@ -79,3 +80,13 @@ jobs:
 
       - name: Test
         run: pnpm run test
+
+  npc-factorio-integration:
+    if: github.ref == 'refs/heads/feat/npc-transition-work'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run prompt contract and zero-player Factorio harness
+        run: docker build -f tests/factorio/Dockerfile -t airi-factorio-npc-test . && docker run --rm airi-factorio-npc-test

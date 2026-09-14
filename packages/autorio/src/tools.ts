@@ -1,15 +1,38 @@
-import { get_inventory_items } from './utils/inventory'
+import { create_actor_remote_interface, get_controlled_actor } from './actors/actor_controller'
+import { get_actor_inventory_items } from './utils/inventory'
+
+const MAX_NEARBY_RADIUS = 64
+const MAX_NEARBY_RESULTS = 100
+const MAX_ENTITY_STATUS_RADIUS = 32
+const MAX_ENTITY_INVENTORIES = 8
+const MAX_ENTITY_INVENTORY_ITEMS = 50
+
+function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
+  return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
+}
 
 export function create_tools_remote_interface() {
+  create_actor_remote_interface()
+
   remote.add_interface('autorio_tools', {
-    get_inventory_items: (player_id: number) => {
-      rcon.print(serpent.block(get_inventory_items(player_id)))
+    get_inventory_items: () => {
+      const actor = get_controlled_actor()
+      if (!actor) {
+        rcon.print('no controlled actor')
+        return false
+      }
+
+      rcon.print(serpent.block(get_actor_inventory_items(actor)))
       return true
     },
-    get_recipe: (item_name: string, player_id: number) => {
-      const player = game.connected_players[player_id - 1]
+    get_recipe: (item_name: string) => {
+      const actor = get_controlled_actor()
+      if (!actor) {
+        rcon.print('no controlled actor')
+        return false
+      }
 
-      const recipe = player.force.recipes[item_name]
+      const recipe = actor.force.recipes[item_name]
       if (!recipe) {
         rcon.print('no such recipe')
         return false
@@ -29,6 +52,141 @@ export function create_tools_remote_interface() {
 
       rcon.print(serpent.block(ingredients))
       return true
+    },
+    get_nearby_entities: (radius: number = 20, name?: string, entity_type?: string, limit: number = 50) => {
+      const actor = get_controlled_actor()
+      if (!actor) {
+        return {
+          entities: [],
+          truncated: false,
+          error: 'no controlled actor',
+        }
+      }
+
+      const bounded_radius = math.max(1, math.min(MAX_NEARBY_RADIUS, radius || 20))
+      const bounded_limit = math.max(1, math.min(MAX_NEARBY_RESULTS, limit || 50))
+      const filters: Record<string, unknown> = {
+        position: actor.position,
+        radius: bounded_radius,
+      }
+      if (name) {
+        filters.name = name
+      }
+      if (entity_type) {
+        filters.type = entity_type
+      }
+
+      const matches = actor.surface.find_entities_filtered(filters as any)
+      const entities: Array<Record<string, unknown>> = []
+      const returned = math.min(matches.length, bounded_limit)
+      for (let i = 0; i < returned; i++) {
+        const entity = matches[i]
+        entities.push({
+          name: entity.name,
+          type: entity.type,
+          position: entity.position,
+          force: entity.force?.name,
+          unit_number: entity.unit_number,
+          amount: entity.type === 'resource' ? entity.amount : undefined,
+        })
+      }
+
+      return {
+        actor_position: actor.position,
+        radius: bounded_radius,
+        entities,
+        matched_count: matches.length,
+        returned_count: entities.length,
+        truncated: matches.length > entities.length,
+      }
+    },
+    get_entity_status: (name: string, radius: number = 8) => {
+      const actor = get_controlled_actor()
+      if (!actor) {
+        return {
+          found: false,
+          error: 'no controlled actor',
+        }
+      }
+
+      const bounded_radius = math.max(1, math.min(MAX_ENTITY_STATUS_RADIUS, radius || 8))
+      const matches = actor.surface.find_entities_filtered({
+        position: actor.position,
+        radius: bounded_radius,
+        name,
+      })
+
+      let entity = matches[0]
+      let nearest_distance = entity ? squared_distance(actor.position, entity.position) : math.huge
+      for (let i = 1; i < matches.length; i++) {
+        const candidate = matches[i]
+        const candidate_distance = squared_distance(actor.position, candidate.position)
+        if (candidate_distance < nearest_distance) {
+          entity = candidate
+          nearest_distance = candidate_distance
+        }
+      }
+
+      if (!entity) {
+        return {
+          found: false,
+          actor_position: actor.position,
+          radius: bounded_radius,
+          name,
+        }
+      }
+
+      const inventories: Array<Record<string, unknown>> = []
+      const max_inventory_index = math.min(entity.get_max_inventory_index(), MAX_ENTITY_INVENTORIES)
+      let returned_items = 0
+      let inventory_items_truncated = false
+
+      for (let index = 1; index <= max_inventory_index; index++) {
+        const inventory = entity.get_inventory(index)
+        if (!inventory) {
+          continue
+        }
+
+        const items: Array<{ name: string, quality: string, count: number }> = []
+        for (const item of inventory.get_contents()) {
+          if (returned_items >= MAX_ENTITY_INVENTORY_ITEMS) {
+            inventory_items_truncated = true
+            break
+          }
+          items.push({
+            name: item.name,
+            quality: item.quality,
+            count: item.count,
+          })
+          returned_items += 1
+        }
+
+        inventories.push({
+          index,
+          items,
+        })
+
+        if (inventory_items_truncated) {
+          break
+        }
+      }
+
+      return {
+        found: true,
+        actor_position: actor.position,
+        radius: bounded_radius,
+        entity: {
+          name: entity.name,
+          type: entity.type,
+          position: entity.position,
+          force: entity.force?.name,
+          unit_number: entity.unit_number,
+          amount: entity.type === 'resource' ? entity.amount : undefined,
+          inventories,
+          inventories_truncated: entity.get_max_inventory_index() > MAX_ENTITY_INVENTORIES,
+          inventory_items_truncated,
+        },
+      }
     },
   })
 }

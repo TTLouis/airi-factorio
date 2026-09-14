@@ -1,3 +1,7 @@
+import type { StructuredOperation } from './llm/operations'
+import { z } from 'zod'
+import { legacyOperationCommandSchema, renderStructuredOperations, structuredOperationsSchema } from './llm/operations'
+
 export interface ChatMessage {
   type: 'chat'
   username: string
@@ -30,12 +34,53 @@ export type StdoutMessage = ChatMessage | CommandMessage | ModErrorMessage | Ope
 export interface LLMMessage {
   chatMessage: string
   operationCommands: string[]
+  operations?: StructuredOperation[]
   plan: string[]
   currentStep: number
 }
 
+const llmMessageSchema = z.object({
+  chatMessage: z.string().max(2000),
+  operationCommands: z.array(legacyOperationCommandSchema).max(16).optional(),
+  operations: structuredOperationsSchema.optional(),
+  plan: z.array(z.string().max(500)).max(30),
+  currentStep: z.number().int().min(0).max(30),
+}).strict().superRefine((value, ctx) => {
+  const actionFormats = Number(value.operationCommands !== undefined) + Number(value.operations !== undefined)
+  if (actionFormats !== 1) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Response must contain exactly one of operationCommands or operations',
+    })
+  }
+
+  if (value.plan.length > 0 && value.currentStep >= value.plan.length) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['currentStep'],
+      message: 'currentStep must index an existing plan step',
+    })
+  }
+
+  if (value.plan.length === 0 && value.currentStep !== 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['currentStep'],
+      message: 'currentStep must be 0 when the plan is empty',
+    })
+  }
+})
+
 export function parseLLMMessage(message: string): LLMMessage {
-  return JSON.parse(message) as LLMMessage
+  const value = llmMessageSchema.parse(JSON.parse(message))
+  const operationCommands = value.operations
+    ? renderStructuredOperations(value.operations)
+    : value.operationCommands ?? []
+
+  return {
+    ...value,
+    operationCommands,
+  }
 }
 
 export function parseCommandMessage(log: string): CommandMessage | null {
@@ -72,7 +117,7 @@ export function parseChatMessage(log: string): ChatMessage | null {
 
   // example: 2000-01-02 12:34:56 [CHAT] username: message
   const playerChatRegex = /(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) \[CHAT\] (.+?): (.+)/
-  const playerMatch = log.match(playerChatRegex)
+  const playerMatch = log.match(playerRegex)
 
   if (playerMatch) {
     const [, date, , username, message] = playerMatch

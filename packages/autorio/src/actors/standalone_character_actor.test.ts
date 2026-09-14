@@ -8,9 +8,15 @@ function fake_character(overrides: Record<string, unknown> = {}) {
     position: { x: 10, y: 20 },
     surface: { name: 'nauvis' },
     force: { name: 'player' },
+    selected: undefined,
     mining_state: { mining: false },
+    character_mining_progress: 0,
+    crafting_queue: [],
+    update_selected_entity: vi.fn(),
     get_main_inventory: vi.fn(() => 'main-inventory'),
+    get_craftable_count: vi.fn(() => 7),
     begin_crafting: vi.fn(),
+    cancel_crafting: vi.fn(),
     ...overrides,
   }
 }
@@ -98,17 +104,34 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
     expect(actor.position).toBe(character.position)
   })
 
-  it('delegates get_main_inventory and begin_crafting to the character entity', () => {
-    const { actor, character } = create_actor()
+  it('delegates main inventory and native crafting controls to the character entity', () => {
+    const queue = [
+      { index: 1, recipe: 'copper-cable', count: 4, prerequisite: true },
+      { index: 2, recipe: 'electronic-circuit', count: 2, prerequisite: false },
+    ]
+    const { actor, character } = create_actor({ crafting_queue: queue })
 
     expect(actor.get_main_inventory()).toBe('main-inventory')
+    expect(actor.get_craftable_count('iron-gear-wheel')).toBe(7)
+    expect(character.get_craftable_count).toHaveBeenCalledWith('iron-gear-wheel')
 
     actor.begin_crafting({ count: 2, recipe: 'iron-gear-wheel' })
     expect(character.begin_crafting).toHaveBeenCalledWith({ count: 2, recipe: 'iron-gear-wheel' })
+
+    expect(actor.get_crafting_queue()).toEqual(queue)
+    expect(actor.get_crafting_queue_count('electronic-circuit')).toBe(2)
+
+    actor.cancel_crafting({ index: 2, count: 1 })
+    expect(character.cancel_crafting).toHaveBeenCalledWith({ index: 2, count: 1 })
   })
 
-  it('gets and sets mining/walking/shooting state directly on the character entity', () => {
-    const { actor, character } = create_actor({ mining_state: { mining: true, position: { x: 1, y: 1 } } })
+  it('gets and sets mining/walking/shooting state directly on the character entity while mining is progressing', () => {
+    const selected = { name: 'iron-ore' }
+    const { actor, character } = create_actor({
+      selected,
+      character_mining_progress: 0.5,
+      mining_state: { mining: true, position: { x: 1, y: 1 } },
+    })
 
     expect(actor.get_mining_state()).toEqual({ mining: true, position: { x: 1, y: 1 } })
 
@@ -120,6 +143,26 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
 
     actor.set_shooting_state({ state: 'shooting_enemies' as any, position: { x: 5, y: 5 } })
     expect((character as any).shooting_state).toEqual({ state: 'shooting_enemies', position: { x: 5, y: 5 } })
+  })
+
+  it('reports mining as effectively stopped when Factorio clears the selected entity', () => {
+    const { actor } = create_actor({
+      selected: undefined,
+      character_mining_progress: 0.5,
+      mining_state: { mining: true, position: { x: 1, y: 1 } },
+    })
+
+    expect(actor.get_mining_state()).toEqual({ mining: false })
+  })
+
+  it('reports mining as effectively stopped when character mining progress returns to zero', () => {
+    const { actor } = create_actor({
+      selected: { name: 'iron-ore' },
+      character_mining_progress: 0,
+      mining_state: { mining: true, position: { x: 1, y: 1 } },
+    })
+
+    expect(actor.get_mining_state()).toEqual({ mining: false })
   })
 
   it('never claims a LuaPlayer-sourced event, since it has no LuaPlayer behind it', () => {
@@ -135,7 +178,7 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
     expect(actor.entity_build_args()).toEqual({ force: character.force })
   })
 
-  it('produces a status snapshot identifying itself as a standalone_character', () => {
+  it('produces a status snapshot identifying itself as a standalone_character with bounded mining diagnostics', () => {
     const { actor } = create_actor()
 
     expect(actor.status_snapshot()).toEqual({
@@ -144,6 +187,10 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
       name: 'AIRI',
       position: { x: 10, y: 20 },
       has_character: true,
+      actor_id: 42,
+      selected_entity: undefined,
+      mining_state: { mining: false },
+      mining_progress: 0,
     })
   })
 })

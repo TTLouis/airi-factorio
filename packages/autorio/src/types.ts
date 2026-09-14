@@ -25,6 +25,21 @@ export interface PlayerParametersWalkToEntity {
   path_index: number
   calculating_path: boolean
   target_position: MapPositionStruct | null
+  target?: LuaEntity | null
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
+  target_unit_number?: number
+  path_request_id?: number
+  path_requested_tick?: number
+  path_attempts?: number
+  next_retry_tick?: number
+  started_tick?: number
+  last_progress_tick?: number
+  /** Best observed distance to the current waypoint. Environmental motion such
+   * as transport belts must not count as progress unless it actually reduces
+   * this distance. */
+  last_waypoint_distance?: number
 }
 
 export interface PlayerParametersWalkingDirect {
@@ -34,23 +49,41 @@ export interface PlayerParametersWalkingDirect {
 
 export interface PlayerParametersMineEntity {
   type: TaskStates.MINING
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
   entity_name: string
+  /** Remaining mining cycles requested by the operation. */
   count: number
+  /** Original requested cycle count, retained while count is decremented. */
+  requested_count?: number
+  /** Current target position while a mining cycle is active. */
   position?: MapPositionStruct
+  /** Resource amount seen on the previous tick for standalone-NPC polling. */
+  last_target_amount?: number
 }
 
 export interface PlayerParametersPlaceEntity {
   type: TaskStates.PLACING
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
   entity_name: string
   position?: MapPositionStruct
 }
 
 export interface PlayerParametersMoveItems {
   type: TaskStates.MOVING_ITEMS
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
   item_name: string
   entity_name: string
   max_count: number
-  to_entity: boolean // If true, the items will be moved to the entity, otherwise, the items will be moved to the player's inventory
+  to_entity: boolean
 }
 
 export interface PlayerParametersCraftItem {
@@ -58,22 +91,53 @@ export interface PlayerParametersCraftItem {
   item_name: string
   count: number
   crafted: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
+  started?: number
+  started_tick?: number
+  output_count_before?: number
+  expected_output_delta?: number
+  owns_native_queue?: boolean
 }
 
 export interface PlayerParametersAttackNearestEnemy {
   type: TaskStates.ATTACKING
   search_radius: number
   target: LuaEntity | null
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
+  target_name?: string
+  target_unit_number?: number
+  target_initial_health?: number
+  started_tick?: number
+  last_progress_tick?: number
+  last_distance?: number
 }
 
 export interface PlayerParametersResearchTechnology {
   type: TaskStates.RESEARCHING
   technology_name: string
+  /** Monotonic Autorio request identifier used to correlate asynchronous native research. */
+  request_id?: number
+  /** Technology level observed when the request was admitted. Repeatable technologies
+   * are complete only after a later native completion advances beyond this level. */
+  requested_level?: number
+  /** Bind deferred research submission to the requesting actor and force. */
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
 }
 
 export interface PlayerParametersWaiting {
   type: TaskStates.WAITING
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
   remaining_ticks: number
+  requested_ticks?: number
 }
 
 export type PlayerParameters

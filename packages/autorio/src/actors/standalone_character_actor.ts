@@ -1,23 +1,14 @@
 import type { MapPositionStruct } from 'factorio:prototype'
 import type { LuaEntity, LuaForce, LuaSurface } from 'factorio:runtime'
-import type { ActorEntityBuildArgs, ActorMiningState, ActorShootingState, ActorStatusSnapshot, ActorWalkingState, ControlledActor } from './types'
+import type { ActorCraftingQueueItem, ActorEntityBuildArgs, ActorMiningState, ActorShootingState, ActorStatusSnapshot, ActorWalkingState, ControlledActor } from './types'
 
-// typed-factorio (targeting Factorio 2.0's runtime) doesn't predeclare the
-// shape of `storage` — Factorio 2.0 replaced the old `global` table with it,
-// and the project is expected to declare its own shape. This is the only
-// file that touches storage today, so it's declared locally rather than as
-// a wider ambient global.
 declare const storage: {
   standalone_character_unit_number?: number
 }
 
 /**
- * A standalone `character` entity with no LuaPlayer behind it — the
- * accountless-NPC substrate the project's original design finding
- * identified. Not wired into control.ts's get_controlled_actor() yet: this
- * class exists and is unit-tested, but the live control path still
- * resolves to ConnectedPlayerActor. Persists its identity across
- * save/load via the entity's unit_number in `storage`.
+ * A standalone `character` entity with no LuaPlayer behind it. Its unit_number
+ * is persisted so the same NPC can be reacquired after save/load.
  */
 export class StandaloneCharacterActor implements ControlledActor {
   private constructor(private readonly character_entity: LuaEntity) {}
@@ -37,12 +28,6 @@ export class StandaloneCharacterActor implements ControlledActor {
     return new StandaloneCharacterActor(entity)
   }
 
-  /**
-   * Reacquires a previously-created standalone character by the
-   * unit_number persisted in storage — for on_init/on_load. Returns
-   * undefined if none was ever created, or if the persisted entity no
-   * longer exists (e.g. it died and nothing replaced it).
-   */
   static reacquire(surface: LuaSurface): StandaloneCharacterActor | undefined {
     const unit_number = storage.standalone_character_unit_number
     if (unit_number === undefined) {
@@ -84,13 +69,28 @@ export class StandaloneCharacterActor implements ControlledActor {
     return this.character_entity.get_main_inventory()
   }
 
-  update_selected_entity(_position: MapPositionStruct) {
-    // No LuaPlayer selection cursor exists for a standalone character;
-    // mining is driven entirely through set_mining_state below.
+  update_selected_entity(position: MapPositionStruct) {
+    // `character` entities inherit LuaControl, so selection works without a
+    // LuaPlayer and is required for normal mining_state-driven mining.
+    this.character_entity.update_selected_entity(position)
   }
 
   get_mining_state(): ActorMiningState {
-    return this.character_entity.mining_state
+    const state = this.character_entity.mining_state
+
+    // Factorio mines the currently selected entity. A standalone scripted
+    // character can retain `mining_state.mining = true` after a resource cycle
+    // while its selection has been cleared or its real character mining
+    // progress has fallen back to zero. In Factorio 2.0.x, LuaEntity's generic
+    // `mining_progress` field is mining-drill-only; character progress is
+    // exposed through the inherited LuaControl `character_mining_progress`.
+    // Treat either stopped condition as effectively idle so control.ts can
+    // reselect the persisted target and start the next requested cycle.
+    if (state.mining && (!this.character_entity.selected || this.character_entity.character_mining_progress === 0)) {
+      return { mining: false }
+    }
+
+    return state
   }
 
   set_mining_state(state: ActorMiningState) {
@@ -105,30 +105,67 @@ export class StandaloneCharacterActor implements ControlledActor {
     this.character_entity.shooting_state = state
   }
 
+  get_craftable_count(recipe: string) {
+    return this.character_entity.get_craftable_count(recipe)
+  }
+
   begin_crafting(params: { count: number, recipe: string }) {
-    this.character_entity.begin_crafting(params)
+    return this.character_entity.begin_crafting(params)
+  }
+
+  cancel_crafting(params: { index: number, count: number }) {
+    this.character_entity.cancel_crafting(params)
+  }
+
+  get_crafting_queue(): ActorCraftingQueueItem[] {
+    const result: ActorCraftingQueueItem[] = []
+    for (const item of this.character_entity.crafting_queue ?? []) {
+      result.push({
+        index: item.index,
+        recipe: item.recipe,
+        count: item.count,
+        prerequisite: item.prerequisite,
+      })
+    }
+    return result
+  }
+
+  get_crafting_queue_count(recipe: string) {
+    let count = 0
+    for (const item of this.character_entity.crafting_queue ?? []) {
+      if (item.recipe === recipe) {
+        count += item.count
+      }
+    }
+    return count
   }
 
   owns_player_index(_player_index: number): boolean {
-    // No LuaPlayer exists behind a standalone character, so no
-    // LuaPlayer-sourced event (on_player_crafted_item, etc.) can ever be
-    // attributed to it.
     return false
   }
 
   entity_build_args(): ActorEntityBuildArgs {
-    // No `player` field: placement attribution has nothing to borrow from
-    // for a standalone character, unlike ConnectedPlayerActor.
     return { force: this.force }
   }
 
   status_snapshot(): ActorStatusSnapshot {
+    const selected = this.character_entity.selected
+
     return {
       kind: 'standalone_character',
       valid: this.character_entity.valid,
       name: 'AIRI',
       position: this.character_entity.position,
       has_character: true,
+      actor_id: this.character_entity.unit_number,
+      selected_entity: selected
+        ? {
+            name: selected.name,
+            position: selected.position,
+          }
+        : undefined,
+      mining_state: this.character_entity.mining_state,
+      mining_progress: this.character_entity.character_mining_progress,
     }
   }
 }
