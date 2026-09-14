@@ -112,7 +112,7 @@ function egg(installScript) {
       variable('Save File Name', 'Save under /saves. Leave blank to use the newest existing save or create airi-world.zip.', 'SAVE_NAME', '', 'nullable|string|max:160'),
       variable('Factorio Username', 'Factorio.com username used for public server listing. Leave both username and token blank for a hidden/private server.', 'FACTORIO_USERNAME', '', 'nullable|string|max:128'),
       variable('Factorio Authentication Token', 'Factorio.com authentication token used for public server listing. Leave both username and token blank for a hidden/private server.', 'FACTORIO_TOKEN', '', 'nullable|string|max:128', { viewable: false }),
-      variable('Max AI Requests Per Hour', 'Persisted hourly provider request cap.', 'MAX_PROVIDER_REQUESTS_PER_HOUR', '30', 'required|numeric|between:1,1200'),
+      variable('Max AI Requests Per Hour', 'Persisted hourly provider request cap.', 'MAX_PROVIDER_REQUESTS_PER_HOUR', '300', 'required|numeric|between:1,1200'),
       variable('Shutdown Timeout (ms)', 'Graceful Factorio save/stop timeout before forced termination.', 'SHUTDOWN_TIMEOUT_MS', '60000', 'required|numeric|between:1000,300000'),
       variable('Factorio Version', 'Factorio 2.0 headless version: latest, experimental, or exact 2.0.x.', 'FACTORIO_VERSION', 'latest', 'required|string|max:20'),
     ],
