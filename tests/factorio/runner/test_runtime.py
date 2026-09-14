@@ -137,15 +137,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertIs(settings['auto_pause_when_players_connect'], False)
         self.assertEqual(settings['visibility'], {'public': False, 'lan': False})
 
-        # Runtime lanes retain isolated saves/config/ports/mod directories, but
-        # are intentionally executed one at a time. This keeps failure logs
-        # deterministic and avoids spending more engineering time on parallel
-        # orchestration than it saves in wall-clock runtime.
+        # Runtime lanes own Factorio server startup. The top-level runner can run
+        # them concurrently by default while preserving a sequential-debug mode.
+        # Every lane still has isolated save/config/ports/mod/write-data state.
         run_script = (root / 'run.sh').read_text()
         lane_script = (root / 'runner/run_lane.sh').read_text()
         self.assertIn('bash "$TEST_ROOT/runner/run_lane.sh"', run_script)
-        self.assertIn('Runtime lane mode: sequential-isolated', run_script)
-        self.assertNotIn('NPC_TEST_PARALLEL', run_script)
+        self.assertIn('NPC_TEST_PARALLEL', run_script)
+        self.assertIn("printf 'parallel'", run_script)
         self.assertIn('--server-settings "$SERVER_SETTINGS"', lane_script)
         self.assertIn('--config "$CONFIG"', lane_script)
         self.assertIn('--port "$SERVER_PORT"', lane_script)
