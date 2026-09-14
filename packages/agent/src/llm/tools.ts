@@ -19,12 +19,18 @@ const nearbyEntitiesSchema = z.object({
   limit: z.number().int().min(1).max(100).default(50),
 }).strict()
 
+const longRangeEntitiesSchema = z.object({
+  name: factorioNameSchema,
+  max_radius: z.number().int().min(64).max(4096).default(1024),
+  limit: z.number().int().min(1).max(16).default(8),
+}).strict()
+
 const entityStatusSchema = z.object({
   name: factorioNameSchema,
   radius: z.number().int().min(1).max(32).default(8),
 }).strict()
 
-async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat') {
+async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
   return response.data.output
@@ -97,6 +103,18 @@ export const tools: ToolFunction[] = [
     },
   },
   {
+    name: 'findLongRangeEntities',
+    description: 'Search outward in bounded rings for an exact Factorio prototype name, up to 4096 tiles, returning only a small number of matching distant targets. Use this for resource/world discovery, not broad local inspection.',
+    schema: longRangeEntitiesSchema,
+    fn: async ({ parameters }) => {
+      const parsed = longRangeEntitiesSchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery", "find_entities", ${renderLuaString(parsed.name)}, ${parsed.max_radius}, ${parsed.limit})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Long-range entities')
+      return response.data.output
+    },
+  },
+  {
     name: 'getEntityStatus',
     description: 'Inspect the nearest local entity with an exact prototype name and return bounded inventory summaries. Use this to verify placed chests and nearby machines without dumping the map.',
     schema: entityStatusSchema,
@@ -113,6 +131,12 @@ export const tools: ToolFunction[] = [
     description: 'Read AIRI navigation state, bound target, active path request/attempt count, and last bounded navigation result. Use it to distinguish reached from no-target, unreachable, path timeout, stuck, or ownership failures.',
     schema: z.object({}).strict(),
     fn: async () => readRemoteStatus('autorio_navigation'),
+  },
+  {
+    name: 'getFollowStatus',
+    description: 'Read AIRI persistent player-follow state, target player, configured distance, current distance, and whether follow movement is active or blocked.',
+    schema: z.object({}).strict(),
+    fn: async () => readRemoteStatus('autorio_follow'),
   },
   {
     name: 'getCraftingStatus',
