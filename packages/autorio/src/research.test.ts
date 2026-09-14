@@ -13,13 +13,14 @@ beforeEach(() => {
 })
 
 function world() {
-  const tech = {
+  const tech: Record<string, any> = {
     name: 'automation', enabled: true, researched: false, level: 1,
     prerequisites: {} as Record<string, any>, prototype: {} as Record<string, any>,
     research_unit_count: 10, research_unit_energy: 600,
     research_unit_ingredients: [{ name: 'automation-science-pack', amount: 1 }],
+    saved_progress: 0,
   }
-  const force = {
+  const force: Record<string, any> = {
     name: 'player', index: 1, valid: true, research_enabled: true,
     technologies: { automation: tech } as Record<string, typeof tech>,
     current_research: undefined as typeof tech | undefined,
@@ -30,6 +31,7 @@ function world() {
       return true
     }),
   }
+  tech.force = force
   const identity = { kind: 'standalone_character', actor_id: 42 }
   const actor = {
     is_valid: true, character: {}, force,
@@ -39,6 +41,13 @@ function world() {
   const manager = new_task_manager(get_actor)
   const controller = new_research_controller(get_actor, manager)
   return { actor, force, tech, identity, manager, controller, get_actor }
+}
+
+function expectRejected(result: [boolean, string, number], code: string) {
+  expect(result[0]).toBe(false)
+  expect(result[1]).toBe(code)
+  expect(result[2]).toBeGreaterThan(0)
+  return result[2]
 }
 
 describe('serialized asynchronous research requests', () => {
@@ -56,16 +65,40 @@ describe('serialized asynchronous research requests', () => {
     expect(manager.player_state.task_state).toBe(TaskStates.IDLE)
   })
 
+  it('allocates monotonic request ids and exposes exact rejected results', () => {
+    const { controller } = world()
+    const missing = controller.submit('unknown')
+    const malformed = controller.submit('automation\n[ERROR] injected')
+    expect(missing[2]).toBeGreaterThan(0)
+    expect(malformed[2]).toBe(missing[2] + 1)
+    expect(controller.request_result(missing[2])).toMatchObject({
+      found: true,
+      request_id: missing[2],
+      result: { accepted: false, completed: false, code: 'unknown_technology' },
+    })
+    expect(controller.request_result(malformed[2])).toMatchObject({
+      found: true,
+      request_id: malformed[2],
+      result: { accepted: false, code: 'invalid_name' },
+    })
+    expect(controller.request_result(99999)).toEqual({ found: false, error: 'unknown_request_id', request_id: 99999 })
+    expect(controller.request_result(0)).toEqual({ found: false, error: 'invalid_request_id' })
+  })
+
   it('allows queued physical work while native research is still incomplete', () => {
     const { actor, tech, manager, controller } = world()
-    controller.submit('automation')
+    const request = controller.submit('automation')
     manager.add_task({ type: TaskStates.WAITING, remaining_ticks: 120 })
     controller.tick(actor)
     expect(tech.researched).toBe(false)
     expect(manager.player_state.task_state).toBe(TaskStates.WAITING)
     expect(controller.status()).toMatchObject({
       current: { name: 'automation' },
-      last_request_result: { accepted: true, code: 'started' },
+      last_request_result: { request_id: request[2], accepted: true, completed: false, code: 'started' },
+    })
+    expect(controller.request_result(request[2])).toMatchObject({
+      found: true,
+      follow_through: { state: 'running', requested_level: 1 },
     })
     expect(controller.technology('automation')).toMatchObject({ researched: false })
   })
@@ -94,7 +127,7 @@ describe('serialized asynchronous research requests', () => {
     controller.submit('automation')
     manager.add_task({ type: TaskStates.WAITING, remaining_ticks: 120 })
     controller.tick(actor)
-    expect(controller.status()).toMatchObject({ last_request_result: { accepted: false, code: 'engine_rejected' } })
+    expect(controller.status()).toMatchObject({ last_request_result: { accepted: false, completed: false, code: 'engine_rejected' } })
     expect(manager.get_status_snapshot()).toMatchObject({ task_state: 'idle', queue_length: 0 })
     expect((globalThis as any).game.print).not.toHaveBeenCalled()
     expect((globalThis as any).log).toHaveBeenCalledWith(expect.stringContaining('[ERROR]'))
@@ -134,7 +167,7 @@ describe('serialized asynchronous research requests', () => {
     controller.submit('automation')
     controller.tick(actor)
     expect(force.add_research).not.toHaveBeenCalled()
-    expect(controller.status()).toMatchObject({ last_request_result: { code: 'already_researched' } })
+    expect(controller.status()).toMatchObject({ last_request_result: { code: 'already_researched', completed: true } })
   })
 
   it('preserves a conflicting force research queue', () => {
@@ -142,7 +175,7 @@ describe('serialized asynchronous research requests', () => {
     const other = { ...tech, name: 'logistics' }
     force.current_research = other
     force.research_queue = [other]
-    expect(controller.submit('automation')).toEqual([false, 'force_busy'])
+    expectRejected(controller.submit('automation'), 'force_busy')
     expect(force.research_queue).toEqual([other])
     expect(force.add_research).not.toHaveBeenCalled()
   })
@@ -157,27 +190,115 @@ describe('serialized asynchronous research requests', () => {
     expect(controller.status()).toMatchObject({ last_request_result: { code: 'force_busy' } })
   })
 
-  it('rejects missing prerequisites, gameplay-trigger research, and disabled force research', () => {
+  it('rejects missing prerequisites, gameplay-trigger research, and disabled force research with distinct ids', () => {
     const { force, tech, controller } = world()
     tech.prerequisites = { electronics: { researched: false } }
-    expect(controller.submit('automation')).toEqual([false, 'missing_prerequisites'])
+    const first = expectRejected(controller.submit('automation'), 'missing_prerequisites')
     tech.prerequisites = {}
     tech.prototype.research_trigger = { type: 'craft-item' }
-    expect(controller.submit('automation')).toEqual([false, 'trigger_research'])
+    const second = expectRejected(controller.submit('automation'), 'trigger_research')
     tech.prototype = {}
     force.research_enabled = false
-    expect(controller.submit('automation')).toEqual([false, 'research_disabled'])
+    const third = expectRejected(controller.submit('automation'), 'research_disabled')
+    expect([second, third]).toEqual([first + 1, first + 2])
     expect(force.add_research).not.toHaveBeenCalled()
   })
 
-  it('rejects unknown, malformed, and unowned requests', () => {
+  it('rejects unknown, malformed, oversized, and unowned requests', () => {
     const { controller, get_actor } = world()
-    expect(controller.submit('unknown')).toEqual([false, 'unknown_technology'])
-    expect(controller.submit('automation\n[ERROR] injected')).toEqual([false, 'invalid_name'])
-    expect(controller.submit('x'.repeat(201))).toEqual([false, 'invalid_name'])
+    expectRejected(controller.submit('unknown'), 'unknown_technology')
+    expectRejected(controller.submit('automation\n[ERROR] injected'), 'invalid_name')
+    expectRejected(controller.submit('x'.repeat(201)), 'invalid_name')
     get_actor.mockReturnValue(undefined)
-    expect(controller.submit('automation')).toEqual([false, 'no_actor'])
+    expectRejected(controller.submit('automation'), 'no_actor')
     expect(controller.status()).toEqual({ error: 'no_actor' })
+  })
+
+  it('marks a running request stalled after a bounded no-progress interval and recovers when progress resumes', () => {
+    const { actor, force, controller } = world()
+    const request = controller.submit('automation')
+    controller.tick(actor)
+    expect(controller.request_result(request[2])).toMatchObject({ follow_through: { state: 'running' } })
+
+    ;(globalThis as any).game.tick = 100 + 3600
+    force.research_progress = 0
+    controller.status()
+    expect(controller.request_result(request[2])).toMatchObject({
+      result: { code: 'stalled', completed: false },
+      follow_through: { state: 'stalled' },
+    })
+
+    ;(globalThis as any).game.tick += 1
+    force.research_progress = 0.25
+    controller.status()
+    expect(controller.request_result(request[2])).toMatchObject({
+      result: { code: 'started', completed: false, progress: 0.25 },
+      follow_through: { state: 'running', last_progress: 0.25 },
+    })
+  })
+
+  it('marks a request interrupted if the force drops it before completion', () => {
+    const { actor, force, controller } = world()
+    const request = controller.submit('automation')
+    controller.tick(actor)
+    force.current_research = undefined
+    force.research_queue = []
+    ;(globalThis as any).game.tick += 1
+    controller.status()
+    expect(controller.request_result(request[2])).toMatchObject({
+      result: { code: 'interrupted', completed: false },
+      follow_through: { state: 'interrupted' },
+    })
+  })
+
+  it('completes repeatable research by level advance even when researched remains false', () => {
+    const { actor, force, tech, controller } = world()
+    tech.name = 'mining-productivity-4'
+    tech.level = 4
+    tech.researched = false
+    tech.prototype.max_level = 'infinite'
+    force.technologies = { [tech.name]: tech }
+
+    const request = controller.submit(tech.name)
+    controller.tick(actor)
+    expect(controller.request_result(request[2])).toMatchObject({
+      result: { code: 'started', requested_level: 4, completed: false },
+      follow_through: { state: 'running', requested_level: 4 },
+    })
+
+    tech.level = 5
+    force.current_research = tech
+    force.research_queue = [tech]
+    ;(globalThis as any).game.tick = 250
+    controller.on_research_finished({ research: tech, tick: 250, by_script: false } as any)
+
+    expect(controller.request_result(request[2])).toMatchObject({
+      result: {
+        accepted: true,
+        completed: true,
+        code: 'completed',
+        requested_level: 4,
+        observed_level: 5,
+        by_script: false,
+      },
+      follow_through: { state: 'completed', requested_level: 4, observed_level: 5, completed_tick: 250 },
+    })
+  })
+
+  it('retains original request owner when completion is observed after actor replacement', () => {
+    const { actor, tech, controller, get_actor, identity } = world()
+    const request = controller.submit('automation')
+    controller.tick(actor)
+    identity.actor_id = 99
+    get_actor.mockReturnValue(actor)
+    tech.researched = true
+    ;(globalThis as any).game.tick = 300
+    controller.on_research_finished({ research: tech, tick: 300, by_script: false } as any)
+
+    expect(controller.request_result(request[2])).toMatchObject({
+      result: { completed: true, actor_id: 42, actor_kind: 'standalone_character', force_index: 1 },
+      follow_through: { actor_id: 42, actor_kind: 'standalone_character', force_index: 1 },
+    })
   })
 
   it('bounds observations and does not mutate research while reading', () => {
