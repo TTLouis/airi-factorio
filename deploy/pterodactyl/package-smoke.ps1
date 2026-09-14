@@ -9,9 +9,11 @@ Set-StrictMode -Version Latest
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = (Resolve-Path (Join-Path $Here '..\..')).Path
 $InstallScript = (Resolve-Path (Join-Path $Here 'install.sh')).Path
+$EggPath = (Resolve-Path (Join-Path $Here 'egg-airi-factorio-server.json')).Path
 $Suffix = ([guid]::NewGuid().ToString('N')).Substring(0, 10)
 $Volume = "airi-ptero-smoke-$PID-$Suffix"
 $Container = "airi-ptero-smoke-$PID-$Suffix"
+$EggInstallScript = Join-Path ([System.IO.Path]::GetTempPath()) "airi-ptero-egg-install-$PID-$Suffix.sh"
 
 function Invoke-Docker {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
@@ -47,10 +49,19 @@ try {
         'node', 'deploy/pterodactyl/build-payload.mjs', '--check'
     )
 
+    Write-Host '[pterodactyl-smoke] Parsing the committed PTDL_v2 egg and extracting its real install script.'
+    $Egg = Get-Content -Raw -LiteralPath $EggPath | ConvertFrom-Json
+    $EggInstallText = [string]$Egg.scripts.installation.script
+    if ([string]::IsNullOrWhiteSpace($EggInstallText)) {
+        throw 'Egg installation script is missing or empty.'
+    }
+    $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($EggInstallScript, $EggInstallText, $Utf8NoBom)
+
     Write-Host '[pterodactyl-smoke] Creating disposable Docker volume.'
     Invoke-Docker -Arguments @('volume', 'create', $Volume)
 
-    Write-Host '[pterodactyl-smoke] Verifying generated bootstrap payload.'
+    Write-Host '[pterodactyl-smoke] Verifying standalone generated bootstrap payload.'
     Invoke-Docker -Arguments @(
         'run', '--rm',
         '-v', "${InstallScript}:/tmp/install.sh:ro",
@@ -60,17 +71,17 @@ try {
         'bash', '/tmp/install.sh', '--verify-only'
     )
 
-    Write-Host '[pterodactyl-smoke] Performing clean standalone-NPC installation.'
+    Write-Host '[pterodactyl-smoke] Performing clean installation through the egg loader.'
     Invoke-Docker -Arguments @(
         'run', '--rm',
-        '-v', "${InstallScript}:/tmp/install.sh:ro",
+        '-v', "${EggInstallScript}:/tmp/egg-install.sh:ro",
         '-v', "${Volume}:/mnt/server",
         '-e', 'AIRI_INSTALL_ROOT=/mnt/server',
         '-e', 'AIRI_ACTOR_MODE=npc',
         '-e', 'AIRI_CHAT_PLAYER=SmokeOperator',
         '-e', "FACTORIO_VERSION=$FactorioSmokeVersion",
         $Image,
-        'bash', '/tmp/install.sh'
+        'bash', '/tmp/egg-install.sh'
     )
 
     Write-Host '[pterodactyl-smoke] Verifying installed release layout.'
@@ -139,9 +150,10 @@ try {
         "find /home/container/saves -maxdepth 1 -type f -name '*.zip' -size +0c | grep -q ."
     )
 
-    Write-Host '[pterodactyl-smoke] PASS: generated egg payload installed, started a zero-player standalone NPC, saved, and stopped cleanly.'
+    Write-Host '[pterodactyl-smoke] PASS: generated PTDL_v2 egg installed, started a zero-player standalone NPC, saved, and stopped cleanly.'
 }
 finally {
     & docker rm -f $Container *> $null
     & docker volume rm -f $Volume *> $null
+    Remove-Item -Force -ErrorAction SilentlyContinue $EggInstallScript
 }
