@@ -12,10 +12,12 @@ The remaining work here is deployment integration: replacing the old v7 connecte
 - `npc-session.test.mjs` — zero-player, multi-human, replacement-body and load-reconciliation unit cases.
 - `guard.ts` — Factorio-side `airi_deployment` v8 guard. It captures actor mode/ID/kind and performs actor-epoch authorization without wrapping the native actor-aware Autorio interfaces.
 - `guard.test.mjs` — VM fixture for zero-player authorization, body replacement, cancellation and legacy player-mode compatibility.
-- `supervisor-adapter.mjs` — Node/RCON startup handshake plus authorized operation and **atomic dependency-batch** admission.
-- `supervisor-adapter.test.mjs` — fake-RCON tests for configure retry, identity validation, stale epochs, no-replay failures, and one-transaction batch admission.
-- `structured-policy.mjs` — strict structured model response/operation validation plus the actor-aware read-only tool surface. It does not accept model-generated Lua or the old `operationCommands` format.
-- `structured-policy.test.mjs` — bounds, schema, rendering and injection-rejection cases for the staged model contract.
+- `source-preparer.mjs` — promotion bridge for the pinned Autorio source. It requires the native actor-aware controllers/interfaces, refuses v7 connected-player guard markers, injects only the v8 deployment guard import, and does not rewrite gameplay semantics.
+- `source-preparer.test.mjs` — copies the repository's real Autorio source into a temporary tree and verifies guard-only, idempotent source preparation plus fail-closed legacy/non-NPC detection.
+- `supervisor-adapter.mjs` — Node/RCON startup handshake plus authorized operation and **atomic dependency-batch** admission while preserving each Autorio operation's native boolean/tuple return shape.
+- `supervisor-adapter.test.mjs` — fake-RCON tests for configure retry, identity validation, stale epochs, no-replay failures, native return shapes, and one-transaction batch admission.
+- `structured-policy.mjs` — strict structured model response/operation validation plus the actor-aware read-only tool surface. It does not accept model-generated Lua or the old `operationCommands` format. Research observations include exact `getResearchRequest(request_id)` correlation.
+- `structured-policy.test.mjs` — bounds, schema, rendering, correlated research lookup and injection-rejection cases for the staged model contract.
 - `npc-agent-loop.mjs` — epoch-safe prompt/tool/operation loop. It rechecks the captured NPC actor before provider calls and observations, validates the complete plan before mutation, then admits the operation dependency batch atomically.
 - `npc-agent-loop.test.mjs` — scripted-provider vertical tests for replacement during observation, malformed later operations, atomic dependency admission, post-admission actor replacement, completion continuation, and malformed/unknown tools.
 
@@ -35,7 +37,7 @@ v8 therefore treats one model `operations` array as one **admission transaction*
 3. send one RCON/Lua command;
 4. authorize the epoch once inside that command;
 5. enqueue every operation synchronously, in order;
-6. fail closed on an admission rejection;
+6. preserve each native Autorio admission result and reject either `false` or a tuple whose first element is `false`;
 7. never replay the mutation command automatically.
 
 Runtime execution is still asynchronous. If the first owned operation later fails, Autorio can now cancel the already-queued dependent work deterministically. If death/recovery or a mode change happens after admission, the next supervisor/agent epoch check cancels the stale continuation while the in-game ownership boundary handles the admitted tasks.
@@ -48,7 +50,7 @@ The deployment targets Node 24; the guard fixture uses Node's `stripTypeScriptTy
 node --test deploy/pterodactyl/staging/*.test.mjs
 ```
 
-These tests are a deployment-protocol gate, not a substitute for the real Factorio harness.
+These tests are a deployment-protocol gate, not a substitute for the real Factorio harness. The repository CI now has a dedicated Node 24 `pterodactyl-npc-staging` job for this directory.
 
 ## Promotion order
 
@@ -56,15 +58,17 @@ The validated runtime baseline is now on `main`, while `feat/npc-transition-work
 
 1. keep all new deployment work on `feat/npc-transition-work`;
 2. pin the payload to a validated NPC source SHA instead of the old connected-player source pin;
-3. build the native actor-aware Autorio source — do **not** reapply the v7 connected-player control patch set;
+3. use `source-preparer.mjs` to build the native actor-aware Autorio source — do **not** reapply the v7 connected-player control patch set;
 4. compile/inject the v8 `airi_deployment` guard alongside the native NPC interfaces;
 5. configure `npc` mode at startup and capture the standalone actor ID/kind/epoch;
 6. keep `AIRI_CHAT_PLAYER` (who may issue `!airi`) separate from NPC ownership;
 7. replace `operationCommands` with the structured `operations` contract;
 8. use atomic dependency-batch admission for model mutations;
-9. expose the current actor-aware observation tools, including correlated research state;
+9. expose the current actor-aware observation tools, including exact correlated research request lookup;
 10. replace the old installer smoke assumption `zero players => denied` with `zero players => standalone NPC authorized`;
 11. run clean-install, existing-save upgrade, graceful restart/save, rollback, and one real provider-to-NPC goal;
-12. only after those gates pass, regenerate `install.sh` and `egg-airi-factorio-server.json` from `payload-src/installer.sh` and let `main` catch up again.
+12. only after those gates pass, regenerate `install.sh` and `egg-airi-factorio-server.json` from the v8 payload source and let `main` catch up again.
+
+`build-payload.mjs` currently refuses to regenerate the canonical egg while `payload-src/installer.sh` still contains v7 markers. This is intentional: a newly checksummed artifact must not make the legacy connected-player package look like the v8 NPC package.
 
 Do not hand-edit the generated payload blob or egg export. The payload source and generator remain the source of truth.

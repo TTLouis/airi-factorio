@@ -10,6 +10,7 @@ import {
 } from './supervisor-adapter.mjs'
 
 const SESSION = '0123456789abcdef0123456789abcdef'
+const CONFIG_MARKER = 'AIRI_CONFIG_0123456789abcdef01234567:'
 
 function readyStatus(overrides = {}) {
   return {
@@ -43,26 +44,42 @@ class FakeRcon {
   }
 }
 
+function configureAck(result = SESSION) {
+  return `${CONFIG_MARKER}${JSON.stringify({ ok: true, result })}`
+}
+
 test('configure handshake selects npc and verifies the native deployment status', async () => {
   const rcon = new FakeRcon([
-    SESSION,
+    configureAck(),
     JSON.stringify(readyStatus()),
   ])
-  const status = await configureNpcSession(rcon, SESSION)
+  const status = await configureNpcSession(rcon, SESSION, CONFIG_MARKER)
   assert.equal(status.actor_id, 18)
   assert.match(rcon.commands[0], /"configure","npc"/)
+  assert.match(rcon.commands[0], /AIRI_CONFIG_0123456789abcdef01234567:/)
   assert.match(rcon.commands[1], /"airi_deployment","status"/)
 })
 
-test('configure handshake repeats only the idempotent startup command after the first-lua warning', async () => {
+test('configure handshake repeats the exact command when Factorio echoes the blocked command including the marker', async () => {
   const rcon = new FakeRcon([
-    'Lua console commands will disable achievements. Please repeat the command to proceed.',
-    SESSION,
+    text => `Player <server> tried using the command ${text}. Lua console commands will disable achievements. Please repeat the command to proceed.`,
+    configureAck(),
     JSON.stringify(readyStatus()),
   ])
-  await configureNpcSession(rcon, SESSION)
+  await configureNpcSession(rcon, SESSION, CONFIG_MARKER)
   assert.equal(rcon.commands[0], rcon.commands[1])
+  assert.match(rcon.commands[0], new RegExp(CONFIG_MARKER))
   assert.notEqual(rcon.commands[1], rcon.commands[2])
+})
+
+test('configure handshake fails closed when the repeated command still has no execution acknowledgement', async () => {
+  const rcon = new FakeRcon([
+    'Please repeat the command to proceed.',
+    'still no acknowledgement',
+  ])
+  await assert.rejects(() => configureNpcSession(rcon, SESSION, CONFIG_MARKER), /acknowledgement missing/)
+  assert.equal(rcon.commands.length, 2)
+  assert.equal(rcon.commands[0], rcon.commands[1])
 })
 
 test('deployment status requires native npc identity and interfaces', async () => {
@@ -102,7 +119,7 @@ test('authorized operation wraps the mutation with an atomic actor-epoch check',
 test('authorized dependency batch admits every operation in one RCON/Lua transaction', async () => {
   const marker = 'AIRI_RESULT_0123456789abcdef01234567:'
   const rcon = new FakeRcon([
-    `${marker}${JSON.stringify({ ok: true, result: [[true, 'first'], [true, 'second']] })}`,
+    `${marker}${JSON.stringify({ ok: true, result: [true, [true, 'second']] })}`,
   ])
   const result = await executeAuthorizedBatch(rcon, 3, [
     'remote.call("autorio_operations","mine_entity","iron-ore",1)',
@@ -110,13 +127,14 @@ test('authorized dependency batch admits every operation in one RCON/Lua transac
   ], marker)
 
   assert.equal(rcon.commands.length, 1)
-  assert.equal(result.results.length, 2)
+  assert.deepEqual(result.results, [true, [true, 'second']])
   assert.equal((rcon.commands[0].match(/airi_deployment","authorize",3/g) ?? []).length, 1)
   const first = rcon.commands[0].indexOf('autorio_operations","mine_entity"')
   const second = rcon.commands[0].indexOf('autorio_operations","wait"')
   assert.ok(first >= 0 && second > first)
-  assert.match(rcon.commands[0], /local r1=\{remote\.call/)
-  assert.match(rcon.commands[0], /local r2=\{remote\.call/)
+  assert.match(rcon.commands[0], /local r1=remote\.call/)
+  assert.match(rcon.commands[0], /local r2=remote\.call/)
+  assert.match(rcon.commands[0], /type\(r1\)=="table" and r1\[1\]==false/)
 })
 
 test('mutation rejection, missing acknowledgement, and stale authorization fail closed without retries', async () => {

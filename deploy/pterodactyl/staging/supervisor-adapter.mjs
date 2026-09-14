@@ -20,16 +20,29 @@ function parseJson(text, context) {
   }
 }
 
-function acknowledgement(raw, marker, context) {
+function parseAcknowledgement(raw, marker) {
   const text = String(raw)
   const position = text.lastIndexOf(marker)
-  check(position >= 0, `Game command acknowledgement missing; ${context} will not be retried`)
-  const data = parseJson(text.slice(position + marker.length), `${context} acknowledgement`)
-  check(data.ok === true, `Game command failed; ${context} will not be retried`)
-  return {
-    data,
-    output: text.slice(0, position).trim(),
+  if (position < 0) return null
+  try {
+    return {
+      data: JSON.parse(text.slice(position + marker.length).trim()),
+      output: text.slice(0, position).trim(),
+    }
   }
+  catch {
+    // The first-use Factorio warning can echo the entire Lua command, including
+    // the marker literal embedded in its source. That is not execution proof:
+    // only marker + parseable JSON at the end of the RCON response is an ack.
+    return null
+  }
+}
+
+function acknowledgement(raw, marker, context) {
+  const parsed = parseAcknowledgement(raw, marker)
+  check(parsed, `Game command acknowledgement missing; ${context} will not be retried`)
+  check(parsed.data.ok === true, `Game command failed; ${context} will not be retried`)
+  return parsed
 }
 
 export async function deploymentStatus(rcon) {
@@ -46,15 +59,26 @@ export async function deploymentStatus(rcon) {
   return status
 }
 
-export async function configureNpcSession(rcon, session) {
+export async function configureNpcSession(rcon, session, marker = `AIRI_CONFIG_${crypto.randomBytes(12).toString('hex')}:`) {
   check(typeof session === 'string' && session.length >= 16 && session.length <= 256 && !/[\x00-\x1f\x7f]/.test(session), 'Invalid deployment session token')
-  const command = `/silent-command rcon.print(remote.call("airi_deployment","configure","npc",${luaString(session)}))`
-  let configured = await rcon.command(command)
-  // Factorio can ask that the first Lua command be repeated before achievements
-  // are disabled. This configure call is intentionally idempotent enough for the
-  // same single retry pattern used by the existing supervisor startup handshake.
-  if (String(configured).trim() !== session) configured = await rcon.command(command)
-  check(String(configured).trim() === session, 'NPC deployment configure handshake failed')
+  check(/^AIRI_CONFIG_[a-f0-9]{24}:$/.test(marker), 'Invalid configure acknowledgement marker')
+
+  // Factorio's first Lua-console command can be blocked by the achievement
+  // warning and must then be repeated exactly. The warning itself can echo this
+  // entire command, including both the session and marker literals, so neither
+  // substring is sufficient execution proof. Only marker + parseable JSON at
+  // the end of the RCON response proves the command actually ran.
+  const command = `/silent-command local ok,result=pcall(function() return remote.call("airi_deployment","configure","npc",${luaString(session)}) end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
+  let raw = await rcon.command(command)
+  let parsed = parseAcknowledgement(raw, marker)
+  if (!parsed) {
+    raw = await rcon.command(command)
+    parsed = parseAcknowledgement(raw, marker)
+  }
+  check(parsed, 'Game command acknowledgement missing; configure retry exhausted')
+  check(parsed.data.ok === true, 'Game command failed; configure retry exhausted')
+  check(parsed.data.result === session, 'NPC deployment configure handshake failed')
+
   const status = await deploymentStatus(rcon)
   check(status.session === session, 'Deployment status session does not match configure token')
   return status
