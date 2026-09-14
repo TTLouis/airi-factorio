@@ -68,6 +68,9 @@ finish() {
     print_file "$RESULTS/navigation-error.txt"
     print_file "$RESULTS/navigation-transcript.json"
     print_file "$RESULTS/navigation.json"
+    print_file "$RESULTS/crafting-error.txt"
+    print_file "$RESULTS/crafting-transcript.json"
+    print_file "$RESULTS/crafting.json"
   fi
   exit "$code"
 }
@@ -173,6 +176,13 @@ python3 "${TEST_ROOT:-/test}/runner/death_recovery.py" \
 
 printf '[npc-test] Death recovery passed; checking bounded navigation and stale-path safety...\n'
 python3 "${TEST_ROOT:-/test}/runner/navigation.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS"
+
+printf '[npc-test] Navigation passed; checking owned native crafting and cancellation...\n'
+python3 "${TEST_ROOT:-/test}/runner/crafting.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \
   --password "$RCON_PASSWORD" \
