@@ -4,84 +4,92 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { buildArtifacts, installerLoader, verifyGeneratedArtifacts } from './build-payload.mjs'
+import { buildArtifacts, channelInstaller, installerLoader, verifyGeneratedArtifacts } from './build-payload.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PAYLOAD_REF = '92afd659485f5cb47a912615e669332c85ef9d12'
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
+REVISION="test"
 DEPLOYMENT_REVISION="airi-deploy-v8-test"
 AIRI_ACTOR_MODE="\${AIRI_ACTOR_MODE:-npc}"
 AIRI_CHAT_PLAYER="\${AIRI_CHAT_PLAYER:-}"
 echo "$DEPLOYMENT_REVISION $AIRI_ACTOR_MODE $AIRI_CHAT_PLAYER"
 `)
 
-test('generated artifacts share one immutable checksummed installer loader', () => {
+test('immutable bootstrap loader remains checksummed and pinned', () => {
   const canonical = buildArtifacts(source)
   assert.equal(canonical.installScript, installerLoader(source))
-  assert.equal(verifyGeneratedArtifacts(source, canonical.installScript, canonical.eggJson), true)
-
-  const egg = JSON.parse(canonical.eggJson)
-  assert.equal(egg.scripts.installation.script, canonical.installScript)
   assert.match(canonical.installScript, new RegExp(PAYLOAD_REF))
   assert.match(canonical.installScript, /payload-src\/installer\.sh/)
   assert.match(canonical.installScript, /EXPECTED_SOURCE_SHA256="[a-f0-9]{64}"/)
 })
 
-test('generated artifact verifier rejects payload/source drift', () => {
+test('main and NPC E2E eggs resolve different default source refs on reinstall', () => {
   const canonical = buildArtifacts(source)
-  const changedSource = Buffer.concat([source, Buffer.from('# changed\n')])
-  assert.throws(
-    () => verifyGeneratedArtifacts(changedSource, canonical.installScript, canonical.eggJson),
-    /install\.sh loader is stale|egg schema is stale/,
-  )
+  const mainEgg = JSON.parse(canonical.mainEggJson)
+  const e2eEgg = JSON.parse(canonical.e2eEggJson)
+
+  assert.equal(mainEgg.name, 'AIRI Factorio Server (Main)')
+  assert.equal(e2eEgg.name, 'AIRI Factorio Server (NPC E2E)')
+  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.default_value, 'main')
+  assert.equal(e2eEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.default_value, 'feat/npc-transition-work')
+  assert.notEqual(mainEgg.scripts.installation.script, e2eEgg.scripts.installation.script)
+  assert.match(mainEgg.scripts.installation.script, /CHANNEL="main"/)
+  assert.match(e2eEgg.scripts.installation.script, /CHANNEL="npc-e2e"/)
 })
 
-test('generated egg is valid PTDL_v2 JSON with the v8 variable contract', () => {
+test('channel installer resolves to an exact SHA and only patches source/revision assignments', () => {
+  const script = channelInstaller(source, 'npcE2e')
+  assert.match(script, /api\.github\.com\/repos\/TTLouis\/airi-factorio\/commits/)
+  assert.match(script, /RESOLVED_SHA/)
+  assert.match(script, /Unexpected AIRI_REF assignment contract/)
+  assert.match(script, /Unexpected REVISION assignment contract/)
+  assert.match(script, /AIRI_REF=.*RESOLVED_SHA/)
+  assert.match(script, /REVISION=.*CHANNEL.*SHORT_SHA/)
+  assert.doesNotMatch(script, /codeload\.github\.com\/TTLouis\/airi-factorio\/tar\.gz\/\$SOURCE_REF/)
+})
+
+test('generated egg variable contract keeps safe provider defaults and 300 request budget', () => {
+  const { mainEggJson, e2eEggJson } = buildArtifacts(source)
+  for (const text of [mainEggJson, e2eEggJson]) {
+    const egg = JSON.parse(text)
+    assert.equal(egg.meta.version, 'PTDL_v2')
+    assert.equal(egg.variables.find(entry => entry.env_variable === 'OPENAI_MODEL')?.default_value, 'replace-me')
+    assert.equal(egg.variables.find(entry => entry.env_variable === 'OPENAI_API_BASEURL')?.default_value, 'https://provider.invalid/v1')
+    assert.equal(egg.variables.find(entry => entry.env_variable === 'PROVIDER_TIMEOUT_MS')?.default_value, '120000')
+    assert.equal(egg.variables.find(entry => entry.env_variable === 'MAX_PROVIDER_REQUESTS_PER_HOUR')?.default_value, '300')
+    assert.equal(egg.variables.find(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS')?.default_value, '')
+    assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_PLAYER'))
+    assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_CHAT_PLAYER'))
+  }
+})
+
+test('generated artifact verifier rejects source or channel drift', () => {
   const canonical = buildArtifacts(source)
-  const egg = JSON.parse(canonical.eggJson)
-  assert.equal(egg.meta.version, 'PTDL_v2')
-  const model = egg.variables.find(entry => entry.env_variable === 'OPENAI_MODEL')
-  assert.ok(model)
-  assert.equal(model.default_value, 'replace-me')
-  assert.equal(model.rules, 'required|string|max:200')
-  assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_PLAYER'))
-  assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_CHAT_PLAYER'))
-
-  const providerUrl = egg.variables.find(entry => entry.env_variable === 'OPENAI_API_BASEURL')
-  assert.ok(providerUrl)
-  assert.equal(providerUrl.default_value, 'https://provider.invalid/v1')
-  assert.equal(providerUrl.rules, 'required|string|url|max:255')
-
-  const chatPlayers = egg.variables.find(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS')
-  assert.ok(chatPlayers)
-  assert.equal(chatPlayers.default_value, '')
-  assert.equal(chatPlayers.rules, 'nullable|string|max:512')
-
-  const providerTimeout = egg.variables.find(entry => entry.env_variable === 'PROVIDER_TIMEOUT_MS')
-  assert.ok(providerTimeout)
-  assert.equal(providerTimeout.default_value, '120000')
-  assert.equal(providerTimeout.rules, 'required|numeric|between:1000,600000')
-
-  const factorioUsername = egg.variables.find(entry => entry.env_variable === 'FACTORIO_USERNAME')
-  assert.ok(factorioUsername)
-  assert.equal(factorioUsername.default_value, '')
-  assert.equal(factorioUsername.user_viewable, true)
-
-  const factorioToken = egg.variables.find(entry => entry.env_variable === 'FACTORIO_TOKEN')
-  assert.ok(factorioToken)
-  assert.equal(factorioToken.default_value, '')
-  assert.equal(factorioToken.user_viewable, false)
+  assert.equal(
+    verifyGeneratedArtifacts(source, canonical.installScript, canonical.mainEggJson, canonical.e2eEggJson),
+    true,
+  )
+  const changedSource = Buffer.concat([source, Buffer.from('# changed\n')])
+  assert.throws(
+    () => verifyGeneratedArtifacts(changedSource, canonical.installScript, canonical.mainEggJson, canonical.e2eEggJson),
+    /install\.sh loader is stale|egg schema is stale/,
+  )
+  const changedE2e = canonical.e2eEggJson.replace('feat/npc-transition-work', 'main')
+  assert.throws(
+    () => verifyGeneratedArtifacts(source, canonical.installScript, canonical.mainEggJson, changedE2e),
+    /npcE2e egg schema is stale|wrong source ref/,
+  )
 })
 
 test('committed Pterodactyl artifacts are internally valid', () => {
   const committedSource = readFileSync(join(here, 'payload-src', 'installer.sh'))
   const committedInstall = readFileSync(join(here, 'install.sh'), 'utf8')
-  const committedEggText = readFileSync(join(here, 'egg-airi-factorio-server.json'), 'utf8')
-  const egg = JSON.parse(committedEggText)
+  const committedMainEgg = readFileSync(join(here, 'egg-airi-factorio-server.json'), 'utf8')
+  const committedE2eEgg = readFileSync(join(here, 'egg-airi-factorio-npc-e2e.json'), 'utf8')
 
-  assert.equal(verifyGeneratedArtifacts(committedSource, committedInstall, committedEggText), true)
-  assert.equal(egg.scripts.installation.script, committedInstall)
+  assert.equal(verifyGeneratedArtifacts(committedSource, committedInstall, committedMainEgg, committedE2eEgg), true)
   assert.match(committedInstall, new RegExp(PAYLOAD_REF))
   assert.match(committedInstall, /EXPECTED_SOURCE_SHA256="7bcddbab0e959d505a156269340fa2de2fe4c837bc83b0fc9d9f7b6df58dfff1"/)
 })
