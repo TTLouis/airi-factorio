@@ -95,8 +95,29 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Check generated egg artifacts
+        run: node deploy/pterodactyl/build-payload.mjs --check
+
       - name: Test standalone-NPC deployment protocol and production runtime
         run: node --test deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
+
+  pterodactyl-package-smoke:
+    if: github.ref == 'refs/heads/feat/npc-transition-work'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify generated standalone-NPC egg
+        run: |
+          node deploy/pterodactyl/build-payload.mjs --check
+          bash -n deploy/pterodactyl/package-smoke.sh
+
+      - name: Install and boot packaged zero-player NPC
+        run: bash deploy/pterodactyl/package-smoke.sh
 
   npc-factorio-integration:
     if: github.ref == 'refs/heads/feat/npc-transition-work'
