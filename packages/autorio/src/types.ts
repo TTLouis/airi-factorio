@@ -25,6 +25,18 @@ export interface PlayerParametersWalkToEntity {
   path_index: number
   calculating_path: boolean
   target_position: MapPositionStruct | null
+  target?: LuaEntity | null
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
+  target_unit_number?: number
+  path_request_id?: number
+  path_requested_tick?: number
+  path_attempts?: number
+  next_retry_tick?: number
+  started_tick?: number
+  last_progress_tick?: number
+  last_position?: MapPositionStruct
 }
 
 export interface PlayerParametersWalkingDirect {
