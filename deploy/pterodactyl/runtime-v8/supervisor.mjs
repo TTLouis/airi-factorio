@@ -264,9 +264,9 @@ export class Session {
       if (this.rcon && this.gameChild?.alive()) {
         this.rcon.timeout = Math.min(this.config.stopMs, 30000)
         try { await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")') }
-        catch (error) { clean = false; this.log(`[DEBUG-STOP] cancel command failed: ${error instanceof Error ? error.message : error}`) }
+        catch (error) { clean = false; this.log(`Shutdown cancel command failed: ${error instanceof Error ? error.message : error}`) }
         try { await this.rcon.command('/server-save') }
-        catch (error) { clean = false; this.log(`[DEBUG-STOP] server-save command failed: ${error instanceof Error ? error.message : error}`) }
+        catch (error) { clean = false; this.log(`Shutdown server-save command failed: ${error instanceof Error ? error.message : error}`) }
       }
       if (this.gameChild) {
         const stopped = await this.gameChild.stop(this.config.stopMs, 'SIGINT')
@@ -328,7 +328,7 @@ async function main() {
       await session.start()
     }
     catch (error) {
-      log(`[DEBUG-STARTUP] session.start() failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
+      log(`Startup failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
       throw error
     }
     const result = await session.gameChild.closed
