@@ -66,14 +66,18 @@ describe('bounded navigation controller', () => {
   })
 
   it('binds the task to actor identity and records the exact path request id', () => {
-    const { controller, manager, surface } = make_context()
+    const { actor, controller, manager, surface } = make_context()
 
     expect(controller.submit('steel-chest', 40)).toBe(true)
-    controller.tick(manager.player_state.parameters_walk_to_entity ? (controller.status().actor as never) : (undefined as never))
+    controller.tick(actor)
 
-    // Use the real actor resolver result for the execution tick.
-    const actor = (surface.request_path.mock.instances.length, make_context)
-    void actor
+    const task = manager.player_state.parameters_walk_to_entity!
+    expect(task.owner_actor_id).toBe(1)
+    expect(task.owner_actor_kind).toBe('standalone_character')
+    expect(task.owner_force_index).toBe(1)
+    expect(task.path_request_id).toBe(101)
+    expect(task.calculating_path).toBe(true)
+    expect(surface.request_path).toHaveBeenCalledTimes(1)
   })
 
   it('ignores a stale path completion and accepts only the active request id', () => {
