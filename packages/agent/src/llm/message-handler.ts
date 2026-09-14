@@ -31,7 +31,7 @@ export async function createMessageHandler() {
     logger.withFields({ message }).debug('Handling message')
 
     if (message.type === 'chat') {
-      messages.push(user(`[CHAT] ${message.message}`))
+      messages.push(user(`[CHAT] ${message.username}: ${message.message}`))
     }
     else if (message.type === 'modError') {
       messages.push(user(`[MOD] Error: ${message.error}`))
@@ -62,10 +62,6 @@ export async function createMessageHandler() {
     }
 
     const parsedMessage = parseLLMMessage(messageFromLLM)
-    // Preserve the model's original validated JSON in history. The parser may
-    // normalize structured operations into legacy command strings for the
-    // executor, but those implementation details should not be taught back to
-    // the model on the next turn.
     messages.push(assistant(messageFromLLM))
 
     return parsedMessage
