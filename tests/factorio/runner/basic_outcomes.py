@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from run import Rcon, connect_with_retry, decode_json, lua_json, lua_text, remote_call
+from run import Rcon, connect_with_retry, decode_json, lua_json, remote_call
 from runtime import operation_status_command, validate_clock, wait_until_idle
 
 
@@ -57,6 +57,30 @@ def run(client: Rcon, results: Path) -> None:
     def status(context: str) -> dict:
         return json_command(operation_status_command(), context)
 
+    def queue_bool_with_dependent(operation: str, context: str) -> dict:
+        # Queue both operations in one Lua/RCON command. If the failure-capable
+        # operation and its dependent are sent as separate RCON commands, a game
+        # tick can run between them: the first task can fail before the second is
+        # queued, turning the supposed dependent into fresh standalone work.
+        payload = json_command(
+            f"/silent-command local op={operation}; local dep={remote_call('autorio_operations', 'wait', '300')}; "
+            "rcon.print(helpers.table_to_json({operation=op,dependent=dep}))",
+            context,
+        )
+        require(payload.get('operation') is True, payload)
+        require(payload.get('dependent')[0] is True, payload)
+        return payload
+
+    def queue_tuple_with_dependent(operation: str, context: str) -> dict:
+        payload = json_command(
+            f"/silent-command local op={operation}; local dep={remote_call('autorio_operations', 'wait', '300')}; "
+            "rcon.print(helpers.table_to_json({operation=op,dependent=dep}))",
+            context,
+        )
+        require(payload.get('operation')[0] is True, payload)
+        require(payload.get('dependent')[0] is True, payload)
+        return payload
+
     initial = status('basic outcomes initial')
     require(initial['actor']['actor_id'] == actor_id, initial)
     require(initial['task_state'] == 'idle' and initial['queue_length'] == 0, initial)
@@ -71,12 +95,12 @@ def run(client: Rcon, results: Path) -> None:
     require(wait_result.get('requested_ticks') == 30, wait_result)
 
     # 2. A valid entity prototype that is absent nearby is a normal no_target
-    # failure. It must cancel dependent work without crashing or silently
-    # advancing the batch.
-    mine_admission = command(lua_text(remote_call('autorio_operations', 'mine_entity', repr('lab'), '1')))
-    require(mine_admission == 'true', mine_admission)
-    dependent = json_command(lua_json(remote_call('autorio_operations', 'wait', '300')), 'mine failure dependent wait')
-    require(dependent[0] is True, dependent)
+    # failure. It must cancel work that was already queued behind it without
+    # crashing or silently advancing the batch.
+    queue_bool_with_dependent(
+        remote_call('autorio_operations', 'mine_entity', repr('lab'), '1'),
+        'mine failure batch admission',
+    )
     mine_after = wait_until_idle(status, 'missing mining target failure', 5)
     mine_result = assert_failed_batch(mine_after, actor_id=actor_id, code='no_target', op_type='mining')
     require(mine_result.get('entity_name') == 'lab', mine_result)
@@ -84,16 +108,16 @@ def run(client: Rcon, results: Path) -> None:
     # 3. Unknown prototype names must fail closed before Factorio receives them
     # in find_entities_filtered. Factorio treats an unknown name there as a
     # non-recoverable mod error, so this is a process-safety boundary.
-    invalid_admission = command(lua_text(remote_call('autorio_operations', 'mine_entity', repr('__airi_missing_resource__'), '1')))
-    require(invalid_admission == 'true', invalid_admission)
-    dependent = json_command(lua_json(remote_call('autorio_operations', 'wait', '300')), 'invalid mine dependent wait')
-    require(dependent[0] is True, dependent)
+    queue_bool_with_dependent(
+        remote_call('autorio_operations', 'mine_entity', repr('__airi_missing_resource__'), '1'),
+        'invalid mine batch admission',
+    )
     invalid_after = wait_until_idle(status, 'invalid mining prototype failure', 5)
     invalid_result = assert_failed_batch(invalid_after, actor_id=actor_id, code='invalid_entity', op_type='mining')
     require(invalid_result.get('entity_name') == '__airi_missing_resource__', invalid_result)
 
     # 4. Valid place prototype but no item in inventory: fail and cancel the
-    # dependent queue rather than reporting batch completion.
+    # already-queued dependent rather than reporting batch completion.
     fixture = json_command(
         "/silent-command local a=nil; for _,e in pairs(game.surfaces[1].find_entities_filtered{name='character'}) do "
         f"if e.unit_number=={actor_id} then a=e end end; assert(a); "
@@ -102,10 +126,10 @@ def run(client: Rcon, results: Path) -> None:
         'basic outcome inventory fixture',
     )
     require(fixture['actor_id'] == actor_id and fixture['steel'] == 0, fixture)
-    place_admission = command(lua_text(remote_call('autorio_operations', 'place_entity', repr('steel-chest'))))
-    require(place_admission == 'true', place_admission)
-    dependent = json_command(lua_json(remote_call('autorio_operations', 'wait', '300')), 'place failure dependent wait')
-    require(dependent[0] is True, dependent)
+    queue_bool_with_dependent(
+        remote_call('autorio_operations', 'place_entity', repr('steel-chest')),
+        'place failure batch admission',
+    )
     place_after = wait_until_idle(status, 'missing placement item failure', 5)
     place_result = assert_failed_batch(place_after, actor_id=actor_id, code='item_missing', op_type='placing')
     require(place_result.get('entity_name') == 'steel-chest', place_result)
@@ -122,13 +146,10 @@ def run(client: Rcon, results: Path) -> None:
         'empty transfer source fixture',
     )
     require(chest['actor_id'] == actor_id, chest)
-    move_admission = json_command(
-        lua_json(remote_call('autorio_operations', 'move_items', repr('iron-plate'), repr('steel-chest'), '5', 'false')),
-        'empty transfer admission',
+    queue_tuple_with_dependent(
+        remote_call('autorio_operations', 'move_items', repr('iron-plate'), repr('steel-chest'), '5', 'false'),
+        'move failure batch admission',
     )
-    require(move_admission[0] is True, move_admission)
-    dependent = json_command(lua_json(remote_call('autorio_operations', 'wait', '300')), 'move failure dependent wait')
-    require(dependent[0] is True, dependent)
     move_after = wait_until_idle(status, 'nothing moved failure', 5)
     move_result = assert_failed_batch(move_after, actor_id=actor_id, code='nothing_moved', op_type='moving_items')
     require(move_result.get('item_name') == 'iron-plate' and move_result.get('moved_count') == 0, move_result)
