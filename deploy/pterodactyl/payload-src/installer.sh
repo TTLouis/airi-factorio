@@ -7,9 +7,9 @@ umask 077
 SERVER_DIR="${AIRI_INSTALL_ROOT:-/mnt/server}"
 NODE_VERSION="v24.21.0"
 PNPM_VERSION="10.30.1"
-AIRI_REF="c5dc39e57285695f122603dbafc9abf4e0a2ef81"
-REVISION="2026-09-14.5"
-DEPLOYMENT_REVISION="airi-deploy-v8-npc-staging"
+AIRI_REF="d770af98ebfd75a0dc0f8759567e5611b47a6385"
+REVISION="2026-09-14.6"
+DEPLOYMENT_REVISION="airi-deploy-v8-swarm-playable"
 AIRI_ACTOR_MODE="${AIRI_ACTOR_MODE:-npc}"
 [[ "$AIRI_ACTOR_MODE" == "npc" ]] || { echo "[AIRI install] ERROR: v8 egg currently requires AIRI_ACTOR_MODE=npc" >&2; exit 1; }
 export AIRI_ACTOR_MODE
@@ -58,7 +58,7 @@ unset OPENAI_API_KEY OPENAI_API_BASEURL FACTORIO_RCON_PASSWORD RCON_PASSWORD SER
 export NODE_TLS_REJECT_UNAUTHORIZED=1
 
 fetch() {
-  curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$1" --output "$2"
+  curl --fail --location --retry 8 --retry-delay 5 --retry-max-time 240 --retry-all-errors --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$1" --output "$2"
 }
 
 log "Installer revision $REVISION; source $AIRI_REF"
