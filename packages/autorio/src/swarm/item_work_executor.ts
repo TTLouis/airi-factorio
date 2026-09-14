@@ -3,10 +3,11 @@ import { complete_work_from_result, create_request, post_observation, post_resul
 import { activate_claim, heartbeat_claim, release_claim } from './claims'
 import type { new_actor_registry } from './actor_registry'
 import type { new_actor_runtime_router } from './actor_runtime_router'
-import type { ActorId, ClaimId, SimulationTick, SwarmStorage, WorkClaim, WorkItem } from './types'
+import type { ActorId, ClaimId, SimulationTick, SwarmStorage, WorkClaim, WorkItem, WorldLocation } from './types'
 
 type ActorRegistry = ReturnType<typeof new_actor_registry>
 type ActorRuntimeRouter = ReturnType<typeof new_actor_runtime_router>
+type ResolvedActor = NonNullable<ReturnType<ActorRegistry['resolve_actor']>>
 
 type ItemExecutionCode
   = 'queued'
@@ -25,6 +26,7 @@ export interface ItemWorkExecutorOptions {
 }
 
 const RESOURCE_INTERACTION_RADIUS = 4
+const TRANSFER_INTERACTION_RADIUS = 7
 
 function squared_distance(ax: number, ay: number, bx: number, by: number) {
   const dx = ax - bx
@@ -32,12 +34,38 @@ function squared_distance(ax: number, ay: number, bx: number, by: number) {
   return dx * dx + dy * dy
 }
 
-function inventory_count(actor: NonNullable<ReturnType<ActorRegistry['resolve_actor']>>, itemName: string) {
+function inventory_count(actor: ResolvedActor, itemName: string) {
   return actor.get_main_inventory()?.get_item_count(itemName) ?? 0
 }
 
+function endpoint_inventory_count(actor: ResolvedActor, entityName: string, location: WorldLocation, itemName: string) {
+  if (actor.surface.index !== location.surfaceIndex) return { found: false, count: 0 }
+  const entities = actor.surface.find_entities_filtered({
+    position: location.position,
+    radius: location.radius ?? 2,
+    name: entityName,
+    force: actor.force,
+  })
+  let count = 0
+  for (const entity of entities) {
+    const maxIndex = entity.get_max_inventory_index()
+    for (let index = 1; index <= maxIndex; index += 1) {
+      const inventory = entity.get_inventory(index)
+      if (inventory !== undefined) count += inventory.get_item_count(itemName)
+    }
+  }
+  return { found: entities.length > 0, count }
+}
+
 export function supports_item_work(work: WorkItem) {
-  return work.goal.kind === 'gather_resource'
+  if (work.goal.kind === 'gather_resource') return true
+  if (work.goal.kind === 'acquire_items') {
+    return work.goal.source !== undefined && work.goal.sourceEntityName !== undefined && work.goal.sourceEntityName !== ''
+  }
+  if (work.goal.kind === 'deliver_items') {
+    return work.goal.destinationEntityName !== undefined && work.goal.destinationEntityName !== ''
+  }
+  return false
 }
 
 export function new_item_work_executor(
@@ -66,26 +94,22 @@ export function new_item_work_executor(
     context.manager.cancel_all_tasks()
   }
 
-  function complete_gather(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
-    if (work.goal.kind !== 'gather_resource') return { ok: false as const, code: 'unsupported_work' as const }
-    const actor = registry.resolve_actor(claim.actorId, tick)
-    if (actor === undefined || !actor.is_valid) return { ok: false as const, code: 'no_body' as const }
-
-    const held = inventory_count(actor, work.goal.itemName)
-    if (held < work.goal.count) return { ok: false as const, code: 'not_satisfied' as const }
-
+  function finish_work(
+    claim: WorkClaim,
+    work: WorkItem,
+    tick: SimulationTick,
+    subject: string,
+    summary: string,
+    location: WorldLocation | undefined,
+    data: Record<string, string | number | boolean>,
+  ) {
     cancel_context_work(claim.actorId)
     const observation = post_observation(swarm, {
       observer: claim.agentId,
-      subject: `resource acquisition completed for ${work.id}`,
-      location: work.goal.source,
+      subject,
+      location,
       evidenceClass: 'measured',
-      data: {
-        itemName: work.goal.itemName,
-        resourceName: work.goal.resourceName,
-        inventoryCount: held,
-        requiredCount: work.goal.count,
-      },
+      data,
       observedTick: tick,
     })
     const evidence = [{ kind: 'observation' as const, id: observation.id, tick }]
@@ -94,7 +118,7 @@ export function new_item_work_executor(
       agentId: claim.agentId,
       status: 'success',
       evidence,
-      summary: `Acquired at least ${work.goal.count} ${work.goal.itemName}; measured inventory ${held}`,
+      summary,
       tick,
     })
     const completed = complete_work_from_result(swarm, work.id, work.revision, result.id, tick)
@@ -102,11 +126,15 @@ export function new_item_work_executor(
     return completed
   }
 
-  function block_missing_resource(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
-    if (work.goal.kind !== 'gather_resource') return { ok: false as const, code: 'unsupported_work' as const }
-    const actor = registry.resolve_actor(claim.actorId, tick)
-    const held = actor !== undefined && actor.is_valid ? inventory_count(actor, work.goal.itemName) : 0
-    const remaining = math.max(1, work.goal.count - held)
+  function block_material_shortage(
+    claim: WorkClaim,
+    work: WorkItem,
+    tick: SimulationTick,
+    itemName: string,
+    count: number,
+    destination: WorldLocation | undefined,
+    description: string,
+  ) {
     cancel_context_work(claim.actorId)
     const request = create_request(swarm, {
       kind: 'material_request',
@@ -115,10 +143,42 @@ export function new_item_work_executor(
       objectiveId: work.objectiveId,
       projectId: work.projectId,
       priority: math.min(100, work.priority + 5),
-      description: `Resource source ${work.goal.resourceName} could not satisfy ${work.goal.itemName} for ${work.id}`,
-      itemName: work.goal.itemName,
-      count: remaining,
-      destination: work.goal.source,
+      description,
+      itemName,
+      count: math.max(1, count),
+      destination,
+      blocksWorkIds: [work.id],
+      createdTick: tick,
+    })
+    const released = release_claim(swarm, {
+      claimId: claim.id,
+      tick,
+      reason: 'supply_shortage',
+      blockerRequestId: request.id,
+    })
+    clear_claim_state(claim.id)
+    return released.ok
+      ? { ok: true as const, request, work: released.work }
+      : { ok: false as const, code: 'claim_release_failed' as const, request }
+  }
+
+  function block_missing_endpoint(
+    claim: WorkClaim,
+    work: WorkItem,
+    tick: SimulationTick,
+    destination: WorldLocation,
+    description: string,
+  ) {
+    cancel_context_work(claim.actorId)
+    const request = create_request(swarm, {
+      kind: 'construction_request',
+      requester: 'system',
+      missionId: work.missionId,
+      objectiveId: work.objectiveId,
+      projectId: work.projectId,
+      priority: math.min(100, work.priority + 5),
+      description,
+      destination,
       blocksWorkIds: [work.id],
       createdTick: tick,
     })
@@ -134,13 +194,117 @@ export function new_item_work_executor(
       : { ok: false as const, code: 'claim_release_failed' as const, request }
   }
 
+  function complete_gather(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
+    if (work.goal.kind !== 'gather_resource') return { ok: false as const, code: 'unsupported_work' as const }
+    const actor = registry.resolve_actor(claim.actorId, tick)
+    if (actor === undefined || !actor.is_valid) return { ok: false as const, code: 'no_body' as const }
+    const held = inventory_count(actor, work.goal.itemName)
+    if (held < work.goal.count) return { ok: false as const, code: 'not_satisfied' as const }
+    return finish_work(
+      claim,
+      work,
+      tick,
+      `resource acquisition completed for ${work.id}`,
+      `Acquired at least ${work.goal.count} ${work.goal.itemName}; measured inventory ${held}`,
+      work.goal.source,
+      {
+        itemName: work.goal.itemName,
+        resourceName: work.goal.resourceName,
+        inventoryCount: held,
+        requiredCount: work.goal.count,
+      },
+    )
+  }
+
+  function complete_acquire(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
+    if (work.goal.kind !== 'acquire_items' || work.goal.source === undefined || work.goal.sourceEntityName === undefined) {
+      return { ok: false as const, code: 'unsupported_work' as const }
+    }
+    const actor = registry.resolve_actor(claim.actorId, tick)
+    if (actor === undefined || !actor.is_valid) return { ok: false as const, code: 'no_body' as const }
+    const held = inventory_count(actor, work.goal.itemName)
+    if (held < work.goal.count) return { ok: false as const, code: 'not_satisfied' as const }
+    const source = endpoint_inventory_count(actor, work.goal.sourceEntityName, work.goal.source, work.goal.itemName)
+    return finish_work(
+      claim,
+      work,
+      tick,
+      `item pickup completed for ${work.id}`,
+      `Acquired at least ${work.goal.count} ${work.goal.itemName} from ${work.goal.sourceEntityName}`,
+      work.goal.source,
+      {
+        itemName: work.goal.itemName,
+        inventoryCount: held,
+        requiredCount: work.goal.count,
+        sourceEntityName: work.goal.sourceEntityName,
+        sourceInventoryCount: source.count,
+      },
+    )
+  }
+
+  function complete_delivery(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
+    if (work.goal.kind !== 'deliver_items' || work.goal.destinationEntityName === undefined) {
+      return { ok: false as const, code: 'unsupported_work' as const }
+    }
+    const actor = registry.resolve_actor(claim.actorId, tick)
+    if (actor === undefined || !actor.is_valid) return { ok: false as const, code: 'no_body' as const }
+    const destination = endpoint_inventory_count(actor, work.goal.destinationEntityName, work.goal.destination, work.goal.itemName)
+    if (!destination.found || destination.count < work.goal.count) return { ok: false as const, code: 'not_satisfied' as const }
+    return finish_work(
+      claim,
+      work,
+      tick,
+      `item delivery completed for ${work.id}`,
+      `Delivered ${work.goal.itemName}; destination inventory reached ${destination.count}`,
+      work.goal.destination,
+      {
+        itemName: work.goal.itemName,
+        requiredCount: work.goal.count,
+        destinationEntityName: work.goal.destinationEntityName,
+        destinationInventoryCount: destination.count,
+        actorInventoryCount: inventory_count(actor, work.goal.itemName),
+      },
+    )
+  }
+
+  function block_missing_resource(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
+    if (work.goal.kind !== 'gather_resource') return { ok: false as const, code: 'unsupported_work' as const }
+    const actor = registry.resolve_actor(claim.actorId, tick)
+    const held = actor !== undefined && actor.is_valid ? inventory_count(actor, work.goal.itemName) : 0
+    return block_material_shortage(
+      claim,
+      work,
+      tick,
+      work.goal.itemName,
+      work.goal.count - held,
+      work.goal.source,
+      `Resource source ${work.goal.resourceName} could not satisfy ${work.goal.itemName} for ${work.id}`,
+    )
+  }
+
+  function queue_walk(claim: WorkClaim, work: WorkItem, actor: ResolvedActor, location: WorldLocation, interactionRadius: number) {
+    const context = context_for(claim.actorId)
+    if (context === undefined) return false
+    const target = location.position
+    const distanceSquared = squared_distance(actor.position.x, actor.position.y, target.x, target.y)
+    if (distanceSquared <= interactionRadius * interactionRadius) return false
+    context.manager.add_task({
+      type: TaskStates.WALKING_DIRECT,
+      target_position: { x: target.x, y: target.y },
+    })
+    lastDistanceByClaim[claim.id] = Math.sqrt(distanceSquared)
+    return true
+  }
+
+  function record_operation(claimId: ClaimId, operationId: number | undefined) {
+    if (operationId !== undefined) operationByClaim[claimId] = operationId
+  }
+
   function dispatch_gather(claim: WorkClaim, work: WorkItem, tick: SimulationTick): { ok: boolean, code: ItemExecutionCode } {
     if (work.goal.kind !== 'gather_resource') return { ok: false, code: 'unsupported_work' }
     const context = context_for(claim.actorId)
     if (context === undefined) return { ok: false, code: 'actor_not_attached' }
-    if (context.manager.player_state.task_state !== TaskStates.IDLE || !context.manager.is_task_queue_empty()) {
-      return { ok: false, code: 'actor_busy' }
-    }
+    if (context.manager.player_state.task_state !== TaskStates.IDLE || !context.manager.is_task_queue_empty()) return { ok: false, code: 'actor_busy' }
     const actor = registry.resolve_actor(claim.actorId, tick)
     if (actor === undefined || !actor.is_valid || actor.character === undefined) return { ok: false, code: 'no_body' }
     if (actor.surface.index !== work.goal.source.surfaceIndex) return { ok: false, code: 'wrong_surface' }
@@ -150,15 +314,7 @@ export function new_item_work_executor(
       complete_gather(claim, work, tick)
       return { ok: true, code: 'completed' }
     }
-
-    const target = work.goal.source.position
-    const distanceSquared = squared_distance(actor.position.x, actor.position.y, target.x, target.y)
-    if (distanceSquared > RESOURCE_INTERACTION_RADIUS * RESOURCE_INTERACTION_RADIUS) {
-      context.manager.add_task({
-        type: TaskStates.WALKING_DIRECT,
-        target_position: { x: target.x, y: target.y },
-      })
-      lastDistanceByClaim[claim.id] = Math.sqrt(distanceSquared)
+    if (queue_walk(claim, work, actor, work.goal.source, RESOURCE_INTERACTION_RADIUS)) {
       lastInventoryByClaim[claim.id] = held
       return { ok: true, code: 'queued' }
     }
@@ -166,11 +322,89 @@ export function new_item_work_executor(
     const remaining = work.goal.count - held
     const accepted = context.basic.submit_mining(work.goal.resourceName, math.min(1000, remaining))
     if (!accepted) return { ok: false, code: 'submit_failed' }
-    const operationId = context.basic.status().last_result?.operation_id
-    if (operationId !== undefined) operationByClaim[claim.id] = operationId
+    record_operation(claim.id, context.basic.status().last_result?.operation_id)
     lastInventoryByClaim[claim.id] = held
-    lastDistanceByClaim[claim.id] = Math.sqrt(distanceSquared)
     return { ok: true, code: 'queued' }
+  }
+
+  function dispatch_acquire(claim: WorkClaim, work: WorkItem, tick: SimulationTick): { ok: boolean, code: ItemExecutionCode } {
+    if (work.goal.kind !== 'acquire_items' || work.goal.source === undefined || work.goal.sourceEntityName === undefined) {
+      return { ok: false, code: 'unsupported_work' }
+    }
+    const context = context_for(claim.actorId)
+    if (context === undefined) return { ok: false, code: 'actor_not_attached' }
+    if (context.manager.player_state.task_state !== TaskStates.IDLE || !context.manager.is_task_queue_empty()) return { ok: false, code: 'actor_busy' }
+    const actor = registry.resolve_actor(claim.actorId, tick)
+    if (actor === undefined || !actor.is_valid || actor.character === undefined) return { ok: false, code: 'no_body' }
+    if (actor.surface.index !== work.goal.source.surfaceIndex) return { ok: false, code: 'wrong_surface' }
+
+    const held = inventory_count(actor, work.goal.itemName)
+    if (held >= work.goal.count) {
+      complete_acquire(claim, work, tick)
+      return { ok: true, code: 'completed' }
+    }
+    const source = endpoint_inventory_count(actor, work.goal.sourceEntityName, work.goal.source, work.goal.itemName)
+    if (!source.found || source.count <= 0) return { ok: true, code: 'queued' }
+    if (queue_walk(claim, work, actor, work.goal.source, TRANSFER_INTERACTION_RADIUS)) return { ok: true, code: 'queued' }
+
+    const moved = context.basic.submit_move(work.goal.itemName, work.goal.sourceEntityName, work.goal.count - held, false)
+    if (!moved[0]) return { ok: false, code: 'submit_failed' }
+    record_operation(claim.id, context.basic.status().last_result?.operation_id)
+    return { ok: true, code: 'queued' }
+  }
+
+  function dispatch_delivery(claim: WorkClaim, work: WorkItem, tick: SimulationTick): { ok: boolean, code: ItemExecutionCode } {
+    if (work.goal.kind !== 'deliver_items' || work.goal.destinationEntityName === undefined) {
+      return { ok: false, code: 'unsupported_work' }
+    }
+    const context = context_for(claim.actorId)
+    if (context === undefined) return { ok: false, code: 'actor_not_attached' }
+    if (context.manager.player_state.task_state !== TaskStates.IDLE || !context.manager.is_task_queue_empty()) return { ok: false, code: 'actor_busy' }
+    const actor = registry.resolve_actor(claim.actorId, tick)
+    if (actor === undefined || !actor.is_valid || actor.character === undefined) return { ok: false, code: 'no_body' }
+    if (actor.surface.index !== work.goal.destination.surfaceIndex) return { ok: false, code: 'wrong_surface' }
+
+    const destination = endpoint_inventory_count(actor, work.goal.destinationEntityName, work.goal.destination, work.goal.itemName)
+    if (destination.found && destination.count >= work.goal.count) {
+      complete_delivery(claim, work, tick)
+      return { ok: true, code: 'completed' }
+    }
+    if (!destination.found || inventory_count(actor, work.goal.itemName) <= 0) return { ok: true, code: 'queued' }
+    if (queue_walk(claim, work, actor, work.goal.destination, TRANSFER_INTERACTION_RADIUS)) return { ok: true, code: 'queued' }
+
+    const remaining = work.goal.count - destination.count
+    const held = inventory_count(actor, work.goal.itemName)
+    const moved = context.basic.submit_move(work.goal.itemName, work.goal.destinationEntityName, math.min(remaining, held), true)
+    if (!moved[0]) return { ok: false, code: 'submit_failed' }
+    record_operation(claim.id, context.basic.status().last_result?.operation_id)
+    return { ok: true, code: 'queued' }
+  }
+
+  function maybe_heartbeat_location(claim: WorkClaim, work: WorkItem, tick: SimulationTick, location: WorldLocation, summary: string) {
+    if (tick - claim.lastProgressTick < options.heartbeatIntervalTicks) return
+    const actor = registry.resolve_actor(claim.actorId, tick)
+    if (actor === undefined || !actor.is_valid || actor.surface.index !== location.surfaceIndex) return
+    const distance = Math.sqrt(squared_distance(actor.position.x, actor.position.y, location.position.x, location.position.y))
+    const previousDistance = lastDistanceByClaim[claim.id]
+    if (previousDistance === undefined || previousDistance - distance < options.minimumProgressDistance) return
+    const observation = post_observation(swarm, {
+      observer: claim.agentId,
+      subject: `logistics progress for ${work.id}`,
+      location,
+      evidenceClass: 'measured',
+      data: { distanceToTarget: distance },
+      observedTick: tick,
+    })
+    const heartbeat = heartbeat_claim(swarm, {
+      claimId: claim.id,
+      tick,
+      leaseTicks: options.leaseTicks,
+      bodyRevision: claim.actorBodyRevision,
+      usefulProgress: true,
+      summary,
+      evidence: [{ kind: 'observation' as const, id: observation.id, tick }],
+    })
+    if (heartbeat.ok) lastDistanceByClaim[claim.id] = distance
   }
 
   function maybe_heartbeat_gather(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
@@ -246,8 +480,92 @@ export function new_item_work_executor(
     maybe_heartbeat_gather(claim, work, tick)
   }
 
+  function process_acquire(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
+    if (work.goal.kind !== 'acquire_items' || work.goal.source === undefined || work.goal.sourceEntityName === undefined) return
+    const actor = registry.resolve_actor(claim.actorId, tick)
+    if (actor === undefined || !actor.is_valid) return
+    const held = inventory_count(actor, work.goal.itemName)
+    if (held >= work.goal.count) {
+      complete_acquire(claim, work, tick)
+      return
+    }
+    const source = endpoint_inventory_count(actor, work.goal.sourceEntityName, work.goal.source, work.goal.itemName)
+    if (!source.found) {
+      block_missing_endpoint(claim, work, tick, work.goal.source, `Pickup endpoint ${work.goal.sourceEntityName} is missing for ${work.id}`)
+      return
+    }
+    if (source.count <= 0) {
+      block_material_shortage(claim, work, tick, work.goal.itemName, work.goal.count - held, work.goal.source, `Pickup source lacks ${work.goal.itemName} for ${work.id}`)
+      return
+    }
+
+    const context = context_for(claim.actorId)
+    if (context === undefined) return
+    if (context.manager.player_state.task_state === TaskStates.IDLE && context.manager.is_task_queue_empty()) {
+      const operationId = operationByClaim[claim.id]
+      const lastResult = context.basic.status().last_result
+      if (operationId !== undefined && lastResult?.operation_id === operationId && !lastResult.completed && lastResult.code !== 'queued') {
+        if (lastResult.code === 'no_target' || lastResult.code === 'invalid_entity') {
+          block_missing_endpoint(claim, work, tick, work.goal.source, `Pickup endpoint ${work.goal.sourceEntityName} became unavailable for ${work.id}`)
+          return
+        }
+        if (lastResult.code === 'nothing_moved') {
+          block_material_shortage(claim, work, tick, work.goal.itemName, work.goal.count - held, work.goal.source, `No ${work.goal.itemName} could be collected for ${work.id}`)
+          return
+        }
+        delete operationByClaim[claim.id]
+      }
+      dispatch_acquire(claim, work, tick)
+      return
+    }
+    maybe_heartbeat_location(claim, work, tick, work.goal.source, `Moved closer to pickup source ${work.goal.sourceEntityName}`)
+  }
+
+  function process_delivery(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
+    if (work.goal.kind !== 'deliver_items' || work.goal.destinationEntityName === undefined) return
+    const actor = registry.resolve_actor(claim.actorId, tick)
+    if (actor === undefined || !actor.is_valid) return
+    const destination = endpoint_inventory_count(actor, work.goal.destinationEntityName, work.goal.destination, work.goal.itemName)
+    if (destination.found && destination.count >= work.goal.count) {
+      complete_delivery(claim, work, tick)
+      return
+    }
+    if (!destination.found) {
+      block_missing_endpoint(claim, work, tick, work.goal.destination, `Delivery endpoint ${work.goal.destinationEntityName} is missing for ${work.id}`)
+      return
+    }
+    const held = inventory_count(actor, work.goal.itemName)
+    if (held <= 0) {
+      block_material_shortage(claim, work, tick, work.goal.itemName, work.goal.count - destination.count, work.goal.destination, `Carrier lacks ${work.goal.itemName} required by ${work.id}`)
+      return
+    }
+
+    const context = context_for(claim.actorId)
+    if (context === undefined) return
+    if (context.manager.player_state.task_state === TaskStates.IDLE && context.manager.is_task_queue_empty()) {
+      const operationId = operationByClaim[claim.id]
+      const lastResult = context.basic.status().last_result
+      if (operationId !== undefined && lastResult?.operation_id === operationId && !lastResult.completed && lastResult.code !== 'queued') {
+        if (lastResult.code === 'no_target' || lastResult.code === 'invalid_entity') {
+          block_missing_endpoint(claim, work, tick, work.goal.destination, `Delivery endpoint ${work.goal.destinationEntityName} became unavailable for ${work.id}`)
+          return
+        }
+        if (lastResult.code === 'item_missing' || lastResult.code === 'nothing_moved') {
+          block_material_shortage(claim, work, tick, work.goal.itemName, work.goal.count - destination.count, work.goal.destination, `Delivery could not move ${work.goal.itemName} for ${work.id}`)
+          return
+        }
+        delete operationByClaim[claim.id]
+      }
+      dispatch_delivery(claim, work, tick)
+      return
+    }
+    maybe_heartbeat_location(claim, work, tick, work.goal.destination, `Moved closer to delivery endpoint ${work.goal.destinationEntityName}`)
+  }
+
   function dispatch(claim: WorkClaim, work: WorkItem, tick: SimulationTick) {
     if (work.goal.kind === 'gather_resource') return dispatch_gather(claim, work, tick)
+    if (work.goal.kind === 'acquire_items') return dispatch_acquire(claim, work, tick)
+    if (work.goal.kind === 'deliver_items') return dispatch_delivery(claim, work, tick)
     return { ok: false as const, code: 'unsupported_work' as const }
   }
 
@@ -276,7 +594,9 @@ export function new_item_work_executor(
       const activated = activate_claim(swarm, claim.id, tick)
       if (!activated.ok) return true
     }
-    process_gather(claim, work, tick)
+    if (work.goal.kind === 'gather_resource') process_gather(claim, work, tick)
+    else if (work.goal.kind === 'acquire_items') process_acquire(claim, work, tick)
+    else if (work.goal.kind === 'deliver_items') process_delivery(claim, work, tick)
     return true
   }
 

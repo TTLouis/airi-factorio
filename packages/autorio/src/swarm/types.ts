@@ -101,8 +101,8 @@ export type WorkStatus
     | 'cancelled'
 
 export type WorkGoal
-  = | { kind: 'acquire_items', itemName: string, count: number }
-    | { kind: 'deliver_items', itemName: string, count: number, destination: WorldLocation }
+  = | { kind: 'acquire_items', itemName: string, count: number, source?: WorldLocation, sourceEntityName?: string }
+    | { kind: 'deliver_items', itemName: string, count: number, destination: WorldLocation, destinationEntityName?: string }
     | { kind: 'gather_resource', resourceName: string, itemName: string, count: number, source: WorldLocation }
     | { kind: 'construct_design', designId: string, designRevision: number }
     | { kind: 'survey_area', subject: string, area: WorldLocation }
