@@ -63,6 +63,9 @@ remote.add_interface('autorio_swarm', {
   create_actor: (x?: number, y?: number, surface_index: number = 1, force_name: string = 'player') =>
     get_swarm_runtime().create_actor(x, y, surface_index, force_name),
   status: (actor_id?: string) => get_swarm_runtime().status(actor_id),
+  create_survey_work: (x: number, y: number, radius: number = 1.5, priority: number = 50, surface_index: number = 1) =>
+    get_swarm_runtime().create_survey_work(x, y, radius, priority, surface_index),
+  work_status: (work_id?: string) => get_swarm_runtime().work_status(work_id),
   wait: (actor_id: string, ticks: number) => get_swarm_runtime().wait(actor_id, ticks),
   walk_to_position: (actor_id: string, x: number, y: number) =>
     get_swarm_runtime().walk_to_position(actor_id, x, y),
