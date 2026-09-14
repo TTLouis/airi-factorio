@@ -78,10 +78,21 @@ export interface PlayerParametersCraftItem {
   /** Requested number of recipe crafts. */
   count: number
   crafted: number
+  /** Bind deferred/native crafting work to the body and force that requested it. */
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
   /** Number of recipe crafts actually accepted by begin_crafting. */
   started?: number
-  /** Matching recipe crafts that were already queued before this task began. */
-  queue_count_before?: number
+  /** Tick on which the native queue was started. */
+  started_tick?: number
+  /** Inventory count of the requested output before the native queue started. */
+  output_count_before?: number
+  /** Minimum deterministic output increase required before declaring success. */
+  expected_output_delta?: number
+  /** This request started when the native queue was empty, so its generated
+   * target/prerequisite queue entries are owned by this task. */
+  owns_native_queue?: boolean
 }
 
 export interface PlayerParametersAttackNearestEnemy {
