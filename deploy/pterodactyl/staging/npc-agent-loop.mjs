@@ -1,4 +1,4 @@
-import { actorChanged, deploymentStatus, executeAuthorizedOperation } from './supervisor-adapter.mjs'
+import { actorChanged, deploymentStatus, executeAuthorizedBatch } from './supervisor-adapter.mjs'
 import { parsePlan, renderOperation, toolCommand } from './structured-policy.mjs'
 
 export class AgentLoopError extends Error {}
@@ -109,15 +109,16 @@ export class NpcAgentLoop {
 
       check(typeof message.content === 'string', 'Provider message has no strict JSON content')
       const plan = parsePlan(strictJson(message.content, 'provider content'))
-      // Render and validate the complete operation batch before its first world
-      // mutation. This prevents a late malformed operation from producing a
-      // partially executed batch.
+      // Render and validate every operation before the first world mutation.
+      // The full dependency batch is then admitted in one RCON/Lua command so
+      // Factorio cannot advance a simulation tick between operation N and N+1.
       const commands = plan.operations.map(renderOperation)
       const before = await this.assertCurrent()
-      for (const command of commands) {
-        await executeAuthorizedOperation(this.rcon, before.epoch, command)
-        // If death/mode change happened as a consequence of an earlier operation,
-        // no later operation in this model batch may inherit the new actor.
+      if (commands.length > 0) {
+        await executeAuthorizedBatch(this.rcon, before.epoch, commands)
+        // Death/recovery or a mode transition after admission invalidates the
+        // continuation, while Autorio's actor-bound task ownership handles the
+        // already-admitted batch safely inside the game.
         await this.assertCurrent()
       }
 
