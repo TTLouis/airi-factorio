@@ -104,4 +104,25 @@ describe('actor mode transitions are ownership boundaries', () => {
 
     expect(handler).not.toHaveBeenCalled()
   })
+
+  it('allows an isolated secondary task manager without stealing global lifecycle ownership', () => {
+    const primary = fake_actor('connected_player', 1)
+    const secondary = fake_actor('standalone_character', 2)
+    const primaryManager = new_task_manager(() => primary)
+    const secondaryManager = new_task_manager(() => secondary, { bindGlobalActorLifecycle: false })
+
+    primaryManager.add_task({ type: TaskStates.WALKING_DIRECT, target_position: { x: 10, y: 0 } })
+    secondaryManager.add_task({ type: TaskStates.MINING, entity_name: 'iron-ore', count: 1 })
+
+    set_actor_mode('npc')
+
+    expect(primaryManager.player_state.task_state).toBe(TaskStates.IDLE)
+    expect(primary.set_walking_state).toHaveBeenCalledTimes(1)
+    expect(secondaryManager.player_state.task_state).toBe(TaskStates.MINING)
+    expect(secondary.set_mining_state).not.toHaveBeenCalled()
+
+    secondaryManager.handle_actor_mode_transition('player', 'npc')
+    expect(secondaryManager.player_state.task_state).toBe(TaskStates.IDLE)
+    expect(secondary.set_mining_state).toHaveBeenCalledWith({ mining: false })
+  })
 })

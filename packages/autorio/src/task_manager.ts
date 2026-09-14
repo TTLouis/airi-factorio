@@ -1,9 +1,16 @@
 import type { ControlledActor } from './actors/types'
+import type { ActorMode } from './actors/actor_controller'
 import { register_actor_mode_transition_handler, register_npc_recovery_handler } from './actors/actor_controller'
 import type { PlayerParameters, PlayerState } from './types'
 import { TaskStates } from './types'
 
-export function new_task_manager(get_controlled_actor: () => ControlledActor | undefined) {
+export interface TaskManagerOptions {
+  /** Legacy singleton compatibility. Multi-actor contexts must set this false
+   * and route lifecycle events explicitly to the owning context. */
+  bindGlobalActorLifecycle?: boolean
+}
+
+export function new_task_manager(get_controlled_actor: () => ControlledActor | undefined, options: TaskManagerOptions = {}) {
   const player_state: PlayerState = {
     task_state: TaskStates.IDLE,
   }
@@ -254,21 +261,26 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     task_queue.length = 0
   }
 
-  register_npc_recovery_handler(({ previous_actor_id }) => {
+  function handle_actor_loss(previous_actor_id: number) {
     discard_all_tasks_after_actor_loss()
     log(`[AUTORIO] Discarded active and queued work after loss of actor_id=${previous_actor_id}`)
-  })
+  }
 
-  register_actor_mode_transition_handler(({ previous_mode, next_mode }) => {
+  function handle_actor_mode_transition(previous_mode: ActorMode, next_mode: ActorMode) {
     if (player_state.task_state === TaskStates.IDLE && task_queue.length === 0) {
       return
     }
-    // set_actor_mode invokes this hook before changing storage.airi_actor_mode,
+    // The actor controller invokes this before changing storage.airi_actor_mode,
     // so cancellation resolves the previous actor and stops/cancels only work
     // that belonged to that actor (including an owned native crafting queue).
     cancel_all_tasks()
     log(`[AUTORIO] Cancelled active and queued work before actor mode change ${previous_mode} -> ${next_mode}`)
-  })
+  }
+
+  if (options.bindGlobalActorLifecycle !== false) {
+    register_npc_recovery_handler(({ previous_actor_id }) => handle_actor_loss(previous_actor_id))
+    register_actor_mode_transition_handler(({ previous_mode, next_mode }) => handle_actor_mode_transition(previous_mode, next_mode))
+  }
 
   return {
     player_state,
@@ -280,6 +292,8 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     cancel_task,
     cancel_all_tasks,
     discard_all_tasks_after_actor_loss,
+    handle_actor_loss,
+    handle_actor_mode_transition,
     register_cancel_handler,
   }
 }
