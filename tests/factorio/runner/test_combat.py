@@ -10,7 +10,13 @@ def observation(**changes):
         'actor': {'valid': True, 'kind': 'standalone_character', 'actor_id': 42},
         'task_state': 'idle', 'queue_empty': True, 'queue_length': 0,
         'walking': False, 'mining': False, 'shooting': False,
-        'actor_health': 250, 'ammo': 20, 'target_alive': True,
+        'actor_health': 250,
+        'selected_gun_index': 1,
+        'selected_gun': 'pistol',
+        'selected_ammo': 'firearm-magazine',
+        'selected_ammo_rounds': 10,
+        'ammo_items': 20,
+        'target_alive': True,
         'target_health': 15, 'target_id': 88, 'position': {'x': 0, 'y': 0},
     }
     value.update(changes)
@@ -20,7 +26,14 @@ def observation(**changes):
 class CombatTests(unittest.TestCase):
     def setUp(self):
         self.before = observation()
-        self.after = observation(ammo=19, target_alive=False, target_health=0)
+        # Killing a weak target can consume only part of the current magazine,
+        # leaving the inventory item count unchanged while stack.ammo decreases.
+        self.after = observation(
+            ammo_items=20,
+            selected_ammo_rounds=7,
+            target_alive=False,
+            target_health=0,
+        )
         self.after['runtime']['tick'] = 250
         self.combat = {
             'last_result': {
@@ -31,14 +44,24 @@ class CombatTests(unittest.TestCase):
             },
         }
 
-    def test_real_destroyed_target_with_ammo_use_passes(self):
+    def test_real_destroyed_target_with_partial_magazine_use_passes(self):
         assert_kill(self.before, self.after, self.combat, 42)
 
-    def test_idle_or_result_without_destroyed_target_does_not_pass(self):
+    def test_destroyed_target_after_consuming_a_whole_magazine_passes(self):
+        after = {
+            **self.after,
+            'ammo_items': 19,
+            'selected_ammo_rounds': 10,
+        }
+        assert_kill(self.before, after, self.combat, 42)
+
+    def test_idle_or_result_without_destroyed_target_or_ammo_use_does_not_pass(self):
         for change in [
             {'target_alive': True, 'target_health': 1},
-            {'ammo': 20},
+            {'ammo_items': 20, 'selected_ammo_rounds': 10},
             {'actor_health': 0},
+            {'selected_gun': None},
+            {'selected_ammo': None},
         ]:
             with self.subTest(change=change):
                 with self.assertRaises(AssertionError):
