@@ -43,7 +43,9 @@ class FakeRcon {
       const marker = text.match(/AIRI_RESULT_[a-f0-9]{24}:/)?.[0]
       assert.ok(marker)
       this.mutations.push(text)
-      return `${marker}${JSON.stringify({ ok: true, result: [true, 'Task started'] })}`
+      const admissions = [...text.matchAll(/local r\d+=\{/g)].length
+      const result = Array.from({ length: admissions }, () => [true, 'Task started'])
+      return `${marker}${JSON.stringify({ ok: true, result })}`
     }
     return 'tool-output'
   }
@@ -131,12 +133,31 @@ test('entire structured operation batch is validated before the first world muta
   assert.equal(rcon.mutations.length, 0)
 })
 
-test('actor replacement caused by an earlier operation prevents later operations inheriting the new body', async () => {
+test('dependent operations are admitted in one mutation with no inter-operation simulation window', async () => {
+  const rcon = new FakeRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => planMessage([
+      { name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } },
+      { name: 'wait', args: { ticks: 300 } },
+    ]),
+    systemPrompt: 'NPC test prompt',
+  })
+
+  const result = await agent.request('mine then wait')
+  assert.equal(result.operations.length, 2)
+  assert.equal(rcon.mutations.length, 1)
+  const command = rcon.mutations[0]
+  assert.equal((command.match(/airi_deployment","authorize",3/g) ?? []).length, 1)
+  const first = command.indexOf("autorio_operations','mine_entity'")
+  const second = command.indexOf("autorio_operations','wait'")
+  assert.ok(first >= 0 && second > first)
+})
+
+test('actor replacement after atomic batch admission cancels continuation without replaying the batch', async () => {
   const rcon = new FakeRcon()
   rcon.onCommand = async (text, transport) => {
-    if (text.includes('local ok,result=pcall') && transport.mutations.length === 0) {
-      // The operation acknowledgement still belongs to actor 18, but subsequent
-      // status observation sees recovery actor 42 / epoch 4.
+    if (text.includes('local ok,result=pcall')) {
       queueMicrotask(() => { transport.status = deployment(42, 4) })
     }
   }
@@ -151,6 +172,7 @@ test('actor replacement caused by an earlier operation prevents later operations
 
   await assert.rejects(() => agent.request('two steps'), /epoch changed/)
   assert.equal(rcon.mutations.length, 1)
+  assert.equal((rcon.mutations[0].match(/local r\d+=\{/g) ?? []).length, 2)
 })
 
 test('completion continuation stays on the captured actor and is bounded', async () => {
