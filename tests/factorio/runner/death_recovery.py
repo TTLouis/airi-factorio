@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from run import Rcon, connect_with_retry, decode_json, lua_text, remote_call, squared_distance
+from run import Rcon, connect_with_retry, decode_json, lua_json, lua_text, remote_call, squared_distance
 from runtime import operation_status_command, validate_clock, wait_until_idle
 
 
@@ -38,6 +38,15 @@ def assert_recovered(before: dict, after: dict) -> None:
     require(result.get('force_index') == before['force_index'], recovery)
     require(result.get('inventory_policy') == 'no_transfer', recovery)
     require(isinstance(result.get('tick'), int), recovery)
+
+
+def assert_navigation_reached(navigation: dict, actor_id: int, target_id: int) -> None:
+    result = navigation.get('last_result') or {}
+    require(navigation.get('task_active') is False, navigation)
+    require(result.get('accepted') is True and result.get('completed') is True, navigation)
+    require(result.get('code') == 'reached', navigation)
+    require(result.get('actor_id') == actor_id, navigation)
+    require(result.get('target_unit_number') == target_id, navigation)
 
 
 def run(client: Rcon, results: Path) -> None:
@@ -176,10 +185,18 @@ def run(client: Rcon, results: Path) -> None:
     require(completed['actor']['actor_id'] == replacement_id, completed)
     require(completed['queue_empty'] is True and completed['queue_length'] == 0, completed)
 
+    navigation = json_command(
+        lua_json(remote_call('autorio_navigation', 'status')),
+        'post-death recovery navigation result',
+    )
+    assert_navigation_reached(navigation, replacement_id, fresh_fixture['id'])
+
     final = observe('post-death final observation')
     assert_recovered(before, final)
     require(final['actor']['actor_id'] == replacement_id, final)
-    require(squared_distance(final['position'], fresh_fixture['position']) < 4.0, (final, fresh_fixture))
+    # Match the bounded navigation arrival contract and require the exact
+    # target-bound `reached` receipt above; idle by itself is insufficient.
+    require(squared_distance(final['position'], fresh_fixture['position']) <= 9.0, (final, fresh_fixture, navigation))
 
     (results / 'death-recovery.json').write_text(json.dumps({
         'status': 'pass',
@@ -189,6 +206,7 @@ def run(client: Rcon, results: Path) -> None:
         'death': death,
         'after_recovery': recovered,
         'quiet': quiet,
+        'navigation': navigation,
         'after_new_task': final,
     }, indent=2))
     print(
