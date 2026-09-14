@@ -8,17 +8,19 @@ This is the active continuation of `NPC_AGENT_HARNESS_PLAN.md` and the historica
 
 The latest combined Docker run reports:
 
-- all 37 deterministic Python runner regressions passed;
+- all deterministic Python runner regressions passed;
 - real zero-player simulation continued at approximately 60 UPS;
 - wait, movement, mining, native hand crafting, placement and both transfer directions passed;
 - physical stop, queued wait, and movement/mining cancellation passed;
 - native research completed through real labs while the NPC continued other work;
 - bounded combat destroyed the exact bound small-biter with real character weapon behavior;
 - combat no-target, no-ammo, dependent-queue cancellation, and approach-cancellation checks passed;
-- the full run retained `actor_id=1` and zero connected players;
+- an active movement plus queued wait was saved, the first Factorio server process stopped, and a second process loaded the same save;
+- the restarted process reacquired the same `actor_id=1`, preserved force/inventory/world state, discarded volatile Autorio work, cleared serialized physical controls, showed no drift, and completed fresh movement;
+- zero connected players were maintained throughout;
 - the runtime script completed successfully.
 
-This closes the bounded research and combat gates at their stated scope. It does not close repeatable/trigger research, persistence, death recovery, general navigation, crafting ownership/cancellation, cross-actor ownership, explicit outcome semantics, or end-to-end autonomous planning.
+This closes the bounded research, combat, and save/restart gates at their stated scope. It does not close repeatable/trigger research, death recovery, general navigation, crafting ownership/cancellation, cross-actor ownership, explicit outcome semantics, or end-to-end autonomous planning.
 
 ## Research request semantics — user-verified bounded gate
 
@@ -30,17 +32,15 @@ The user-verified gate supplied prerequisites, labs, power and exact science as 
 
 ## Bounded real combat — user verified
 
-The bounded combat controller now binds combat to actor/force identity and one target, uses the selected weapon's real `can_shoot` result, stops walking before firing, limits no-progress/total duration, reports explicit failure codes, cancels dependent queued work on failure, and completes only after the bound target is actually gone. Production setup no longer deletes enemies.
+The bounded combat controller binds combat to actor/force identity and one target, uses the selected weapon's real `can_shoot` result, stops walking before firing, limits no-progress/total duration, reports explicit failure codes, cancels dependent queued work on failure, and completes only after the bound target is actually gone. Production setup no longer deletes enemies.
 
 The real-engine gate verified target destruction, real ammunition consumption (including rounds from a partially used magazine), stable NPC identity, no-target failure, no-ammo failure without target damage, dependent-queue cancellation, and stopping an out-of-range approach without drift or target damage.
 
-## Current slice: real save/restart persistence
+## Real save/restart persistence — user verified
 
-Status: implemented for user testing; not yet engine-verified.
+Factorio persists the standalone character entity and `storage`, while ordinary Lua module locals are rebuilt when a save loads. Autorio's current task manager is module-local, so logical active/queued operations are intentionally not resumed across a load boundary. The character entity's walking/mining/shooting states are engine state and can survive in the save.
 
-Factorio persists the standalone character entity and `storage`, while ordinary Lua module locals are rebuilt when a save loads. Autorio's current task manager is module-local, so logical active/queued operations are intentionally not resumed across a load boundary. The character entity's walking/mining/shooting states are engine state and can survive in the save. Without reconciliation, a freshly loaded NPC could therefore continue a physical action after the logical task that owned it disappeared.
-
-The persistence policy for this slice is explicit and fail-safe:
+The verified persistence policy is fail-safe:
 
 1. persist/reacquire the same standalone character via its stored unit number;
 2. discard Autorio logical active/queued operations on load rather than pretending they resumed safely;
@@ -49,27 +49,50 @@ The persistence policy for this slice is explicit and fail-safe:
 5. expose the reconciliation policy/result through `autorio_actor.status`;
 6. do not implicitly cancel/rewrite separate force-wide or native engine work here; crafting ownership and research follow-through remain separate workstreams.
 
-### Save/restart acceptance gate
+The real gate saved an actively walking NPC with queued work, stopped the first Factorio server process, started a second process from that save, reacquired the same `actor_id=1`, preserved the expected inventory/force/target, observed an idle empty Autorio queue with released controls and no quiet-interval drift, then completed a fresh movement task on the same body.
 
-The Docker path now continues after combat by creating a deterministic persisted inventory marker and unique steel-chest target, starting movement with queued work, forcing a real server save, stopping the first Factorio process, and starting a second process from the same save.
+## Current slice: bounded death recovery
 
-The restarted process must prove:
+Status: implemented for user testing; not yet engine-verified.
 
-- the same actor unit number, force and deterministic inventory marker;
-- zero connected players;
-- idle/empty Autorio task state;
-- stopped walking/mining/shooting and completed load reconciliation;
-- no position drift over a quiet interval;
-- the persisted target still exists;
-- the same reacquired NPC can complete a fresh movement task after restart.
+The pre-existing actor resolver could recreate a standalone character after the cached/persisted body disappeared, but there was no ownership boundary between the dead body and the replacement. An active or queued Autorio task could therefore continue against the replacement body. That is unsafe even when the operation later fails, because the replacement did not own the old task or its physical intent.
+
+The death-recovery policy for this slice is:
+
+1. detect that the persisted standalone `unit_number` no longer resolves to a live character;
+2. invalidate all active/queued Autorio work before creating the replacement;
+3. logical invalidation must not resolve or control an actor, avoiding recursive replacement creation through normal cancellation cleanup;
+4. clear stale path rendering at the ownership boundary;
+5. create a new standalone character on the same force using the normal spawn/non-colliding placement path;
+6. do **not** copy the dead character's inventory into the replacement (`inventory_policy: no_transfer`), so recovery cannot duplicate inventory;
+7. persist a bounded recovery receipt containing old actor ID, replacement actor ID, force, tick, reason and inventory policy;
+8. expose that receipt through `autorio_actor.status().death_recovery`;
+9. require the replacement to remain idle/stationary until fresh work is submitted.
+
+### Death-recovery acceptance gate
+
+The combined Docker path now continues after the verified restart stage. The fixture gives the active NPC deterministic marker inventory, starts real movement toward a unique target, queues a wait behind it, proves the old body is physically walking, then calls the engine's normal `LuaEntity.die()` path. `die()` is used rather than `destroy()` so Factorio executes entity-death behavior and produces a corpse.
+
+The gate requires:
+
+- the old body is actually dead/invalid and a character corpse exists;
+- a different standalone character ID is created on the same force;
+- zero human players remain connected;
+- stale active and queued Autorio work is gone;
+- the replacement is not walking, mining, or shooting and does not drift over a quiet interval;
+- the old movement target remains alive, proving recovery did not reinterpret task completion;
+- deterministic marker items are **not** copied into the replacement inventory;
+- the recovery receipt binds the exact old/new actor IDs and records `inventory_policy: no_transfer`;
+- exactly one live standalone character remains;
+- fresh movement submitted after recovery completes successfully on the replacement body.
 
 Expected success line:
 
 ```text
-PASS: zero-player NPC save/restart reacquired same body and cleared stale controls with actor_id=1
+PASS: zero-player NPC death recovery invalidated stale work and created replacement old_actor_id=1, replacement_actor_id=<new id>
 ```
 
-The assistant has not executed this new build or real restart gate. Do not treat persistence as proven until the user's Docker run reports it.
+The assistant has not executed this new TypeScript/build/Factorio death gate. Do not treat death recovery as proven until the user's Docker run reports it.
 
 ## Remaining section-4 work
 
@@ -77,15 +100,15 @@ The assistant has not executed this new build or real restart gate. Do not treat
 | --- | --- |
 | Research follow-through | Interrupted/stalled research recovery through the real agent; gameplay-trigger and repeatable research scenarios; request/result correlation beyond one last-result record. |
 | Combat | Bounded real combat gate is user-verified. Obstacle/unreachable and moving-target edge behavior belongs with navigation work. |
-| Save/restart | User-run real stop/restart gate above; then resolve native crafting/research persistence interactions exposed by later ownership work. |
-| Death recovery | Detect invalid body, invalidate stale work, create/reacquire replacement deliberately, do not duplicate inventory, then complete a post-recovery task. |
+| Save/restart | Real stop/restart gate is user-verified. Native crafting/research persistence interactions remain part of later ownership/follow-through work. |
+| Death recovery | User-run gate above; then integrate any recovery edge cases exposed by navigation/crafting ownership rather than silently carrying old work. |
 | Navigation | Correlate path request IDs; ignore stale path results after cancellation/replacement; proper collision/reach checks; bounded stuck detection/repath/failure; obstacles/water/unreachable/moving targets. |
 | Crafting and cancellation | Cancel owned native queue work correctly; preserve unrelated crafts; verify actual outputs rather than queue disappearance alone; partial queues, full inventory, unavailable recipes, quantities/quality. |
-| Cross-actor ownership | Mode/force/body changes cannot carry arbitrary old operations or controls into another actor; human actions cannot satisfy an NPC task. Research/combat binding alone does not fix other operations. |
+| Cross-actor ownership | Mode/force/body changes cannot carry arbitrary old operations or controls into another actor; human actions cannot satisfy an NPC task. Body-loss invalidation is now covered, but mode/force transitions and the remaining operations still need generalized ownership. |
 | Outcome semantics | Explicit success/failure for all operation types; no generic "completed" on silent failure; stop dependent batches appropriately, including immediate rejection during submission. |
 | End-to-end agent | Durable operational goal/step state, bounded runtime context, real prompt/tool/executor/Factorio loop with scripted model boundary, missing-material and changed-world recovery, verification before advancing, bounded provider/tool retries. |
 
-Work in reviewable slices and keep previously passing scenarios in every combined run. Swarm/message-board execution remains out of scope until the single NPC is reliable. The new swarm architecture document is planning material only and does not change this release gate.
+Work in reviewable slices and keep previously passing scenarios in every combined run. Swarm/message-board execution remains out of scope until the single NPC is reliable. The swarm architecture document is planning material only and does not change this release gate.
 
 ## Later main and Pterodactyl migration (blocked)
 
