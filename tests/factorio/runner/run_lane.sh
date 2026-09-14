@@ -124,6 +124,8 @@ case "$LANE" in
     printf '[npc-test][core] Running placement/transfer and lifecycle cancellation gates...\n'
     run_py placement_transfer.py
     run_py control_lifecycle.py
+    printf '[npc-test][core] Running owned basic-operation outcome/failure gates...\n'
+    run_py basic_outcomes.py
     ;;
 
   research-combat)
