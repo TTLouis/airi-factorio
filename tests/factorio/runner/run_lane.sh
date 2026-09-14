@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+LANE="${1:?lane name required}"
+SAVE="${2:?save path required}"
+RESULTS="${3:?results path required}"
+SERVER_PORT="${4:?server port required}"
+RCON_PORT="${5:?rcon port required}"
+
+FACTORIO_ROOT="${FACTORIO_ROOT:-/opt/factorio}"
+FACTORIO_BIN="$FACTORIO_ROOT/bin/x64/factorio"
+TEST_ROOT="${TEST_ROOT:-/test}"
+SERVER_SETTINGS="$TEST_ROOT/fixtures/server-settings.json"
+RCON_PASSWORD="${RCON_PASSWORD:-airi-test}"
+LANE_ROOT="$(dirname "$RESULTS")"
+WRITE_DATA="$LANE_ROOT/factorio-data"
+CONFIG="$LANE_ROOT/config.ini"
+FACTORIO_PID=""
+START_COUNT=0
+export PYTHONUNBUFFERED=1
+
+mkdir -p "$RESULTS" "$WRITE_DATA"
+cat >"$CONFIG" <<EOF
+[path]
+read-data=$FACTORIO_ROOT/data
+write-data=$WRITE_DATA
+EOF
+
+print_failure_context() {
+  local pattern file
+  for pattern in "$RESULTS"/*-error.txt "$RESULTS"/runner-error.txt; do
+    for file in $pattern; do
+      [[ -f "$file" && -s "$file" ]] || continue
+      printf '\n[npc-test][%s] ===== %s =====\n' "$LANE" "$(basename "$file")" >&2
+      cat "$file" >&2
+    done
+  done
+
+  for file in "$RESULTS"/factorio-process-*.log; do
+    [[ -f "$file" && -s "$file" ]] || continue
+    printf '\n[npc-test][%s] ===== tail %s =====\n' "$LANE" "$(basename "$file")" >&2
+    tail -n 120 "$file" >&2
+  done
+}
+
+stop_factorio() {
+  if [[ -n "$FACTORIO_PID" ]] && kill -0 "$FACTORIO_PID" 2>/dev/null; then
+    kill "$FACTORIO_PID" 2>/dev/null || true
+    wait "$FACTORIO_PID" 2>/dev/null || true
+  fi
+  FACTORIO_PID=""
+}
+
+finish() {
+  local code=$?
+  trap - EXIT
+  stop_factorio
+  if (( code != 0 )); then
+    printf '[npc-test][%s] FAILED with exit code %s\n' "$LANE" "$code" >&2
+    print_failure_context
+  fi
+  exit "$code"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+start_factorio() {
+  START_COUNT=$((START_COUNT + 1))
+  local process_log="$RESULTS/factorio-process-$START_COUNT.log"
+  local console_log="$RESULTS/factorio-console-$START_COUNT.log"
+
+  "$FACTORIO_BIN" \
+    --config "$CONFIG" \
+    --mod-directory "$FACTORIO_ROOT/mods" \
+    --start-server "$SAVE" \
+    --server-settings "$SERVER_SETTINGS" \
+    --port "$SERVER_PORT" \
+    --rcon-port "$RCON_PORT" \
+    --rcon-password "$RCON_PASSWORD" \
+    --console-log "$console_log" \
+    --no-log-rotation \
+    >"$process_log" 2>&1 &
+  FACTORIO_PID=$!
+
+  sleep 0.5
+  if ! kill -0 "$FACTORIO_PID" 2>/dev/null; then
+    wait "$FACTORIO_PID" || true
+    printf '[npc-test][%s] Factorio exited before RCON became available.\n' "$LANE" >&2
+    exit 1
+  fi
+  printf '[npc-test][%s] Factorio started pid=%s game_port=%s rcon_port=%s start=%s\n' \
+    "$LANE" "$FACTORIO_PID" "$SERVER_PORT" "$RCON_PORT" "$START_COUNT"
+}
+
+restart_factorio() {
+  printf '[npc-test][%s] Restarting Factorio...\n' "$LANE"
+  stop_factorio
+  sleep 0.5
+  start_factorio
+}
+
+run_py() {
+  local script="$1"
+  shift
+  python3 "$TEST_ROOT/runner/$script" \
+    --host 127.0.0.1 \
+    --port "$RCON_PORT" \
+    --password "$RCON_PASSWORD" \
+    --results "$RESULTS" \
+    "$@"
+}
+
+printf '[npc-test][%s] Starting isolated runtime lane.\n' "$LANE"
+start_factorio
+
+# Every lane begins with the same zero-player actor/clock/core-action smoke. This
+# gives each isolated save a runner.json actor identity and verifies the common
+# foundation before a specialized gate mutates its world.
+run_py run.py
+
+case "$LANE" in
+  core)
+    printf '[npc-test][core] Running placement/transfer and lifecycle cancellation gates...\n'
+    run_py placement_transfer.py
+    run_py control_lifecycle.py
+    ;;
+
+  research-combat)
+    printf '[npc-test][research-combat] Running native research gate...\n'
+    run_py research.py
+    printf '[npc-test][research-combat] Running bounded combat gate...\n'
+    run_py combat.py
+    ;;
+
+  resilience)
+    printf '[npc-test][resilience] Saving active movement for real process restart...\n'
+    run_py persistence_prepare.py --save "$SAVE"
+    restart_factorio
+    run_py persistence_verify.py
+
+    printf '[npc-test][resilience] Running death-recovery and navigation/belt gates...\n'
+    run_py death_recovery.py
+    run_py navigation.py
+
+    printf '[npc-test][resilience] Running owned native crafting/cancellation gate...\n'
+    run_py crafting.py
+
+    printf '[npc-test][resilience] Saving active owned craft for second process restart...\n'
+    run_py crafting_restart_prepare.py --save "$SAVE"
+    restart_factorio
+    run_py crafting_restart_verify.py
+    ;;
+
+  *)
+    printf '[npc-test][%s] Unknown lane.\n' "$LANE" >&2
+    exit 2
+    ;;
+esac
+
+printf '[npc-test][%s] PASS\n' "$LANE"
