@@ -1,35 +1,37 @@
 import type { MapPositionStruct } from 'factorio:prototype'
 import type {
-  BoundingBoxArray,
-  CollisionMask,
   LuaEntity,
   LuaInventory,
   OnPlayerCraftedItemEvent,
   OnPlayerMinedEntityEvent,
   OnScriptPathRequestFinishedEvent,
   OnSelectedEntityChangedEvent,
-  PathfinderWaypoint,
   SurfaceCreateEntity,
 } from 'factorio:runtime'
 
 import type { ControlledActor } from './actors/types'
 import { get_controlled_actor } from './actors/actor_controller'
 import { new_combat_controller } from './combat'
+import { new_navigation_controller } from './navigation'
 import { new_research_controller } from './research'
 import { new_task_manager } from './task_manager'
 import { create_tools_remote_interface } from './tools'
 import { TaskStates } from './types'
 import { direction_towards } from './utils/direction'
 import { get_actor_inventory_items } from './utils/inventory'
-import { distance } from './utils/math'
 
 create_tools_remote_interface()
 
 let setup_complete = false
 
 export const task_manager = new_task_manager(get_controlled_actor)
+const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
+
+remote.add_interface('autorio_navigation', {
+  status: () => navigation_controller.status(),
+})
 
 remote.add_interface('autorio_research', {
   status: () => research_controller.status(),
@@ -93,18 +95,7 @@ function log_actor_info() {
 remote.add_interface('autorio_operations', {
   walk_to_entity: (entity_name: string, search_radius: number) => {
     log(`[AUTORIO] New walk_to_entity task: ${entity_name}, radius: ${search_radius}`)
-    task_manager.add_task({
-      type: TaskStates.WALKING_TO_ENTITY,
-      entity_name,
-      search_radius,
-      path: null,
-      path_drawn: false,
-      path_index: 1,
-      calculating_path: false,
-      target_position: null,
-    })
-
-    return true
+    return navigation_controller.submit(entity_name, search_radius)
   },
 
   mine_entity: (entity_name: string, count: number = 1) => {
@@ -306,32 +297,7 @@ function poll_standalone_mining_progress(actor: ControlledActor) {
 script.on_event(defines.events.on_selected_entity_changed, (unused_event: OnSelectedEntityChangedEvent) => {})
 
 script.on_event(defines.events.on_script_path_request_finished, (event: OnScriptPathRequestFinishedEvent) => {
-  if (task_manager.player_state.task_state !== TaskStates.WALKING_TO_ENTITY) {
-    log('[AUTORIO] Not walking to entity, ignoring path request')
-    return
-  }
-
-  if (!task_manager.player_state.parameters_walk_to_entity) {
-    log('[AUTORIO] No parameters found when receiving path request')
-    return
-  }
-
-  if (!event.path) {
-    log('[AUTORIO] Path calculation failed, switching to direct walking')
-    task_manager.player_state.task_state = TaskStates.WALKING_DIRECT
-    task_manager.player_state.parameters_walking_direct = {
-      type: TaskStates.WALKING_DIRECT,
-      target_position: task_manager.player_state.parameters_walk_to_entity.target_position,
-    }
-    task_manager.player_state.parameters_walk_to_entity = undefined
-    return
-  }
-
-  task_manager.player_state.parameters_walk_to_entity.path = event.path
-  task_manager.player_state.parameters_walk_to_entity.path_drawn = false
-  task_manager.player_state.parameters_walk_to_entity.path_index = 1
-  task_manager.player_state.parameters_walk_to_entity.calculating_path = false
-  log(`[AUTORIO] Path calculation completed. Path length: ${event.path}`)
+  navigation_controller.on_path_finished(event)
 })
 
 script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEntityEvent) => {
@@ -367,155 +333,6 @@ function setup() {
   // their fixtures explicitly; combat must interact with real enemy entities.
   setup_complete = true
   log('[AUTORIO] Setup complete')
-}
-
-function draw_path(actor: ControlledActor, path: PathfinderWaypoint[]) {
-  for (let i = 0; i < path.length - 1; i++) {
-    rendering.draw_line({
-      color: { r: 0, g: 1, b: 0 },
-      width: 2,
-      from: path[i].position,
-      to: path[i + 1].position,
-      surface: actor.surface,
-      time_to_live: 600,
-      draw_on_ground: true,
-    })
-  }
-}
-
-function follow_path(actor: ControlledActor, path: PathfinderWaypoint[]) {
-  if (path.length === 0) {
-    return true
-  }
-
-  // check if reached next waypoint
-  const next_position = path[0].position
-  const d = distance(next_position, actor.position)
-  if (d < 0.1) {
-    path.shift()
-    return false
-  }
-
-  // move towards next waypoint
-  const direction = get_direction(actor.position, next_position)
-  actor.set_walking_state({
-    walking: true,
-    direction,
-  })
-
-  return false
-}
-
-function state_walking_to_entity(actor: ControlledActor) {
-  if (!task_manager.player_state.parameters_walk_to_entity) {
-    log('[AUTORIO] No parameters found when walking to entity')
-    return
-  }
-
-  if (task_manager.player_state.parameters_walk_to_entity.calculating_path) {
-    log('[AUTORIO] Path calculation in progress, skipping')
-    return
-  }
-
-  // follow path
-  if (task_manager.player_state.parameters_walk_to_entity.path) {
-    if (!task_manager.player_state.parameters_walk_to_entity.path_drawn) {
-      draw_path(actor, task_manager.player_state.parameters_walk_to_entity.path)
-      task_manager.player_state.parameters_walk_to_entity.path_drawn = true
-      log('[AUTORIO] Path drawn on ground')
-    }
-
-    if (follow_path(actor, task_manager.player_state.parameters_walk_to_entity.path)) {
-      log('[AUTORIO] Task completed, switching to IDLE state')
-      rendering.clear()
-      task_manager.reset_task_state()
-      task_manager.next_task()
-    }
-
-    return
-  }
-
-  // find nearest entity and calculate path
-  const entities = actor.surface.find_entities_filtered({
-    position: actor.position,
-    radius: task_manager.player_state.parameters_walk_to_entity.search_radius,
-    name: task_manager.player_state.parameters_walk_to_entity.entity_name, // TODO: catch entity name not found error
-  })
-
-  if (!entities.length) {
-    log('[AUTORIO] No entities found, reverting to IDLE state')
-    task_manager.reset_task_state()
-    task_manager.next_task()
-    return
-  }
-
-  if (entities.length === 0) {
-    log(`[AUTORIO] [ERROR] No ${task_manager.player_state.parameters_walk_to_entity.entity_name} found in ${task_manager.player_state.parameters_walk_to_entity.search_radius}m radius, reverting to IDLE state`)
-    task_manager.cancel_all_tasks()
-    return
-  }
-
-  const nearest_entity = get_nearest_entity(actor, entities)
-
-  log(`[AUTORIO] Nearest entity position: ${serpent.line(nearest_entity?.position)}`)
-  log(`[AUTORIO] Actor position: ${serpent.line(actor.position)}`)
-  log(`[AUTORIO] Actor bounding box: ${serpent.line(actor.character?.bounding_box)}`)
-
-  if (nearest_entity && !task_manager.player_state.parameters_walk_to_entity.calculating_path && !task_manager.player_state.parameters_walk_to_entity.path) {
-    const character = actor.character
-    if (!character) {
-      log('[AUTORIO] Actor character not found, aborting pathfinding')
-      return
-    }
-
-    // TODO: improve path following, check if stuck on objects
-    // currently using larger than character bbox as a workaround for the path following getting stuck on objects
-    // may sometimes still get stuck on trees and will fail to find small passages
-    const bbox: BoundingBoxArray = [[-0.5, -0.5], [0.5, 0.5]]
-    const start = actor.surface.find_non_colliding_position(
-      'iron-chest', // TODO: using iron chest bbox so request_path doesn't fail standing near objects using the larger bbox
-      character.position,
-      10,
-      0.5,
-      false,
-    )
-
-    if (!start) {
-      log('[AUTORIO] find_non_colliding_position returned nil! Aborting pathfinding.')
-      return
-    }
-
-    const collision_mask: CollisionMask = {
-      layers: {
-        player: true,
-        train: true,
-        water_tile: true,
-        object: true,
-        // car: true,
-        // cliff: true,
-      },
-      consider_tile_transitions: true,
-    }
-
-    actor.surface.request_path({
-      bounding_box: bbox,
-      collision_mask,
-      radius: 2,
-      start,
-      goal: nearest_entity.position,
-      force: actor.force,
-      entity_to_ignore: character,
-      pathfind_flags: {
-        cache: false,
-        no_break: true,
-        prefer_straight_paths: false,
-        allow_paths_through_own_entities: false,
-      },
-    })
-    task_manager.player_state.parameters_walk_to_entity.calculating_path = true
-    task_manager.player_state.parameters_walk_to_entity.target_position = nearest_entity.position
-    log(`[AUTORIO] Requested path calculation to ${serpent.line(nearest_entity.position)}`)
-  }
 }
 
 function state_mining(actor: ControlledActor) {
@@ -910,7 +727,7 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   }
 
   if (task_manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
-    state_walking_to_entity(actor)
+    navigation_controller.tick(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.MINING) {
     state_mining(actor)
