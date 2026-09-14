@@ -12,6 +12,7 @@ import {
   DeploymentError,
   directory,
   freeTcpPort,
+  hashFile,
   nonce,
   readJson,
   redact,
@@ -280,7 +281,9 @@ export async function verifyManifest(app) {
   check(manifest?.revision === 'airi-pterodactyl-v8' && manifest.files && typeof manifest.files === 'object', 'Missing v8 release manifest')
   for (const [name, expected] of Object.entries(manifest.files)) {
     check(typeof expected === 'string' && /^[a-f0-9]{64}$/.test(expected), `Invalid manifest digest: ${name}`)
-    await regularFile(path.join(app, name))
+    const filename = path.join(app, name)
+    await regularFile(filename)
+    check(await hashFile(filename) === expected, `Release file integrity failed: ${name}`)
   }
   return manifest
 }
