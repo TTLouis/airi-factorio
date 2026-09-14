@@ -20,6 +20,18 @@ function parseJson(text, context) {
   }
 }
 
+function acknowledgement(raw, marker, context) {
+  const text = String(raw)
+  const position = text.lastIndexOf(marker)
+  check(position >= 0, `Game command acknowledgement missing; ${context} will not be retried`)
+  const data = parseJson(text.slice(position + marker.length), `${context} acknowledgement`)
+  check(data.ok === true, `Game command failed; ${context} will not be retried`)
+  return {
+    data,
+    output: text.slice(0, position).trim(),
+  }
+}
+
 export async function deploymentStatus(rcon) {
   const raw = await rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("airi_deployment","status")))')
   const status = parseJson(raw, 'airi_deployment.status')
@@ -61,16 +73,34 @@ export async function executeAuthorizedOperation(rcon, epoch, command, marker = 
   check(/^AIRI_RESULT_[a-f0-9]{24}:$/.test(marker), 'Invalid operation acknowledgement marker')
 
   const wrapped = `/silent-command local ok,result=pcall(function() if not remote.call("airi_deployment","authorize",${epoch}) then error("stale npc actor epoch") end; return ${command} end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
-  const raw = await rcon.command(wrapped)
-  const text = String(raw)
-  const position = text.lastIndexOf(marker)
-  check(position >= 0, 'Game command acknowledgement missing; operation will not be retried')
-  const data = parseJson(text.slice(position + marker.length), 'operation acknowledgement')
-  check(data.ok === true, 'Game command failed; operation will not be retried')
-  check(data.result !== false && !(Array.isArray(data.result) && data.result[0] === false), 'Autorio rejected operation')
+  const parsed = acknowledgement(await rcon.command(wrapped), marker, 'operation')
+  check(parsed.data.result !== false && !(Array.isArray(parsed.data.result) && parsed.data.result[0] === false), 'Autorio rejected operation')
   return {
-    result: data.result,
-    output: text.slice(0, position).trim(),
+    result: parsed.data.result,
+    output: parsed.output,
+  }
+}
+
+export async function executeAuthorizedBatch(rcon, epoch, commands, marker = `AIRI_RESULT_${crypto.randomBytes(12).toString('hex')}:`) {
+  check(Number.isSafeInteger(epoch) && epoch > 0, 'Invalid deployment epoch')
+  check(Array.isArray(commands) && commands.length >= 1 && commands.length <= 16, 'Invalid operation batch')
+  const validated = commands.map(validatedOperationCall)
+  check(/^AIRI_RESULT_[a-f0-9]{24}:$/.test(marker), 'Invalid operation acknowledgement marker')
+
+  // A model plan is a dependency batch. All operations must enter Autorio's
+  // logical queue during one Lua/RCON command so Factorio cannot advance a tick
+  // between operation N and N+1. Runtime failure of an earlier owned operation
+  // can then reliably cancel the already-queued dependent work.
+  const admissions = validated.map((command, index) => {
+    const slot = index + 1
+    return `local r${slot}={${command}}; if r${slot}[1]==false then error("autorio rejected operation ${slot}") end; results[${slot}]=r${slot}`
+  }).join('; ')
+  const wrapped = `/silent-command local ok,result=pcall(function() if not remote.call("airi_deployment","authorize",${epoch}) then error("stale npc actor epoch") end; local results={}; ${admissions}; return results end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
+  const parsed = acknowledgement(await rcon.command(wrapped), marker, 'operation batch')
+  check(Array.isArray(parsed.data.result) && parsed.data.result.length === validated.length, 'Invalid Autorio batch acknowledgement')
+  return {
+    results: parsed.data.result,
+    output: parsed.output,
   }
 }
 
