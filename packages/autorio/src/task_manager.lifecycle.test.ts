@@ -62,21 +62,27 @@ describe('task control lifecycle', () => {
     })
   }
 
-  it('stops walking before starting a queued crafting task', () => {
+  it('stops walking before activating a queued crafting task without starting native crafting itself', () => {
     const { actor, manager } = context()
-    actor.begin_crafting.mockImplementation(() => {
-      expect(actor.set_walking_state).toHaveBeenCalledWith({ walking: false, direction: defines.direction.north })
-      return 1
-    })
     manager.add_task(walking_task())
     manager.add_task({ type: TaskStates.CRAFTING, item_name: 'iron-gear-wheel', count: 1, crafted: 0 })
     expect(actor.begin_crafting).not.toHaveBeenCalled()
 
     manager.reset_task_state()
+    expect(actor.set_walking_state).toHaveBeenCalledWith({ walking: false, direction: defines.direction.north })
+
     manager.next_task()
 
-    expect(actor.begin_crafting).toHaveBeenCalledTimes(1)
     expect(manager.player_state.task_state).toBe(TaskStates.CRAFTING)
+    expect(manager.player_state.parameters_craft_item).toMatchObject({
+      item_name: 'iron-gear-wheel',
+      count: 1,
+      crafted: 0,
+    })
+    // Native admission/start belongs to crafting_controller.tick(), which binds
+    // identity and owns cancellation/output verification. The task manager only
+    // advances logical task order.
+    expect(actor.begin_crafting).not.toHaveBeenCalled()
   })
 
   it('cancel_all_tasks stops the active movement and discards the queued wait', () => {
