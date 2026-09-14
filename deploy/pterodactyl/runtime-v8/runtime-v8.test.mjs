@@ -3,9 +3,10 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { providerEndpoint } from './provider.mjs'
-import { configuration, Session } from './supervisor.mjs'
+import { configuration, installedAppRoot, Session } from './supervisor.mjs'
 
 async function temp(t) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-v8-'))
@@ -34,6 +35,11 @@ test('configuration defaults to standalone NPC and keeps chat authorization sepa
   const alias = configuration({}, aliasEnv)
   assert.equal(alias.chatPlayer, 'LegacyName')
   assert.throws(() => configuration({}, { ...baseEnv, AIRI_ACTOR_MODE: 'player' }))
+})
+
+test('installed supervisor resolves the release root above src/runtime-v8', () => {
+  const moduleUrl = pathToFileURL('/srv/.airi/releases/v8/src/runtime-v8/supervisor.mjs').href
+  assert.equal(installedAppRoot(moduleUrl), path.resolve('/srv/.airi/releases/v8'))
 })
 
 test('provider URL is HTTPS remotely and may be loopback HTTP', () => {
