@@ -11,9 +11,12 @@ function fake_character(overrides: Record<string, unknown> = {}) {
     selected: undefined,
     mining_state: { mining: false },
     character_mining_progress: 0,
+    crafting_queue: [],
     update_selected_entity: vi.fn(),
     get_main_inventory: vi.fn(() => 'main-inventory'),
+    get_craftable_count: vi.fn(() => 7),
     begin_crafting: vi.fn(),
+    cancel_crafting: vi.fn(),
     ...overrides,
   }
 }
@@ -101,13 +104,25 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
     expect(actor.position).toBe(character.position)
   })
 
-  it('delegates get_main_inventory and begin_crafting to the character entity', () => {
-    const { actor, character } = create_actor()
+  it('delegates main inventory and native crafting controls to the character entity', () => {
+    const queue = [
+      { index: 1, recipe: 'copper-cable', count: 4, prerequisite: true },
+      { index: 2, recipe: 'electronic-circuit', count: 2, prerequisite: false },
+    ]
+    const { actor, character } = create_actor({ crafting_queue: queue })
 
     expect(actor.get_main_inventory()).toBe('main-inventory')
+    expect(actor.get_craftable_count('iron-gear-wheel')).toBe(7)
+    expect(character.get_craftable_count).toHaveBeenCalledWith('iron-gear-wheel')
 
     actor.begin_crafting({ count: 2, recipe: 'iron-gear-wheel' })
     expect(character.begin_crafting).toHaveBeenCalledWith({ count: 2, recipe: 'iron-gear-wheel' })
+
+    expect(actor.get_crafting_queue()).toEqual(queue)
+    expect(actor.get_crafting_queue_count('electronic-circuit')).toBe(2)
+
+    actor.cancel_crafting({ index: 2, count: 1 })
+    expect(character.cancel_crafting).toHaveBeenCalledWith({ index: 2, count: 1 })
   })
 
   it('gets and sets mining/walking/shooting state directly on the character entity while mining is progressing', () => {
