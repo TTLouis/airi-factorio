@@ -149,6 +149,10 @@ export function buildArtifacts(source) {
   return { installScript, eggJson }
 }
 
+function normalizeCheckoutText(text) {
+  return text.replaceAll('\r\n', '\n')
+}
+
 function main() {
   const checkOnly = process.argv.includes('--check')
   if (process.argv.length > 3 || (process.argv.length === 3 && !checkOnly)) throw new Error('Usage: node build-payload.mjs [--check]')
@@ -156,8 +160,8 @@ function main() {
   const { installScript, eggJson } = buildArtifacts(source)
 
   if (checkOnly) {
-    const currentInstall = readFileSync(installPath, 'utf8')
-    const currentEgg = readFileSync(eggPath, 'utf8')
+    const currentInstall = normalizeCheckoutText(readFileSync(installPath, 'utf8'))
+    const currentEgg = normalizeCheckoutText(readFileSync(eggPath, 'utf8'))
     if (currentInstall !== installScript || currentEgg !== eggJson) {
       throw new Error('Generated Pterodactyl artifacts are stale; run node deploy/pterodactyl/build-payload.mjs')
     }
