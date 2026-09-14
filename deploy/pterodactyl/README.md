@@ -6,7 +6,7 @@ This directory contains this fork's Pterodactyl deployment for the standalone AI
 
 The Factorio runtime has a **user-verified standalone-NPC baseline**: the parallel zero-player `core`, `research-combat`, and `resilience` lanes pass, including real restarts, death recovery, navigation, native crafting ownership/reconciliation, research follow-through, combat, actor-mode boundaries, and explicit operation outcomes.
 
-The checked-in [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) is now a **generated v8 standalone-NPC release candidate**, not the previous connected-player v7 package. The installed runtime remains pinned to source commit `8879a71b7b74118b1030d8a89aaf4fba3c95ebf6`.
+The checked-in [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) is now a **generated v8 standalone-NPC release candidate**, not the previous connected-player v7 package. The installed runtime is pinned to source commit `f0a0420d7a16cb6b48855c12538013ba112ec6c5`, including the real-Factorio first-Lua-command confirmation regression and acknowledgement-based retry.
 
 The candidate still stays on `feat/npc-transition-work` until the packaged Docker smoke is green. Do not merge/publish it to `main` merely because the JSON imports successfully.
 
@@ -20,6 +20,7 @@ The candidate still stays on `feat/npc-transition-work` until the packaged Docke
 - exact correlated research-request lookup;
 - full-plan validation before mutation;
 - **atomic dependency-batch admission** so Factorio cannot advance a tick between dependent operations from one model plan;
+- acknowledgement-based first-Lua-command handling: the exact configure command is repeated once only when Factorio's achievement warning blocks execution, and echoed command text is not accepted as an acknowledgement;
 - no automatic replay of paid provider requests or unknown-acknowledgement game mutations;
 - checksummed release files and loopback-only RCON;
 - transactional activation plus an explicit `rollback-airi.sh` target for the previous completed managed release.
@@ -62,12 +63,12 @@ There is deliberately no `AIRI_PLAYER` actor-ownership variable in the v8 egg. Z
 
 ## Generated artifacts
 
-- [`payload-src/installer.sh`](payload-src/installer.sh) — human-readable installer source of truth.
+- [`payload-src/installer.sh`](payload-src/installer.sh) — human-readable installer source of truth. The current release payload is frozen at immutable commit `c60728afc4d348d9739a3c7de70bec86cc9c708a`.
 - [`build-payload.mjs`](build-payload.mjs) — generator and integrity/drift checker.
-- [`install.sh`](install.sh) — self-contained checksummed bootstrap generated from the payload source.
-- [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) — compact PTDL_v2 egg whose install field downloads that bootstrap from an **immutable commit pin**, verifies that the bootstrap advertises the expected payload-source SHA-256, and then executes it.
+- [`install.sh`](install.sh) — small generated loader that downloads the immutable payload source, verifies its SHA-256, and executes it.
+- [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) — PTDL_v2 egg embedding that **same loader exactly**.
 
-The egg deliberately does **not** embed the large gzip/base64 bootstrap anymore. Keeping the PTDL JSON small avoids fragile escaping and makes it practical to parse/inspect independently, while the immutable commit pin plus the bootstrap's own source/archive checks preserve the release-integrity chain.
+The loader is intentionally small. Both entry points use one immutable Git commit plus one expected payload SHA-256, removing gzip/zlib reproducibility and nested bootstrap-pin drift from the release chain.
 
 Regenerate/check with:
 
@@ -76,9 +77,9 @@ node deploy/pterodactyl/build-payload.mjs
 node deploy/pterodactyl/build-payload.mjs --check
 ```
 
-`--check` validates the standalone bootstrap against `payload-src/installer.sh`, parses the committed egg as JSON, and verifies that the complete egg schema matches the expected immutable loader contract. It does not require identical gzip output across different Node/zlib builds.
+`--check` validates the local installer source contract, verifies the checked-in `install.sh` against the expected immutable loader, parses the egg as JSON, and requires the egg to embed the exact same loader and schema.
 
-The standalone bootstrap also supports a non-installing integrity probe:
+The loader supports a non-installing integrity probe:
 
 ```bash
 AIRI_INSTALL_ROOT=/tmp/airi-bootstrap-check bash deploy/pterodactyl/install.sh --verify-only
@@ -116,8 +117,8 @@ On a Docker-capable machine the smoke performs:
 
 1. generated-artifact integrity/schema check;
 2. parse the committed PTDL_v2 egg and extract its real installation script;
-3. standalone generated bootstrap `--verify-only`;
-4. clean transactional installation **through the egg loader** into a disposable server volume;
+3. immutable loader `--verify-only` against the pinned installer payload;
+4. clean transactional installation **through the egg's identical loader** into a disposable server volume;
 5. pinned native Autorio tests/build plus injected v8 guard typecheck/build;
 6. verified Factorio 2.0 headless download;
 7. startup with **zero connected players**;
