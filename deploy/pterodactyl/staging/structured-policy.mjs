@@ -25,12 +25,24 @@ function exactKeys(value, allowed) {
   check(keys.every(key => allowed.includes(key)), 'Unexpected argument')
 }
 
+const operationKeys = {
+  walk_to_entity: ['entity_name', 'search_radius'],
+  mine_entity: ['entity_name', 'count'],
+  place_entity: ['entity_name'],
+  move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
+  craft_item: ['item_name', 'count'],
+  attack_nearest_enemy: ['search_radius'],
+  research_technology: ['technology_name'],
+  wait: ['ticks'],
+}
+
 export function parseOperation(value) {
   check(value && typeof value === 'object' && !Array.isArray(value), 'Operation must be an object')
   exactKeys(value, ['name', 'args'])
   const { name, args } = value
   check(typeof name === 'string', 'Operation name must be a string')
-  exactKeys(args, operationKeys[name] ?? [])
+  check(Object.hasOwn(operationKeys, name), 'Unapproved operation')
+  exactKeys(args, operationKeys[name])
 
   switch (name) {
     case 'walk_to_entity':
@@ -53,17 +65,6 @@ export function parseOperation(value) {
     default:
       throw new PolicyError('Unapproved operation')
   }
-}
-
-const operationKeys = {
-  walk_to_entity: ['entity_name', 'search_radius'],
-  mine_entity: ['entity_name', 'count'],
-  place_entity: ['entity_name'],
-  move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
-  craft_item: ['item_name', 'count'],
-  attack_nearest_enemy: ['search_radius'],
-  research_technology: ['technology_name'],
-  wait: ['ticks'],
 }
 
 export function renderOperation(value) {
@@ -96,24 +97,44 @@ export function parsePlan(value) {
   }
 }
 
-const noArgs = () => ({})
+const emptyObjectSchema = Object.freeze({ type: 'object', properties: {}, additionalProperties: false })
+const nameStringSchema = Object.freeze({ type: 'string', minLength: 1, maxLength: 200 })
+
+function functionTool(name, description, parameters) {
+  return { type: 'function', function: { name, description, parameters } }
+}
 
 export const toolDefinitions = [
-  ['getActorStatus', 'Read AIRI actor mode, identity, validity, position and connected-human count.', noArgs],
-  ['getTaskStatus', 'Read current Autorio task and bounded queue state.', noArgs],
-  ['getInventoryItems', 'Read AIRI standalone actor inventory.', noArgs],
-  ['getRecipe', 'Read one exact recipe for AIRI force.', () => ({ item: 'string' })],
-  ['getNearbyEntities', 'Inspect a bounded local area around AIRI.', () => ({ radius: 'integer?', name: 'string?', type: 'string?', limit: 'integer?' })],
-  ['getEntityStatus', 'Inspect one nearest exact-name local entity.', () => ({ name: 'string', radius: 'integer?' })],
-  ['getNavigationStatus', 'Read bounded navigation target and last result.', noArgs],
-  ['getCraftingStatus', 'Read bounded native crafting ownership and last result.', noArgs],
-  ['getResearchStatus', 'Read force research and last request result.', noArgs],
-  ['getTechnology', 'Read one exact technology.', () => ({ name: 'string' })],
-  ['getCombatStatus', 'Read bounded combat target and last result.', noArgs],
-].map(([name, description]) => ({
-  type: 'function',
-  function: { name, description, parameters: { type: 'object', properties: {}, additionalProperties: true } },
-}))
+  functionTool('getActorStatus', 'Read AIRI actor mode, identity, validity, position and connected-human count.', emptyObjectSchema),
+  functionTool('getTaskStatus', 'Read current Autorio task and bounded queue state.', emptyObjectSchema),
+  functionTool('getInventoryItems', 'Read AIRI standalone actor inventory.', emptyObjectSchema),
+  functionTool('getRecipe', 'Read one exact recipe for AIRI force.', {
+    type: 'object', properties: { item: nameStringSchema }, required: ['item'], additionalProperties: false,
+  }),
+  functionTool('getNearbyEntities', 'Inspect a bounded local area around AIRI.', {
+    type: 'object',
+    properties: {
+      radius: { type: 'integer', minimum: 1, maximum: 64, default: 20 },
+      name: nameStringSchema,
+      type: nameStringSchema,
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+    },
+    additionalProperties: false,
+  }),
+  functionTool('getEntityStatus', 'Inspect one nearest exact-name local entity.', {
+    type: 'object',
+    properties: { name: nameStringSchema, radius: { type: 'integer', minimum: 1, maximum: 32, default: 8 } },
+    required: ['name'],
+    additionalProperties: false,
+  }),
+  functionTool('getNavigationStatus', 'Read bounded navigation target and last result.', emptyObjectSchema),
+  functionTool('getCraftingStatus', 'Read bounded native crafting ownership and last result.', emptyObjectSchema),
+  functionTool('getResearchStatus', 'Read force research and last request result.', emptyObjectSchema),
+  functionTool('getTechnology', 'Read one exact technology.', {
+    type: 'object', properties: { name: nameStringSchema }, required: ['name'], additionalProperties: false,
+  }),
+  functionTool('getCombatStatus', 'Read bounded combat target and last result.', emptyObjectSchema),
+]
 
 function argsObject(args) {
   check(args && typeof args === 'object' && !Array.isArray(args), 'Invalid tool arguments')
