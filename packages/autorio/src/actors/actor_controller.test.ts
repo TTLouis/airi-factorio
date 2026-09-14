@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { get_actor_mode, get_controlled_actor, set_actor_mode } from './actor_controller'
+import { get_load_handler } from '../test-event-registry'
+import { get_actor_mode, get_controlled_actor, get_load_reconciliation_status, set_actor_mode } from './actor_controller'
 
 function fake_character(unit_number: number, valid = true) {
   return {
@@ -9,6 +10,8 @@ function fake_character(unit_number: number, valid = true) {
     surface: undefined as any,
     force: undefined as any,
     mining_state: { mining: false },
+    walking_state: { walking: false, direction: 'north' },
+    shooting_state: { state: 'not_shooting', position: { x: 4, y: 5 } },
     get_main_inventory: vi.fn(),
     begin_crafting: vi.fn(),
   }
@@ -17,6 +20,7 @@ function fake_character(unit_number: number, valid = true) {
 function make_world() {
   const force = {
     name: 'player',
+    index: 1,
     get_spawn_position: vi.fn(() => ({ x: 0, y: 0 })),
   }
   const surface = {
@@ -36,7 +40,9 @@ beforeEach(() => {
     surfaces: { 1: surface },
     forces: { player: force },
     print: vi.fn(),
+    tick: 123,
   }
+  ;(globalThis as any).rendering = { clear: vi.fn() }
   set_actor_mode('player')
 })
 
@@ -124,5 +130,65 @@ describe('actor mode', () => {
 
     expect(recovered?.character).toBe(replacement)
     expect((globalThis as any).storage.standalone_character_unit_number).toBe(99)
+  })
+
+  it('reacquires the same saved npc and clears stale physical inputs after on_load', () => {
+    const surface = (globalThis as any).game.surfaces[1]
+    const force = (globalThis as any).game.forces.player
+    const character = fake_character(42)
+    character.surface = surface
+    character.force = force
+    character.walking_state = { walking: true, direction: 'east' }
+    character.mining_state = { mining: true, position: { x: 5, y: 5 } } as any
+    character.shooting_state = { state: 'shooting_selected', position: { x: 6, y: 5 } }
+    surface.find_entities_filtered.mockReturnValue([character])
+    ;(globalThis as any).storage.airi_actor_mode = 'npc'
+    ;(globalThis as any).storage.standalone_character_unit_number = 42
+
+    get_load_handler()()
+    expect(get_load_reconciliation_status().pending).toBe(true)
+
+    const actor = get_controlled_actor()
+
+    expect(actor?.character).toBe(character)
+    expect(surface.create_entity).not.toHaveBeenCalled()
+    expect(character.walking_state).toEqual({ walking: false, direction: 'north' })
+    expect(character.mining_state).toEqual({ mining: false })
+    expect(character.shooting_state).toEqual({ state: 'not_shooting', position: character.position })
+    expect((globalThis as any).rendering.clear).toHaveBeenCalledTimes(1)
+    expect(get_load_reconciliation_status()).toEqual({
+      policy: 'discard_autorio_tasks_and_stop_npc_controls_on_load',
+      pending: false,
+      last_actor_id: 42,
+      last_tick: 123,
+    })
+  })
+
+  it('does not clear a connected player control state merely because a save loaded', () => {
+    const player = {
+      valid: true,
+      index: 1,
+      name: 'Louis',
+      position: { x: 0, y: 0 },
+      surface: { name: 'nauvis' },
+      force: { name: 'player' },
+      character: { valid: true },
+      walking_state: { walking: true, direction: 'east' },
+      mining_state: { mining: false },
+      shooting_state: { state: 'not_shooting' },
+      get_main_inventory: vi.fn(),
+      update_selected_entity: vi.fn(),
+      begin_crafting: vi.fn(),
+    }
+    ;(globalThis as any).game.connected_players = [player]
+    ;(globalThis as any).storage.airi_actor_mode = 'player'
+
+    get_load_handler()()
+    const actor = get_controlled_actor()
+
+    expect(actor?.status_snapshot().kind).toBe('connected_player')
+    expect(player.walking_state).toEqual({ walking: true, direction: 'east' })
+    expect((globalThis as any).rendering.clear).not.toHaveBeenCalled()
+    expect(get_load_reconciliation_status().pending).toBe(true)
   })
 })

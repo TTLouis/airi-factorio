@@ -38,6 +38,7 @@ finish() {
     print_file "$RESULTS/runner-unit.log"
     print_file "$RESULTS/create.log"
     print_file "$RESULTS/factorio.log"
+    print_file "$RESULTS/factorio-restart.log"
     print_file "$RESULTS/simulation-clock.json"
     print_file "$RESULTS/runner-error.txt"
     print_file "$RESULTS/runner-transcript.json"
@@ -55,10 +56,34 @@ finish() {
     print_file "$RESULTS/combat-error.txt"
     print_file "$RESULTS/combat-transcript.json"
     print_file "$RESULTS/combat.json"
+    print_file "$RESULTS/persistence-prepare-error.txt"
+    print_file "$RESULTS/persistence-prepare-transcript.json"
+    print_file "$RESULTS/persistence-before.json"
+    print_file "$RESULTS/persistence-verify-error.txt"
+    print_file "$RESULTS/persistence-verify-transcript.json"
+    print_file "$RESULTS/persistence.json"
   fi
   exit "$code"
 }
 trap finish EXIT
+
+start_factorio() {
+  local logfile="$1"
+  "$FACTORIO_BIN" --start-server "$SAVE" \
+    --server-settings "$SERVER_SETTINGS" \
+    --rcon-port "$RCON_PORT" \
+    --rcon-password "$RCON_PASSWORD" \
+    >"$logfile" 2>&1 &
+  FACTORIO_PID=$!
+
+  # Catch startup failures immediately instead of waiting for the RCON retry timeout.
+  sleep 0.5
+  if ! kill -0 "$FACTORIO_PID" 2>/dev/null; then
+    wait "$FACTORIO_PID" || true
+    echo '[npc-test] Factorio exited before RCON became available.' >&2
+    exit 1
+  fi
+}
 
 printf '[npc-test] Running deterministic Python runner regressions...\n'
 python3 -m unittest discover -s "${TEST_ROOT:-/test}/runner" -p 'test_*.py' -v \
@@ -72,22 +97,9 @@ printf '[npc-test] Creating deterministic Factorio save...\n'
 printf '[npc-test] Save created successfully.\n'
 
 printf '[npc-test] Starting Factorio with auto_pause=false and private server settings...\n'
-"$FACTORIO_BIN" --start-server "$SAVE" \
-  --server-settings "$SERVER_SETTINGS" \
-  --rcon-port "$RCON_PORT" \
-  --rcon-password "$RCON_PASSWORD" \
-  >"$RESULTS/factorio.log" 2>&1 &
-FACTORIO_PID=$!
-
-# Catch startup failures immediately instead of waiting for the RCON retry timeout.
-sleep 0.5
-if ! kill -0 "$FACTORIO_PID" 2>/dev/null; then
-  wait "$FACTORIO_PID" || true
-  echo '[npc-test] Factorio exited before RCON became available.' >&2
-  exit 1
-fi
-
+start_factorio "$RESULTS/factorio.log"
 printf '[npc-test] Factorio started (pid=%s); checking clock and core NPC actions...\n' "$FACTORIO_PID"
+
 python3 "${TEST_ROOT:-/test}/runner/run.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \
@@ -117,6 +129,30 @@ python3 "${TEST_ROOT:-/test}/runner/research.py" \
 
 printf '[npc-test] Research passed; checking bounded real combat and failure semantics...\n'
 python3 "${TEST_ROOT:-/test}/runner/combat.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS"
+
+printf '[npc-test] Combat passed; saving active NPC work for a real server restart...\n'
+python3 "${TEST_ROOT:-/test}/runner/persistence_prepare.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS" \
+  --save "$SAVE"
+
+printf '[npc-test] Save persisted; stopping the first Factorio process...\n'
+kill "$FACTORIO_PID"
+wait "$FACTORIO_PID" 2>/dev/null || true
+FACTORIO_PID=""
+sleep 0.5
+
+printf '[npc-test] Restarting Factorio from the saved active-NPC state...\n'
+start_factorio "$RESULTS/factorio-restart.log"
+printf '[npc-test] Factorio restarted (pid=%s); checking NPC reacquisition and load reconciliation...\n' "$FACTORIO_PID"
+
+python3 "${TEST_ROOT:-/test}/runner/persistence_verify.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \
   --password "$RCON_PASSWORD" \
