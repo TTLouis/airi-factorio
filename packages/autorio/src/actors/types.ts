@@ -5,6 +5,13 @@ export type ActorMiningState = LuaPlayer['mining_state']
 export type ActorWalkingState = LuaPlayer['walking_state']
 export type ActorShootingState = LuaPlayer['shooting_state']
 
+export interface ActorCraftingQueueItem {
+  index: number
+  recipe: string
+  count: number
+  prerequisite: boolean
+}
+
 /**
  * Arguments to spread into `LuaSurface.create_entity` so a placed entity is
  * attributed to this actor's identity rather than to whichever LuaPlayer
@@ -53,7 +60,10 @@ export interface ControlledActor {
   set_walking_state: (state: ActorWalkingState) => void
   set_shooting_state: (state: ActorShootingState) => void
 
+  get_craftable_count: (recipe: string) => number
   begin_crafting: (params: { count: number, recipe: string }) => number
+  cancel_crafting: (params: { index: number, count: number }) => void
+  get_crafting_queue: () => ActorCraftingQueueItem[]
   get_crafting_queue_count: (recipe: string) => number
 
   /**
