@@ -30,6 +30,7 @@ interface OwnedCraftingLoadReceipt {
 }
 
 type NpcRecoveryHandler = (event: { previous_actor_id: number }) => void
+type ActorModeTransitionHandler = (event: { previous_mode: ActorMode, next_mode: ActorMode }) => void
 
 declare const storage: {
   airi_actor_mode?: ActorMode
@@ -44,6 +45,7 @@ let last_reconciled_actor_id: number | undefined
 let last_reconciled_tick: number | undefined
 let last_reconciled_owned_crafting: OwnedCraftingLoadReceipt | undefined
 let npc_recovery_handler: NpcRecoveryHandler | undefined
+let actor_mode_transition_handler: ActorModeTransitionHandler | undefined
 let recovery_invalidated_actor_id: number | undefined
 
 // Factorio does not persist ordinary Lua module locals across save/load. Autorio's
@@ -65,6 +67,13 @@ export function get_actor_mode(): ActorMode {
 }
 
 export function set_actor_mode(mode: ActorMode): ActorMode {
+  const previous_mode = get_actor_mode()
+  if (previous_mode !== mode) {
+    // The transition handler runs while the previous mode is still active so
+    // cleanup can stop/cancel work on the actor that actually owned it. Only
+    // after cleanup do we select the new actor mode.
+    actor_mode_transition_handler?.({ previous_mode, next_mode: mode })
+  }
   storage.airi_actor_mode = mode
   standalone_actor = undefined
   recovery_invalidated_actor_id = undefined
@@ -73,6 +82,10 @@ export function set_actor_mode(mode: ActorMode): ActorMode {
 
 export function register_npc_recovery_handler(handler: NpcRecoveryHandler | undefined) {
   npc_recovery_handler = handler
+}
+
+export function register_actor_mode_transition_handler(handler: ActorModeTransitionHandler | undefined) {
+  actor_mode_transition_handler = handler
 }
 
 function get_player_actor(): ControlledActor | undefined {
