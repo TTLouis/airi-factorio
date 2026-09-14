@@ -12,6 +12,7 @@ import type {
 import type { ControlledActor } from './actors/types'
 import { get_controlled_actor } from './actors/actor_controller'
 import { new_combat_controller } from './combat'
+import { new_crafting_controller } from './crafting'
 import { new_navigation_controller } from './navigation'
 import { new_research_controller } from './research'
 import { new_task_manager } from './task_manager'
@@ -26,11 +27,16 @@ let setup_complete = false
 
 export const task_manager = new_task_manager(get_controlled_actor)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
+const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
 
 remote.add_interface('autorio_navigation', {
   status: () => navigation_controller.status(),
+})
+
+remote.add_interface('autorio_crafting', {
+  status: () => crafting_controller.status(),
 })
 
 remote.add_interface('autorio_research', {
@@ -146,35 +152,7 @@ remote.add_interface('autorio_operations', {
 
     return [true, 'Task started']
   },
-  craft_item: (item_name: string, count: number = 1): [boolean, string] => {
-    const actor = get_controlled_actor()
-    if (!actor) {
-      log('[AUTORIO] Cannot start craft_item task: No controlled actor')
-      return [false, 'No controlled actor']
-    }
-    if (!actor.force.recipes[item_name]) {
-      log('[AUTORIO] Cannot start craft_item task: Recipe not available')
-      return [false, 'Recipe not available']
-    }
-    if (!actor.force.recipes[item_name].enabled) {
-      log('[AUTORIO] Cannot start craft_item task: Recipe not unlocked')
-      return [false, 'Recipe not unlocked']
-    }
-
-    if (!check_can_craft(actor, item_name, count)) {
-      return [false, 'Not enough ingredients']
-    }
-
-    task_manager.add_task({
-      type: TaskStates.CRAFTING,
-      item_name,
-      count,
-      crafted: 0,
-    })
-
-    log(`[AUTORIO] New craft_item task: ${item_name} x${count}`)
-    return [true, 'Task started']
-  },
+  craft_item: (item_name: string, count: number = 1): [boolean, string] => crafting_controller.submit(item_name, count),
   attack_nearest_enemy: (search_radius: number = 50): [boolean, string] => combat_controller.submit(search_radius),
   research_technology: (name: string): [boolean, string] => research_controller.submit(name),
   cancel_all_tasks: () => {
@@ -589,78 +567,6 @@ export function state_moving_items(actor: ControlledActor) {
   return moved_total
 }
 
-function check_can_craft(actor: ControlledActor, item_name: string, count: number) {
-  const recipe = actor.force.recipes[item_name]
-
-  if (!recipe) {
-    log(`[AUTORIO] No such recipe: ${item_name}`)
-    return false
-  }
-
-  const ingredients = recipe.ingredients
-  const actor_inventory = actor.get_main_inventory()
-
-  if (!actor_inventory) {
-    log('[AUTORIO] Cannot access actor inventory, ending CRAFTING task')
-    return false
-  }
-
-  const not_enough_ingredients: { name: string, amount: number }[] = []
-
-  // TODO check dependencies
-  for (const ingredient of ingredients) {
-    const item_count = actor_inventory.get_item_count(ingredient.name)
-
-    if (item_count < ingredient.amount * count) {
-      not_enough_ingredients.push({ name: ingredient.name, amount: ingredient.amount * count - item_count })
-    }
-  }
-
-  if (not_enough_ingredients.length > 0) {
-    log(`[AUTORIO] [ERROR] No enough ingredients to craft ${item_name}: ${serpent.line(not_enough_ingredients)}`)
-    return false
-  }
-
-  return true
-}
-
-function state_crafting(actor: ControlledActor) {
-  const parameters = task_manager.player_state.parameters_craft_item
-  if (!parameters) {
-    log('[AUTORIO] No parameters found when crafting')
-    return
-  }
-
-  if (!actor.character) {
-    log('[AUTORIO] Actor character not found, ending CRAFTING task')
-    task_manager.reset_task_state()
-    task_manager.next_task()
-    return
-  }
-
-  // Connected LuaPlayers keep their existing event-driven completion path.
-  if (!is_standalone_actor(actor)) {
-    return
-  }
-
-  const started = parameters.started ?? parameters.count
-  const queue_count_before = parameters.queue_count_before ?? 0
-  const currently_queued = actor.get_crafting_queue_count(parameters.item_name)
-  const remaining_for_task = math.max(0, currently_queued - queue_count_before)
-  const crafted = math.max(0, started - math.min(started, remaining_for_task))
-
-  if (crafted > parameters.crafted) {
-    parameters.crafted = crafted
-    log(`[AUTORIO] Standalone actor crafted ${parameters.crafted}/${started} ${parameters.item_name}`)
-  }
-
-  if (remaining_for_task <= 0 || parameters.crafted >= started) {
-    log('[AUTORIO] Standalone crafting task complete')
-    task_manager.reset_task_state()
-    task_manager.next_task()
-  }
-}
-
 function state_walking_direct(actor: ControlledActor) {
   if (!task_manager.player_state.parameters_walking_direct) {
     log('[AUTORIO] No parameters found when walking directly')
@@ -739,7 +645,7 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     state_moving_items(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.CRAFTING) {
-    state_crafting(actor)
+    crafting_controller.tick(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) {
     research_controller.tick(actor)
@@ -759,31 +665,14 @@ script.on_event(defines.events.on_player_crafted_item, (event: OnPlayerCraftedIt
   const actor = get_controlled_actor()
   if (!actor || !actor.owns_player_index(event.player_index)) {
     // Not our controlled actor's craft (e.g. another connected player) — ignore it.
-    // Standalone NPC crafting completion is polled from its own crafting queue.
+    // Standalone NPC crafting produces no LuaPlayer event at all.
     return
   }
 
+  // This event is diagnostic only. Queue ownership and completion are verified
+  // by the crafting controller against the controlled actor's native queue and
+  // real inventory output; a player-sourced event cannot complete an NPC task.
   log(`[AUTORIO] Actor ${actor.status_snapshot().name} crafted item: ${event.item_stack.name}`)
-
-  const parameters = task_manager.player_state.parameters_craft_item
-  if (!parameters) {
-    log('[AUTORIO] No parameters found when item crafted')
-    return
-  }
-
-  if (task_manager.player_state.task_state !== TaskStates.CRAFTING) {
-    return
-  }
-
-  parameters.crafted += 1
-  const target_count = parameters.started ?? parameters.count
-  log(`[AUTORIO] Crafted 1 ${parameters.item_name}, remaining: ${target_count - parameters.crafted}`)
-
-  if (parameters.crafted >= target_count) {
-    log('[AUTORIO] Crafting task complete')
-    task_manager.reset_task_state()
-    task_manager.next_task()
-  }
 })
 
 log('[AUTORIO] Mod loaded 1')
