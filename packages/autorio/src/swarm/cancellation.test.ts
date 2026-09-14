@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { create_agent } from './agents'
+import { allocate_logical_actor_id, create_agent } from './agents'
 import { create_request, create_work } from './blackboard'
 import { cancel_mission, cancel_project } from './cancellation'
 import { claim_work } from './claims'
@@ -9,10 +9,11 @@ import { create_empty_swarm_storage } from './storage'
 describe('scope cancellation', () => {
   it('releases claims, clears the agent commitment, and cancels mission scope without a model turn', () => {
     const swarm = create_empty_swarm_storage()
-    const agent = create_agent(swarm, 'actor-1')
+    const actorId = allocate_logical_actor_id(swarm)
+    const agent = create_agent(swarm, actorId)
     const mission = create_mission(swarm, { title: 'm', priority: 50, goal: 'g', createdBy: 'human', tick: 1 })
     const work = create_work(swarm, { missionId: mission.id, createdBy: 'system', goal: { kind: 'custom', description: 'x' }, requirements: { capabilities: ['move'] }, priority: 50, createdTick: 1 })
-    const claimed = claim_work(swarm, { workId: work.id, expectedRevision: work.revision, actor: { agentId: agent.id, actorId: 'actor-1', bodyRevision: 1, available: true, capabilities: ['move'] }, tick: 2, leaseTicks: 100 })
+    const claimed = claim_work(swarm, { workId: work.id, expectedRevision: work.revision, actor: { agentId: agent.id, actorId, bodyRevision: 1, available: true, capabilities: ['move'] }, tick: 2, leaseTicks: 100 })
     expect(claimed.ok).toBe(true)
     if (!claimed.ok) return
     expect(cancel_mission(swarm, mission.id, mission.revision, 3).ok).toBe(true)
