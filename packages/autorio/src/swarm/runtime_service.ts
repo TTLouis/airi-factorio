@@ -10,6 +10,7 @@ import { block_work_with_observation_request } from './blockers'
 import { reconcile_mission_work_completion } from './mission_completion'
 import { create_survey_mission_workflow } from './mission_workflow'
 import type { SurveyMissionTarget } from './mission_workflow'
+import { create_cooperative_craft_mission_workflow } from './production_workflow'
 import { new_request_coordinator } from './request_coordinator'
 import { new_standalone_actor_pool } from './standalone_actor_pool'
 import { get_swarm_storage } from './storage'
@@ -37,6 +38,14 @@ function valid_radius(value: number) {
 
 function valid_priority(value: number) {
   return typeof value === 'number' && value === value && value >= 0 && value <= 100
+}
+
+function valid_count(value: number) {
+  return typeof value === 'number' && value === math.floor(value) && value > 0 && value <= 1000
+}
+
+function valid_name(value: string) {
+  return typeof value === 'string' && value !== ''
 }
 
 export function new_swarm_runtime_service() {
@@ -202,6 +211,61 @@ export function new_swarm_runtime_service() {
       title,
       priority,
       targets,
+      createdBy: 'human',
+      tick: game.tick,
+    })
+  }
+
+  function create_cooperative_craft_mission(
+    title: string,
+    resourceName: string,
+    rawItemName: string,
+    rawItemCount: number,
+    sourceX: number,
+    sourceY: number,
+    handoffEntityName: string,
+    handoffX: number,
+    handoffY: number,
+    outputItemName: string,
+    outputCount: number,
+    priority: number = 70,
+    surfaceIndex: number = 1,
+  ) {
+    if (!valid_name(title)) return { ok: false as const, code: 'invalid_title' as const }
+    if (!valid_name(resourceName) || !valid_name(rawItemName) || !valid_name(handoffEntityName) || !valid_name(outputItemName)) {
+      return { ok: false as const, code: 'invalid_name' as const }
+    }
+    if (!valid_count(rawItemCount) || !valid_count(outputCount)) return { ok: false as const, code: 'invalid_count' as const }
+    if (!valid_priority(priority)) return { ok: false as const, code: 'invalid_priority' as const }
+    if (!valid_coordinate(sourceX) || !valid_coordinate(sourceY) || !valid_coordinate(handoffX) || !valid_coordinate(handoffY)) {
+      return { ok: false as const, code: 'invalid_position' as const }
+    }
+    if (game.surfaces[surfaceIndex] === undefined) return { ok: false as const, code: 'unknown_surface' as const }
+    const resourcePrototype = prototypes.entity[resourceName]
+    if (resourcePrototype === undefined || resourcePrototype.type !== 'resource') {
+      return { ok: false as const, code: 'unknown_resource' as const }
+    }
+    if (prototypes.entity[handoffEntityName] === undefined) return { ok: false as const, code: 'unknown_handoff_entity' as const }
+
+    return create_cooperative_craft_mission_workflow(swarm, {
+      title,
+      priority,
+      resourceName,
+      rawItemName,
+      rawItemCount,
+      resourceSource: {
+        surfaceIndex,
+        position: { x: sourceX, y: sourceY },
+        radius: 3,
+      },
+      handoffEntityName,
+      handoffLocation: {
+        surfaceIndex,
+        position: { x: handoffX, y: handoffY },
+        radius: 2,
+      },
+      outputItemName,
+      outputCount,
       createdBy: 'human',
       tick: game.tick,
     })
@@ -393,6 +457,35 @@ export function new_swarm_runtime_service() {
   remote.add_interface('autorio_swarm_coordination', {
     create_survey_mission: (title: string, targets: SurveyMissionTarget[], priority: number = 60) =>
       create_survey_mission(title, targets, priority),
+    create_cooperative_craft_mission: (
+      title: string,
+      resource_name: string,
+      raw_item_name: string,
+      raw_item_count: number,
+      source_x: number,
+      source_y: number,
+      handoff_entity_name: string,
+      handoff_x: number,
+      handoff_y: number,
+      output_item_name: string,
+      output_count: number,
+      priority: number = 70,
+      surface_index: number = 1,
+    ) => create_cooperative_craft_mission(
+      title,
+      resource_name,
+      raw_item_name,
+      raw_item_count,
+      source_x,
+      source_y,
+      handoff_entity_name,
+      handoff_x,
+      handoff_y,
+      output_item_name,
+      output_count,
+      priority,
+      surface_index,
+    ),
     mission_status: (mission_id?: MissionId) => mission_status(mission_id),
     work_status: (work_id?: WorkId) => work_status(work_id),
     block_work_for_observation: (
@@ -411,6 +504,7 @@ export function new_swarm_runtime_service() {
     status,
     create_survey_work,
     create_survey_mission,
+    create_cooperative_craft_mission,
     mission_status,
     work_status,
     block_work_for_observation,
