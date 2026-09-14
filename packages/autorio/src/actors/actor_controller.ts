@@ -227,17 +227,12 @@ function get_npc_actor(): ControlledActor | undefined {
   // generation around spawn: normally a joining client's position does that.
   // Without this, create_entity silently fails on a freshly created save
   // because the target chunk was never generated.
-  const chunk_generated = surface.is_chunk_generated({ x: Math.floor(spawn_position.x / 32), y: Math.floor(spawn_position.y / 32) })
-  log(`[AIRI-DEBUG] get_npc_actor: spawn_position=${helpers.table_to_json(spawn_position)} chunk_generated=${chunk_generated}`)
-  if (!chunk_generated) {
+  if (!surface.is_chunk_generated({ x: Math.floor(spawn_position.x / 32), y: Math.floor(spawn_position.y / 32) })) {
     surface.request_to_generate_chunks(spawn_position, 3)
     surface.force_generate_chunk_requests()
-    log(`[AIRI-DEBUG] get_npc_actor: after force_generate_chunk_requests, chunk_generated=${surface.is_chunk_generated({ x: Math.floor(spawn_position.x / 32), y: Math.floor(spawn_position.y / 32) })}`)
   }
   const position = surface.find_non_colliding_position('character', spawn_position, 32, 0.5) ?? spawn_position
-  log(`[AIRI-DEBUG] get_npc_actor: creating at position=${helpers.table_to_json(position)}`)
   standalone_actor = StandaloneCharacterActor.create(surface, force, position)
-  log(`[AIRI-DEBUG] get_npc_actor: create result valid=${standalone_actor?.is_valid}`)
   if (standalone_actor?.is_valid) {
     if (persisted_actor_id !== undefined) {
       record_npc_recovery(persisted_actor_id, standalone_actor)
@@ -283,7 +278,6 @@ export function create_actor_remote_interface() {
 
       set_actor_mode(mode)
       const actor = get_controlled_actor()
-      log(`[AIRI-DEBUG] set_mode(${mode}): storage.airi_actor_mode=${storage.airi_actor_mode}, actor=${actor ? helpers.table_to_json(actor.status_snapshot()) : 'undefined'}`)
       return [true, actor?.status_snapshot()]
     },
     status: () => {
