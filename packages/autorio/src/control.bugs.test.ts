@@ -201,30 +201,58 @@ describe('Player-sourced completion events are gated by actor identity', () => {
   })
 })
 
-describe('Bug 4 (fixed): ATTACKING now has an on_tick dispatch case', () => {
-  function connect_player_seeing(entities: unknown[]) {
+describe('Bug 4 (fixed): ATTACKING is dispatched through the bounded combat controller', () => {
+  function enemy(x: number) {
+    return {
+      valid: true,
+      name: 'small-biter',
+      unit_number: 88,
+      position: { x, y: 0 },
+      health: 15,
+    }
+  }
+
+  function connect_player_seeing(entities: unknown[], can_shoot = false) {
+    const weapon_slot = { valid_for_read: true }
+    const character = {
+      selected_gun_index: 1,
+      can_shoot: vi.fn(() => can_shoot),
+      get_inventory: vi.fn((index: unknown) => {
+        if (index === (globalThis as any).defines.inventory.character_guns) return { 1: weapon_slot }
+        if (index === (globalThis as any).defines.inventory.character_ammo) return { 1: weapon_slot }
+        return undefined
+      }),
+    }
+    const surface = { find_entities_filtered: vi.fn(() => entities) }
     const fake_player = {
       valid: true,
       index: 1,
       name: 'AIRI',
-      character: {},
+      character,
       position: { x: 0, y: 0 },
-      surface: { find_entities_filtered: () => entities },
-      force: {},
+      surface,
+      force: { index: 1 },
+      update_selected_entity: vi.fn(),
     }
     ;(globalThis as any).game.connected_players = [fake_player]
     return fake_player as any
   }
 
+  function add_owned_attack(search_radius: number, target: any = null) {
+    task_manager.add_task({
+      type: TaskStates.ATTACKING,
+      search_radius,
+      target,
+      owner_actor_id: 1,
+      owner_actor_kind: 'connected_player',
+      owner_force_index: 1,
+    })
+  }
+
   it('completes the attack task instead of hanging when no enemy is found', () => {
     const on_tick = get_handler('on_tick')
     connect_player_seeing([])
-
-    task_manager.add_task({
-      type: TaskStates.ATTACKING,
-      search_radius: 50,
-      target: null,
-    })
+    add_owned_attack(50)
     expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
 
     on_tick({})
@@ -232,55 +260,46 @@ describe('Bug 4 (fixed): ATTACKING now has an on_tick dispatch case', () => {
     expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
   })
 
-  it('shoots an enemy that is already within engage range', () => {
+  it('shoots the bound enemy when Factorio reports it can be shot', () => {
     const on_tick = get_handler('on_tick')
-    const fake_player = connect_player_seeing([{ valid: true, position: { x: 5, y: 0 } }])
-
-    task_manager.add_task({
-      type: TaskStates.ATTACKING,
-      search_radius: 50,
-      target: null,
-    })
+    const target = enemy(5)
+    const fake_player = connect_player_seeing([target], true)
+    add_owned_attack(50)
 
     on_tick({})
 
     expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
-    expect(fake_player.shooting_state).toEqual({ state: 'shooting_enemies', position: { x: 5, y: 0 } })
-    expect(fake_player.walking_state).toBeUndefined()
+    expect(fake_player.character.can_shoot).toHaveBeenCalledWith(target, target.position)
+    expect(fake_player.shooting_state).toEqual({ state: 'shooting_selected', position: target.position })
+    expect(fake_player.walking_state).toEqual({ walking: false, direction: 'north' })
+    expect(fake_player.update_selected_entity).toHaveBeenCalledWith(target.position)
   })
 
-  it('walks toward a distant enemy instead of shooting when out of engage range', () => {
+  it('walks toward the bound enemy when Factorio reports it cannot yet be shot', () => {
     const on_tick = get_handler('on_tick')
-    const fake_player = connect_player_seeing([{ valid: true, position: { x: 100, y: 0 } }])
-
-    task_manager.add_task({
-      type: TaskStates.ATTACKING,
-      search_radius: 200,
-      target: null,
-    })
+    const target = enemy(100)
+    const fake_player = connect_player_seeing([target], false)
+    add_owned_attack(200)
 
     on_tick({})
 
     expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
-    expect(fake_player.walking_state).toBeDefined()
-    expect(fake_player.shooting_state).toBeUndefined()
+    expect(fake_player.character.can_shoot).toHaveBeenCalledWith(target, target.position)
+    expect(fake_player.walking_state).toEqual({ walking: true, direction: 'east' })
+    expect(fake_player.shooting_state).toEqual({ state: 'not_shooting', position: target.position })
   })
 
-  it('re-acquires a new target once the current one is no longer valid', () => {
+  it('completes the single-target task once its bound target is no longer valid', () => {
     const on_tick = get_handler('on_tick')
-    connect_player_seeing([])
-
-    task_manager.add_task({
-      type: TaskStates.ATTACKING,
-      search_radius: 50,
-      // Already has a target locked from a previous tick, but it died —
-      // state_attacking must re-search rather than keep aiming at it.
-      target: { valid: false, position: { x: 5, y: 0 } } as any,
-    })
+    const replacement = enemy(6)
+    replacement.unit_number = 99
+    const fake_player = connect_player_seeing([replacement])
+    const dead_target = { ...enemy(5), valid: false }
+    add_owned_attack(50, dead_target)
 
     on_tick({})
 
-    // No replacement enemy found either, so the task completes.
     expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
+    expect(fake_player.surface.find_entities_filtered).not.toHaveBeenCalled()
   })
 })
