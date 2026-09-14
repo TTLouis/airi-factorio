@@ -39,6 +39,7 @@ finish() {
     print_file "$RESULTS/create.log"
     print_file "$RESULTS/factorio.log"
     print_file "$RESULTS/factorio-restart.log"
+    print_file "$RESULTS/factorio-crafting-restart.log"
     print_file "$RESULTS/simulation-clock.json"
     print_file "$RESULTS/runner-error.txt"
     print_file "$RESULTS/runner-transcript.json"
@@ -71,6 +72,12 @@ finish() {
     print_file "$RESULTS/crafting-error.txt"
     print_file "$RESULTS/crafting-transcript.json"
     print_file "$RESULTS/crafting.json"
+    print_file "$RESULTS/crafting-restart-prepare-error.txt"
+    print_file "$RESULTS/crafting-restart-prepare-transcript.json"
+    print_file "$RESULTS/crafting-restart-before.json"
+    print_file "$RESULTS/crafting-restart-verify-error.txt"
+    print_file "$RESULTS/crafting-restart-verify-transcript.json"
+    print_file "$RESULTS/crafting-restart.json"
   fi
   exit "$code"
 }
@@ -183,6 +190,30 @@ python3 "${TEST_ROOT:-/test}/runner/navigation.py" \
 
 printf '[npc-test] Navigation passed; checking owned native crafting and cancellation...\n'
 python3 "${TEST_ROOT:-/test}/runner/crafting.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS"
+
+printf '[npc-test] Crafting passed; saving active owned native craft for a second real restart...\n'
+python3 "${TEST_ROOT:-/test}/runner/crafting_restart_prepare.py" \
+  --host 127.0.0.1 \
+  --port "$RCON_PORT" \
+  --password "$RCON_PASSWORD" \
+  --results "$RESULTS" \
+  --save "$SAVE"
+
+printf '[npc-test] Owned crafting save persisted; stopping Factorio for crafting restart...\n'
+kill "$FACTORIO_PID"
+wait "$FACTORIO_PID" 2>/dev/null || true
+FACTORIO_PID=""
+sleep 0.5
+
+printf '[npc-test] Restarting Factorio from active owned native crafting state...\n'
+start_factorio "$RESULTS/factorio-crafting-restart.log"
+printf '[npc-test] Factorio restarted (pid=%s); checking owned native crafting reconciliation...\n' "$FACTORIO_PID"
+
+python3 "${TEST_ROOT:-/test}/runner/crafting_restart_verify.py" \
   --host 127.0.0.1 \
   --port "$RCON_PORT" \
   --password "$RCON_PASSWORD" \
