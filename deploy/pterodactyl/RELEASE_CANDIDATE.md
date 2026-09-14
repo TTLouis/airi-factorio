@@ -13,11 +13,13 @@ The generated `egg-airi-factorio-server.json` is now a v8 standalone-NPC candida
 - packaged real Factorio boot with zero connected players
 - standalone actor readiness acknowledgement
 - graceful `/server-save` + SIGINT shutdown
-- valid PTDL_v2 JSON with immutable installer-loader pin and matching payload-source SHA
+- valid PTDL_v2 JSON with the same immutable checksummed installer loader as `install.sh`
 
-The runtime installer pins source commit `8879a71b7b74118b1030d8a89aaf4fba3c95ebf6`, which contains the corrected installed-layout v8 supervisor and its process/RCON tests. The compact egg loader separately pins installer artifact commit `2d9ea4cbcd65dcf850a5f6deed49cf5747433571`, which contains the synchronized self-verifying `install.sh` for this payload revision. Both pins are immutable so subsequent feature-branch changes cannot silently alter a published egg.
+The immutable installer payload is commit `c60728afc4d348d9739a3c7de70bec86cc9c708a`, whose `payload-src/installer.sh` has SHA-256 `c5ae9291b5d8ce16deb4356b20e0c1b2629ff350794393c61500dac8f3836170`. That installer pins runtime source `f0a0420d7a16cb6b48855c12538013ba112ec6c5` and revision `2026-09-14.4`.
 
-The egg intentionally does not embed the large bootstrap directly. Its loader downloads the pinned `install.sh`, checks that the bootstrap advertises the expected payload-source SHA-256, then executes it. The bootstrap itself verifies its compressed archive and decompressed installer source before installation.
+The runtime pin includes the real-Factorio first-Lua-command confirmation fix. Configure admission now repeats the exact same command at most once when the achievement warning blocks execution, and accepts success only when the response contains the acknowledgement marker followed by parseable JSON. An echoed command containing the session or marker text is not treated as execution proof.
+
+`install.sh` and the egg deliberately share one compact loader. The loader downloads the immutable human-readable installer payload directly, verifies its SHA-256, and only then executes it. This avoids mutable branch fetches, nested bootstrap pins, and gzip/zlib reproducibility as release concerns.
 
 ## Rollback
 
