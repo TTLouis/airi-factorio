@@ -90,6 +90,25 @@ describe('task control lifecycle', () => {
     expect(manager.get_status_snapshot()).toMatchObject({ task_state: TaskStates.IDLE, queue_empty: true, queue_length: 0 })
   })
 
+  it('discards actor-owned work after body loss without resolving or controlling a replacement', () => {
+    const { actor, resolve, manager } = context()
+    manager.add_task(walking_task())
+    manager.add_task({ type: TaskStates.WAITING, remaining_ticks: 3600 })
+
+    manager.discard_all_tasks_after_actor_loss()
+
+    expect(resolve).not.toHaveBeenCalled()
+    expect(actor.set_walking_state).not.toHaveBeenCalled()
+    expect(actor.set_mining_state).not.toHaveBeenCalled()
+    expect(actor.set_shooting_state).not.toHaveBeenCalled()
+    expect(manager.get_status_snapshot()).toMatchObject({
+      task_state: TaskStates.IDLE,
+      queue_empty: true,
+      queue_length: 0,
+      queued_task_types: [],
+    })
+  })
+
   it('does not resolve or spawn an actor for an already-idle reset', () => {
     const { resolve, manager } = context()
     manager.reset_task_state()
