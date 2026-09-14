@@ -59,29 +59,28 @@ function cancel_tasks() {
   }
 }
 
-function configure(mode: ActorMode, session: string) {
-  log(`[AIRI-DEBUG] configure: received mode="${mode}" (type ${typeof mode}), session="${session}" (type ${typeof session}, length ${session ? session.length : -1})`)
+// Declared as an arrow function, like every other handler in the
+// remote.add_interface table below. A plain `function` declaration used as a
+// bare table value gets an implicit Lua `self` parameter from TypeScriptToLua,
+// which silently shifts every argument by one (mode receives the session
+// token, session is left nil) since remote.call has no receiver to bind self.
+const configure = (mode: ActorMode, session: string) => {
   if ((mode !== 'npc' && mode !== 'player') || session === '') {
-    log('[AIRI-DEBUG] configure: early-return, invalid mode or empty session')
     return false
   }
 
   cancel_tasks()
   const changed = remote.call('autorio_actor', 'set_mode', mode) as [boolean, unknown]
-  log(`[AIRI-DEBUG] configure: set_mode returned changed=${helpers.table_to_json(changed)}`)
   if (!changed || changed[0] !== true) {
     return false
   }
 
   const status = actor_status()
-  log(`[AIRI-DEBUG] configure: post-set_mode status=${helpers.table_to_json(status)}`)
   const actor = status.actor
   if (!actor || status.mode !== mode || actor.valid !== true || actor.has_character !== true || actor.actor_id === undefined) {
-    log('[AIRI-DEBUG] configure: actor validity check failed')
     return false
   }
   if (mode === 'npc' && actor.kind !== 'standalone_character') {
-    log(`[AIRI-DEBUG] configure: npc kind mismatch, actor.kind=${actor.kind}`)
     return false
   }
   if (mode === 'player' && actor.kind !== 'connected_player') {
