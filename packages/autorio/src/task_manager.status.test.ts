@@ -40,11 +40,9 @@ describe('task manager status snapshot', () => {
     })
   })
 
-  it('reports standalone crafting progress from the actor queue without exposing the queue itself', () => {
-    const get_crafting_queue_count = vi.fn()
-      .mockReturnValueOnce(1) // baseline before begin_crafting
-      .mockReturnValue(3) // baseline + two newly queued crafts
+  it('reports crafting progress supplied by the crafting controller without starting native crafting itself', () => {
     const begin_crafting = vi.fn(() => 2)
+    const get_crafting_queue_count = vi.fn(() => 2)
     const actor = {
       begin_crafting,
       get_crafting_queue_count,
@@ -58,7 +56,18 @@ describe('task manager status snapshot', () => {
       crafted: 0,
     })
 
-    expect(begin_crafting).toHaveBeenCalledWith({ count: 2, recipe: 'iron-gear-wheel' })
+    // The task manager owns ordering/status only. Native admission/start is
+    // performed later by crafting_controller.tick(). Simulate the controller's
+    // bounded progress fields to verify the status snapshot contract.
+    const task = manager.player_state.parameters_craft_item
+    expect(task).toBeDefined()
+    if (!task) {
+      throw new Error('crafting task was not activated')
+    }
+    task.started = 2
+    task.owns_native_queue = true
+
+    expect(begin_crafting).not.toHaveBeenCalled()
     expect(manager.get_status_snapshot()).toEqual({
       task_state: TaskStates.CRAFTING,
       queue_empty: true,
@@ -70,12 +79,13 @@ describe('task manager status snapshot', () => {
         count: 2,
         crafted: 0,
         started: 2,
-        queued_crafts: 3,
+        owns_native_queue: true,
+        queued_crafts: 2,
       },
     })
   })
 
-  it('ends a crafting task immediately if the actor cannot queue any crafts', () => {
+  it('leaves native craft admission failure to the crafting controller instead of silently ending the task', () => {
     const actor = {
       begin_crafting: vi.fn(() => 0),
       get_crafting_queue_count: vi.fn(() => 0),
@@ -89,12 +99,21 @@ describe('task manager status snapshot', () => {
       crafted: 0,
     })
 
+    expect(actor.begin_crafting).not.toHaveBeenCalled()
     expect(manager.get_status_snapshot()).toEqual({
-      task_state: TaskStates.IDLE,
+      task_state: TaskStates.CRAFTING,
       queue_empty: true,
       queue_length: 0,
       queued_task_types: [],
-      current_task: undefined,
+      current_task: {
+        type: TaskStates.CRAFTING,
+        item_name: 'iron-gear-wheel',
+        count: 2,
+        crafted: 0,
+        started: undefined,
+        owns_native_queue: false,
+        queued_crafts: 0,
+      },
     })
   })
 
