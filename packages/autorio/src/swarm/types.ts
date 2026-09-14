@@ -104,6 +104,7 @@ export type WorkGoal
   = | { kind: 'acquire_items', itemName: string, count: number, source?: WorldLocation, sourceEntityName?: string }
     | { kind: 'deliver_items', itemName: string, count: number, destination: WorldLocation, destinationEntityName?: string }
     | { kind: 'gather_resource', resourceName: string, itemName: string, count: number, source: WorldLocation }
+    | { kind: 'craft_items', itemName: string, count: number }
     | { kind: 'construct_design', designId: string, designRevision: number }
     | { kind: 'survey_area', subject: string, area: WorldLocation }
     | { kind: 'increase_capacity', itemName: string, additionalRatePerSecond: number }
