@@ -6,7 +6,7 @@ This directory contains this fork's Pterodactyl deployment for the standalone AI
 
 The Factorio runtime has a **user-verified standalone-NPC baseline**: the parallel zero-player `core`, `research-combat`, and `resilience` lanes pass, including real restarts, death recovery, navigation, native crafting ownership/reconciliation, research follow-through, combat, actor-mode boundaries, and explicit operation outcomes.
 
-The checked-in [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) is now a **generated v8 standalone-NPC release candidate**, not the previous connected-player v7 package. The installed runtime is pinned to source commit `f0a0420d7a16cb6b48855c12538013ba112ec6c5`, including the real-Factorio first-Lua-command confirmation regression and acknowledgement-based retry.
+The checked-in [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) is now a **generated v8 standalone-NPC release candidate**, not the previous connected-player v7 package. The installed runtime is pinned to source commit `c5dc39e57285695f122603dbafc9abf4e0a2ef81`, including the real-Factorio first-Lua-command confirmation regression, acknowledgement-based retry, and production Source-RCON fixture for that warning path.
 
 The candidate still stays on `feat/npc-transition-work` until the packaged Docker smoke is green. Do not merge/publish it to `main` merely because the JSON imports successfully.
 
@@ -51,19 +51,19 @@ The only externally exposed service required by AIRI is Factorio's normal game p
 |---|---|---|
 | Actor ownership | `AIRI_ACTOR_MODE` | fixed to `npc` for this first v8 egg |
 | Chat authorization | `AIRI_CHAT_PLAYER` | optional exact player name allowed to issue `!airi ...` |
-| Provider credential | `OPENAI_API_KEY` | required; hidden and never written into `airi-config.json` |
+| Provider credential | `OPENAI_API_KEY` | required; hidden and never written to `airi-config.json` |
 | Model | `OPENAI_MODEL` | OpenAI-compatible model identifier |
 | Provider URL | `OPENAI_API_BASEURL` | HTTPS OpenAI-compatible API base URL |
 | Save | `SAVE_NAME` | optional explicit save name; blank chooses newest or creates `airi-world.zip` |
 | Provider budget | `MAX_PROVIDER_REQUESTS_PER_HOUR` | persisted hourly request cap |
-| Shutdown timeout | `SHUTDOWN_TIMEOUT_MS` | save/stop timeout before forced fallback |
+| Shutdown timeout | `SHUTDOWN_TIMEOUT_MS` | save/stop timeout before forced termination |
 | Factorio version | `FACTORIO_VERSION` | `latest`, `experimental`, or an exact supported `2.0.x` |
 
 There is deliberately no `AIRI_PLAYER` actor-ownership variable in the v8 egg. Zero connected humans is valid. If `AIRI_CHAT_PLAYER` is blank, AIRI may run as an NPC but ordinary in-game `!airi` chat requests are disabled.
 
 ## Generated artifacts
 
-- [`payload-src/installer.sh`](payload-src/installer.sh) — human-readable installer source of truth. The current release payload is frozen at immutable commit `c60728afc4d348d9739a3c7de70bec86cc9c708a`.
+- [`payload-src/installer.sh`](payload-src/installer.sh) — human-readable installer source of truth. The current release payload is frozen at immutable commit `5e56255fcfcd9f79e21838d452c20de3dbed829c` with SHA-256 `014e965de0cb1e753bb42d992d10ba9762e7abe0681da020a3ed9c6e5949eb1f`.
 - [`build-payload.mjs`](build-payload.mjs) — generator and integrity/drift checker.
 - [`install.sh`](install.sh) — small generated loader that downloads the immutable payload source, verifies its SHA-256, and executes it.
 - [`egg-airi-factorio-server.json`](egg-airi-factorio-server.json) — PTDL_v2 egg embedding that **same loader exactly**.
