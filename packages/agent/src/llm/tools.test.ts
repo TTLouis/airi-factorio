@@ -34,6 +34,7 @@ describe('agent observation tools', () => {
       'getNearbyEntities',
       'getEntityStatus',
       'getNavigationStatus',
+      'getCraftingStatus',
       'getResearchStatus',
       'getTechnology',
       'getCombatStatus',
@@ -146,6 +147,17 @@ describe('navigation observation tool', () => {
   })
 })
 
+describe('crafting observation tool', () => {
+  it('reads native queue ownership and last-result state', async () => {
+    const output = '{"task_active":false,"last_result":{"code":"completed","completed":true}}'
+    mocks.raw.mockResolvedValue({ data: { output } })
+    expect(await getTool('getCraftingStatus').fn({ parameters: {} })).toBe(output)
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting", "status")))',
+    } })
+  })
+})
+
 describe('research observation tools', () => {
   it('reads force research without treating the request result as completion', async () => {
     const output = '{"current":{"name":"automation"},"progress":0.1,"last_request_result":{"accepted":true}}'
@@ -182,9 +194,9 @@ describe('combat observation tool', () => {
   })
 })
 
-describe('navigation, research, and combat prompt contract', () => {
+describe('navigation, crafting, research, and combat prompt contract', () => {
   it('documents the actual observation tools', () => {
-    for (const name of ['getNavigationStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+    for (const name of ['getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
@@ -195,6 +207,13 @@ describe('navigation, research, and combat prompt contract', () => {
     expect(prompt).toContain('reached')
     expect(prompt).toContain('unreachable')
     expect(prompt).toContain('path_timeout')
+  })
+
+  it('requires crafting output verification and preserves a pre-existing native queue', () => {
+    expect(prompt).toContain('Hand-crafting completion must be verified')
+    expect(prompt).toContain('native_queue_busy')
+    expect(prompt).toContain('output_missing')
+    expect(prompt).toContain('preserves pre-existing native crafts')
   })
 
   it('distinguishes research submission from technology completion and shared research cancellation', () => {
