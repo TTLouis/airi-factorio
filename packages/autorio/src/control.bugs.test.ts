@@ -218,8 +218,8 @@ describe('Bug 4 (fixed): ATTACKING is dispatched through the bounded combat cont
       selected_gun_index: 1,
       can_shoot: vi.fn(() => can_shoot),
       get_inventory: vi.fn((index: unknown) => {
-        if (index === (globalThis as any).defines.inventory.character_guns) return { 1: weapon_slot }
-        if (index === (globalThis as any).defines.inventory.character_ammo) return { 1: weapon_slot }
+        if (index === (globalThis as any).defines.inventory.character_guns) return [weapon_slot]
+        if (index === (globalThis as any).defines.inventory.character_ammo) return [weapon_slot]
         return undefined
       }),
     }
