@@ -259,14 +259,11 @@ echo "[AIRI rollback] Restored startup target: $TARGET"
 ROLLBACK_AIRI
 chmod 755 "$SERVER_DIR/rollback-airi.sh"
 
-if [[ ! -e "$SERVER_DIR/airi-config.json" ]]; then
-  AIRI_CONFIG_PATH="$SERVER_DIR/airi-config.json" AIRI_SUPERVISOR="$RELEASE/src/runtime-v8/supervisor.mjs" "$RELEASE/node/bin/node" --input-type=module <<'CONFIG'
-import fs from 'node:fs/promises'
+AIRI_CONFIG_PATH="$SERVER_DIR/airi-config.json" AIRI_SUPERVISOR="$RELEASE/src/runtime-v8/supervisor.mjs" "$RELEASE/node/bin/node" --input-type=module <<'CONFIG'
 import { pathToFileURL } from 'node:url'
-const { seedConfigFromEnv } = await import(pathToFileURL(process.env.AIRI_SUPERVISOR).href)
-await fs.writeFile(process.env.AIRI_CONFIG_PATH, `${JSON.stringify(seedConfigFromEnv(), null, 2)}\n`)
+const { migrateConfigFile } = await import(pathToFileURL(process.env.AIRI_SUPERVISOR).href)
+await migrateConfigFile(process.env.AIRI_CONFIG_PATH)
 CONFIG
-fi
 
 log "Installation complete: $DEPLOYMENT_REVISION"
 log "Pinned source: $AIRI_REF"

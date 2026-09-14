@@ -100,6 +100,24 @@ test('Factorio account: only one of username/token supplied fails configuration'
   assert.throws(() => configuration({}, { ...baseEnv, FACTORIO_TOKEN: 'dummy-token-1234' }))
 })
 
+test('Factorio account: a stored factorioUsername in airi-config.json is never read', () => {
+  const config = configuration({ factorioUsername: 'stored-old-username' }, baseEnv)
+  assert.equal(config.factorio.username, '')
+  assert.equal(config.factorio.public, false)
+})
+
+test('provider base URL: env OPENAI_API_BASEURL overrides a stored providerUrl', () => {
+  const config = configuration({ providerUrl: 'https://stored.example/v1' }, { ...baseEnv, OPENAI_API_BASEURL: 'https://env-override.example/v1' })
+  assert.equal(config.base, 'https://env-override.example/v1')
+})
+
+test('provider base URL: a stored providerUrl is used when no env override is set', () => {
+  const envWithoutBase = { ...baseEnv }
+  delete envWithoutBase.OPENAI_API_BASEURL
+  const config = configuration({ providerUrl: 'https://stored.example/v1' }, envWithoutBase)
+  assert.equal(config.base, 'https://stored.example/v1')
+})
+
 test('startup chat summary is understandable without logging the allowlist itself', () => {
   assert.equal(describeChatPlayers({ mode: 'all', names: [] }), 'all')
   assert.equal(describeChatPlayers({ mode: 'disabled', names: [] }), 'disabled')

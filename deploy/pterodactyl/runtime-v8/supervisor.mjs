@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import {
+  atomicWrite,
   Child,
   Rcon,
   chatAuthorized,
@@ -38,7 +39,7 @@ export function configuration(raw = {}, env = process.env) {
   const legacySingleChatPlayer = env.AIRI_CHAT_PLAYER ?? raw.chatPlayer ?? legacyChat
   const chatPlayersSource = env.AIRI_CHAT_PLAYERS ?? raw.chatPlayers ?? legacySingleChatPlayer
 
-  const factorioUsername = cleanString(env.FACTORIO_USERNAME ?? raw.factorioUsername ?? '', 'FACTORIO_USERNAME', 128)
+  const factorioUsername = cleanString(env.FACTORIO_USERNAME ?? '', 'FACTORIO_USERNAME', 128)
   const factorioToken = cleanString(env.FACTORIO_TOKEN ?? '', 'FACTORIO_TOKEN', 128)
   check((factorioUsername === '') === (factorioToken === ''), 'FACTORIO_USERNAME and FACTORIO_TOKEN must both be set or both left blank')
 
@@ -63,18 +64,39 @@ export function configuration(raw = {}, env = process.env) {
   return config
 }
 
-export function seedConfigFromEnv(env = process.env) {
-  const config = { actorMode: env.AIRI_ACTOR_MODE ?? 'npc' }
-  if (env.AIRI_CHAT_PLAYERS) config.chatPlayers = env.AIRI_CHAT_PLAYERS
-  else if (env.AIRI_CHAT_PLAYER) config.chatPlayers = env.AIRI_CHAT_PLAYER
-  else if (env.AIRI_PLAYER) config.chatPlayers = env.AIRI_PLAYER
-  if (env.SAVE_NAME) config.save = env.SAVE_NAME
-  if (env.OPENAI_MODEL) config.model = env.OPENAI_MODEL
-  if (env.OPENAI_API_BASEURL) config.providerUrl = env.OPENAI_API_BASEURL
-  if (env.MAX_PROVIDER_REQUESTS_PER_HOUR) config.maxProviderRequestsPerHour = Number(env.MAX_PROVIDER_REQUESTS_PER_HOUR)
-  if (env.SHUTDOWN_TIMEOUT_MS) config.shutdownTimeoutMs = Number(env.SHUTDOWN_TIMEOUT_MS)
-  if (env.FACTORIO_USERNAME) config.factorioUsername = env.FACTORIO_USERNAME
-  return config
+// airi-config.json holds AIRI's own non-secret runtime configuration only.
+// Factorio account/listing settings (FACTORIO_USERNAME/FACTORIO_TOKEN) and
+// provider credentials (OPENAI_API_KEY) are never part of this file: the
+// former flows into data/server-settings.json, the latter stays env-only.
+export const AIRI_CONFIG_DEFAULTS = {
+  actorMode: 'npc',
+  chatPlayers: '',
+  providerUrl: 'https://api.openai.com/v1',
+  model: 'gpt-5.6',
+  save: '',
+  gamePort: 34197,
+  maxProviderRequestsPerHour: 30,
+  shutdownTimeoutMs: 60000,
+}
+
+// Fills in any default field missing from an existing config without
+// touching values the user already set, and keeps providerUrl synchronized
+// with the effective endpoint: OPENAI_API_BASEURL, when set, overrides
+// whatever is stored, so the file never shows a stale/meaningless value for
+// the endpoint AIRI is actually using this run.
+export function migrateConfig(raw = {}, env = process.env) {
+  check(raw && typeof raw === 'object' && !Array.isArray(raw), 'airi-config.json must be an object')
+  const next = { ...AIRI_CONFIG_DEFAULTS, ...raw }
+  next.providerUrl = env.OPENAI_API_BASEURL ?? raw.providerUrl ?? AIRI_CONFIG_DEFAULTS.providerUrl
+  delete next.factorioUsername
+  return next
+}
+
+export async function migrateConfigFile(filename, env = process.env) {
+  const raw = await readJson(filename, {})
+  const next = migrateConfig(raw, env)
+  if (JSON.stringify(next) !== JSON.stringify(raw)) await atomicWrite(filename, `${JSON.stringify(next, null, 2)}\n`)
+  return next
 }
 
 export function installedAppRoot(moduleUrl = import.meta.url) {
@@ -315,7 +337,7 @@ async function main() {
   await verifyManifest(app)
   await directory(path.join(root, '.airi'))
   await directory(path.join(root, '.airi', 'tmp'))
-  const raw = await readJson(path.join(root, 'airi-config.json'), {})
+  const raw = await migrateConfigFile(path.join(root, 'airi-config.json'))
   const config = configuration(raw)
   const game = path.join(app, 'factorio')
   await regularFile(path.join(game, 'bin', 'x64', 'factorio'))
