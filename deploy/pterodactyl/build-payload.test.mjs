@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { buildArtifacts, installerLoader, verifyGeneratedArtifacts } from './build-payload.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const PAYLOAD_REF = '867031bf2364ffdc4359545f59a0daac5eb710f5'
+const PAYLOAD_REF = '0d40de62da7bd62aa840d22f07af519fa47502a5'
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
 DEPLOYMENT_REVISION="airi-deploy-v8-test"
@@ -72,5 +72,5 @@ test('committed Pterodactyl artifacts are internally valid', () => {
   assert.equal(verifyGeneratedArtifacts(committedSource, committedInstall, committedEggText), true)
   assert.equal(egg.scripts.installation.script, committedInstall)
   assert.match(committedInstall, new RegExp(PAYLOAD_REF))
-  assert.match(committedInstall, /EXPECTED_SOURCE_SHA256="d0224f5af1ec5ade147b20a41917f8acc2f5470920a0fd9b25a32970ac769470"/)
+  assert.match(committedInstall, /EXPECTED_SOURCE_SHA256="8b4f77045a3e3a6ec63234994c55da78e91296060ca16c36446584de7f85a8e5"/)
 })
