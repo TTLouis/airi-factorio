@@ -62,6 +62,8 @@ async function fixture() {
   const context = { storage, remote }
   vm.createContext(context)
   const js = stripTypeScriptTypes(source, { mode: 'strip' })
+    .replaceAll('export function', 'function')
+    .replaceAll('export class', 'class')
   vm.runInContext(js, context)
 
   return {
