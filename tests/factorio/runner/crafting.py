@@ -39,7 +39,8 @@ def assert_busy_preserved(before: dict, after: dict, crafting: dict, actor_id: i
     validate_clock(after['runtime'])
     require(after['runtime']['connected_players'] == 0, after)
     require(after['actor']['actor_id'] == actor_id, after)
-    require(before['native_queue_length'] > 0 and after['native_queue_length'] > 0, (before, after))
+    require(before['native_queue_length'] > 0, before)
+    require(after['native_queue_length'] == before['native_queue_length'], (before, after))
     require(after['native_queue_recipe'] == before['native_queue_recipe'], (before, after))
     result = crafting.get('last_result') or {}
     require(result.get('accepted') is False and result.get('completed') is False, crafting)
@@ -109,7 +110,7 @@ def run(client: Rcon, results: Path) -> None:
         inserts = '; '.join(
             f"assert(inv.insert{{name={name!r},count={count}}}=={count})"
             for name, count in ingredients.items()
-        )
+        ) or 'do end'
         return json_command(
             "/silent-command local a=nil; for _,e in pairs(game.surfaces[1].find_entities_filtered{name='character'}) do "
             f"if e.unit_number=={actor_id} then a=e end end; assert(a); "
@@ -140,7 +141,7 @@ def run(client: Rcon, results: Path) -> None:
     assert_completed(before, after, completed_status, actor_id, 'iron-gear-wheel', 3)
 
     # Case 2: an unrelated native queue is not Autorio-owned. The request must
-    # fail closed without cancelling, replacing, or merging that queue.
+    # fail closed without cancelling, replacing, appending to, or merging that queue.
     clear_native_queue_and_inventory({'copper-plate': 1000, 'iron-plate': 20}, 'busy queue fixture')
     busy_setup = json_command(
         "/silent-command local a=nil; for _,e in pairs(game.surfaces[1].find_entities_filtered{name='character'}) do "
