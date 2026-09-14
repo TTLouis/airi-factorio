@@ -26,7 +26,7 @@ describe('structured Autorio operations', () => {
     ])).toThrow()
   })
 
-  it('bounds operation batches plus navigation, crafting, and combat', () => {
+  it('bounds operation batches, task counts, transfers, navigation, crafting, and combat', () => {
     const operations = Array.from({ length: 17 }, () => ({
       name: 'wait',
       args: { ticks: 1 },
@@ -40,11 +40,23 @@ describe('structured Autorio operations', () => {
       { name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 256 } },
     ])[0]).toEqual({ name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 256 } })
     expect(() => parseStructuredOperations([
+      { name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1001 } },
+    ])).toThrow()
+    expect(parseStructuredOperations([
+      { name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1000 } },
+    ])[0]).toEqual({ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1000 } })
+    expect(() => parseStructuredOperations([
       { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } },
     ])).toThrow()
     expect(parseStructuredOperations([
       { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1000 } },
     ])[0]).toEqual({ name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1000 } })
+    expect(() => parseStructuredOperations([
+      { name: 'move_items', args: { item_name: 'iron-plate', entity_name: 'steel-chest', max_count: 100001, to_entity: true } },
+    ])).toThrow()
+    expect(parseStructuredOperations([
+      { name: 'move_items', args: { item_name: 'iron-plate', entity_name: 'steel-chest', max_count: 100000, to_entity: true } },
+    ])[0]).toEqual({ name: 'move_items', args: { item_name: 'iron-plate', entity_name: 'steel-chest', max_count: 100000, to_entity: true } })
     expect(() => parseStructuredOperations([
       { name: 'attack_nearest_enemy', args: { search_radius: 257 } },
     ])).toThrow()
