@@ -1,4 +1,5 @@
 import type { ControlledActor } from './actors/types'
+import { register_npc_recovery_handler } from './actors/actor_controller'
 import type { PlayerParameters, PlayerState } from './types'
 import { TaskStates } from './types'
 
@@ -49,8 +50,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     }
   }
 
-  function reset_task_state() {
-    stop_task_controls()
+  function clear_task_state_without_controls() {
     player_state.task_state = TaskStates.IDLE
     player_state.parameters_walk_to_entity = undefined
     player_state.parameters_walking_direct = undefined
@@ -61,6 +61,11 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     player_state.parameters_attack_nearest_enemy = undefined
     player_state.parameters_research_technology = undefined
     player_state.parameters_waiting = undefined
+  }
+
+  function reset_task_state() {
+    stop_task_controls()
+    clear_task_state_without_controls()
   }
 
   function next_task() {
@@ -250,6 +255,18 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     task_queue.length = 0 // can use this to clear the array in lua
   }
 
+  function discard_all_tasks_after_actor_loss() {
+    // The previous actor is already invalid. Do not call stop_task_controls(),
+    // because resolving an actor here would enter replacement creation again.
+    clear_task_state_without_controls()
+    task_queue.length = 0
+  }
+
+  register_npc_recovery_handler(({ previous_actor_id }) => {
+    discard_all_tasks_after_actor_loss()
+    log(`[AUTORIO] Discarded active and queued work after loss of actor_id=${previous_actor_id}`)
+  })
+
   return {
     player_state,
     add_task,
@@ -259,5 +276,6 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     reset_task_state,
     cancel_task,
     cancel_all_tasks,
+    discard_all_tasks_after_actor_loss,
   }
 }
