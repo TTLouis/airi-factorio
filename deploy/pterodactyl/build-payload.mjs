@@ -44,10 +44,9 @@ function assertNpcV8Source(source) {
   if (failures.length) throw new Error(`Refusing to generate v8 artifacts: ${failures.join('; ')}`)
 }
 
-function bootstrap(source) {
+export function bootstrapFromArchive(source, archive) {
   assertNpcV8Source(source)
-  const archive = deterministicGzip(source)
-  if (!gunzipSync(archive).equals(source)) throw new Error('Deterministic payload round-trip failed')
+  if (!gunzipSync(archive).equals(source)) throw new Error('Payload archive does not round-trip to source')
   const sourceHash = sha256(source)
   const archiveHash = sha256(archive)
   const encoded = wrapBase64(archive.toString('base64'))
@@ -87,6 +86,10 @@ if [[ "\${1:-}" == '--verify-only' ]]; then log 'Payload verified; installation 
 log 'Payload verified; starting standalone-NPC v8 installer.'
 bash "$INSTALLER"
 `
+}
+
+function bootstrap(source) {
+  return bootstrapFromArchive(source, deterministicGzip(source))
 }
 
 function variable(name, description, envVariable, defaultValue, rules, { viewable = true } = {}) {
@@ -153,22 +156,69 @@ function normalizeCheckoutText(text) {
   return text.replaceAll('\r\n', '\n')
 }
 
+function requiredMatch(text, regex, name) {
+  const match = text.match(regex)
+  if (!match) throw new Error(`Generated install.sh is missing ${name}`)
+  return match[1]
+}
+
+export function verifyGeneratedArtifacts(source, installText, eggText) {
+  assertNpcV8Source(source)
+  const installScript = normalizeCheckoutText(installText)
+  const currentEgg = normalizeCheckoutText(eggText)
+
+  const expectedSourceHash = requiredMatch(installScript, /^EXPECTED_SOURCE_SHA256="([a-f0-9]{64})"$/m, 'EXPECTED_SOURCE_SHA256')
+  const expectedSourceBytes = Number(requiredMatch(installScript, /^EXPECTED_SOURCE_BYTES="([0-9]+)"$/m, 'EXPECTED_SOURCE_BYTES'))
+  const expectedArchiveHash = requiredMatch(installScript, /^EXPECTED_ARCHIVE_SHA256="([a-f0-9]{64})"$/m, 'EXPECTED_ARCHIVE_SHA256')
+
+  const payloadStart = `cat > "$PAYLOAD" <<'AIRI_PAYLOAD'\n`
+  const start = installScript.indexOf(payloadStart)
+  if (start === -1) throw new Error('Generated install.sh is missing AIRI_PAYLOAD start marker')
+  const bodyStart = start + payloadStart.length
+  const end = installScript.indexOf('\nAIRI_PAYLOAD\n', bodyStart)
+  if (end === -1) throw new Error('Generated install.sh is missing AIRI_PAYLOAD end marker')
+
+  const encoded = installScript.slice(bodyStart, end).replace(/\s+/g, '')
+  const archive = Buffer.from(encoded, 'base64')
+  let decoded
+  try {
+    decoded = gunzipSync(archive)
+  } catch (error) {
+    throw new Error(`Generated install.sh payload is not valid gzip: ${error.message}`)
+  }
+
+  if (expectedSourceHash !== sha256(source)) throw new Error('Generated install.sh source checksum is stale')
+  if (expectedSourceBytes !== source.length) throw new Error('Generated install.sh source byte count is stale')
+  if (expectedArchiveHash !== sha256(archive)) throw new Error('Generated install.sh archive checksum is stale')
+  if (!decoded.equals(source)) throw new Error('Generated install.sh payload does not reproduce payload-src/installer.sh')
+
+  let parsedEgg
+  try {
+    parsedEgg = JSON.parse(currentEgg)
+  } catch (error) {
+    throw new Error(`Generated egg JSON is invalid: ${error.message}`)
+  }
+  if (normalizeCheckoutText(parsedEgg?.scripts?.installation?.script ?? '') !== installScript) {
+    throw new Error('Generated egg does not embed the checked-in install.sh exactly')
+  }
+
+  const expectedEgg = `${JSON.stringify(egg(installScript), null, 4)}\n`
+  if (currentEgg !== expectedEgg) throw new Error('Generated egg schema is stale')
+  return true
+}
+
 function main() {
   const checkOnly = process.argv.includes('--check')
   if (process.argv.length > 3 || (process.argv.length === 3 && !checkOnly)) throw new Error('Usage: node build-payload.mjs [--check]')
   const source = readFileSync(sourcePath)
-  const { installScript, eggJson } = buildArtifacts(source)
 
   if (checkOnly) {
-    const currentInstall = normalizeCheckoutText(readFileSync(installPath, 'utf8'))
-    const currentEgg = normalizeCheckoutText(readFileSync(eggPath, 'utf8'))
-    if (currentInstall !== installScript || currentEgg !== eggJson) {
-      throw new Error('Generated Pterodactyl artifacts are stale; run node deploy/pterodactyl/build-payload.mjs')
-    }
-    console.log('Pterodactyl v8 artifacts are current and deterministic.')
+    verifyGeneratedArtifacts(source, readFileSync(installPath, 'utf8'), readFileSync(eggPath, 'utf8'))
+    console.log('Pterodactyl v8 artifacts are current and internally verified.')
     return
   }
 
+  const { installScript, eggJson } = buildArtifacts(source)
   writeFileSync(installPath, installScript)
   writeFileSync(eggPath, eggJson)
   console.log('Generated standalone-NPC v8 install.sh and egg-airi-factorio-server.json.')
