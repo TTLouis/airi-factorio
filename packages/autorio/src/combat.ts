@@ -60,14 +60,19 @@ function identity_matches(actor: ControlledActor, task: PlayerParametersAttackNe
 }
 
 function has_selected_weapon_and_ammo(character: LuaEntity) {
-  const index = character.selected_gun_index
+  const factorioIndex = character.selected_gun_index
   const guns = character.get_inventory(defines.inventory.character_guns)
   const ammo = character.get_inventory(defines.inventory.character_ammo)
-  if (!index || !guns || !ammo) {
+  if (!factorioIndex || !guns || !ammo) {
     return false
   }
-  const gun = guns[index]
-  const magazine = ammo[index]
+
+  // Factorio exposes selected_gun_index as a 1-based Lua inventory slot.
+  // typed-factorio intentionally presents LuaInventory as a 0-based
+  // TypeScript array, so convert the engine slot before indexing it here.
+  const typescriptIndex = factorioIndex - 1
+  const gun = guns[typescriptIndex]
+  const magazine = ammo[typescriptIndex]
   return gun?.valid_for_read === true && magazine?.valid_for_read === true
 }
 
