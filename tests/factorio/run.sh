@@ -2,221 +2,149 @@
 set -Eeuo pipefail
 
 FACTORIO_BIN="${FACTORIO_ROOT:-/opt/factorio}/bin/x64/factorio"
-SAVE="${TEST_ROOT:-/test}/saves/npc-test.zip"
-RESULTS="${TEST_ROOT:-/test}/results"
-SERVER_SETTINGS="${TEST_ROOT:-/test}/fixtures/server-settings.json"
-RCON_PORT="${RCON_PORT:-27015}"
-RCON_PASSWORD="${RCON_PASSWORD:-airi-test}"
-FACTORIO_PID=""
+TEST_ROOT="${TEST_ROOT:-/test}"
+RESULTS="$TEST_ROOT/results"
+SAVES="$TEST_ROOT/saves"
+LANES_ROOT="$TEST_ROOT/lanes"
+BASE_SAVE="$SAVES/npc-test-base.zip"
+MAP_GEN_SETTINGS="$TEST_ROOT/fixtures/map-gen-settings.json"
+PARALLEL="${NPC_TEST_PARALLEL:-1}"
+GAME_PORT_BASE="${GAME_PORT_BASE:-34197}"
+RCON_PORT_BASE="${RCON_PORT_BASE:-27015}"
 export PYTHONUNBUFFERED=1
 
-mkdir -p "$(dirname "$SAVE")" "$RESULTS"
-rm -f "$SAVE" "$RESULTS"/*
+mkdir -p "$RESULTS" "$SAVES"
+rm -rf "$RESULTS"/* "$LANES_ROOT"
+rm -f "$BASE_SAVE"
+mkdir -p "$LANES_ROOT"
 
-print_file() {
-  local file="$1"
-  if [[ -s "$file" ]]; then
-    printf '\n===== %s =====\n' "$(basename "$file")" >&2
-    cat "$file" >&2
-  fi
-}
+CHILD_PIDS=()
 
-cleanup() {
-  if [[ -n "$FACTORIO_PID" ]] && kill -0 "$FACTORIO_PID" 2>/dev/null; then
-    kill "$FACTORIO_PID" 2>/dev/null || true
-    wait "$FACTORIO_PID" 2>/dev/null || true
-  fi
+cleanup_children() {
+  local pid
+  for pid in "${CHILD_PIDS[@]:-}"; do
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "${CHILD_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] || continue
+    wait "$pid" 2>/dev/null || true
+  done
 }
 
 finish() {
   local code=$?
   trap - EXIT
-  cleanup
   if (( code != 0 )); then
+    cleanup_children
     printf '\n[npc-test] FAILED with exit code %s\n' "$code" >&2
-    print_file "$SERVER_SETTINGS"
-    print_file "$RESULTS/runner-unit.log"
-    print_file "$RESULTS/create.log"
-    print_file "$RESULTS/factorio.log"
-    print_file "$RESULTS/factorio-restart.log"
-    print_file "$RESULTS/factorio-crafting-restart.log"
-    print_file "$RESULTS/simulation-clock.json"
-    print_file "$RESULTS/runner-error.txt"
-    print_file "$RESULTS/runner-transcript.json"
-    print_file "$RESULTS/runner.json"
-    print_file "$RESULTS/placement-transfer-error.txt"
-    print_file "$RESULTS/placement-transfer-transcript.json"
-    print_file "$RESULTS/placement-transfer.json"
-    print_file "$RESULTS/control-lifecycle-error.txt"
-    print_file "$RESULTS/control-lifecycle-transcript.json"
-    print_file "$RESULTS/control-lifecycle-observations.json"
-    print_file "$RESULTS/control-lifecycle.json"
-    print_file "$RESULTS/research-error.txt"
-    print_file "$RESULTS/research-transcript.json"
-    print_file "$RESULTS/research.json"
-    print_file "$RESULTS/combat-error.txt"
-    print_file "$RESULTS/combat-transcript.json"
-    print_file "$RESULTS/combat.json"
-    print_file "$RESULTS/persistence-prepare-error.txt"
-    print_file "$RESULTS/persistence-prepare-transcript.json"
-    print_file "$RESULTS/persistence-before.json"
-    print_file "$RESULTS/persistence-verify-error.txt"
-    print_file "$RESULTS/persistence-verify-transcript.json"
-    print_file "$RESULTS/persistence.json"
-    print_file "$RESULTS/death-recovery-error.txt"
-    print_file "$RESULTS/death-recovery-transcript.json"
-    print_file "$RESULTS/death-recovery.json"
-    print_file "$RESULTS/navigation-error.txt"
-    print_file "$RESULTS/navigation-transcript.json"
-    print_file "$RESULTS/navigation.json"
-    print_file "$RESULTS/crafting-error.txt"
-    print_file "$RESULTS/crafting-transcript.json"
-    print_file "$RESULTS/crafting.json"
-    print_file "$RESULTS/crafting-restart-prepare-error.txt"
-    print_file "$RESULTS/crafting-restart-prepare-transcript.json"
-    print_file "$RESULTS/crafting-restart-before.json"
-    print_file "$RESULTS/crafting-restart-verify-error.txt"
-    print_file "$RESULTS/crafting-restart-verify-transcript.json"
-    print_file "$RESULTS/crafting-restart.json"
   fi
   exit "$code"
 }
 trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-start_factorio() {
-  local logfile="$1"
-  "$FACTORIO_BIN" --start-server "$SAVE" \
-    --server-settings "$SERVER_SETTINGS" \
-    --rcon-port "$RCON_PORT" \
-    --rcon-password "$RCON_PASSWORD" \
-    >"$logfile" 2>&1 &
-  FACTORIO_PID=$!
+printf '[npc-test] Running deterministic Python regressions while creating the shared deterministic base save...\n'
+python3 -m unittest discover -s "$TEST_ROOT/runner" -p 'test_*.py' -v \
+  >"$RESULTS/runner-unit.log" 2>&1 &
+UNIT_PID=$!
 
-  # Catch startup failures immediately instead of waiting for the RCON retry timeout.
-  sleep 0.5
-  if ! kill -0 "$FACTORIO_PID" 2>/dev/null; then
-    wait "$FACTORIO_PID" || true
-    echo '[npc-test] Factorio exited before RCON became available.' >&2
-    exit 1
-  fi
-}
+"$FACTORIO_BIN" --create "$BASE_SAVE" \
+  --map-gen-settings "$MAP_GEN_SETTINGS" \
+  >"$RESULTS/create.log" 2>&1 &
+CREATE_PID=$!
 
-printf '[npc-test] Running deterministic Python runner regressions...\n'
-python3 -m unittest discover -s "${TEST_ROOT:-/test}/runner" -p 'test_*.py' -v \
-  >"$RESULTS/runner-unit.log" 2>&1
+UNIT_STATUS=0
+CREATE_STATUS=0
+wait "$UNIT_PID" || UNIT_STATUS=$?
+wait "$CREATE_PID" || CREATE_STATUS=$?
 cat "$RESULTS/runner-unit.log"
 
-printf '[npc-test] Creating deterministic Factorio save...\n'
-"$FACTORIO_BIN" --create "$SAVE" \
-  --map-gen-settings "${TEST_ROOT:-/test}/fixtures/map-gen-settings.json" \
-  >"$RESULTS/create.log" 2>&1
-printf '[npc-test] Save created successfully.\n'
+if (( UNIT_STATUS != 0 )); then
+  printf '[npc-test] Deterministic Python regressions failed.\n' >&2
+  exit "$UNIT_STATUS"
+fi
+if (( CREATE_STATUS != 0 )); then
+  printf '[npc-test] Base save creation failed.\n' >&2
+  cat "$RESULTS/create.log" >&2
+  exit "$CREATE_STATUS"
+fi
+printf '[npc-test] Base save created successfully.\n'
 
-printf '[npc-test] Starting Factorio with auto_pause=false and private server settings...\n'
-start_factorio "$RESULTS/factorio.log"
-printf '[npc-test] Factorio started (pid=%s); checking clock and core NPC actions...\n' "$FACTORIO_PID"
+prepare_lane() {
+  local lane="$1"
+  local lane_root="$LANES_ROOT/$lane"
+  mkdir -p "$lane_root/results"
+  cp "$BASE_SAVE" "$lane_root/npc-test.zip"
+}
 
-python3 "${TEST_ROOT:-/test}/runner/run.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
+launch_lane() {
+  local lane="$1"
+  local game_port="$2"
+  local rcon_port="$3"
+  local lane_root="$LANES_ROOT/$lane"
+  local lane_save="$lane_root/npc-test.zip"
+  local lane_results="$lane_root/results"
+  local lane_log="$RESULTS/$lane.log"
 
-printf '[npc-test] Core NPC smoke passed; running placement + inventory transfer...\n'
-python3 "${TEST_ROOT:-/test}/runner/placement_transfer.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
+  (
+    set -o pipefail
+    bash "$TEST_ROOT/runner/run_lane.sh" \
+      "$lane" "$lane_save" "$lane_results" "$game_port" "$rcon_port" \
+      2>&1 | sed -u "s/^/[$lane] /" | tee "$lane_log"
+  ) &
+  CHILD_PIDS+=("$!")
+}
 
-printf '[npc-test] Gameplay passed; checking physical stop and cancellation...\n'
-python3 "${TEST_ROOT:-/test}/runner/control_lifecycle.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
+LANES=(core research-combat resilience)
+for lane in "${LANES[@]}"; do
+  prepare_lane "$lane"
+done
 
-printf '[npc-test] Lifecycle passed; checking research submission and native labs...\n'
-python3 "${TEST_ROOT:-/test}/runner/research.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
+printf '[npc-test] Runtime lane mode: %s\n' "$([[ "$PARALLEL" == "0" ]] && printf 'sequential-debug' || printf 'parallel')"
+printf '[npc-test] Lanes: core | research-combat | resilience\n'
 
-printf '[npc-test] Research passed; checking bounded real combat and failure semantics...\n'
-python3 "${TEST_ROOT:-/test}/runner/combat.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
+OVERALL=0
+if [[ "$PARALLEL" == "0" ]]; then
+  # Debug mode preserves lane isolation while making logs strictly ordered.
+  CHILD_PIDS=()
+  launch_lane core "$GAME_PORT_BASE" "$RCON_PORT_BASE"
+  wait "${CHILD_PIDS[0]}" || OVERALL=1
 
-printf '[npc-test] Combat passed; saving active NPC work for a real server restart...\n'
-python3 "${TEST_ROOT:-/test}/runner/persistence_prepare.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS" \
-  --save "$SAVE"
+  CHILD_PIDS=()
+  launch_lane research-combat "$((GAME_PORT_BASE + 1))" "$((RCON_PORT_BASE + 1))"
+  wait "${CHILD_PIDS[0]}" || OVERALL=1
 
-printf '[npc-test] Save persisted; stopping the first Factorio process...\n'
-kill "$FACTORIO_PID"
-wait "$FACTORIO_PID" 2>/dev/null || true
-FACTORIO_PID=""
-sleep 0.5
+  CHILD_PIDS=()
+  launch_lane resilience "$((GAME_PORT_BASE + 2))" "$((RCON_PORT_BASE + 2))"
+  wait "${CHILD_PIDS[0]}" || OVERALL=1
+else
+  launch_lane core "$GAME_PORT_BASE" "$RCON_PORT_BASE"
+  launch_lane research-combat "$((GAME_PORT_BASE + 1))" "$((RCON_PORT_BASE + 1))"
+  launch_lane resilience "$((GAME_PORT_BASE + 2))" "$((RCON_PORT_BASE + 2))"
 
-printf '[npc-test] Restarting Factorio from the saved active-NPC state...\n'
-start_factorio "$RESULTS/factorio-restart.log"
-printf '[npc-test] Factorio restarted (pid=%s); checking NPC reacquisition and load reconciliation...\n' "$FACTORIO_PID"
+  for pid in "${CHILD_PIDS[@]}"; do
+    if ! wait "$pid"; then
+      OVERALL=1
+    fi
+  done
+fi
 
-python3 "${TEST_ROOT:-/test}/runner/persistence_verify.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
+CHILD_PIDS=()
 
-printf '[npc-test] Persistence passed; killing the active NPC to verify bounded recovery...\n'
-python3 "${TEST_ROOT:-/test}/runner/death_recovery.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
+if (( OVERALL != 0 )); then
+  printf '\n[npc-test] One or more isolated runtime lanes failed. See prefixed output above and lane logs in %s.\n' "$RESULTS" >&2
+  for lane in "${LANES[@]}"; do
+    lane_error_dir="$LANES_ROOT/$lane/results"
+    if compgen -G "$lane_error_dir/*-error.txt" >/dev/null; then
+      printf '\n[npc-test] ===== %s error files =====\n' "$lane" >&2
+      cat "$lane_error_dir"/*-error.txt >&2 || true
+    fi
+  done
+  exit 1
+fi
 
-printf '[npc-test] Death recovery passed; checking bounded navigation and stale-path safety...\n'
-python3 "${TEST_ROOT:-/test}/runner/navigation.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
-
-printf '[npc-test] Navigation passed; checking owned native crafting and cancellation...\n'
-python3 "${TEST_ROOT:-/test}/runner/crafting.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
-
-printf '[npc-test] Crafting passed; saving active owned native craft for a second real restart...\n'
-python3 "${TEST_ROOT:-/test}/runner/crafting_restart_prepare.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS" \
-  --save "$SAVE"
-
-printf '[npc-test] Owned crafting save persisted; stopping Factorio for crafting restart...\n'
-kill "$FACTORIO_PID"
-wait "$FACTORIO_PID" 2>/dev/null || true
-FACTORIO_PID=""
-sleep 0.5
-
-printf '[npc-test] Restarting Factorio from active owned native crafting state...\n'
-start_factorio "$RESULTS/factorio-crafting-restart.log"
-printf '[npc-test] Factorio restarted (pid=%s); checking owned native crafting reconciliation...\n' "$FACTORIO_PID"
-
-python3 "${TEST_ROOT:-/test}/runner/crafting_restart_verify.py" \
-  --host 127.0.0.1 \
-  --port "$RCON_PORT" \
-  --password "$RCON_PASSWORD" \
-  --results "$RESULTS"
-
+printf '[npc-test] PASS: isolated parallel runtime lanes completed successfully: core + research-combat + resilience\n'
 printf '[npc-test] Runtime smoke completed successfully.\n'
