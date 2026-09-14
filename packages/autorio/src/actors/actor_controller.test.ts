@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get_load_handler } from '../test-event-registry'
-import { get_actor_mode, get_controlled_actor, get_load_reconciliation_status, set_actor_mode } from './actor_controller'
+import {
+  get_actor_mode,
+  get_controlled_actor,
+  get_load_reconciliation_status,
+  get_npc_recovery_status,
+  register_npc_recovery_handler,
+  set_actor_mode,
+} from './actor_controller'
 
 function fake_character(unit_number: number, valid = true) {
   return {
@@ -43,6 +50,7 @@ beforeEach(() => {
     tick: 123,
   }
   ;(globalThis as any).rendering = { clear: vi.fn() }
+  register_npc_recovery_handler(undefined)
   set_actor_mode('player')
 })
 
@@ -91,6 +99,7 @@ describe('actor mode', () => {
     })
     expect(actor?.status_snapshot().kind).toBe('standalone_character')
     expect((globalThis as any).storage.standalone_character_unit_number).toBe(42)
+    expect(get_npc_recovery_status().last_result).toBeUndefined()
   })
 
   it('reacquires a persisted standalone character instead of creating a duplicate', () => {
@@ -107,9 +116,10 @@ describe('actor mode', () => {
 
     expect(actor?.character).toBe(character)
     expect(surface.create_entity).not.toHaveBeenCalled()
+    expect(get_npc_recovery_status().last_result).toBeUndefined()
   })
 
-  it('recreates the npc when the cached standalone character becomes invalid', () => {
+  it('invalidates stale work before replacing a missing standalone character', () => {
     const surface = (globalThis as any).game.surfaces[1]
     const force = (globalThis as any).game.forces.player
     const first = fake_character(42)
@@ -118,7 +128,9 @@ describe('actor mode', () => {
     first.force = force
     replacement.surface = surface
     replacement.force = force
-    surface.create_entity.mockReturnValueOnce(first).mockReturnValueOnce(replacement)
+    surface.create_entity.mockReturnValueOnce(first)
+    const recovery_handler = vi.fn()
+    register_npc_recovery_handler(recovery_handler)
 
     set_actor_mode('npc')
     const actor = get_controlled_actor()
@@ -126,10 +138,50 @@ describe('actor mode', () => {
 
     first.valid = false
     surface.find_entities_filtered.mockReturnValue([])
+    surface.create_entity.mockImplementationOnce(() => {
+      expect(recovery_handler).toHaveBeenCalledWith({ previous_actor_id: 42 })
+      return replacement
+    })
     const recovered = get_controlled_actor()
 
     expect(recovered?.character).toBe(replacement)
     expect((globalThis as any).storage.standalone_character_unit_number).toBe(99)
+    expect(recovery_handler).toHaveBeenCalledTimes(1)
+    expect((globalThis as any).rendering.clear).toHaveBeenCalledTimes(1)
+    expect(get_npc_recovery_status()).toEqual({
+      policy: 'discard_autorio_tasks_and_create_empty_replacement',
+      pending_from_actor_id: undefined,
+      last_result: {
+        reason: 'missing_persisted_actor',
+        previous_actor_id: 42,
+        replacement_actor_id: 99,
+        force_index: 1,
+        tick: 123,
+        inventory_policy: 'no_transfer',
+      },
+    })
+  })
+
+  it('does not repeatedly invalidate work when replacement creation temporarily fails', () => {
+    const surface = (globalThis as any).game.surfaces[1]
+    const force = (globalThis as any).game.forces.player
+    const first = fake_character(42)
+    first.surface = surface
+    first.force = force
+    surface.create_entity.mockReturnValueOnce(first)
+    const recovery_handler = vi.fn()
+    register_npc_recovery_handler(recovery_handler)
+
+    set_actor_mode('npc')
+    get_controlled_actor()
+    first.valid = false
+    surface.find_entities_filtered.mockReturnValue([])
+    surface.create_entity.mockReturnValue(undefined)
+
+    expect(get_controlled_actor()).toBeUndefined()
+    expect(get_controlled_actor()).toBeUndefined()
+    expect(recovery_handler).toHaveBeenCalledTimes(1)
+    expect(get_npc_recovery_status().pending_from_actor_id).toBe(42)
   })
 
   it('reacquires the same saved npc and clears stale physical inputs after on_load', () => {
