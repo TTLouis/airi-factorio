@@ -34,7 +34,18 @@ def assert_kill(before: dict, after: dict, combat: dict, actor_id: int) -> None:
     assert_stopped(after, actor_id)
     require(before['target_alive'] is True and before['target_health'] > 0, before)
     require(after['target_alive'] is False, 'target must actually be gone; idle is not a kill')
-    require(after['ammo'] < before['ammo'], 'real character weapon must consume ammunition')
+    require(before['selected_gun'] == 'pistol' and before['selected_ammo'] == 'firearm-magazine', before)
+    # LuaInventory.get_item_count() counts magazine *items*, not rounds inside the
+    # currently loaded magazine. A small biter can die before a magazine is
+    # emptied, so item count can remain unchanged while LuaItemStack.ammo drops.
+    consumed_ammo = (
+        after['ammo_items'] < before['ammo_items']
+        or (
+            after['ammo_items'] == before['ammo_items']
+            and after['selected_ammo_rounds'] < before['selected_ammo_rounds']
+        )
+    )
+    require(consumed_ammo, 'real character weapon must consume magazine rounds or magazine items')
     require(after['actor_health'] > 0, 'AIRI died during the combat fixture')
     require(after['runtime']['tick'] > before['runtime']['tick'], 'combat consumed no simulation time')
     result = combat.get('last_result') or {}
@@ -82,11 +93,17 @@ def run(client: Rcon, results: Path) -> None:
         "local guns=a.get_inventory(defines.inventory.character_guns); local ammo=a.get_inventory(defines.inventory.character_ammo); "
         "guns.clear(); ammo.clear(); assert(guns.insert{name='pistol',count=1}==1); "
         "assert(ammo.insert{name='firearm-magazine',count=20}==20); a.selected_gun_index=1; "
+        "local slot=a.selected_gun_index; local gun=guns[slot]; local magazine=ammo[slot]; "
+        "assert(gun.valid_for_read and magazine.valid_for_read); "
         "local target=s.create_entity{name='small-biter',position={x=a.position.x+20,y=a.position.y},force=enemy}; assert(target); "
-        "rcon.print(helpers.table_to_json({target_id=target.unit_number,target_health=target.health,ammo=ammo.get_item_count('firearm-magazine'),actor_health=a.health,position=a.position}))",
+        "rcon.print(helpers.table_to_json({target_id=target.unit_number,target_health=target.health,"
+        "ammo_items=ammo.get_item_count('firearm-magazine'),selected_gun_index=slot,selected_gun=gun.name,"
+        "selected_ammo=magazine.name,selected_ammo_rounds=magazine.ammo,actor_health=a.health,position=a.position}))",
         'combat fixture',
     )
-    require(fixture['target_health'] > 0 and fixture['ammo'] == 20, fixture)
+    require(fixture['target_health'] > 0 and fixture['ammo_items'] == 20, fixture)
+    require(fixture['selected_gun_index'] == 1 and fixture['selected_gun'] == 'pistol', fixture)
+    require(fixture['selected_ammo'] == 'firearm-magazine' and fixture['selected_ammo_rounds'] > 0, fixture)
     target_id = fixture['target_id']
 
     observation_command = (
@@ -98,7 +115,12 @@ def run(client: Rcon, results: Path) -> None:
         "o.walking=a.walking_state.walking; o.mining=a.mining_state.mining; "
         "o.shooting=a.shooting_state.state~=defines.shooting.not_shooting; "
         "o.actor_health=a.health; o.position=a.position; "
-        "o.ammo=a.get_inventory(defines.inventory.character_ammo).get_item_count('firearm-magazine'); "
+        "local guns=a.get_inventory(defines.inventory.character_guns); local ammo=a.get_inventory(defines.inventory.character_ammo); "
+        "local slot=a.selected_gun_index; local gun=slot and guns[slot] or nil; local magazine=slot and ammo[slot] or nil; "
+        "o.selected_gun_index=slot; o.selected_gun=gun and gun.valid_for_read and gun.name or nil; "
+        "o.selected_ammo=magazine and magazine.valid_for_read and magazine.name or nil; "
+        "o.selected_ammo_rounds=magazine and magazine.valid_for_read and magazine.ammo or 0; "
+        "o.ammo_items=ammo.get_item_count('firearm-magazine'); "
         "o.target_alive=target~=nil and target.valid; o.target_health=target and target.health or 0; "
         f"o.target_id={target_id}; rcon.print(helpers.table_to_json(o))"
     )
