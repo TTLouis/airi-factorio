@@ -119,10 +119,12 @@ run_py() {
 printf '[npc-test][%s] Starting isolated runtime lane.\n' "$LANE"
 start_factorio
 
-# Every lane begins with the same zero-player actor/clock/core-action smoke. This
-# gives each isolated save a runner.json actor identity and verifies the common
-# foundation before a specialized gate mutates its world.
-run_py run.py
+# Legacy lanes begin with the same zero-player singleton actor/clock/core-action
+# smoke. The swarm lane intentionally skips it so its save contains exactly the
+# two logical actors created by swarm_multi_actor.py and no compatibility NPC.
+if [[ "$LANE" != "swarm" ]]; then
+  run_py run.py
+fi
 
 case "$LANE" in
   core)
@@ -159,6 +161,11 @@ case "$LANE" in
     run_py crafting_restart_prepare.py --save "$SAVE"
     restart_factorio
     run_py crafting_restart_verify.py
+    ;;
+
+  swarm)
+    printf '[npc-test][swarm] Running live two-NPC isolation and replacement gate...\n'
+    run_py swarm_multi_actor.py
     ;;
 
   *)

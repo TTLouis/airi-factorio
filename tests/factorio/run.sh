@@ -9,7 +9,7 @@ LANES_ROOT="$TEST_ROOT/lanes"
 BASE_SAVE="$SAVES/npc-test-base.zip"
 MAP_GEN_SETTINGS="$TEST_ROOT/fixtures/map-gen-settings.json"
 PARALLEL="${NPC_TEST_PARALLEL:-1}"
-LANE_FILTER="${NPC_TEST_LANES:-core,research-combat,resilience}"
+LANE_FILTER="${NPC_TEST_LANES:-core,research-combat,resilience,swarm}"
 GAME_PORT_BASE="${GAME_PORT_BASE:-34197}"
 RCON_PORT_BASE="${RCON_PORT_BASE:-27015}"
 export PYTHONUNBUFFERED=1
@@ -104,6 +104,7 @@ lane_offset() {
     core) printf '0' ;;
     research-combat) printf '1' ;;
     resilience) printf '2' ;;
+    swarm) printf '3' ;;
     *) printf '[npc-test] Unknown lane requested: %s\n' "$1" >&2; return 2 ;;
   esac
 }
