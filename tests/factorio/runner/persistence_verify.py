@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from run import Rcon, connect_with_retry, decode_json, lua_json, remote_call, squared_distance
+from run import Rcon, connect_with_retry, decode_json, lua_text, remote_call, squared_distance
 from runtime import operation_status_command, validate_clock, wait_until_idle
 
 
@@ -95,9 +95,10 @@ def run(client: Rcon, results: Path) -> None:
     require(squared_distance(position, quiet['position']) < 0.01, (position, quiet['position']))
 
     # Reuse the persisted target to prove the reacquired body can accept and
-    # complete fresh work after the restart boundary.
-    start = json_command(lua_json(remote_call('autorio_operations', 'walk_to_entity', repr('steel-chest'), '40')), 'post-restart movement start')
-    require(start is True, start)
+    # complete fresh work after the restart boundary. walk_to_entity returns a
+    # scalar boolean, so serialize it with tostring rather than table_to_json.
+    start = command(lua_text(remote_call('autorio_operations', 'walk_to_entity', repr('steel-chest'), '40')))
+    require(start == 'true', f'post-restart movement start failed: {start!r}')
 
     def status(context: str) -> dict:
         return json_command(operation_status_command(), context)
