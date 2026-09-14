@@ -60,14 +60,15 @@ test('configure handshake selects npc and verifies the native deployment status'
   assert.match(rcon.commands[1], /"airi_deployment","status"/)
 })
 
-test('configure handshake repeats the exact command after a real-style first-lua warning even when the warning echoes the session token', async () => {
+test('configure handshake repeats the exact command when Factorio echoes the blocked command including the marker', async () => {
   const rcon = new FakeRcon([
-    `Player <server> tried using the command rcon.print(remote.call("airi_deployment","configure","npc","${SESSION}")). Lua console commands will disable achievements. Please repeat the command to proceed.`,
+    text => `Player <server> tried using the command ${text}. Lua console commands will disable achievements. Please repeat the command to proceed.`,
     configureAck(),
     JSON.stringify(readyStatus()),
   ])
   await configureNpcSession(rcon, SESSION, CONFIG_MARKER)
   assert.equal(rcon.commands[0], rcon.commands[1])
+  assert.match(rcon.commands[0], new RegExp(CONFIG_MARKER))
   assert.notEqual(rcon.commands[1], rcon.commands[2])
 })
 
