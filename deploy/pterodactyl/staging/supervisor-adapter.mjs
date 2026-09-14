@@ -76,7 +76,7 @@ export async function configureNpcSession(rcon, session, marker = `AIRI_CONFIG_$
     parsed = parseAcknowledgement(raw, marker)
   }
   check(parsed, 'Game command acknowledgement missing; configure retry exhausted')
-  check(parsed.data.ok === true, 'Game command failed; configure retry exhausted')
+  check(parsed.data.ok === true, `Game command failed; configure retry exhausted: ${JSON.stringify(parsed.data.result)}`)
   if (parsed.data.result !== session) {
     const rawActorStatus = await rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor","status")))')
     process.stderr.write(`[DEBUG-ACTOR-STATUS] configureResult=${JSON.stringify(parsed.data.result)} actorStatus=${rawActorStatus}\n`)
