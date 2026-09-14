@@ -28,6 +28,7 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('getRecipe(item)')
     expect(prompt).toContain('getNearbyEntities({ radius?, name?, type?, limit? })')
     expect(prompt).toContain('getEntityStatus({ name, radius? })')
+    expect(prompt).toContain('getCombatStatus()')
     expect(prompt).toContain('Radius is limited to 64 tiles')
     expect(prompt).toContain('Radius is limited to 32 tiles')
     expect(prompt).toContain("AIRI's controlled actor inventory")
@@ -37,7 +38,7 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('Verify important results with read-only tools before claiming success')
     expect(prompt).toContain('Operation completion does not automatically mean the larger goal succeeded')
     expect(prompt).toContain('replan instead of repeating blindly')
-    expect(prompt).toContain('inspect the local area before choosing movement or mining')
+    expect(prompt).toContain('inspect the local area before choosing movement, mining, or combat')
     expect(prompt).toContain('verify the relevant inventory/entity state before depending on that result')
   })
 
