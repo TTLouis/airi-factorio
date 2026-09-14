@@ -48,6 +48,16 @@ def run(client, results: Path) -> None:
             time.sleep(0.1)
         raise AssertionError(f'{context} did not become idle: {last!r}')
 
+    def wait_for_work_completed(work_ids: list[str], context: str, timeout: float = 12.0):
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            last = {work_id: swarm_call('work_status', repr(work_id)) for work_id in work_ids}
+            if all((entry.get('work') or {}).get('status') == 'completed' for entry in last.values()):
+                return last
+            time.sleep(0.1)
+        raise AssertionError(f'{context} did not complete: {last!r}')
+
     lua_probe = '/silent-command rcon.print("AIRI_RCON_READY")'
     probe_response = command(lua_probe)
     if probe_response != 'AIRI_RCON_READY':
@@ -150,6 +160,32 @@ def run(client, results: Path) -> None:
     assert_true(replacement_wait.get('ok') is True, f'replacement body could not accept fresh work: {replacement_wait!r}')
     wait_for_idle([first_id], 'replacement actor fresh work', 5.0)
 
+    # First actual coordination gate: create two Blackboard jobs without naming an
+    # actor. The runtime coordinator must score locality/capability, claim each
+    # job for a different available agent, dispatch it, and complete it with
+    # measured evidence and a WorkResult.
+    left_work = swarm_call('create_survey_work', '-8', '-2', '1.5', '60', '1')
+    right_work = swarm_call('create_survey_work', '8', '2', '1.5', '60', '1')
+    assert_true(left_work.get('ok') is True, f'could not create left survey work: {left_work!r}')
+    assert_true(right_work.get('ok') is True, f'could not create right survey work: {right_work!r}')
+    left_work_id = left_work['work']['id']
+    right_work_id = right_work['work']['id']
+
+    coordinated = wait_for_work_completed([left_work_id, right_work_id], 'autonomous two-work coordination')
+    left_done = coordinated[left_work_id]
+    right_done = coordinated[right_work_id]
+    assert_true(left_done.get('found') is True and right_done.get('found') is True, f'coordinated work lookup failed: {coordinated!r}')
+    assert_true(len(left_done.get('results') or []) >= 1, f'left work has no result evidence: {left_done!r}')
+    assert_true(len(right_done.get('results') or []) >= 1, f'right work has no result evidence: {right_done!r}')
+    assert_true(len((left_done.get('work') or {}).get('evidence') or []) >= 1, f'left work has no measured evidence: {left_done!r}')
+    assert_true(len((right_done.get('work') or {}).get('evidence') or []) >= 1, f'right work has no measured evidence: {right_done!r}')
+    assert_true(left_done['results'][-1]['agentId'] == first['agentId'], f'locality scheduler did not assign left work to first agent: {left_done!r}')
+    assert_true(right_done['results'][-1]['agentId'] == second['agentId'], f'locality scheduler did not assign right work to second agent: {right_done!r}')
+
+    coordinated_actors = wait_for_idle([first_id, second_id], 'coordinated actors after work completion')
+    assert_true(squared_distance(coordinated_actors[first_id]['actor']['position'], {'x': -8.0, 'y': -2.0}) <= 4.0, f'first actor did not reach autonomously assigned left target: {coordinated_actors[first_id]!r}')
+    assert_true(squared_distance(coordinated_actors[second_id]['actor']['position'], {'x': 8.0, 'y': 2.0}) <= 4.0, f'second actor did not reach autonomously assigned right target: {coordinated_actors[second_id]!r}')
+
     final = swarm_status()
     final_bodies = decode_json(command(
         "/silent-command local s=game.surfaces[1]; rcon.print(helpers.table_to_json({count=#s.find_entities_filtered{name='character'}}))"
@@ -165,13 +201,16 @@ def run(client, results: Path) -> None:
         'first_replacement_physical_id': replacement['actor']['actor_id'],
         'second_physical_id': second_physical,
         'first_final_body_revision': replacement['runtime']['bodyRevision'],
+        'left_work_id': left_work_id,
+        'right_work_id': right_work_id,
+        'coordinated_work': coordinated,
         'final_status': final,
         'transcript': transcript,
     }
     (results / 'swarm-multi-actor.json').write_text(json.dumps(result, indent=2))
     print(
-        'PASS: two live swarm NPCs moved independently, cancellation stayed actor-scoped, '
-        f'and body replacement preserved logical identity ({first_id}, {second_id})'
+        'PASS: two live swarm NPCs stayed isolated through cancellation/replacement and '
+        f'autonomously split Blackboard survey work by locality ({first_id}, {second_id})'
     )
 
 
