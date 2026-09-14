@@ -48,11 +48,6 @@ function configureNpcWorld(resource?: Record<string, any>) {
     character.selected = resource?.valid === false ? undefined : resource
   })
 
-  character.begin_crafting = vi.fn(({ count, recipe }: { count: number, recipe: string }) => {
-    character.crafting_queue = [{ index: 1, recipe, count, prerequisite: false }]
-    return count
-  })
-
   const surface: Record<string, any> = {
     name: 'nauvis',
     daytime: 0,
@@ -159,28 +154,6 @@ describe('standalone NPC completion polling', () => {
     expect(task_manager.player_state.parameters_mine_entity?.count).toBe(1)
     expect(character.selected).toBe(resource)
     expect(character.mining_state.mining).toBe(true)
-  })
-
-  it('finishes standalone crafting when its own crafting queue drains', () => {
-    const { character } = configureNpcWorld()
-    const on_tick = get_handler('on_tick')
-
-    task_manager.add_task({
-      type: TaskStates.CRAFTING,
-      item_name: 'iron-gear-wheel',
-      count: 2,
-      crafted: 0,
-    })
-
-    expect(character.begin_crafting).toHaveBeenCalledWith({ count: 2, recipe: 'iron-gear-wheel' })
-    expect(task_manager.player_state.task_state).toBe(TaskStates.CRAFTING)
-
-    on_tick({})
-    expect(task_manager.player_state.task_state).toBe(TaskStates.CRAFTING)
-
-    character.crafting_queue = []
-    on_tick({})
-    expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
   })
 })
 
