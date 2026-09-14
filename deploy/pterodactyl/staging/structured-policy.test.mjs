@@ -47,16 +47,19 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'getNavigationStatus',
     'getCraftingStatus',
     'getResearchStatus',
+    'getResearchRequest',
     'getTechnology',
     'getCombatStatus',
   ])
   for (const tool of toolDefinitions) assert.equal(tool.function.parameters.additionalProperties, false)
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getRecipe').function.parameters.required, ['item'])
+  assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getResearchRequest').function.parameters.required, ['request_id'])
 })
 
 test('read-only tool renderer targets native actor-aware interfaces without player indexes', () => {
   assert.equal(toolCommand('getActorStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor","status")))')
   assert.equal(toolCommand('getCraftingStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting","status")))')
+  assert.equal(toolCommand('getResearchRequest', { request_id: 42 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","request_result",42)))')
   assert.equal(toolCommand('getRecipe', { item: 'iron-gear-wheel' }), '/silent-command remote.call("autorio_tools","get_recipe",\'iron-gear-wheel\')')
   assert.equal(toolCommand('getNearbyEntities', { radius: 32, name: 'iron-ore', type: 'resource', limit: 25 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_nearby_entities",32,\'iron-ore\',\'resource\',25)))')
   assert.equal(toolCommand('getEntityStatus', { name: 'steel-chest' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_entity_status",\'steel-chest\',8)))')
@@ -68,4 +71,7 @@ test('tool calls reject unknown names, unsafe names, extras, and out-of-bound sc
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate\n/c game.clear()' }))
   assert.throws(() => toolCommand('getNearbyEntities', { radius: 65 }))
   assert.throws(() => toolCommand('getEntityStatus', { name: 'steel-chest', radius: 33 }))
+  assert.throws(() => toolCommand('getResearchRequest', { request_id: 0 }))
+  assert.throws(() => toolCommand('getResearchRequest', { request_id: 1.5 }))
+  assert.throws(() => toolCommand('getResearchRequest', { request_id: 42, force: 'enemy' }))
 })
