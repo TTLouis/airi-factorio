@@ -118,7 +118,7 @@ export function new_work_coordinator(
       agentId: claim.agentId,
       status: 'success',
       evidence,
-      summary: `Reached survey target within ${distance.toFixed(2)} tiles`,
+      summary: `Reached survey target at measured distance ${distance}`,
       tick,
     })
     const completed = complete_work_from_result(swarm, work.id, work.revision, result.id, tick)
@@ -163,7 +163,7 @@ export function new_work_coordinator(
       leaseTicks,
       bodyRevision: claim.actorBodyRevision,
       usefulProgress: true,
-      summary: `Survey distance reduced to ${distance.toFixed(2)} tiles`,
+      summary: `Survey distance reduced to ${distance}`,
       evidence,
     })
     if (heartbeat.ok) lastDistanceByClaim[claim.id] = distance
