@@ -1,14 +1,25 @@
 > [!IMPORTANT]
 >
-> **This is a fork.** It's maintained independently from the upstream
-> [`moeru-ai/airi-factorio`](https://github.com/moeru-ai/airi-factorio) project and may
-> diverge in scope, direction, and priorities — it isn't guaranteed to track upstream or
-> to stay compatible with it. See [`deploy/pterodactyl/`](./deploy/pterodactyl) for this
-> fork's Pterodactyl deployment notes. Everything below this notice is the original
-> project's README.
+> **This is an independently maintained fork** of
+> [`moeru-ai/airi-factorio`](https://github.com/moeru-ai/airi-factorio). It now intentionally
+> diverges from upstream in architecture as well as deployment: AIRI can run as a persistent
+> **standalone Factorio NPC** instead of requiring ownership of a connected human player's
+> character.
 >
-> Development on this fork uses [Claude Code](https://claude.com/claude-code) as an AI
-> coding assistant/tool.
+> The fork's current validated baseline covers zero-player movement, mining, placement and
+> transfer, native crafting, research follow-through, combat, navigation, save/restart
+> reconciliation, death recovery, actor-ownership boundaries, and isolated parallel Factorio
+> acceptance lanes. `main` tracks validated checkpoints; `feat/npc-transition-work` remains the
+> active integration/testing branch for the next deployment and agent slices.
+>
+> Pterodactyl deployment is being migrated to the same standalone-NPC model. See
+> [`deploy/pterodactyl/`](./deploy/pterodactyl) and its [`staging/`](./deploy/pterodactyl/staging)
+> v8 work for the actor-epoch guard, structured operation policy, and zero-player agent loop.
+> The generated egg should only be treated as updated once that v8 payload is regenerated and
+> passes its clean-install, upgrade, rollback, and real-agent acceptance gates.
+>
+> Everything below this notice is the original project's README. Development on this fork uses
+> AI coding assistants/tools including Claude Code and OpenAI ChatGPT/Codex.
 
 <p align="center">
   <picture>
@@ -95,7 +106,7 @@ Now you can use the commands in Factorio, the script will be compiled automatica
 - [`xsai-transformers`](https://github.com/moeru-ai/xsai-transformers): Experimental [🤗 Transformers.js](https://github.com/huggingface/transformers.js) provider for [xsAI](https://github.com/moeru-ai/xsai).
 - [WebAI: Realtime Voice Chat](https://github.com/proj-airi/webai-realtime-voice-chat): Full example of implementing ChatGPT's realtime voice from scratch with VAD + STT + LLM + TTS.
 - [`@proj-airi/drizzle-duckdb-wasm`](https://github.com/moeru-ai/airi/tree/main/packages/drizzle-duckdb-wasm/README.md): Drizzle ORM driver for DuckDB WASM
-- [`@proj-airi/duckdb-wasm`](https://github.com/moeru-ai/airi/tree/main/packages/duckdb-wasm/README.md): Easy to use wrapper for `@duckdb/duckdb-wasm`
+- [`@proj-airi/duckdb-wasm`](https://github.com/moeru-ai/airi/tree/main/packages/drizzle-duckdb-wasm/README.md): Easy to use wrapper for `@duckdb/duckdb-wasm`
 - [Airi Factorio](https://github.com/moeru-ai/airi-factorio): Allow Airi to play Factorio
 - [Factorio RCON API](https://github.com/nekomeowww/factorio-rcon-api): RESTful API wrapper for Factorio headless server console
 - [`autorio`](https://github.com/moeru-ai/airi-factorio/tree/main/packages/autorio): Factorio automation library
