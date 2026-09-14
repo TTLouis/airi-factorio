@@ -264,9 +264,9 @@ export class Session {
       if (this.rcon && this.gameChild?.alive()) {
         this.rcon.timeout = Math.min(this.config.stopMs, 30000)
         try { await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")') }
-        catch { clean = false }
+        catch (error) { clean = false; this.log(`[DEBUG-STOP] cancel command failed: ${error instanceof Error ? error.message : error}`) }
         try { await this.rcon.command('/server-save') }
-        catch { clean = false }
+        catch (error) { clean = false; this.log(`[DEBUG-STOP] server-save command failed: ${error instanceof Error ? error.message : error}`) }
       }
       if (this.gameChild) {
         const stopped = await this.gameChild.stop(this.config.stopMs, 'SIGINT')
@@ -324,7 +324,13 @@ async function main() {
       await createSave(selected.filename, game, modDir, ini, root, log)
     }
     session = new Session({ root, app, game, config, save: selected.filename, settingsFile, modDir, ini, log })
-    await session.start()
+    try {
+      await session.start()
+    }
+    catch (error) {
+      log(`[DEBUG-STARTUP] session.start() failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
+      throw error
+    }
     const result = await session.gameChild.closed
     if (!requestedStop) {
       log(`Factorio exited unexpectedly: ${JSON.stringify(result)}`)

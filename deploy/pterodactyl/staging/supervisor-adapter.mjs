@@ -70,9 +70,11 @@ export async function configureNpcSession(rcon, session, marker = `AIRI_CONFIG_$
   // the end of the RCON response proves the command actually ran.
   const command = `/silent-command local ok,result=pcall(function() return remote.call("airi_deployment","configure","npc",${luaString(session)}) end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
   let raw = await rcon.command(command)
+  process.stderr.write(`[DEBUG-CONFIGURE] attempt1 raw=${JSON.stringify(raw)}\n`)
   let parsed = parseAcknowledgement(raw, marker)
   if (!parsed) {
     raw = await rcon.command(command)
+    process.stderr.write(`[DEBUG-CONFIGURE] attempt2 raw=${JSON.stringify(raw)}\n`)
     parsed = parseAcknowledgement(raw, marker)
   }
   check(parsed, 'Game command acknowledgement missing; configure retry exhausted')
