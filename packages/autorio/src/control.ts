@@ -177,6 +177,11 @@ remote.add_interface('autorio_operations', {
     if (result[0]) log(`[AUTORIO] New gather_resource task: ${resource_name} x${count}, radius=${search_radius}`)
     return result
   },
+  supply_entity: (unit_number: number, items: Array<{ item_name: string, count: number }>): [boolean, string] => {
+    const result = composite_operation_controller.supply_entity(unit_number, items)
+    if (result[0]) log(`[AUTORIO] New supply_entity task: unit=${unit_number}, item_types=${items.length}`)
+    return result
+  },
   place_entity: (entity_name: string, x?: number, y?: number, direction?: number) => {
     const accepted = basic_operation_controller.submit_placement(entity_name, x, y, direction)
     if (accepted) {
