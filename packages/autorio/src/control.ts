@@ -271,6 +271,7 @@ script.on_event(defines.events.on_selected_entity_changed, (unused_event: OnSele
 
 script.on_event(defines.events.on_script_path_request_finished, (event: OnScriptPathRequestFinishedEvent) => {
   navigation_controller.on_path_finished(event)
+  combat_controller.on_path_finished(event)
 })
 
 script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEntityEvent) => {
