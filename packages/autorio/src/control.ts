@@ -21,6 +21,7 @@ import { new_follow_controller } from './follow'
 import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
 import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
+import { new_recipe_configuration_runtime } from './recipe_configuration'
 import { new_research_controller } from './research'
 import { new_task_manager } from './task_manager'
 import { create_tools_remote_interface } from './tools'
@@ -39,6 +40,7 @@ export const task_manager = new_task_manager(get_controlled_actor)
 const awareness_controller = new_awareness_controller()
 const basic_operation_controller = new_basic_operation_controller(get_controlled_actor, task_manager)
 const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_operation_controller)
+const recipe_configuration_runtime = new_recipe_configuration_runtime(task_manager, basic_operation_controller)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
 const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
@@ -175,6 +177,11 @@ remote.add_interface('autorio_operations', {
     }
     return result
   },
+  set_machine_recipe: (unit_number: number, recipe_name: string): [boolean, string] => {
+    const result = basic_operation_controller.submit_set_recipe_exact(unit_number, recipe_name)
+    if (result[0]) log(`[AUTORIO] New set_machine_recipe task for entity unit ${unit_number}: ${recipe_name}`)
+    return result
+  },
   move_items_with_player: (item_name: string, player_name: string, max_count: number, to_player: boolean): [boolean, string] => {
     const result = basic_operation_controller.submit_player_move(item_name, player_name, max_count, to_player)
     if (result[0]) {
@@ -309,6 +316,9 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   }
   else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) {
     basic_operation_runtime.state_moving_items(actor)
+  }
+  else if (task_manager.player_state.task_state === TaskStates.SETTING_RECIPE) {
+    recipe_configuration_runtime.state_setting_recipe(actor)
   }
   else if (task_manager.player_state.task_state === TaskStates.CRAFTING) {
     crafting_controller.tick(actor)
