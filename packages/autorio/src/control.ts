@@ -148,9 +148,13 @@ remote.add_interface('autorio_operations', {
     if (accepted) log(`[AUTORIO] New mine_entity task: ${entity_name} x${count}`)
     return accepted
   },
-  place_entity: (entity_name: string) => {
-    const accepted = basic_operation_controller.submit_placement(entity_name)
-    if (accepted) log(`[AUTORIO] New place_entity task: ${entity_name}`)
+  place_entity: (entity_name: string, x?: number, y?: number, direction?: number) => {
+    const accepted = basic_operation_controller.submit_placement(entity_name, x, y, direction)
+    if (accepted) {
+      const position = x !== undefined && y !== undefined ? ` at (${x}, ${y})` : ''
+      const facing = direction !== undefined ? ` direction=${direction}` : ''
+      log(`[AUTORIO] New place_entity task: ${entity_name}${position}${facing}`)
+    }
     return accepted
   },
   move_items: (item_name: string, entity_name: string, max_count: number, to_entity: boolean): [boolean, string] => {
