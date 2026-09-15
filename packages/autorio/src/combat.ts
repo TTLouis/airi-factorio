@@ -11,6 +11,7 @@ const MAX_SEARCH_RADIUS = 256
 const MAX_SINGLE_COMBAT_TICKS = 60 * 60
 const MAX_CLEAR_AREA_TICKS = 10 * 60 * 60
 const COMBAT_PATH_STUCK_TICKS = 3 * 60
+const LEGACY_DIRECT_STUCK_TICKS = 10 * 60
 const COMBAT_PHYSICAL_STUCK_TICKS = 90
 const COMBAT_PHYSICAL_SAMPLE_TICKS = 30
 const COMBAT_PHYSICAL_PROGRESS_DISTANCE = 0.12
@@ -547,6 +548,23 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     actor.set_walking_state({ walking: true, direction: direction_towards(actor.position, position) })
   }
 
+  function supports_combat_path_runtime(actor: ControlledActor) {
+    const character = actor.character as any
+    const surface = actor.surface as any
+    return !!character
+      && !!character.prototype
+      && !!character.prototype.collision_box
+      && !!character.prototype.collision_mask
+      && typeof surface.request_path === 'function'
+  }
+
+  function supports_spatial_recovery(actor: ControlledActor) {
+    const surface = actor.surface as any
+    return supports_combat_path_runtime(actor)
+      && typeof surface.find_non_colliding_position === 'function'
+      && typeof surface.get_tile === 'function'
+  }
+
   function path_goal_changed(task: CombatTask, goal: { x: number, y: number }, mode: CombatPathMode) {
     if (task.combat_recovery_position) return task.combat_path_mode !== mode
     return task.combat_path_mode !== mode
@@ -563,6 +581,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function maybe_prepare_combat_escape(actor: ControlledActor, task: CombatTask, goal: { x: number, y: number }, reason: string) {
+    if (!supports_spatial_recovery(actor)) return false
     if ((task.combat_path_attempts ?? 0) < 2 || task.combat_recovery_position) return false
     const recovery = select_navigation_escape_point(actor, goal, (task.combat_path_attempts ?? 0) >= 3 ? 8 : 6)
     task.combat_last_spatial_observation = recovery.spatial_observation
@@ -681,6 +700,11 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function follow_combat_path(actor: ControlledActor, task: CombatTask, goal: { x: number, y: number }, mode: CombatPathMode) {
+    if (!supports_combat_path_runtime(actor)) {
+      clear_combat_path(task, true)
+      walk_toward(actor, goal)
+      return true
+    }
     if (path_goal_changed(task, goal, mode)) clear_combat_path(task, true)
     if (mode === 'retreat' && distance(actor.position, goal) <= COMBAT_PATH_RETREAT_GOAL_RADIUS) {
       actor.set_walking_state({ walking: false, direction: defines.direction.north })
@@ -740,7 +764,9 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   function shoot_while_retreating(actor: ControlledActor, task: CombatTask, target: LuaEntity) {
     actor.update_selected_entity(target.position)
     actor.set_shooting_state({ state: defines.shooting.shooting_selected, position: target.position })
-    follow_combat_path(actor, task, stable_retreat_goal(actor, task, target), 'retreat')
+    const retreat_goal = stable_retreat_goal(actor, task, target)
+    if (supports_combat_path_runtime(actor)) follow_combat_path(actor, task, retreat_goal, 'retreat')
+    else walk_toward(actor, retreat_goal)
     task.last_progress_tick = game.tick
   }
 
@@ -811,6 +837,16 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     }
 
     stop_actor_combat(actor)
+    if (target.type === 'unit' && !supports_combat_path_runtime(actor)) {
+      clear_combat_path(task, true)
+      if (game.tick - (task.last_progress_tick ?? started_tick) > LEGACY_DIRECT_STUCK_TICKS) {
+        fail(actor, task, 'stuck')
+        return
+      }
+      if (current_distance <= PANIC_DISTANCE) walk_toward(actor, stable_retreat_goal(actor, task, target))
+      else walk_toward(actor, target.position)
+      return
+    }
     if (target.type === 'unit' && current_distance <= PANIC_DISTANCE) {
       follow_combat_path(actor, task, stable_retreat_goal(actor, task, target), 'retreat')
       return
