@@ -7,6 +7,7 @@ import { TaskStates } from './types'
 beforeEach(() => {
   ;(globalThis as any).game.connected_players = []
   ;(globalThis as any).storage.airi_actor_mode = 'player'
+  ;(globalThis as any).storage.airi_awareness_chunk = undefined
   task_manager.cancel_all_tasks()
   ;(globalThis as any).storage.standalone_character_unit_number = undefined
   ;(globalThis as any).serpent = {
@@ -24,6 +25,7 @@ function configureNpcWorld(resource?: Record<string, any>) {
     current_research: undefined,
     research_progress: 0,
     get_spawn_position: () => ({ x: 0, y: 0 }),
+    chart: vi.fn(),
   }
 
   let character_created = false
