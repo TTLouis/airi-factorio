@@ -11,13 +11,33 @@ function positiveRate(value) {
   check(typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1_000_000_000, 'rate_per_second must be a positive number up to 1000000000')
   return value
 }
-function positiveInteger(value, label) {
-  check(Number.isSafeInteger(value) && value > 0, `${label} must be a positive integer`)
+function positiveInteger(value, label, max = Number.MAX_SAFE_INTEGER) {
+  check(Number.isSafeInteger(value) && value > 0 && value <= max, `${label} must be a positive integer${max < Number.MAX_SAFE_INTEGER ? ` up to ${max}` : ''}`)
+  return value
+}
+function optionalInteger(value, label, min, max) {
+  check(Number.isSafeInteger(value) && value >= min && value <= max, `${label} must be an integer from ${min} to ${max}`)
+  return value
+}
+function finiteCoordinate(value, label) {
+  check(typeof value === 'number' && Number.isFinite(value) && value >= -1_000_000 && value <= 1_000_000, `${label} must be a finite map coordinate`)
   return value
 }
 function stringArray(value, label) {
   check(Array.isArray(value) && value.length <= 64, `${label} must be an array with at most 64 entries`)
   return value.map(base.factorioName)
+}
+function optionalBoolean(value, label) {
+  check(typeof value === 'boolean', `${label} must be boolean`)
+  return value
+}
+function position(value) {
+  exactKeys(value, ['x', 'y'])
+  return { x: finiteCoordinate(value.x, 'position.x'), y: finiteCoordinate(value.y, 'position.y') }
+}
+function side(value, label) {
+  check(['north', 'south', 'east', 'west', 'any'].includes(value), `${label} must be north, south, east, west, or any`)
+  return value
 }
 
 function parseSolveProduction(args) {
@@ -90,6 +110,52 @@ function renderTransportCapacity(args) {
   return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","capacity",{${fields.join(',')}})))`
 }
 
+function parseSpatialObservation(args) {
+  exactKeys(args, ['anchor_unit_number', 'position', 'half_size', 'requested_entity_name'])
+  const parsed = {}
+  if (args.anchor_unit_number !== undefined) parsed.anchor_unit_number = positiveInteger(args.anchor_unit_number, 'anchor_unit_number')
+  if (args.position !== undefined) parsed.position = position(args.position)
+  check(!(parsed.anchor_unit_number !== undefined && parsed.position !== undefined), 'provide anchor_unit_number or position, not both')
+  if (args.half_size !== undefined) parsed.half_size = optionalInteger(args.half_size, 'half_size', 4, 16)
+  if (args.requested_entity_name !== undefined) parsed.requested_entity_name = base.factorioName(args.requested_entity_name)
+  return parsed
+}
+
+function parsePlacement(args) {
+  exactKeys(args, ['entity_name', 'anchor_unit_number', 'position', 'side', 'direction', 'search_radius', 'max_candidates', 'reserve_input', 'reserve_output', 'reserve_power', 'extension_direction'])
+  const parsed = { entity_name: base.factorioName(args.entity_name) }
+  if (args.anchor_unit_number !== undefined) parsed.anchor_unit_number = positiveInteger(args.anchor_unit_number, 'anchor_unit_number')
+  if (args.position !== undefined) parsed.position = position(args.position)
+  check(!(parsed.anchor_unit_number !== undefined && parsed.position !== undefined), 'provide anchor_unit_number or position, not both')
+  if (args.side !== undefined) parsed.side = side(args.side, 'side')
+  if (args.direction !== undefined) parsed.direction = optionalInteger(args.direction, 'direction', 0, 15)
+  if (args.search_radius !== undefined) parsed.search_radius = optionalInteger(args.search_radius, 'search_radius', 1, 12)
+  if (args.max_candidates !== undefined) parsed.max_candidates = optionalInteger(args.max_candidates, 'max_candidates', 1, 8)
+  if (args.reserve_input !== undefined) parsed.reserve_input = optionalBoolean(args.reserve_input, 'reserve_input')
+  if (args.reserve_output !== undefined) parsed.reserve_output = optionalBoolean(args.reserve_output, 'reserve_output')
+  if (args.reserve_power !== undefined) parsed.reserve_power = optionalBoolean(args.reserve_power, 'reserve_power')
+  if (args.extension_direction !== undefined) parsed.extension_direction = side(args.extension_direction, 'extension_direction')
+  return parsed
+}
+
+function luaTable(parsed) {
+  const fields = []
+  if (parsed.entity_name !== undefined) fields.push(`entity_name=${base.luaString(parsed.entity_name)}`)
+  if (parsed.anchor_unit_number !== undefined) fields.push(`anchor_unit_number=${parsed.anchor_unit_number}`)
+  if (parsed.position !== undefined) fields.push(`position={x=${parsed.position.x},y=${parsed.position.y}}`)
+  if (parsed.half_size !== undefined) fields.push(`half_size=${parsed.half_size}`)
+  if (parsed.requested_entity_name !== undefined) fields.push(`requested_entity_name=${base.luaString(parsed.requested_entity_name)}`)
+  if (parsed.side !== undefined) fields.push(`side=${base.luaString(parsed.side)}`)
+  if (parsed.direction !== undefined) fields.push(`direction=${parsed.direction}`)
+  if (parsed.search_radius !== undefined) fields.push(`search_radius=${parsed.search_radius}`)
+  if (parsed.max_candidates !== undefined) fields.push(`max_candidates=${parsed.max_candidates}`)
+  if (parsed.reserve_input !== undefined) fields.push(`reserve_input=${parsed.reserve_input}`)
+  if (parsed.reserve_output !== undefined) fields.push(`reserve_output=${parsed.reserve_output}`)
+  if (parsed.reserve_power !== undefined) fields.push(`reserve_power=${parsed.reserve_power}`)
+  if (parsed.extension_direction !== undefined) fields.push(`extension_direction=${base.luaString(parsed.extension_direction)}`)
+  return `{${fields.join(',')}}`
+}
+
 const solveProductionDefinition = {
   type: 'function',
   function: {
@@ -138,9 +204,50 @@ const transportCapacityDefinition = {
   },
 }
 
-export const toolDefinitions = [...base.toolDefinitions, solveProductionDefinition, transportCapacityDefinition]
+const positionSchema = {
+  type: 'object', additionalProperties: false, required: ['x', 'y'],
+  properties: { x: { type: 'number', minimum: -1000000, maximum: 1000000 }, y: { type: 'number', minimum: -1000000, maximum: 1000000 } },
+}
+
+const localSpatialObservationDefinition = {
+  type: 'function',
+  function: {
+    name: 'getLocalSpatialObservation',
+    description: 'Read a bounded live local occupancy/spatial snapshot (max 32x32) for construction or navigation diagnosis: blocking water/out-of-map tiles, structures, cliffs, belts, inserters, machines, storage and the NPC footprint. Prefer this to repeated same-name entity probes when geometry matters.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        anchor_unit_number: { type: 'integer', minimum: 1 }, position: positionSchema,
+        half_size: { type: 'integer', minimum: 4, maximum: 16, default: 12 },
+        requested_entity_name: { type: 'string', minLength: 1, maxLength: 200 },
+      },
+    },
+  },
+}
+
+const placementPlannerDefinition = {
+  type: 'function',
+  function: {
+    name: 'planPlacement',
+    description: 'Deterministically select collision-free, locally reachable placement candidates from the live spatial map. Returns explicit rejection causes plus reserved input/output/power/future-extension corridor intent. Use the best returned coordinate instead of guessing tiles.',
+    parameters: {
+      type: 'object', additionalProperties: false, required: ['entity_name'],
+      properties: {
+        entity_name: { type: 'string', minLength: 1, maxLength: 200 }, anchor_unit_number: { type: 'integer', minimum: 1 }, position: positionSchema,
+        side: { type: 'string', enum: ['north', 'south', 'east', 'west', 'any'] }, direction: { type: 'integer', minimum: 0, maximum: 15 },
+        search_radius: { type: 'integer', minimum: 1, maximum: 12, default: 8 }, max_candidates: { type: 'integer', minimum: 1, maximum: 8, default: 4 },
+        reserve_input: { type: 'boolean' }, reserve_output: { type: 'boolean' }, reserve_power: { type: 'boolean' },
+        extension_direction: { type: 'string', enum: ['north', 'south', 'east', 'west', 'any'] },
+      },
+    },
+  },
+}
+
+export const toolDefinitions = [...base.toolDefinitions, solveProductionDefinition, transportCapacityDefinition, localSpatialObservationDefinition, placementPlannerDefinition]
 export function toolCommand(name, args) {
   if (name === 'solveProduction') return renderSolveProduction(args)
   if (name === 'getTransportCapacity') return renderTransportCapacity(args)
+  if (name === 'getLocalSpatialObservation') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","spatial_observation",${luaTable(parseSpatialObservation(args))})))`
+  if (name === 'planPlacement') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","plan_placement",${luaTable(parsePlacement(args))})))`
   return base.toolCommand(name, args)
 }
