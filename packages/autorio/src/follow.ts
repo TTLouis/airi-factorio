@@ -17,6 +17,7 @@ interface FollowState {
   state: FollowRuntimeState
   player_name?: string
   follow_distance?: number
+  clear_obstacles?: boolean
   code: FollowCode
   updated_tick: number
   last_navigation_tick?: number
@@ -56,6 +57,7 @@ function current_state(): FollowState {
   }
   const state = storage.airi_follow_state
   if (!state.state) state.state = state.active ? 'paused' : 'stopped'
+  if (state.clear_obstacles === undefined) state.clear_obstacles = true
   return state
 }
 
@@ -88,21 +90,21 @@ function navigation_blocked(nav: NavigationStatus | undefined, player_name: stri
 }
 
 export function new_follow_controller(get_actor: () => ControlledActor | undefined, navigate_to_player?: NavigateToPlayer) {
-  function submit(player_name: string, follow_distance: number = 4): [boolean, string] {
+  function submit(player_name: string, follow_distance: number = 4, clear_obstacles: boolean = true): [boolean, string] {
     const actor = get_actor()
     if (!actor || !actor.is_valid || !actor.character) {
-      storage.airi_follow_state = { active: false, state: 'stopped', code: 'no_actor', updated_tick: game.tick }
+      storage.airi_follow_state = { active: false, state: 'stopped', code: 'no_actor', clear_obstacles, updated_tick: game.tick }
       return [false, 'No controlled actor']
     }
     if (typeof player_name !== 'string' || player_name.length === 0) {
-      storage.airi_follow_state = { active: false, state: 'stopped', code: 'invalid_player', updated_tick: game.tick }
+      storage.airi_follow_state = { active: false, state: 'stopped', code: 'invalid_player', clear_obstacles, updated_tick: game.tick }
       return [false, 'player_name is required']
     }
 
     const bounded_distance = math.max(MIN_FOLLOW_DISTANCE, math.min(MAX_FOLLOW_DISTANCE, follow_distance || 4))
     const player = game.get_player(player_name)
     if (!player || !player.valid) {
-      storage.airi_follow_state = { active: false, state: 'stopped', player_name, follow_distance: bounded_distance, code: 'invalid_player', updated_tick: game.tick }
+      storage.airi_follow_state = { active: false, state: 'stopped', player_name, follow_distance: bounded_distance, clear_obstacles, code: 'invalid_player', updated_tick: game.tick }
       return [false, 'Player does not exist']
     }
 
@@ -111,6 +113,7 @@ export function new_follow_controller(get_actor: () => ControlledActor | undefin
       state: (!player.connected || !player.character || player.surface.index !== actor.surface.index) ? 'paused' : 'following',
       player_name,
       follow_distance: bounded_distance,
+      clear_obstacles,
       code: (!player.connected || !player.character)
         ? 'player_unavailable'
         : player.surface.index !== actor.surface.index
@@ -139,6 +142,7 @@ export function new_follow_controller(get_actor: () => ControlledActor | undefin
       state: 'stopped',
       player_name: previous.player_name,
       follow_distance: previous.follow_distance,
+      clear_obstacles: previous.clear_obstacles,
       code: 'stopped',
       updated_tick: game.tick,
     }
