@@ -34,6 +34,10 @@ const entityStatusSchema = z.object({
   radius: z.number().int().min(1).max(32).default(8),
 }).strict()
 
+const entityGeometrySchema = z.object({
+  unit_number: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+}).strict()
+
 const playerStatusSchema = z.object({
   player_name: factorioNameSchema,
 }).strict()
@@ -181,6 +185,18 @@ export const tools: ToolFunction[] = [
     },
   },
   {
+    name: 'getEntityGeometry',
+    description: 'Inspect one exact same-surface entity by Factorio unit_number and return bounded runtime I/O geometry: inserter pickup/drop positions and targets, mining-drill output position/target, and fluidbox production roles and absolute pipe connection positions/targets.',
+    schema: entityGeometrySchema,
+    fn: async ({ parameters }) => {
+      const parsed = entityGeometrySchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "entity_geometry", ${parsed.unit_number})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Exact entity geometry')
+      return response.data.output
+    },
+  },
+  {
     name: 'getNavigationStatus',
     description: 'Read AIRI navigation state, bound target, active path request/attempt count, and last bounded navigation result. Use it to distinguish reached from no-target, unreachable, path timeout, stuck, or ownership failures.',
     schema: z.object({}).strict(),
@@ -212,7 +228,7 @@ export const tools: ToolFunction[] = [
   },
   {
     name: 'getTechnology',
-    description: 'Inspect one exact technology: researched state, level, prerequisites, science requirements, and any request blocker. Use this to verify research completion.',
+    description: 'Inspect one exact technology: researched state, level, prerequisites, science requirements, and whether it is actually researched.',
     schema: technologySchema,
     fn: async ({ parameters }) => {
       const { name } = technologySchema.parse(parameters)
