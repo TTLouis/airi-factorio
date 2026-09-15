@@ -6,6 +6,7 @@ on:
       - main
       - feat/npc-transition-work
       - feat/swarm-pterodactyl-playable
+      - tmp/swarm-npc-parity-integration
 
   pull_request:
     branches:
@@ -19,7 +20,7 @@ concurrency:
 
 jobs:
   lint-typescript:
-    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.ref != 'refs/heads/tmp/swarm-npc-parity-integration' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -35,7 +36,7 @@ jobs:
         run: pnpm run lint
 
   lint-python:
-    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.ref != 'refs/heads/tmp/swarm-npc-parity-integration' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -47,7 +48,7 @@ jobs:
         run: pixi run lint
 
   typecheck-typescript:
-    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.ref != 'refs/heads/tmp/swarm-npc-parity-integration' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -68,7 +69,7 @@ jobs:
           pnpm --filter autorio.ts run build
 
   typecheck-python:
-    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.ref != 'refs/heads/tmp/swarm-npc-parity-integration' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -80,7 +81,7 @@ jobs:
         run: pixi run typecheck
 
   test-typescript:
-    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.ref != 'refs/heads/tmp/swarm-npc-parity-integration' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -113,7 +114,7 @@ jobs:
           node --test deploy/pterodactyl/runtime-v8/child-input.test.mjs deploy/pterodactyl/runtime-v8/config-authority.test.mjs deploy/pterodactyl/runtime-v8/game-files.test.mjs
 
   swarm-factorio-integration:
-    if: github.ref == 'refs/heads/feat/swarm-pterodactyl-playable' || github.head_ref == 'feat/swarm-pterodactyl-playable'
+    if: github.ref == 'refs/heads/feat/swarm-pterodactyl-playable' || github.ref == 'refs/heads/tmp/swarm-npc-parity-integration' || github.head_ref == 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
