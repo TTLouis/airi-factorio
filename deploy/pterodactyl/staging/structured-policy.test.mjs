@@ -112,6 +112,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'findNearestEnemy',
     'getEntityStatus',
     'getEntityGeometry',
+    'getLogisticsTopology',
     'getNavigationStatus',
     'getFollowStatus',
     'getDefenseStatus',
@@ -125,6 +126,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getRecipe').function.parameters.required, ['item'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getRecipeDetails').function.parameters.required, ['item_or_recipe'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getEntityGeometry').function.parameters.required, ['unit_number'])
+  assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getLogisticsTopology').function.parameters.required, ['unit_number'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getPlayerStatus').function.parameters.required, ['player_name'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'findLongRangeEntities').function.parameters.required, ['name'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getResearchRequest').function.parameters.required, ['request_id'])
@@ -147,6 +149,8 @@ test('read-only tool renderer targets native actor-aware interfaces without play
   assert.equal(toolCommand('findNearestEnemy', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_nearest_enemy",1024)))')
   assert.equal(toolCommand('getEntityStatus', { name: 'steel-chest' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_entity_status",\'steel-chest\',8)))')
   assert.equal(toolCommand('getEntityGeometry', { unit_number: 4242 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","entity_geometry",4242)))')
+  assert.equal(toolCommand('getLogisticsTopology', { unit_number: 4242 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","logistics_topology",4242,8)))')
+  assert.equal(toolCommand('getLogisticsTopology', { unit_number: 4242, radius: 16 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","logistics_topology",4242,16)))')
 })
 
 test('tool calls reject unknown names, unsafe names, extras, and out-of-bound scans', () => {
@@ -160,6 +164,10 @@ test('tool calls reject unknown names, unsafe names, extras, and out-of-bound sc
   assert.throws(() => toolCommand('getEntityGeometry', { unit_number: 0 }))
   assert.throws(() => toolCommand('getEntityGeometry', { unit_number: 1.5 }))
   assert.throws(() => toolCommand('getEntityGeometry', { unit_number: 42, radius: 8 }))
+  assert.throws(() => toolCommand('getLogisticsTopology', { unit_number: 0 }))
+  assert.throws(() => toolCommand('getLogisticsTopology', { unit_number: 1.5 }))
+  assert.throws(() => toolCommand('getLogisticsTopology', { unit_number: 42, radius: 17 }))
+  assert.throws(() => toolCommand('getLogisticsTopology', { unit_number: 42, radius: 8, name: 'steel-chest' }))
   assert.throws(() => toolCommand('getPlayerStatus', { player_name: 'TTLouis', force: 'enemy' }))
   assert.throws(() => toolCommand('getPlayerStatus', { player_name: 'TTLouis\n/c game.clear()' }))
   assert.throws(() => toolCommand('getNearbyEntities', { radius: 65 }))
