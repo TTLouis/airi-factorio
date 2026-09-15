@@ -221,6 +221,12 @@ export const toolDefinitions = [
     required: ['name'],
     additionalProperties: false,
   }),
+  functionTool('getEntityGeometry', 'Inspect exact same-surface runtime I/O geometry for one entity by stable Factorio unit_number.', {
+    type: 'object',
+    properties: { unit_number: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } },
+    required: ['unit_number'],
+    additionalProperties: false,
+  }),
   functionTool('getNavigationStatus', 'Read bounded navigation target and last result.', emptyObjectSchema),
   functionTool('getFollowStatus', 'Read persistent player-follow state, target player, configured distance, and current distance.', emptyObjectSchema),
   functionTool('getDefenseStatus', 'Read persistent follow auto-defense policy, defensive radius, and current nearby hostile target.', emptyObjectSchema),
@@ -295,6 +301,11 @@ export function toolCommand(name, rawArgs = {}) {
       noExtra(args, ['name', 'radius'])
       const radius = integer(args.radius ?? 8, 'radius', 1, 32)
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_entity_status",${luaString(factorioName(args.name))},${radius})))`
+    }
+    case 'getEntityGeometry': {
+      noExtra(args, ['unit_number'])
+      const unitNumber = integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","entity_geometry",${unitNumber})))`
     }
     case 'getNavigationStatus':
       noExtra(args, [])
