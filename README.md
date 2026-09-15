@@ -23,6 +23,8 @@ The Pterodactyl deployment currently includes:
 
 The active NPC/E2E development branch is [`feat/npc-transition-work`](https://github.com/TTLouis/airi-factorio/tree/feat/npc-transition-work). The stable integration branch is `main`.
 
+A WIP Docker Compose deployment is being developed separately on [`feat/docker-compose-deployment`](https://github.com/TTLouis/airi-factorio/tree/feat/docker-compose-deployment) so Docker packaging work does not interfere with the ongoing NPC feature history.
+
 ## Pterodactyl deployment channels
 
 Two separate eggs are provided so stable servers and active NPC E2E testing cannot be confused:
@@ -55,6 +57,27 @@ activate it and record the SHA
 Set `AIRI_SOURCE_REF` to a full 40-character commit SHA when reproducing a specific E2E failure. Managed installs also provide `rollback-airi.sh` to return to the previously completed release without rewriting saves, user mods, or `airi-config.json`.
 
 See [`deploy/pterodactyl/README.md`](./deploy/pterodactyl/README.md) for import, configuration, testing, and rollback details.
+
+## Docker Compose deployment (WIP)
+
+Docker Compose support currently lives on [`feat/docker-compose-deployment`](https://github.com/TTLouis/airi-factorio/tree/feat/docker-compose-deployment) rather than `main`. It is intentionally a thin deployment wrapper around the same standalone-NPC runtime used by Pterodactyl.
+
+During this early WIP stage, Docker builds locally instead of pulling a published image. The Compose environment mirrors the Pterodactyl egg parameters through `.env`, including provider configuration, chat authorization, Factorio account settings, request budgeting, timeouts, and Factorio version selection.
+
+The current Docker branch defaults to `AIRI_SOURCE_REF=feat/npc-transition-work`. Each build resolves that moving ref to an exact Git commit SHA and builds that exact runtime snapshot; restarting the container does not update code. Persistent saves and runtime state live outside the image under the configured data directory.
+
+To try it now:
+
+```bash
+git switch feat/docker-compose-deployment
+cp .env.example .env
+# Fill in OPENAI_API_KEY, OPENAI_API_BASEURL, and OPENAI_MODEL.
+docker compose up -d --build
+```
+
+No GHCR image is published yet. Once the runtime is more stable, the same Compose and `.env` contract can switch from local builds to a published image without changing the persistent data layout.
+
+See the [Docker Compose WIP documentation](https://github.com/TTLouis/airi-factorio/blob/feat/docker-compose-deployment/deploy/docker/README.md) for current details.
 
 ## Important Pterodactyl defaults
 
@@ -98,7 +121,7 @@ The real Factorio harness and package-smoke gates are intentionally separate fro
 
 ## Roadmap
 
-Near-term work is focused on deeper NPC E2E coverage and improving the AI harness. Longer-term work includes swarm/multi-agent coordination, an in-game message board, richer production-line reasoning, and pinning the Pterodactyl container image by digest.
+Near-term work is focused on deeper NPC E2E coverage and improving the AI harness, alongside the WIP Docker Compose deployment. Longer-term work includes swarm/multi-agent coordination, an in-game message board, richer production-line reasoning, publishing a stable container image, and pinning deployment images by immutable digest.
 
 ## Upstream and credits
 
