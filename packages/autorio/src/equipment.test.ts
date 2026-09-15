@@ -23,7 +23,10 @@ function stack(name?: string, count = 0) {
 
 function inventory(slots: any[]) {
   const value: any = slots
-  value.find_item_stack = vi.fn((name: string) => slots.find(item => item.valid_for_read && item.name === name))
+  value.find_item_stack = vi.fn((name: string) => {
+    const index = slots.findIndex(item => item.valid_for_read && item.name === name)
+    return index >= 0 ? [slots[index], index + 1] : [undefined, undefined]
+  })
   return value
 }
 
