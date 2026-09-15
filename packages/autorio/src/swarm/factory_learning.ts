@@ -10,7 +10,6 @@ import {
   get_skill_definition,
 } from '../skills'
 import type { SkillDefinition } from '../skills'
-import type { new_actor_registry } from './actor_registry'
 import { new_actor_registry } from './actor_registry'
 import { post_observation } from './blackboard'
 import { new_standalone_actor_pool } from './standalone_actor_pool'
