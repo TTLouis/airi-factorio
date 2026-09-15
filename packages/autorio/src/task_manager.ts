@@ -25,12 +25,14 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
   let last_cancelled_batch: TaskBatchReceipt | undefined
 
   function begin_or_extend_batch(task: PlayerParameters) {
-    if (active_batch_id === undefined) {
+    const created = active_batch_id === undefined
+    if (created) {
       batch_sequence += 1
       active_batch_id = batch_sequence
       active_batch_task_types = []
     }
     active_batch_task_types.push(task.type)
+    return created
   }
 
   function close_batch(kind: 'completed' | 'cancelled', reason?: string) {
@@ -49,10 +51,20 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     return receipt
   }
 
+  function receipt_details(receipt: TaskBatchReceipt) {
+    const reason = receipt.reason ? `, reason=${receipt.reason}` : ''
+    return `batch=${receipt.batch_id}, task_count=${receipt.task_count}, tasks=${receipt.task_types.join(',') || 'none'}, tick=${receipt.tick}${reason}`
+  }
+
   function add_task(task: PlayerParameters) {
-    begin_or_extend_batch(task)
+    const new_batch = begin_or_extend_batch(task)
     task_queue.push(task)
     log(`[AUTORIO] Task added: ${task.type}, batch=${active_batch_id}, task queue length: ${task_queue.length}`)
+    if (new_batch) {
+      const details = `batch=${active_batch_id}, first_task=${task.type}, tick=${game.tick}`
+      game.print(`[AUTORIO] Operation batch started: ${details}`)
+      log(`[AUTORIO] Operation batch started: ${details}`)
+    }
 
     if (task_queue.length === 1) {
       next_task()
@@ -115,7 +127,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       player_state.task_state = TaskStates.IDLE
       const receipt = close_batch('completed')
       const details = receipt
-        ? `batch=${receipt.batch_id}, task_count=${receipt.task_count}, tasks=${receipt.task_types.join(',') || 'none'}, tick=${receipt.tick}`
+        ? receipt_details(receipt)
         : `batch=none, task_count=0, tasks=none, tick=${game.tick}`
       game.print(`[AUTORIO] All operations completed: ${details}`)
       log(`[AUTORIO] All operations completed: ${details}`)
@@ -293,13 +305,23 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     run_cancel_cleanup()
     reset_task_state()
     task_queue.length = 0
-    close_batch('cancelled', reason)
+    const receipt = close_batch('cancelled', reason)
+    if (receipt) {
+      const details = receipt_details(receipt)
+      game.print(`[AUTORIO] Operation batch cancelled: ${details}`)
+      log(`[AUTORIO] Operation batch cancelled: ${details}`)
+    }
   }
 
   function discard_all_tasks_after_actor_loss() {
     clear_task_state_without_controls()
     task_queue.length = 0
-    close_batch('cancelled', 'actor_loss')
+    const receipt = close_batch('cancelled', 'actor_loss')
+    if (receipt) {
+      const details = receipt_details(receipt)
+      game.print(`[AUTORIO] Operation batch cancelled: ${details}`)
+      log(`[AUTORIO] Operation batch cancelled: ${details}`)
+    }
   }
 
   register_npc_recovery_handler(({ previous_actor_id }) => {
