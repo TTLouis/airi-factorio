@@ -1,14 +1,15 @@
 import { NpcDialogueMemory } from './npc-agent-loop.mjs'
 
-const STRICT_TASK_BY_OPERATION = new Map([
-  ['walk_to_entity', 'walking_to_entity'],
-  ['walk_to_player', 'walking_to_entity'],
-  ['mine_entity', 'mining'],
-  ['place_entity', 'placing'],
-  ['set_machine_recipe', 'setting_recipe'],
-  ['craft_item', 'crafting'],
-  ['attack_nearest_enemy', 'attacking'],
-  ['clear_enemy_area', 'attacking'],
+const STRICT_TASKS_BY_OPERATION = new Map([
+  ['walk_to_entity', ['walking_to_entity']],
+  ['walk_to_player', ['walking_to_entity']],
+  ['mine_entity', ['mining']],
+  ['gather_resource', ['walking_to_entity', 'mining']],
+  ['place_entity', ['placing']],
+  ['set_machine_recipe', ['setting_recipe']],
+  ['craft_item', ['crafting']],
+  ['attack_nearest_enemy', ['attacking']],
+  ['clear_enemy_area', ['attacking']],
 ])
 
 function clean(value) {
@@ -58,11 +59,11 @@ export function verifyDeterministicReceipt(state, evidence) {
 
   const expectedTaskTypes = []
   for (const operation of operations) {
-    const taskType = STRICT_TASK_BY_OPERATION.get(operation.name)
-    if (!taskType) {
+    const taskTypes = STRICT_TASKS_BY_OPERATION.get(operation.name)
+    if (!taskTypes) {
       return { verified: false, reason: `operation_requires_additional_verification:${operation.name}` }
     }
-    expectedTaskTypes.push(taskType)
+    expectedTaskTypes.push(...taskTypes)
   }
 
   if (receipt.task_count !== expectedTaskTypes.length || !taskTypesMatch(receipt.task_types, expectedTaskTypes)) {

@@ -46,6 +46,7 @@ const operationKeys = {
   equip_armor: ['item_name'],
   select_weapon_slot: ['slot'],
   mine_entity: ['entity_name', 'count'],
+  gather_resource: ['resource_name', 'count', 'search_radius'],
   place_entity: ['entity_name', 'x', 'y', 'direction'],
   move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
   move_items_exact: ['item_name', 'unit_number', 'max_count', 'to_entity'],
@@ -88,6 +89,15 @@ export function parseOperation(value) {
       return { name, args: { slot: integer(args.slot, 'slot', 1, 64) } }
     case 'mine_entity':
       return { name, args: { entity_name: factorioName(args.entity_name), count: integer(args.count ?? 1, 'count', 1, 1000) } }
+    case 'gather_resource':
+      return {
+        name,
+        args: {
+          resource_name: factorioName(args.resource_name),
+          count: integer(args.count ?? 1, 'count', 1, 1000),
+          search_radius: integer(args.search_radius ?? 256, 'search_radius', 1, 4096),
+        },
+      }
     case 'place_entity': {
       const hasX = args.x !== undefined
       const hasY = args.y !== undefined
@@ -139,6 +149,7 @@ export function renderOperation(value) {
     case 'equip_armor': return `remote.call('autorio_operations','equip_armor',${luaString(operation.args.item_name)})`
     case 'select_weapon_slot': return `remote.call('autorio_operations','select_weapon_slot',${operation.args.slot})`
     case 'mine_entity': return `remote.call('autorio_operations','mine_entity',${luaString(operation.args.entity_name)},${operation.args.count})`
+    case 'gather_resource': return `remote.call('autorio_operations','gather_resource',${luaString(operation.args.resource_name)},${operation.args.count},${operation.args.search_radius})`
     case 'place_entity': {
       const name = luaString(operation.args.entity_name)
       if (operation.args.x !== undefined && operation.args.y !== undefined) {

@@ -13,6 +13,7 @@ import { new_awareness_controller } from './awareness'
 import { new_basic_operation_runtime } from './basic_operation_runtime'
 import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
+import { new_composite_operation_controller } from './composite_operations'
 import { new_crafting_controller } from './crafting'
 import { new_defense_controller } from './defense'
 import { create_discovery_remote_interface } from './discovery'
@@ -51,6 +52,7 @@ const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_
 const recipe_configuration_runtime = new_recipe_configuration_runtime(task_manager, basic_operation_controller)
 const interaction_recovery = new_interaction_recovery(task_manager)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
+const composite_operation_controller = new_composite_operation_controller(navigation_controller, basic_operation_controller, task_manager)
 const navigation_obstacle_recovery = new_navigation_obstacle_recovery()
 const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
@@ -192,6 +194,11 @@ remote.add_interface('autorio_operations', {
     const accepted = basic_operation_controller.submit_mining(entity_name, count)
     if (accepted) log(`[AUTORIO] New mine_entity task: ${entity_name} x${count}`)
     return accepted
+  },
+  gather_resource: (resource_name: string, count: number = 1, search_radius: number = 256): [boolean, string] => {
+    const result = composite_operation_controller.gather_resource(resource_name, count, search_radius)
+    if (result[0]) log(`[AUTORIO] New gather_resource task: ${resource_name} x${count}, radius=${search_radius}`)
+    return result
   },
   place_entity: (entity_name: string, x?: number, y?: number, direction?: number) => {
     const accepted = basic_operation_controller.submit_placement(entity_name, x, y, direction)
