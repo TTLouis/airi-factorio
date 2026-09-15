@@ -2,13 +2,47 @@ import type { MapPositionStruct } from 'factorio:prototype'
 import type { LuaEntity, LuaForce, LuaSurface } from 'factorio:runtime'
 import type { ActorCraftingQueueItem, ActorEntityBuildArgs, ActorMiningState, ActorShootingState, ActorStatusSnapshot, ActorWalkingState, ControlledActor } from './types'
 
+interface StandaloneNpcIdentity {
+  id: string
+  name: string
+}
+
 declare const storage: {
   standalone_character_unit_number?: number
+  standalone_npc_identity?: StandaloneNpcIdentity
+  standalone_npc_identity_serial?: number
+}
+
+const NPC_NAMES = [
+  'Aster',
+  'Cinder',
+  'Ember',
+  'Kite',
+  'Luma',
+  'Mira',
+  'Nova',
+  'Piper',
+  'Rook',
+  'Vale',
+]
+
+function ensure_identity(): StandaloneNpcIdentity {
+  if (storage.standalone_npc_identity) return storage.standalone_npc_identity
+  const serial = storage.standalone_npc_identity_serial ?? 1
+  storage.standalone_npc_identity_serial = serial + 1
+  const index = math.random(1, NPC_NAMES.length) - 1
+  const identity = {
+    id: `npc-${serial}`,
+    name: `${NPC_NAMES[index]}-${serial}`,
+  }
+  storage.standalone_npc_identity = identity
+  return identity
 }
 
 /**
  * A standalone `character` entity with no LuaPlayer behind it. Its unit_number
- * is persisted so the same NPC can be reacquired after save/load.
+ * is persisted so the same physical body can be reacquired after save/load.
+ * A separate logical NPC identity is persisted across body death/replacement.
  */
 export class StandaloneCharacterActor implements ControlledActor {
   private constructor(private readonly character_entity: LuaEntity) {}
@@ -24,6 +58,7 @@ export class StandaloneCharacterActor implements ControlledActor {
       return undefined
     }
 
+    ensure_identity()
     storage.standalone_character_unit_number = entity.unit_number
     return new StandaloneCharacterActor(entity)
   }
@@ -42,6 +77,7 @@ export class StandaloneCharacterActor implements ControlledActor {
       return undefined
     }
 
+    ensure_identity()
     return new StandaloneCharacterActor(entity)
   }
 
@@ -70,26 +106,14 @@ export class StandaloneCharacterActor implements ControlledActor {
   }
 
   update_selected_entity(position: MapPositionStruct) {
-    // `character` entities inherit LuaControl, so selection works without a
-    // LuaPlayer and is required for normal mining_state-driven mining.
     this.character_entity.update_selected_entity(position)
   }
 
   get_mining_state(): ActorMiningState {
     const state = this.character_entity.mining_state
-
-    // Factorio mines the currently selected entity. A standalone scripted
-    // character can retain `mining_state.mining = true` after a resource cycle
-    // while its selection has been cleared or its real character mining
-    // progress has fallen back to zero. In Factorio 2.0.x, LuaEntity's generic
-    // `mining_progress` field is mining-drill-only; character progress is
-    // exposed through the inherited LuaControl `character_mining_progress`.
-    // Treat either stopped condition as effectively idle so control.ts can
-    // reselect the persisted target and start the next requested cycle.
     if (state.mining && (!this.character_entity.selected || this.character_entity.character_mining_progress === 0)) {
       return { mining: false }
     }
-
     return state
   }
 
@@ -150,11 +174,13 @@ export class StandaloneCharacterActor implements ControlledActor {
 
   status_snapshot(): ActorStatusSnapshot {
     const selected = this.character_entity.selected
+    const identity = ensure_identity()
 
     return {
       kind: 'standalone_character',
       valid: this.character_entity.valid,
-      name: 'AIRI',
+      name: identity.name,
+      npc_id: identity.id,
       position: this.character_entity.position,
       has_character: true,
       actor_id: this.character_entity.unit_number,
