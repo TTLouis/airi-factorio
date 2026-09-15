@@ -36,6 +36,7 @@ describe('agent observation tools', () => {
       'getEntityStatus',
       'getNavigationStatus',
       'getFollowStatus',
+      'getDefenseStatus',
       'getCraftingStatus',
       'getResearchStatus',
       'getTechnology',
@@ -139,6 +140,13 @@ describe('navigation and follow observation tools', () => {
       input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_follow", "status")))',
     } })
   })
+
+  it('reads persistent follow auto-defense state', async () => {
+    await getTool('getDefenseStatus').fn({ parameters: {} })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_defense", "status")))',
+    } })
+  })
 })
 
 describe('crafting, research, and combat observation tools', () => {
@@ -171,12 +179,12 @@ describe('crafting, research, and combat observation tools', () => {
 })
 
 describe('prompt contract', () => {
-  it('documents equipment, discovery, player interaction, follow, navigation, crafting, research, and combat tools', () => {
-    for (const name of ['getEquipmentStatus', 'getPlayerStatus', 'findLongRangeEntities', 'getFollowStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+  it('documents equipment, discovery, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
+    for (const name of ['getEquipmentStatus', 'getPlayerStatus', 'findLongRangeEntities', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
-    for (const operation of ['walk_to_player', 'move_items_with_player', 'follow_player', 'stop_follow_player', 'equip_weapon', 'equip_ammo', 'equip_armor', 'select_weapon_slot']) {
+    for (const operation of ['walk_to_player', 'move_items_with_player', 'follow_player', 'stop_follow_player', 'set_auto_defense', 'equip_weapon', 'equip_ammo', 'equip_armor', 'select_weapon_slot', 'clear_enemy_area']) {
       expect(prompt).toContain(operation)
     }
     expect(prompt).toContain('4096')
