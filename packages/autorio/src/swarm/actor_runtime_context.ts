@@ -2,6 +2,7 @@ import type { OnScriptPathRequestFinishedEvent } from 'factorio:runtime'
 import type { ControlledActor } from '../actors/types'
 import { new_basic_operation_runtime } from '../basic_operation_runtime'
 import { new_basic_operation_controller } from '../basic_operations'
+import { new_composite_operation_controller } from '../composite_operations'
 import { new_crafting_controller } from '../crafting'
 import { new_interaction_recovery } from '../interaction_recovery'
 import { new_recipe_configuration_runtime } from '../recipe_configuration'
@@ -23,6 +24,7 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
   const recipeConfiguration = new_recipe_configuration_runtime(manager, basic)
   const interactionRecovery = new_interaction_recovery(manager)
   const navigation = new_actor_scoped_navigation_controller(actorId, get_actor, manager)
+  const composite = new_composite_operation_controller(navigation, basic, manager)
   const crafting = new_crafting_controller(get_actor, manager, { persistenceKey: actorId })
   const combat = new_actor_scoped_combat_controller(actorId, get_actor, manager)
 
@@ -141,6 +143,7 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
     actorId,
     manager,
     basic,
+    composite,
     navigation,
     crafting,
     combat,

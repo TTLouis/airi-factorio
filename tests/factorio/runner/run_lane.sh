@@ -166,6 +166,8 @@ case "$LANE" in
   swarm)
     printf '[npc-test][swarm] Running live two-NPC isolation and replacement gate...\n'
     run_py swarm_multi_actor.py
+    printf '[npc-test][swarm] Running actor-scoped LLM bridge authority/isolation gate...\n'
+    run_py swarm_actor_bridge.py
     printf '[npc-test][swarm] Running mission/reassignment/request coordination gate...\n'
     run_py swarm_coordination.py
     printf '[npc-test][swarm] Running cooperative resource/logistics/production gate...\n'
