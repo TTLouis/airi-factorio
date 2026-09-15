@@ -176,11 +176,20 @@ function physically_stuck(actor: ControlledActor, state: ObstacleRecoveryState) 
 export function new_navigation_obstacle_recovery() {
   function set_enabled(enabled: boolean) {
     storage.airi_navigation_clear_obstacles = enabled !== false
+    if (enabled === false && storage.airi_navigation_obstacle_recovery) {
+      storage.airi_navigation_obstacle_recovery.clear_obstacles = false
+    }
     return storage.airi_navigation_clear_obstacles
   }
 
   function enabled() {
     return storage.airi_navigation_clear_obstacles !== false
+  }
+
+  function suspend(actor: ControlledActor | undefined) {
+    const state = storage.airi_navigation_obstacle_recovery
+    if (state?.clearing_target && actor?.is_valid) actor.set_mining_state({ mining: false })
+    storage.airi_navigation_obstacle_recovery = undefined
   }
 
   function tick(actor: ControlledActor, raw_task: PlayerParametersWalkToEntity | undefined) {
@@ -214,5 +223,5 @@ export function new_navigation_obstacle_recovery() {
     }
   }
 
-  return { set_enabled, enabled, tick, status }
+  return { set_enabled, enabled, suspend, tick, status }
 }
