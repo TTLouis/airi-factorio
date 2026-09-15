@@ -61,11 +61,11 @@ describe('physical navigation recovery', () => {
     f.controller.tick(f.actor)
     let task: any = f.manager.player_state.parameters_walk_to_entity
     f.controller.on_path_finished({ id: task.path_request_id, path: undefined, try_again_later: false } as any)
-    ;(globalThis as any).game.tick = 20
+    ;(globalThis as any).game.tick = 30
     f.controller.tick(f.actor)
     task = f.manager.player_state.parameters_walk_to_entity
     f.controller.on_path_finished({ id: task.path_request_id, path: undefined, try_again_later: false } as any)
-    ;(globalThis as any).game.tick = 40
+    ;(globalThis as any).game.tick = 60
     f.controller.tick(f.actor)
 
     task = f.manager.player_state.parameters_walk_to_entity as any
@@ -86,7 +86,7 @@ describe('physical navigation recovery', () => {
       expect(task).toBeDefined()
       f.controller.on_path_finished({ id: task.path_request_id, path: undefined, try_again_later: false } as any)
       if (attempt < 4) {
-        ;(globalThis as any).game.tick += 20
+        ;(globalThis as any).game.tick += 30
         f.controller.tick(f.actor)
       }
     }
