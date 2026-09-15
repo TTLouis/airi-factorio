@@ -292,7 +292,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
 
   function fail(actor: ControlledActor | undefined, task: BasicTask, code: BasicOperationCode, details: Partial<BasicOperationResult> = {}) {
     suppress_cancel_receipt = true
-    manager.cancel_all_tasks()
+    manager.cancel_all_tasks(`${task.type}:${code}`)
     suppress_cancel_receipt = false
     result_for(actor, task, false, false, code, details)
     log(`[AUTORIO] [ERROR] ${task.type} failed: ${code}; dependent operations cancelled`)
