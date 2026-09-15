@@ -67,6 +67,37 @@ describe('basic operation ownership and receipts', () => {
     expect(c.manager.player_state.parameters_waiting?.operation_id).toBe(2)
   })
 
+  it('queues precise placement position and direction with an auditable receipt', () => {
+    const c = context()
+
+    expect(c.controller.submit_placement('assembling-machine-1', 4.5, -2, 6)).toBe(true)
+    expect(c.manager.player_state.parameters_place_entity).toMatchObject({
+      operation_id: 1,
+      owner_actor_id: 18,
+      owner_actor_kind: 'standalone_character',
+      owner_force_index: 1,
+      entity_name: 'assembling-machine-1',
+      position: { x: 4.5, y: -2 },
+      direction: 6,
+    })
+    expect(c.controller.status().last_result).toMatchObject({
+      code: 'queued',
+      accepted: true,
+      requested_position: { x: 4.5, y: -2 },
+      direction: 6,
+    })
+  })
+
+  it('rejects malformed precise placement before queueing work', () => {
+    const c = context()
+
+    expect(c.controller.submit_placement('steel-chest', 1, undefined, 0)).toBe(false)
+    expect(c.controller.status().last_result?.code).toBe('invalid_position')
+    expect(c.controller.submit_placement('steel-chest', 1, 1, 16)).toBe(false)
+    expect(c.controller.status().last_result?.code).toBe('invalid_direction')
+    expect(c.manager.get_status_snapshot()).toMatchObject({ task_state: TaskStates.IDLE, queue_length: 0 })
+  })
+
   it('rejects invalid bounded inputs before queueing work', () => {
     const c = context()
 
