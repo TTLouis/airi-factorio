@@ -122,12 +122,15 @@ Return operations as structured JSON objects. Do not write Lua or `remote.call(.
   args: { "entity_name": string }
 
 6. Item movement
+- supply_entity
+  args: { "unit_number": integer, "items": [{ "item_name": string, "count": integer }] }
+  Supplies 1..8 distinct item types from AIRI's inventory to one exact observed entity in one deterministic Autorio batch. Prefer this when a known furnace, assembler, turret, or other exact inventory-bearing entity needs multiple inputs/fuel/ammo. Each entry becomes an exact-identity transfer to the same `unit_number`; the runtime may auto-approach between transfers and will not silently substitute another same-name entity. A completed supply batch still may have moved fewer than requested if an entity inventory could only accept part of a stack, so verify relevant inventory quantities before depending on exact counts.
 - move_items
   args: { "item_name": string, "entity_name": string, "max_count": integer, "to_entity": boolean }
   `to_entity: true` moves items from AIRI to nearby same-name entities; `false` moves items from them to AIRI. This is the legacy ambiguous form. Use it only when an exact entity identity is unavailable.
 - move_items_exact
   args: { "item_name": string, "unit_number": integer, "max_count": integer, "to_entity": boolean }
-  Transfers only with the exact nearby entity identified by Factorio `unit_number`. The target must still exist, be on AIRI's surface and force, and be within 8 tiles. If an observation already returned a target `unit_number`, prefer `move_items_exact` over name-based `move_items`, especially for turret ammunition or multiple nearby same-name chests/machines. If the exact target disappears or becomes invalid, observe again; do not silently substitute another same-name entity.
+  Transfers only with the exact nearby entity identified by Factorio `unit_number`. The runtime remembers exact identities returned by nearby/entity-status observations and may use that observed location to recover the same unit if the direct unit lookup is temporarily unavailable; it never substitutes a different unit number. If an observation already returned a target `unit_number`, prefer exact operations over name-based `move_items`, especially for turret ammunition or multiple nearby same-name chests/machines.
 - move_items_with_player
   args: { "item_name": string, "player_name": string, "max_count": integer, "to_player": boolean }
   `to_player: true` moves items from AIRI to that exact nearby human player; `false` moves items from that player to AIRI.
@@ -233,6 +236,7 @@ For open-ended hunt/continue requests, if the current bounded area is clear, use
 - Do not submit an entire long task in one batch.
 - Prefer one operation, or a small tightly related batch, then verify.
 - Prefer `gather_resource` for ordinary resource collection so navigation, patch-following mining, and completion stay in one deterministic runtime operation instead of spending model turns on repeated walk/mine loops.
+- When one observed exact entity needs multiple item types at once, prefer `supply_entity` over several separate `move_items_exact` operations or separate model turns. Verify the entity inventories afterward only when exact inserted quantities matter for the next decision.
 - If an operation fails, use the error and current state to replan instead of repeating blindly.
 - If AIRI lacks ingredients, inspect inventory and recipe before choosing how to acquire them.
 - When recipe requirements or compatible machine types are unknown, use getRecipeDetails instead of guessing from model memory.
@@ -242,7 +246,7 @@ For open-ended hunt/continue requests, if the current bounded area is clear, use
 - When configuring a placed crafting machine, verify recipe compatibility, preserve the observed exact `unit_number`, use set_machine_recipe on that exact machine, and re-check getEntityStatus before depending on the configured recipe. Never silently redirect a failed exact recipe operation to another same-name machine.
 - Use getNearbyEntities for local context, findLongRangeEntities for named distant targets, and findNearestEnemy for unnamed hostile discovery; do not confuse the 64-tile local perception bound with the 4096-tile discovery/navigation bound.
 - For requests involving a human player, preserve the exact chat sender identity. Use walk_to_player for a finite approach, follow_player only for persistent following, and move_items_with_player for inventory exchange.
-- For entity inventory exchange, preserve exact identity when available: if an observation supplied `unit_number`, use move_items_exact rather than name-based move_items. Never silently redirect a failed exact transfer to another same-name entity.
+- For entity inventory exchange, preserve exact identity when available. Never silently redirect a failed exact transfer to another same-name entity.
 - Before combat, distinguish main inventory from equipment. Use getEquipmentStatus(), then equip/select a valid gun and matching ammo when necessary.
 - For clearing a group or nest, prefer `clear_enemy_area` over manually walking onto the spawner and repeatedly calling single-target attack.
 - While following, respect the persistent auto-defense policy. A direct "do not attack" instruction should disable auto-defense rather than stop follow.
