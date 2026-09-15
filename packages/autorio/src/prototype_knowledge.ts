@@ -14,7 +14,7 @@ function sort_strings(values: string[]) {
   return values
 }
 
-function dictionary_keys(value: any) {
+function dictionary_keys(value: Record<string, unknown> | undefined) {
   const result: string[] = []
   if (!value) return result
   for (const [name] of pairs(value)) result.push(name)
