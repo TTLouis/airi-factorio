@@ -93,3 +93,45 @@ describe('composite resource gathering', () => {
     })
   })
 })
+
+describe('composite exact entity supply', () => {
+  it('queues multiple item loads to one exact unit number in one batch', () => {
+    const f = fixture()
+
+    expect(f.composite.supply_entity(104, [
+      { item_name: 'coal', count: 10 },
+      { item_name: 'iron-ore', count: 10 },
+    ])).toEqual([true, 'Exact entity supply task started'])
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.MOVING_ITEMS)
+    expect(f.manager.player_state.parameters_move_items).toMatchObject({
+      item_name: 'coal',
+      target_unit_number: 104,
+      max_count: 10,
+      to_entity: true,
+    })
+    expect(f.manager.get_status_snapshot()).toMatchObject({
+      queue_length: 1,
+      queued_task_types: [TaskStates.MOVING_ITEMS],
+      active_batch: {
+        task_count: 2,
+        task_types: [TaskStates.MOVING_ITEMS, TaskStates.MOVING_ITEMS],
+      },
+    })
+  })
+
+  it('rejects duplicate items before creating any work', () => {
+    const f = fixture()
+
+    expect(f.composite.supply_entity(104, [
+      { item_name: 'coal', count: 5 },
+      { item_name: 'coal', count: 5 },
+    ])[0]).toBe(false)
+    expect(f.manager.get_status_snapshot()).toMatchObject({
+      task_state: TaskStates.IDLE,
+      queue_length: 0,
+      queue_empty: true,
+      active_batch: undefined,
+    })
+  })
+})
