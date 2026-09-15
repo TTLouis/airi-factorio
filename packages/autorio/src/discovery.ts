@@ -46,9 +46,6 @@ function find_candidate_radius(actor: ControlledActor, name: string, max_radius:
     }
   }
 
-  // Fewer than desired_count entities exist inside max_radius. Materialize the
-  // complete bounded set once so the caller can still return every available
-  // match without widening beyond the requested world-search boundary.
   if (upper_count < desired_count) {
     return {
       searched_radius: upper_radius,
@@ -56,9 +53,6 @@ function find_candidate_radius(actor: ControlledActor, name: string, max_radius:
     }
   }
 
-  // Refine to the smallest integer radius that still contains desired_count.
-  // This avoids materializing a huge ore patch simply because its nearest edge
-  // was hundreds of tiles away from AIRI.
   let low = lower_radius + 1
   let high = upper_radius
   while (low < high) {
@@ -128,8 +122,6 @@ export function find_long_range_entities(actor: ControlledActor, name: string, m
     }
   }
 
-  // Only now ask Factorio to construct LuaEntity wrappers, and only for the
-  // refined radius around the nearest requested matches.
   const matches = actor.surface.find_entities_filtered({
     position: actor.position,
     radius: search.searched_radius,
@@ -150,6 +142,38 @@ export function find_long_range_entities(actor: ControlledActor, name: string, m
   }
 }
 
+export function find_nearest_enemy(actor: ControlledActor, max_distance: number = 1024) {
+  const bounded_distance = math.max(1, math.min(MAX_LONG_RANGE_RADIUS, math.floor(max_distance || 1024)))
+  const entity = actor.surface.find_nearest_enemy({
+    position: actor.position,
+    max_distance: bounded_distance,
+    force: actor.force,
+  })
+
+  if (!entity || !entity.valid) {
+    return {
+      found: false,
+      actor_position: actor.position,
+      max_distance: bounded_distance,
+    }
+  }
+
+  return {
+    found: true,
+    actor_position: actor.position,
+    max_distance: bounded_distance,
+    entity: {
+      name: entity.name,
+      type: entity.type,
+      position: entity.position,
+      distance: math.sqrt(squared_distance(actor.position, entity.position)),
+      force: entity.force?.name,
+      unit_number: entity.unit_number,
+      health: entity.health,
+    },
+  }
+}
+
 export function create_discovery_remote_interface(get_actor: () => ControlledActor | undefined) {
   remote.add_interface('autorio_discovery', {
     find_entities: (name: string, max_radius: number = 1024, limit: number = 8) => {
@@ -162,6 +186,13 @@ export function create_discovery_remote_interface(get_actor: () => ControlledAct
       }
 
       return find_long_range_entities(actor, name, max_radius, limit)
+    },
+    find_nearest_enemy: (max_distance: number = 1024) => {
+      const actor = get_actor()
+      if (!actor || !actor.is_valid) {
+        return { found: false, error: 'no controlled actor' }
+      }
+      return find_nearest_enemy(actor, max_distance)
     },
   })
 }
