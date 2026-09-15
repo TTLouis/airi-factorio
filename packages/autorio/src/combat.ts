@@ -37,7 +37,10 @@ interface CombatResult {
   target_initial_health?: number
   targets_destroyed?: number
   turrets_placed?: number
+  last_turret_position?: { x: number, y: number }
+  last_turret_unit_number?: number
   turret_ammo_name?: string
+  last_turret_ammo_loaded?: number
 }
 
 declare const storage: {
@@ -94,9 +97,6 @@ function has_selected_weapon_and_ammo(character: LuaEntity) {
     return false
   }
 
-  // Factorio exposes selected_gun_index as a 1-based Lua inventory slot.
-  // typed-factorio intentionally presents LuaInventory as a 0-based
-  // TypeScript array, so convert the engine slot before indexing it here.
   const typescriptIndex = factorioIndex - 1
   const gun = guns[typescriptIndex]
   const magazine = ammo[typescriptIndex]
@@ -144,7 +144,10 @@ function record(actor: ControlledActor | undefined, task: PlayerParametersAttack
     target_initial_health: task?.target_initial_health,
     targets_destroyed: task?.targets_destroyed,
     turrets_placed: task?.turrets_placed,
+    last_turret_position: task?.last_turret_position,
+    last_turret_unit_number: task?.last_turret_unit_number,
     turret_ammo_name: task?.turret_ammo_name,
+    last_turret_ammo_loaded: task?.last_turret_ammo_loaded,
   }
   storage.airi_last_combat_result = result
   return result
@@ -260,8 +263,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     }
     clear_bound_target(task)
     stop_actor_combat(actor)
-    // Reacquire immediately so an area-clear cannot idle for a tick while a
-    // nearby biter is already engaging AIRI.
     acquire(actor, task)
   }
 
@@ -306,19 +307,40 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       turret.destroy()
       return false
     }
-    const requested = math.min(TURRET_LOAD_COUNT, ammo.stack.count)
-    const inserted = turret_inventory.insert({ name: ammo.name, count: requested })
-    if (inserted <= 0) {
+
+    // create_entity does not consume AIRI's inventory. Provision this support
+    // turret transactionally: if AIRI cannot actually pay the turret/ammo cost,
+    // or the turret cannot receive ammunition, roll the physical entity back.
+    const removed_turret = inventory.remove({ name: 'gun-turret', count: 1 })
+    if (removed_turret !== 1) {
       turret.destroy()
       return false
     }
 
-    inventory.remove({ name: 'gun-turret', count: 1 })
-    inventory.remove({ name: ammo.name, count: inserted })
+    const requested_ammo = math.min(TURRET_LOAD_COUNT, ammo.stack.count)
+    const removed_ammo = inventory.remove({ name: ammo.name, count: requested_ammo })
+    if (removed_ammo <= 0) {
+      inventory.insert({ name: 'gun-turret', count: 1 })
+      turret.destroy()
+      return false
+    }
+
+    const inserted_ammo = turret_inventory.insert({ name: ammo.name, count: removed_ammo })
+    if (inserted_ammo < removed_ammo) {
+      inventory.insert({ name: ammo.name, count: removed_ammo - inserted_ammo })
+    }
+    if (inserted_ammo <= 0) {
+      inventory.insert({ name: 'gun-turret', count: 1 })
+      turret.destroy()
+      return false
+    }
+
     task.turrets_placed = (task.turrets_placed ?? 0) + 1
     task.last_turret_position = { x: position.x, y: position.y }
+    task.last_turret_unit_number = turret.unit_number
     task.turret_ammo_name = ammo.name
-    log(`[AUTORIO] Combat support turret placed at ${serpent.line(position)} with ${inserted} ${ammo.name}`)
+    task.last_turret_ammo_loaded = inserted_ammo
+    log(`[AUTORIO] Combat support turret placed at ${serpent.line(position)} unit=${turret.unit_number ?? 'n/a'} with ${inserted_ammo} ${ammo.name}`)
     return true
   }
 
@@ -396,9 +418,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       actor.set_shooting_state({ state: defines.shooting.shooting_selected, position: target.position })
       task.last_progress_tick = game.tick
 
-      // Never walk directly onto a nest/worm once it is in range. Mobile
-      // enemies are kited toward the most recent support turret (or simply
-      // away from the threat) while AIRI keeps firing.
       if (target.type === 'unit' && current_distance <= KITE_DISTANCE) {
         shoot_while_retreating(actor, task, target)
       }
@@ -406,8 +425,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
         actor.set_walking_state({ walking: false, direction: defines.direction.north })
       }
       else {
-        // Keep moving against other mobile/unknown targets instead of freezing
-        // in melee range; this also allows run-and-gun behavior.
         walk_toward(actor, retreat_position(actor, target))
       }
       return
@@ -438,7 +455,9 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       targets_destroyed: task?.targets_destroyed ?? 0,
       turrets_placed: task?.turrets_placed ?? 0,
       last_turret_position: task?.last_turret_position,
+      last_turret_unit_number: task?.last_turret_unit_number,
       turret_ammo_name: task?.turret_ammo_name,
+      last_turret_ammo_loaded: task?.last_turret_ammo_loaded,
       target: target && target.valid
         ? {
             name: target.name,
