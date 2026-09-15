@@ -18,6 +18,7 @@ import { new_defense_controller } from './defense'
 import { create_discovery_remote_interface } from './discovery'
 import { new_equipment_controller } from './equipment'
 import { new_follow_controller } from './follow'
+import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
 import { new_research_controller } from './research'
 import { new_task_manager } from './task_manager'
@@ -28,6 +29,7 @@ import { get_actor_inventory_items } from './utils/inventory'
 
 create_tools_remote_interface()
 create_discovery_remote_interface(get_controlled_actor)
+create_knowledge_remote_interface(get_controlled_actor)
 
 let setup_complete = false
 
