@@ -12,9 +12,12 @@ const documentedOperations = [
   'equip_armor',
   'select_weapon_slot',
   'mine_entity',
+  'gather_resource',
   'place_entity',
+  'supply_entity',
   'move_items',
   'move_items_exact',
+  'set_machine_recipe',
   'move_items_with_player',
   'craft_item',
   'attack_nearest_enemy',
@@ -85,11 +88,18 @@ describe('production Factorio prompt contract', () => {
     }
   })
 
-  it('prefers stable exact entity identity for item transfers when available', () => {
+  it('preserves stable exact entity identity across transfers and deterministic recovery', () => {
     expect(prompt).toContain('Entity summaries include `unit_number`')
-    expect(prompt).toContain('prefer `move_items_exact` over name-based `move_items`')
+    expect(prompt).toContain('runtime remembers exact identities returned by nearby/entity-status observations')
+    expect(prompt).toContain('never substitutes a different unit number')
     expect(prompt).toContain('Never silently redirect a failed exact transfer to another same-name entity')
-    expect(prompt).toContain('The target must still exist, be on AIRI\'s surface and force, and be within 8 tiles')
+    expect(prompt).toContain('runtime may auto-approach between transfers')
+  })
+
+  it('prefers one exact supply composite for multiple inputs to the same entity', () => {
+    expect(prompt).toContain('Supplies 1..8 distinct item types')
+    expect(prompt).toContain('prefer `supply_entity` over several separate `move_items_exact` operations')
+    expect(prompt).toContain('completed supply batch still may have moved fewer than requested')
   })
 
   it('documents equipment as separate state and requires combat readiness checks', () => {
