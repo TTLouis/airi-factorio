@@ -25,28 +25,17 @@ function destroy_radar() {
   storage.airi_awareness_radar = undefined
 }
 
-function ensure_radar(actor: ControlledActor) {
-  let radar = storage.airi_awareness_radar
-  if (radar?.valid && radar.surface.index !== actor.surface.index) {
-    radar.destroy()
-    radar = undefined
-  }
-
-  if (!radar?.valid) {
-    radar = actor.surface.create_entity({
-      name: RADAR_NAME,
-      position: actor.position,
-      force: actor.force,
-    })
-    if (!radar) return undefined
-    radar.destructible = false
-    radar.minable_flag = false
-    radar.operable = false
-    storage.airi_awareness_radar = radar
-    return radar
-  }
-
-  radar.teleport(actor.position)
+function create_radar(actor: ControlledActor) {
+  const radar = actor.surface.create_entity({
+    name: RADAR_NAME,
+    position: actor.position,
+    force: actor.force,
+  })
+  if (!radar) return undefined
+  radar.destructible = false
+  radar.minable_flag = false
+  radar.operable = false
+  storage.airi_awareness_radar = radar
   return radar
 }
 
@@ -59,22 +48,39 @@ export function new_awareness_controller() {
       return false
     }
 
-    ensure_radar(actor)
-
     const chunk_x = chunk_coordinate(actor.position.x)
     const chunk_y = chunk_coordinate(actor.position.y)
     const previous = storage.airi_awareness_chunk
-    if (previous
-      && previous.surface_index === actor.surface.index
-      && previous.chunk_x === chunk_x
-      && previous.chunk_y === chunk_y) {
-      return false
+    const changed_chunk = !previous
+      || previous.surface_index !== actor.surface.index
+      || previous.chunk_x !== chunk_x
+      || previous.chunk_y !== chunk_y
+
+    let radar = storage.airi_awareness_radar
+    if (radar?.valid && radar.surface.index !== actor.surface.index) {
+      radar.destroy()
+      radar = undefined
+      storage.airi_awareness_radar = undefined
     }
 
-    // The hidden RadarPrototype handles the actual 3x3 fog-of-war visibility.
-    // Chunk generation remains an explicit bounded safety net because a radar
-    // cannot reveal terrain that does not exist yet, and standalone characters
-    // do not get the normal LuaPlayer exploration/generation bubble.
+    if (!radar?.valid) {
+      radar = create_radar(actor)
+    }
+    else if (changed_chunk) {
+      // Radar visibility is chunk based. Moving it inside the same 32x32 chunk
+      // cannot change the 3x3 nearby-sector footprint, so avoid a LuaEntity
+      // teleport every simulation tick. Reposition only when the footprint can
+      // actually change.
+      radar.teleport(actor.position)
+    }
+
+    if (!changed_chunk) return false
+
+    // The hidden RadarPrototype handles the actual continuously refreshed 3x3
+    // fog-of-war visibility. Chunk generation remains an explicit bounded
+    // safety net because a radar cannot reveal terrain that does not exist yet,
+    // and standalone characters do not get the normal LuaPlayer exploration
+    // generation bubble.
     actor.surface.request_to_generate_chunks(actor.position, RADAR_CHUNK_RADIUS)
     actor.surface.force_generate_chunk_requests()
 
