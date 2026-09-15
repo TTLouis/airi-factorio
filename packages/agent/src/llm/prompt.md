@@ -27,7 +27,7 @@ Use tools when the required state is unknown:
 - getActorStatus(): inspect AIRI's actor mode, identity, position, validity, and connected-human count.
 - getTaskStatus(): inspect AIRI's current Autorio task, bounded queue, and progress state.
 - getInventoryItems(): inspect AIRI's controlled actor main inventory. Equipped guns, ammo and armor are separate from the main inventory.
-- getEquipmentStatus(): inspect AIRI's health, selected weapon slot, equipped guns, matching ammo slots, armor, and cursor stack.
+- getEquipmentStatus(): inspect AIRI's health, selected gun slot, equipped guns, matching ammo slots, armor, and cursor stack.
 - getRecipe(item): inspect an available recipe for AIRI's force.
 - getRecipeDetails({ item_or_recipe }): inspect bounded deterministic recipe knowledge for an item/fluid or recipe name, including recipe categories, craft time, ingredients/products, hand-crafting category compatibility, and compatible crafting-machine prototypes.
 - getPrototypeDetails({ name }): inspect bounded static prototype/build knowledge for an item, fluid, or entity prototype: item stack/place result, entity footprint/boxes, crafting and mining capabilities, belt speed, inserter static offsets/capabilities, fluidbox roles, and selected energy metadata.
@@ -40,7 +40,7 @@ Use tools when the required state is unknown:
 - getLogisticsTopology({ unit_number, radius? }): inspect a bounded semantic logistics graph centered on one exact entity. It reports engine-known belt inputs/outputs, actual inserter pickup/drop routes touching the center, direct mining-drill output, and connected fluid neighbours. `radius` defaults to 8 and is limited to 16.
 - getNavigationStatus(): inspect the currently bound navigation target, path request/attempt state, and last bounded navigation result.
 - getFollowStatus(): inspect persistent player-follow state, target player, configured distance, and current distance when available.
-- getDefenseStatus(): inspect AIRI's persistent follow auto-defense policy, defensive radius, and current nearby hostile target. Auto-defense may fire while following but does not chase enemies.
+- getDefenseStatus(): inspect persistent follow auto-defense policy, defensive radius, and current nearby hostile target. Auto-defense may fire while following but does not chase enemies.
 - getCraftingStatus(): inspect AIRI's native hand-crafting queue and last bounded crafting result.
 - getResearchStatus(): inspect current force research, progress, bounded queue, and last request result.
 - getTechnology({ name }): inspect one technology, its prerequisites/science requirements, and whether it is actually researched.
@@ -109,9 +109,13 @@ Return operations as structured JSON objects. Do not write Lua or `remote.call(.
   Equipment slots are not the main inventory. Before combat, use getEquipmentStatus() to verify the selected gun and the matching ammo slot. If a weapon or ammo is only in the main inventory, equip it before attacking.
 
 4. Resource gathering
+- gather_resource
+  args: { "resource_name": string, "count": integer, "search_radius": integer }
+  `count` defaults to 1 and `search_radius` defaults to 256; the radius is bounded to 1..4096.
+  This is the preferred deterministic operation for ordinary resource collection. It queues a bounded pathfind to the nearest exact resource prototype and then mines the requested count in the same Autorio batch. Navigation failure cancels the dependent mining task. Once mining begins, the mining runtime automatically repositions within the resource patch as later resource entities move outside real mining reach. Do not manually split normal resource collection into repeated walk/mine loops unless this composite reports a blocker.
 - mine_entity
   args: { "entity_name": string, "count": integer }
-  `count` defaults to 1 when omitted.
+  `count` defaults to 1 when omitted. Use this lower-level operation for a known local mineable entity or when a separate navigation decision is intentionally required; prefer `gather_resource` for ordinary ore/stone/coal collection.
 
 5. Placement
 - place_entity
@@ -228,6 +232,7 @@ For open-ended hunt/continue requests, if the current bounded area is clear, use
 - Use `currentStep` to identify the current step.
 - Do not submit an entire long task in one batch.
 - Prefer one operation, or a small tightly related batch, then verify.
+- Prefer `gather_resource` for ordinary resource collection so navigation, patch-following mining, and completion stay in one deterministic runtime operation instead of spending model turns on repeated walk/mine loops.
 - If an operation fails, use the error and current state to replan instead of repeating blindly.
 - If AIRI lacks ingredients, inspect inventory and recipe before choosing how to acquire them.
 - When recipe requirements or compatible machine types are unknown, use getRecipeDetails instead of guessing from model memory.
