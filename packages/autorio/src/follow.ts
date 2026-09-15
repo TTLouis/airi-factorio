@@ -75,7 +75,7 @@ function copy_position(position: { x: number, y: number } | undefined) {
 }
 
 function moved_materially(a: { x: number, y: number } | undefined, b: { x: number, y: number } | undefined) {
-  if (!a || !b) return true
+  if (!a || !b) return false
   return distance(a, b) >= BLOCKED_RETRY_TARGET_MOVEMENT
 }
 
@@ -208,11 +208,13 @@ export function new_follow_controller(get_actor: () => ControlledActor | undefin
 
     const blocked_reason = navigation_blocked(nav, state.player_name)
     if (blocked_reason) {
-      if (!moved_materially(state.blocked_target_position, player.position)) {
+      const blocked_at = state.blocked_target_position
+      if (!blocked_at || !moved_materially(blocked_at, player.position)) {
         stop_walking(actor)
         state.state = 'blocked'
         state.code = 'navigation_blocked'
         state.blocked_reason = blocked_reason
+        state.blocked_target_position = blocked_at ?? copy_position(player.position)
         state.updated_tick = game.tick
         return
       }
