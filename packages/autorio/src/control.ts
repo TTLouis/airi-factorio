@@ -14,6 +14,7 @@ import { new_basic_operation_runtime } from './basic_operation_runtime'
 import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
 import { new_composite_operation_controller } from './composite_operations'
+import { execute_validated_construction_plan } from './construction_execution'
 import { new_crafting_controller } from './crafting'
 import { new_defense_controller } from './defense'
 import { create_discovery_remote_interface } from './discovery'
@@ -180,6 +181,19 @@ remote.add_interface('autorio_operations', {
   supply_entity: (unit_number: number, items: Array<{ item_name: string, count: number }>): [boolean, string] => {
     const result = composite_operation_controller.supply_entity(unit_number, items)
     if (result[0]) log(`[AUTORIO] New supply_entity task: unit=${unit_number}, item_types=${items.length}`)
+    return result
+  },
+  execute_construction_plan: (validation_id: number, placement_count: number): [boolean, string] => {
+    const actor = get_controlled_actor()
+    if (!actor) return [false, 'controlled actor is unavailable']
+    const result = execute_validated_construction_plan(
+      actor,
+      validation_id,
+      placement_count,
+      basic_operation_controller,
+      task_manager,
+    )
+    if (result[0]) log(`[AUTORIO] New execute_construction_plan task: validation=${validation_id}, placements=${placement_count}`)
     return result
   },
   place_entity: (entity_name: string, x?: number, y?: number, direction?: number) => {
