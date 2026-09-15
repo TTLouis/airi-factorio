@@ -36,8 +36,13 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.deepEqual(parseOperation({ name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 4096 } }), {
     name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 4096 },
   })
+  assert.deepEqual(parseOperation({ name: 'place_entity', args: { entity_name: 'assembling-machine-1', x: 12.5, y: -4, direction: 6 } }), {
+    name: 'place_entity', args: { entity_name: 'assembling-machine-1', x: 12.5, y: -4, direction: 6 },
+  })
   assert.equal(renderOperation({ name: 'wait', args: { ticks: 60 } }), "remote.call('autorio_operations','wait',60)")
   assert.equal(renderOperation({ name: 'place_entity', args: { entity_name: "mod's-chest" } }), "remote.call('autorio_operations','place_entity','mod\\'s-chest')")
+  assert.equal(renderOperation({ name: 'place_entity', args: { entity_name: 'transport-belt', direction: 4 } }), "remote.call('autorio_operations','place_entity','transport-belt',nil,nil,4)")
+  assert.equal(renderOperation({ name: 'place_entity', args: { entity_name: 'assembling-machine-1', x: 12.5, y: -4, direction: 6 } }), "remote.call('autorio_operations','place_entity','assembling-machine-1',12.5,-4,6)")
   assert.equal(renderOperation({ name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 3.5 } }), "remote.call('autorio_operations','follow_player','TTLouis',3.5)")
   assert.equal(renderOperation({ name: 'set_auto_defense', args: { enabled: true } }), "remote.call('autorio_operations','set_auto_defense',true)")
   assert.equal(renderOperation({ name: 'walk_to_player', args: { player_name: 'TTLouis' } }), "remote.call('autorio_operations','walk_to_player','TTLouis')")
@@ -67,6 +72,10 @@ test('operation policy rejects arbitrary code, extra args, and oversized bounded
     { name: 'stop_follow_player', args: { player_name: 'TTLouis' } },
     { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } },
     { name: 'mine_entity', args: { entity_name: 'iron-ore\n/c game.clear()', count: 1 } },
+    { name: 'place_entity', args: { entity_name: 'steel-chest', x: 1 } },
+    { name: 'place_entity', args: { entity_name: 'steel-chest', y: 1 } },
+    { name: 'place_entity', args: { entity_name: 'steel-chest', x: 1, y: 1, direction: 16 } },
+    { name: 'place_entity', args: { entity_name: 'steel-chest', x: 1000001, y: 0 } },
   ]) assert.throws(() => parseOperation(operation))
 })
 
