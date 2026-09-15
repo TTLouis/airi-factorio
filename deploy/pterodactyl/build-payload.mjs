@@ -14,7 +14,7 @@ const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
 // Immutable commit containing the audited installer payload. Channel eggs keep
 // this bootstrap immutable, then resolve AIRI_SOURCE_REF to an exact commit at
 // reinstall time and patch only the payload's AIRI_REF/revision assignments.
-const PAYLOAD_REF = 'b73d12101bad1b4515b75818474985a95e933ef4'
+const PAYLOAD_REF = 'a16cc6d1201ae529813a4530a51125ba2654a144'
 const CHANNELS = Object.freeze({
   main: {
     name: 'AIRI Factorio Server (Main)',
