@@ -111,6 +111,27 @@ describe('basic operation ownership and receipts', () => {
     })
   })
 
+  it('queues exact machine recipe configuration and records the target identity', () => {
+    const c = context()
+
+    expect(c.controller.submit_set_recipe_exact(4242, 'iron-gear-wheel')).toEqual([true, 'Task started'])
+    expect(c.manager.player_state.parameters_set_recipe).toMatchObject({
+      operation_id: 1,
+      owner_actor_id: 18,
+      owner_actor_kind: 'standalone_character',
+      owner_force_index: 1,
+      target_unit_number: 4242,
+      recipe_name: 'iron-gear-wheel',
+    })
+    expect(c.controller.status().last_result).toMatchObject({
+      code: 'queued',
+      accepted: true,
+      type: TaskStates.SETTING_RECIPE,
+      target_unit_number: 4242,
+      recipe_name: 'iron-gear-wheel',
+    })
+  })
+
   it('rejects malformed precise placement before queueing work', () => {
     const c = context()
 
@@ -130,6 +151,10 @@ describe('basic operation ownership and receipts', () => {
     expect(c.controller.status().last_result?.code).toBe('invalid_max_count')
     expect(c.controller.submit_move_exact('iron-plate', 0, 1, true)[0]).toBe(false)
     expect(c.controller.status().last_result?.code).toBe('invalid_unit_number')
+    expect(c.controller.submit_set_recipe_exact(0, 'iron-gear-wheel')[0]).toBe(false)
+    expect(c.controller.status().last_result?.code).toBe('invalid_unit_number')
+    expect(c.controller.submit_set_recipe_exact(42, '')[0]).toBe(false)
+    expect(c.controller.status().last_result?.code).toBe('invalid_recipe')
     expect(c.controller.submit_wait(360001)[0]).toBe(false)
     expect(c.controller.status().last_result?.code).toBe('invalid_ticks')
     expect(c.manager.get_status_snapshot()).toMatchObject({ task_state: TaskStates.IDLE, queue_length: 0 })
