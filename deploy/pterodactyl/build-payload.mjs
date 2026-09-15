@@ -9,7 +9,7 @@ const sourcePath = join(here, 'payload-src', 'installer.sh')
 const installPath = join(here, 'install.sh')
 const eggPath = join(here, 'egg-airi-factorio-server.json')
 const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
-const PAYLOAD_REF = 'b73d12101bad1b4515b75818474985a95e933ef4'
+const PAYLOAD_REF = 'd6a6ba815cb724c9622d8a980a9c781cc60c0cb8'
 const CHANNEL = Object.freeze({
   name: 'AIRI Factorio Server (Swarm E2E)',
   description: 'Development AIRI Factorio channel for swarm E2E testing. Reinstall resolves the latest feat/swarm-pterodactyl-playable commit to an exact SHA. Restart never updates code. The bundled chat/LLM loop remains single-NPC while the installed Autorio runtime exposes swarm coordination APIs and deterministic swarm test coverage.',
