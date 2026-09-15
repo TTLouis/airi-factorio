@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseStructuredOperations, renderStructuredOperation, renderStructuredOperations } from './operations'
+import { isLegacyOperationCommand, parseStructuredOperations, renderStructuredOperation, renderStructuredOperations } from './operations'
 
 describe('structured Autorio operations', () => {
   it('normalizes optional defaults while validating operation shape', () => {
@@ -13,6 +13,7 @@ describe('structured Autorio operations', () => {
       { name: 'walk_to_player', args: { player_name: 'Louis' } },
       { name: 'equip_weapon', args: { item_name: 'rocket-launcher' } },
       { name: 'equip_ammo', args: { item_name: 'atomic-bomb' } },
+      { name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 4242, max_count: 10, to_entity: true } },
       { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
     ])
 
@@ -26,6 +27,7 @@ describe('structured Autorio operations', () => {
       { name: 'walk_to_player', args: { player_name: 'Louis' } },
       { name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 1 } },
       { name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 1 } },
+      { name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 4242, max_count: 10, to_entity: true } },
       { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
     ])
   })
@@ -82,6 +84,9 @@ describe('structured Autorio operations', () => {
     expect(() => parseStructuredOperations([{ name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } }])).toThrow()
     expect(parseStructuredOperations([{ name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1000 } }])[0]).toEqual({ name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1000 } })
     expect(() => parseStructuredOperations([{ name: 'move_items', args: { item_name: 'iron-plate', entity_name: 'steel-chest', max_count: 100001, to_entity: true } }])).toThrow()
+    expect(() => parseStructuredOperations([{ name: 'move_items_exact', args: { item_name: 'iron-plate', unit_number: 0, max_count: 1, to_entity: true } }])).toThrow()
+    expect(() => parseStructuredOperations([{ name: 'move_items_exact', args: { item_name: 'iron-plate', unit_number: 1.5, max_count: 1, to_entity: true } }])).toThrow()
+    expect(() => parseStructuredOperations([{ name: 'move_items_exact', args: { item_name: 'iron-plate', unit_number: 42, max_count: 100001, to_entity: true } }])).toThrow()
     expect(() => parseStructuredOperations([{ name: 'move_items_with_player', args: { item_name: 'iron-plate', player_name: 'Louis', max_count: 100001, to_player: true } }])).toThrow()
     expect(() => parseStructuredOperations([{ name: 'attack_nearest_enemy', args: { search_radius: 257 } }])).toThrow()
     expect(() => parseStructuredOperations([{ name: 'clear_enemy_area', args: { search_radius: 257 } }])).toThrow()
@@ -100,6 +105,7 @@ describe('structured Autorio operations', () => {
       { name: 'select_weapon_slot', args: { slot: 2 } },
       { name: 'clear_enemy_area', args: { search_radius: 128 } },
       { name: 'mine_entity', args: { entity_name: 'iron-ore', count: 8 } },
+      { name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 4242, max_count: 10, to_entity: true } },
       { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
     ])).toEqual([
       "remote.call('autorio_operations', 'walk_to_entity', 'iron-ore', 1024)",
@@ -113,8 +119,15 @@ describe('structured Autorio operations', () => {
       "remote.call('autorio_operations', 'select_weapon_slot', 2)",
       "remote.call('autorio_operations', 'clear_enemy_area', 128)",
       "remote.call('autorio_operations', 'mine_entity', 'iron-ore', 8)",
+      "remote.call('autorio_operations', 'move_items_exact', 'firearm-magazine', 4242, 10, true)",
       "remote.call('autorio_operations', 'move_items_with_player', 'stone', 'Louis', 10, true)",
     ])
+  })
+
+  it('allows only the exact legacy remote-call shape for exact entity transfers', () => {
+    expect(isLegacyOperationCommand("remote.call('autorio_operations', 'move_items_exact', 'firearm-magazine', 4242, 10, true)")).toBe(true)
+    expect(isLegacyOperationCommand("remote.call('autorio_operations', 'move_items_exact', 'firearm-magazine', 0, 10, true)")).toBe(false)
+    expect(isLegacyOperationCommand("remote.call('autorio_operations', 'move_items_exact', 'firearm-magazine', 4242, 10, true); game.clear()")).toBe(false)
   })
 
   it('escapes strings before rendering Lua', () => {
