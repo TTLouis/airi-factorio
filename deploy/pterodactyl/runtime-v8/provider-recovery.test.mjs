@@ -20,6 +20,16 @@ function hangingFetch(_url, { signal }) {
   })
 }
 
+function successfulFetch(captured) {
+  return async (_url, options) => {
+    captured.push(JSON.parse(options.body))
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+}
+
 test('provider timeout reports an explicit error instead of leaving the turn active', async () => {
   await assert.rejects(
     () => providerRequest({ ...config, timeoutMs: 1000 }, messages, { fetchImpl: hangingFetch }),
@@ -35,4 +45,16 @@ test('external cancellation aborts an in-flight provider request', async () => {
   })
   setTimeout(() => controller.abort(), 10)
   await assert.rejects(() => pending, /Provider request cancelled/)
+})
+
+test('recovery requests can disable the tool surface completely', async () => {
+  const captured = []
+  await providerRequest(config, messages, { fetchImpl: successfulFetch(captured), allowTools: false })
+  assert.equal(captured.length, 1)
+  assert.equal('tools' in captured[0], false)
+  assert.equal('tool_choice' in captured[0], false)
+
+  await providerRequest(config, messages, { fetchImpl: successfulFetch(captured), allowTools: true })
+  assert.ok(Array.isArray(captured[1].tools))
+  assert.equal(captured[1].tool_choice, 'auto')
 })

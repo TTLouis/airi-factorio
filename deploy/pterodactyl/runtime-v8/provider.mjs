@@ -11,15 +11,25 @@ export function providerEndpoint(base) {
   return url.toString()
 }
 
-export async function providerRequest(config, messages, { fetchImpl = fetch, signal } = {}) {
+export async function providerRequest(config, messages, { fetchImpl = fetch, signal, allowTools = true } = {}) {
   check(typeof config.key === 'string' && config.key.trim().length > 0, 'OPENAI_API_KEY is missing')
   check(typeof config.model === 'string' && /^[a-zA-Z0-9._:/-]{1,200}$/.test(config.model), 'Invalid model identifier')
   check(Array.isArray(messages) && messages.length > 0 && messages.length <= 50, 'Invalid provider message history')
+  check(typeof allowTools === 'boolean', 'Invalid tool availability flag')
   const timeoutMs = config.timeoutMs ?? 120000
   check(Number.isSafeInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 600000, 'Provider timeout must be an integer from 1000 to 600000 ms')
 
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
   const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+  const body = {
+    model: config.model,
+    messages,
+    max_tokens: 2000,
+  }
+  if (allowTools) {
+    body.tools = toolDefinitions
+    body.tool_choice = 'auto'
+  }
 
   try {
     const response = await fetchImpl(providerEndpoint(config.base), {
@@ -30,13 +40,7 @@ export async function providerRequest(config, messages, { fetchImpl = fetch, sig
         'content-type': 'application/json',
         authorization: `Bearer ${config.key}`,
       },
-      body: JSON.stringify({
-        model: config.model,
-        messages,
-        tools: toolDefinitions,
-        tool_choice: 'auto',
-        max_tokens: 2000,
-      }),
+      body: JSON.stringify(body),
     })
 
     if (!response.ok) throw new DeploymentError(`Provider HTTP ${response.status}; request will not be retried automatically`)

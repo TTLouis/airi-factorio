@@ -282,7 +282,7 @@ export class Session {
           await this.printChat('Cancelled AIRI work.')
           return
         }
-        const result = await this.agent.request(text)
+        const result = await this.agent.request(text, { sender: chat[1] })
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
       return
