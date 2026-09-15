@@ -150,7 +150,7 @@
         },
         {
             "name": "Factorio Version",
-            "description": "Factorio 2.0 headless version: latest, experimental, or exact 2.0.x.",
+            "description": "Factorio 2.0 headless version: latest, experimental, or exact 2.0.x release.",
             "env_variable": "FACTORIO_VERSION",
             "default_value": "latest",
             "user_viewable": true,
