@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { AIRI_CONFIG_DEFAULTS, configuration, migrateConfig, Session } from './supervisor.mjs'
+import {
+  AIRI_CONFIG_DEFAULTS,
+  configuration,
+  migrateConfig,
+  recoverInterruptedAgentPlan,
+  Session,
+  shouldRecoverInterruptedPlan,
+} from './supervisor.mjs'
 
 const env = {
   AIRI_ACTOR_MODE: 'npc',
@@ -83,4 +90,95 @@ test('!airi stop cancels an in-flight model turn immediately and reports that th
   await session.eventQueue
   assert.ok(commands.some(command => command.includes('airi_deployment')))
   assert.ok(commands.some(command => command.includes('Paused the current AIRI plan')))
+})
+
+test('only active or system-interrupted plans are eligible for automatic recovery', () => {
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'active' }), true)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'npc_identity_or_session_changed' }), true)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'actor_replaced' }), true)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'user_stop' }), false)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'ui_pause' }), false)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'blocked' }), false)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'completed' }), false)
+})
+
+test('interrupted-plan recovery creates a continuation turn that requires live re-observation instead of replaying old operations', async () => {
+  const state = {
+    status: 'active',
+    owner: 'Louis',
+    objective: 'build a furnace and start iron production',
+    last_operations: ['place_entity {"entity_name":"stone-furnace","x":4,"y":5}'],
+  }
+  let observed
+  const agent = {
+    npcId: 'airi',
+    systemPrompt: 'NPC recovery prompt',
+    active: true,
+    turnSequence: 4,
+    traceRequest: null,
+    memory: {
+      currentPlan: key => key === 'npc:airi' ? state : undefined,
+      context: () => '[PLAN_STATE] {"status":"active","current_step_text":"Place furnace"}',
+    },
+    loadPersistentState: async () => {},
+    cancel(reason) {
+      this.cancelReason = reason
+      this.active = false
+    },
+    captureEpoch: async () => ({ actor_id: 99, epoch: 8 }),
+    traceEvent: async () => {},
+    runGuarded: async function () {
+      observed = {
+        messages: this.messages,
+        requestInfo: this.requestInfo,
+        continuations: this.continuations,
+        active: this.active,
+        epoch: this.epoch,
+      }
+      return { chatMessage: '', operations: [{ name: 'wait', args: { ticks: 1 } }] }
+    },
+  }
+
+  const recovery = await recoverInterruptedAgentPlan(agent, 'runtime_restart', { actor_id: 99 })
+
+  assert.equal(recovery.recovered, true)
+  assert.equal(agent.cancelReason, 'runtime_recovery_prepare:runtime_restart')
+  assert.equal(observed.continuations, 1)
+  assert.equal(observed.active, true)
+  assert.deepEqual(observed.epoch, { actor_id: 99, epoch: 8 })
+  assert.equal(observed.requestInfo.sender, 'Louis')
+  assert.equal(observed.requestInfo.text, state.objective)
+  const context = observed.messages.map(message => message.content ?? '').join('\n')
+  assert.match(context, /\[PLAN_STATE\]/)
+  assert.match(context, /previous finite Autorio task queue was discarded/)
+  assert.match(context, /MUST NOT be assumed complete/)
+  assert.match(context, /Never blindly replay last_operations/)
+})
+
+test('NPC body replacement cancels the stale turn, rebinds authorization, and automatically recovers an active durable plan', async () => {
+  const { session } = sessionFixture()
+  const sequence = []
+  const state = { status: 'active', objective: 'mine iron', owner: 'Louis' }
+  session.currentPlanState = () => state
+  session.agent = {
+    active: true,
+    cancel: reason => sequence.push(`cancel:${reason}`),
+  }
+  session.ensureAuthorization = async () => {
+    sequence.push('authorize')
+    return { actor_id: 99, epoch: 4 }
+  }
+  session.recoverInterruptedPlan = async (reason, details) => {
+    sequence.push(`recover:${reason}:${details.previous_actor_id}->${details.replacement_actor_id}`)
+    return { chatMessage: '', operations: [{ name: 'wait', args: { ticks: 1 } }] }
+  }
+
+  session.onGameLine('[AUTORIO] Recovered standalone NPC actor_id=42 -> 99 without inventory transfer')
+  await session.eventQueue
+
+  assert.deepEqual(sequence, [
+    'cancel:actor_replaced_stale_turn',
+    'authorize',
+    'recover:actor_replaced:42->99',
+  ])
 })
