@@ -42,6 +42,47 @@ const MAX_LOCAL_DISTANCE = 10
 const VALIDATION_MAX_AGE_TICKS = 60 * 60
 const OVERLAP_EPSILON = 0.001
 
+// Factorio direction is a discrete 0..15 value. Keep the collision geometry
+// deterministic and portable instead of depending on host math.cos/math.sin
+// implementations in the Node test harness.
+const DIRECTION_COS = [
+  1,
+  0.9238795325112867,
+  0.7071067811865476,
+  0.38268343236508984,
+  0,
+  -0.3826834323650897,
+  -0.7071067811865475,
+  -0.9238795325112867,
+  -1,
+  -0.9238795325112868,
+  -0.7071067811865477,
+  -0.38268343236509034,
+  0,
+  0.38268343236509,
+  0.7071067811865474,
+  0.9238795325112865,
+]
+
+const DIRECTION_SIN = [
+  0,
+  0.3826834323650898,
+  0.7071067811865475,
+  0.9238795325112867,
+  1,
+  0.9238795325112867,
+  0.7071067811865476,
+  0.3826834323650899,
+  0,
+  -0.38268343236508967,
+  -0.7071067811865475,
+  -0.9238795325112865,
+  -1,
+  -0.9238795325112866,
+  -0.7071067811865477,
+  -0.3826834323650904,
+]
+
 function valid_integer(value: number, min: number, max: number) {
   return typeof value === 'number' && value === math.floor(value) && value >= min && value <= max
 }
@@ -59,9 +100,9 @@ function rotated_world_box(entity_name: string, position: Position, direction: n
   const box = prototype?.collision_box
   if (!box) return undefined
 
-  const angle = ((direction ?? 0) * math.pi) / 8
-  const cosine = math.cos(angle)
-  const sine = math.sin(angle)
+  const direction_index = direction ?? 0
+  const cosine = DIRECTION_COS[direction_index]
+  const sine = DIRECTION_SIN[direction_index]
   const corners = [
     { x: box.left_top.x, y: box.left_top.y },
     { x: box.left_top.x, y: box.right_bottom.y },
