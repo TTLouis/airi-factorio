@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   sanitize_task_board_ui_snapshot,
+  task_board_activity_for_display,
   task_board_ui_is_open,
   task_board_ui_terminate_is_armed,
   toggle_task_board_ui_open,
@@ -74,7 +75,25 @@ describe('in-game task board UI projection', () => {
     expect(sanitize_task_board_ui_snapshot({ status: 'active' })).toBeUndefined()
   })
 
-  it('keeps the task board panel closed by default and toggles per player', () => {
+  it('falls back to the canonical current step when an active task has no activity entries yet', () => {
+    const board = sanitize_task_board_ui_snapshot({
+      goal_id: 'goal_1', objective: 'Gather stone', status: 'active', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 2, active_index: 0,
+      steps: [
+        { id: 'step_1', description: 'Walk to stone patch', status: 'active' },
+        { id: 'step_2', description: 'Mine stone', status: 'pending' },
+      ],
+      activity: [], wanted_items: [],
+    })
+    expect(task_board_activity_for_display(board)).toEqual([
+      {
+        kind: 'system',
+        text: 'Current canonical step 1/2: Walk to stone patch (active). Waiting for the next auditable observation, action, or result.',
+      },
+    ])
+  })
+
+  it('keeps the task board window closed by default and toggles per player', () => {
     expect(task_board_ui_is_open(1)).toBe(false)
     expect(task_board_ui_is_open(2)).toBe(false)
 
@@ -97,6 +116,32 @@ describe('in-game task board UI projection', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).not.toMatch(/const\s+\w+\s*:\s*any\s*=\s*player\.gui/)
     expect(source).not.toContain('const root: any')
+  })
+
+  it('uses a movable screen window with native Factorio title, content, section, and control styles', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain('player.gui.screen.add')
+    expect(source).toContain("style: 'frame_title'")
+    expect(source).toContain("style: 'draggable_space_header'")
+    expect(source).toContain("style: 'frame_action_button'")
+    expect(source).toContain("style: 'subheader_frame'")
+    expect(source).toContain("style: 'inside_shallow_frame_with_padding'")
+    expect(source).toContain("style: 'dialog_button'")
+    expect(source).toContain("style: 'red_button'")
+    expect(source).toContain("style: follow?.active ? 'red_button' : 'confirm_button'")
+    expect(source).toContain('root.location = previous_location')
+    expect(source).toContain('HALF_SECTION_WIDTH')
+    expect(source).toContain('TOP_SECTION_HEIGHT')
+    expect(source).toContain('RESOURCE_SECTION_HEIGHT')
+  })
+
+  it('renders a native Factorio camera preview bound to the current actor world position', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("type: 'camera'")
+    expect(source).toContain('position: preview.position')
+    expect(source).toContain('surface_index: preview.surface_index')
+    expect(source).toContain('camera.entity = preview.entity')
+    expect(source).toContain('WORLD_PREVIEW_SECTION_HEIGHT')
   })
 
   it('only emits fixed UI control actions instead of arbitrary console commands', () => {

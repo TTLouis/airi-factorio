@@ -1,10 +1,12 @@
-import type { LuaGuiElement, LuaPlayer } from 'factorio:runtime'
+import type { MapPositionStruct } from 'factorio:prototype'
+import type { LuaEntity, LuaGuiElement, LuaPlayer } from 'factorio:runtime'
 
 import { get_controlled_actor } from './actors/actor_controller'
 import { get_actor_inventory_items } from './utils/inventory'
 
 const BUTTON_NAME = 'airi_task_board_button'
 const ROOT_NAME = 'airi_task_board_panel'
+const CLOSE_BUTTON_NAME = 'airi_task_board_close'
 const PAUSE_BUTTON_NAME = 'airi_task_board_pause'
 const TERMINATE_BUTTON_NAME = 'airi_task_board_terminate'
 const FOLLOW_BUTTON_NAME = 'airi_task_board_follow'
@@ -14,6 +16,14 @@ const MAX_INVENTORY_ITEMS = 24
 const MAX_WANTED_ITEMS = 16
 const MAX_TEXT = 500
 const TERMINATE_CONFIRM_TICKS = 5 * 60
+const WINDOW_WIDTH = 900
+const CONTENT_WIDTH = 868
+const HALF_SECTION_WIDTH = 428
+const TOP_SECTION_HEIGHT = 120
+const WORLD_PREVIEW_SECTION_HEIGHT = 150
+const STEPS_SECTION_HEIGHT = 120
+const ACTIVITY_SECTION_HEIGHT = 115
+const RESOURCE_SECTION_HEIGHT = 110
 
 type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow'
 type TaskBoardUiActivityKind = 'observation' | 'decision' | 'action' | 'result' | 'blocker' | 'system' | 'note'
@@ -58,11 +68,18 @@ interface TaskBoardUiFollowStatus {
   last_failure: string
 }
 
+interface TaskBoardUiWorldPreview {
+  position: MapPositionStruct
+  surface_index: number
+  entity?: LuaEntity
+}
+
 interface TaskBoardUiRuntimeSnapshot {
   actor_name: string
   actor_kind: string
   inventory: Array<{ name: string, count: number }>
   follow?: TaskBoardUiFollowStatus
+  preview?: TaskBoardUiWorldPreview
 }
 
 declare const storage: {
@@ -153,6 +170,10 @@ export function toggle_task_board_ui_open(player_index: number) {
   return next
 }
 
+function close_task_board_ui(player_index: number) {
+  open_state()[player_index] = false
+}
+
 export function task_board_ui_terminate_is_armed(player_index: number, tick: number) {
   return (terminate_confirm_state()[player_index] ?? 0) >= tick
 }
@@ -172,13 +193,19 @@ function ensure_button(player: LuaPlayer) {
     type: 'button',
     name: BUTTON_NAME,
     caption: 'AIRI',
-    tooltip: 'Open or close the AIRI NPC control panel',
+    tooltip: 'Open or close the AIRI NPC control window',
   })
 }
 
 function destroy_panel(player: LuaPlayer) {
-  const existing = player.gui.left[ROOT_NAME]
+  const existing = player.gui.screen[ROOT_NAME]
+  const location = existing?.valid ? existing.location : undefined
   if (existing?.valid) existing.destroy()
+
+  // Clean up the legacy left-side panel when upgrading an already-running save.
+  const legacy = player.gui.left[ROOT_NAME]
+  if (legacy?.valid) legacy.destroy()
+  return location
 }
 
 function step_prefix(step: TaskBoardUiStep) {
@@ -224,11 +251,19 @@ function runtime_snapshot(): TaskBoardUiRuntimeSnapshot {
   const identity = actor?.status_snapshot()
   const inventory = actor ? get_actor_inventory_items(actor) : []
   inventory.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+  const preview: TaskBoardUiWorldPreview | undefined = actor?.is_valid
+    ? {
+        position: actor.position,
+        surface_index: actor.surface.index,
+        entity: actor.character?.valid ? actor.character : undefined,
+      }
+    : undefined
   return {
     actor_name: text(identity?.name ?? 'AIRI', 128),
     actor_kind: text(identity?.kind ?? '', 64),
     inventory: inventory.slice(0, MAX_INVENTORY_ITEMS),
     follow: read_follow_status(),
+    preview,
   }
 }
 
@@ -243,20 +278,34 @@ function emit_control(player: LuaPlayer, action: TaskBoardUiControlAction) {
   log(`[AIRI_UI_CONTROL] ${payload}`)
 }
 
+function create_section(parent: LuaGuiElement, title: string, width: number, height: number) {
+  const section = parent.add({ type: 'flow', direction: 'vertical' })
+  section.style.width = width
+  section.style.height = height
+
+  const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
+  header.style.horizontally_stretchable = true
+  header.add({ type: 'label', caption: title, style: 'subheader_caption_label' })
+
+  const body = section.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame_with_padding' })
+  body.style.horizontally_stretchable = true
+  body.style.vertically_stretchable = true
+  return body
+}
+
+function add_key_value(table: LuaGuiElement, key: string, value: string) {
+  table.add({ type: 'label', caption: key, style: 'semibold_label' })
+  table.add({ type: 'label', caption: value })
+}
+
 function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
-  const frame = parent.add({ type: 'frame', direction: 'vertical', caption: 'Status' })
-  const table = frame.add({ type: 'table', column_count: 2 })
-  table.add({ type: 'label', caption: 'NPC' })
-  table.add({ type: 'label', caption: runtime.actor_name || 'AIRI' })
-  if (runtime.actor_kind.length > 0) {
-    table.add({ type: 'label', caption: 'ACTOR' })
-    table.add({ type: 'label', caption: runtime.actor_kind.toUpperCase() })
-  }
+  const body = create_section(parent, 'Status', HALF_SECTION_WIDTH, TOP_SECTION_HEIGHT)
+  const table = body.add({ type: 'table', column_count: 2 })
+  add_key_value(table, 'NPC', runtime.actor_name || 'AIRI')
+  if (runtime.actor_kind.length > 0) add_key_value(table, 'ACTOR', runtime.actor_kind.toUpperCase())
   if (board === undefined) {
-    table.add({ type: 'label', caption: 'STATUS' })
-    table.add({ type: 'label', caption: 'IDLE' })
-    table.add({ type: 'label', caption: 'GOAL' })
-    table.add({ type: 'label', caption: 'No active AIRI task.' })
+    add_key_value(table, 'STATUS', 'IDLE')
+    add_key_value(table, 'GOAL', 'No active AIRI task.')
     return
   }
 
@@ -268,14 +317,10 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   const progress = board.status === 'completed'
     ? board.total_steps
     : math.min(board.active_index + 1, board.total_steps)
-  table.add({ type: 'label', caption: 'STATUS' })
-  table.add({ type: 'label', caption: board.status.toUpperCase() })
-  table.add({ type: 'label', caption: 'GOAL' })
-  table.add({ type: 'label', caption: goal })
-  table.add({ type: 'label', caption: 'PROGRESS' })
-  table.add({ type: 'label', caption: `${progress}/${board.total_steps}` })
-  table.add({ type: 'label', caption: 'DONE' })
-  table.add({ type: 'label', caption: `${board.completed_count}/${board.total_steps}` })
+  add_key_value(table, 'STATUS', board.status.toUpperCase())
+  add_key_value(table, 'GOAL', goal)
+  add_key_value(table, 'PROGRESS', `${progress}/${board.total_steps}`)
+  add_key_value(table, 'DONE', `${board.completed_count}/${board.total_steps}`)
 }
 
 function follow_summary(follow: TaskBoardUiFollowStatus | undefined) {
@@ -286,49 +331,79 @@ function follow_summary(follow: TaskBoardUiFollowStatus | undefined) {
 }
 
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
-  const frame = parent.add({ type: 'frame', direction: 'vertical', caption: 'Controls' })
+  const body = create_section(parent, 'Controls', HALF_SECTION_WIDTH, TOP_SECTION_HEIGHT)
   const follow = runtime.follow
-  const follow_table = frame.add({ type: 'table', column_count: 2 })
-  follow_table.add({ type: 'label', caption: 'FOLLOW' })
-  follow_table.add({ type: 'label', caption: follow_summary(follow) })
-  if (follow?.last_failure) {
-    follow_table.add({ type: 'label', caption: 'FOLLOW ISSUE' })
-    follow_table.add({ type: 'label', caption: follow.last_failure })
-  }
+  const follow_table = body.add({ type: 'table', column_count: 2 })
+  add_key_value(follow_table, 'FOLLOW', follow_summary(follow))
+  if (follow?.last_failure) add_key_value(follow_table, 'ISSUE', follow.last_failure)
 
-  const task_controls = frame.add({ type: 'flow', direction: 'horizontal' })
-  const pause = task_controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: 'PAUSE' })
+  const task_controls = body.add({ type: 'flow', direction: 'horizontal' })
+  const pause = task_controls.add({
+    type: 'button',
+    name: PAUSE_BUTTON_NAME,
+    caption: 'PAUSE',
+    style: 'dialog_button',
+    tooltip: 'Pause the durable AIRI goal and stop current world work',
+  })
+  pause.style.minimal_width = 120
   pause.enabled = board !== undefined && board.status !== 'paused' && board.status !== 'completed'
+
   const armed = task_board_ui_terminate_is_armed(player.index, game.tick)
   const terminate = task_controls.add({
     type: 'button',
     name: TERMINATE_BUTTON_NAME,
     caption: armed ? 'CONFIRM TERMINATE' : 'TERMINATE',
+    style: 'red_button',
+    tooltip: 'Discard the current durable AIRI goal permanently',
   })
+  terminate.style.minimal_width = 160
   terminate.enabled = board !== undefined && board.status !== 'completed'
 
-  const follow_controls = frame.add({ type: 'flow', direction: 'horizontal' })
-  follow_controls.add({
+  const follow_button = body.add({
     type: 'button',
     name: FOLLOW_BUTTON_NAME,
     caption: follow?.active ? 'STOP FOLLOW' : 'FOLLOW ME',
+    style: follow?.active ? 'red_button' : 'confirm_button',
+    tooltip: follow?.active ? 'Stop the persistent follow controller' : 'Pause current work and follow this player',
   })
+  follow_button.style.minimal_width = 160
 }
 
-function render_steps(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined) {
-  const frame = parent.add({ type: 'frame', direction: 'vertical', caption: 'Steps' })
-  if (board === undefined || board.steps.length === 0) {
-    frame.add({ type: 'label', caption: 'No active task steps.' })
+function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) {
+  const body = create_section(parent, 'NPC World Preview', CONTENT_WIDTH, WORLD_PREVIEW_SECTION_HEIGHT)
+  const preview = runtime.preview
+  if (preview === undefined) {
+    body.add({ type: 'label', caption: 'NPC world preview is unavailable.' })
     return
   }
 
-  const headings = frame.add({ type: 'table', column_count: 3 })
-  headings.add({ type: 'label', caption: 'STATE' })
-  headings.add({ type: 'label', caption: 'STEP' })
-  headings.add({ type: 'label', caption: 'DESCRIPTION' })
-  const scroll = frame.add({ type: 'scroll-pane' })
-  scroll.style.maximal_height = 260
+  const camera = body.add({
+    type: 'camera',
+    position: preview.position,
+    surface_index: preview.surface_index,
+    zoom: 0.8,
+  })
+  camera.style.horizontally_stretchable = true
+  camera.style.height = 100
+  if (preview.entity?.valid) camera.entity = preview.entity
+}
+
+function render_steps(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined) {
+  const body = create_section(parent, 'Steps', CONTENT_WIDTH, STEPS_SECTION_HEIGHT)
+  if (board === undefined || board.steps.length === 0) {
+    body.add({ type: 'label', caption: 'No active task steps.' })
+    return
+  }
+
+  const headings = body.add({ type: 'table', column_count: 3 })
+  headings.add({ type: 'label', caption: 'STATE', style: 'semibold_label' })
+  headings.add({ type: 'label', caption: 'STEP', style: 'semibold_label' })
+  headings.add({ type: 'label', caption: 'DESCRIPTION', style: 'semibold_label' })
+  const scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame' })
+  scroll.style.maximal_height = 55
+  scroll.style.horizontally_stretchable = true
   const grid = scroll.add({ type: 'table', column_count: 3 })
+  grid.draw_horizontal_lines = true
   const visible = board.steps.slice(0, MAX_STEPS)
   for (let index = 0; index < visible.length; index++) {
     const step = visible[index]
@@ -343,48 +418,60 @@ function render_steps(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefi
   }
 
   if (board.blocker.length > 0 || board.pause_reason.length > 0) {
-    const attention = frame.add({ type: 'table', column_count: 2 })
-    if (board.blocker.length > 0) {
-      attention.add({ type: 'label', caption: 'BLOCKED' })
-      attention.add({ type: 'label', caption: board.blocker })
-    }
-    if (board.pause_reason.length > 0) {
-      attention.add({ type: 'label', caption: 'PAUSED' })
-      attention.add({ type: 'label', caption: board.pause_reason })
-    }
+    const attention = body.add({ type: 'table', column_count: 2 })
+    if (board.blocker.length > 0) add_key_value(attention, 'BLOCKED', board.blocker)
+    if (board.pause_reason.length > 0) add_key_value(attention, 'PAUSED', board.pause_reason)
   }
 }
 
+export function task_board_activity_for_display(board: TaskBoardUiSnapshot | undefined): TaskBoardUiActivity[] {
+  if (board === undefined) return []
+  if (board.activity.length > 0) return board.activity.slice(-MAX_ACTIVITY)
+  if (board.steps.length === 0) return [{ kind: 'system', text: `Goal is ${board.status}; no auditable step activity has been recorded yet.` }]
+
+  const index = math.min(board.active_index, board.steps.length - 1)
+  const step = board.steps[index]
+  return [{
+    kind: 'system',
+    text: `Current canonical step ${index + 1}/${board.total_steps}: ${step.description} (${step.status}). Waiting for the next auditable observation, action, or result.`,
+  }]
+}
+
 function render_activity(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined) {
-  const frame = parent.add({ type: 'frame', direction: 'vertical', caption: 'Activity / Reasoning Summary' })
-  frame.add({
+  const body = create_section(parent, 'Activity / Reasoning Summary', CONTENT_WIDTH, ACTIVITY_SECTION_HEIGHT)
+  body.add({
     type: 'label',
-    caption: 'Visible decision trace only: observations, plan summaries, actions, results, and blockers.',
+    caption: 'Auditable trace only: observations, plan summaries, actions, results, blockers, and canonical step state.',
+    style: 'grey_label',
   })
-  if (board === undefined || board.activity.length === 0) {
-    frame.add({ type: 'label', caption: 'No activity summary available yet.' })
+  const activity = task_board_activity_for_display(board)
+  if (activity.length === 0) {
+    body.add({ type: 'label', caption: 'No active AIRI task.' })
     return
   }
-  const scroll = frame.add({ type: 'scroll-pane' })
-  scroll.style.maximal_height = 220
+  const scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame' })
+  scroll.style.maximal_height = 50
+  scroll.style.horizontally_stretchable = true
   const grid = scroll.add({ type: 'table', column_count: 2 })
-  for (const entry of board.activity.slice(-MAX_ACTIVITY)) {
-    grid.add({ type: 'label', caption: activity_prefix(entry.kind) })
+  grid.draw_horizontal_lines = true
+  for (const entry of activity) {
+    grid.add({ type: 'label', caption: activity_prefix(entry.kind), style: 'semibold_label' })
     grid.add({ type: 'label', caption: entry.text })
   }
 }
 
 function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) {
-  const frame = parent.add({ type: 'frame', direction: 'vertical', caption: 'NPC Inventory' })
+  const body = create_section(parent, 'NPC Inventory', HALF_SECTION_WIDTH, RESOURCE_SECTION_HEIGHT)
   if (runtime.inventory.length === 0) {
-    frame.add({ type: 'label', caption: 'Inventory is empty.' })
+    body.add({ type: 'label', caption: 'Inventory is empty.' })
     return
   }
-  const scroll = frame.add({ type: 'scroll-pane' })
-  scroll.style.maximal_height = 240
+  const scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame' })
+  scroll.style.maximal_height = 58
+  scroll.style.horizontally_stretchable = true
   const grid = scroll.add({ type: 'table', column_count: 2 })
-  grid.add({ type: 'label', caption: 'ITEM' })
-  grid.add({ type: 'label', caption: 'COUNT' })
+  grid.add({ type: 'label', caption: 'ITEM', style: 'semibold_label' })
+  grid.add({ type: 'label', caption: 'COUNT', style: 'semibold_label' })
   for (const item of runtime.inventory) {
     grid.add({ type: 'label', caption: item_caption(item.name) })
     grid.add({ type: 'label', caption: `${item.count}` })
@@ -392,17 +479,18 @@ function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnap
 }
 
 function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined) {
-  const frame = parent.add({ type: 'frame', direction: 'vertical', caption: 'Wanted / Needed' })
+  const body = create_section(parent, 'Wanted / Needed', HALF_SECTION_WIDTH, RESOURCE_SECTION_HEIGHT)
   if (board === undefined || board.wanted_items.length === 0) {
-    frame.add({ type: 'label', caption: 'Nothing currently requested.' })
+    body.add({ type: 'label', caption: 'Nothing currently requested.' })
     return
   }
-  const scroll = frame.add({ type: 'scroll-pane' })
-  scroll.style.maximal_height = 240
+  const scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame' })
+  scroll.style.maximal_height = 58
+  scroll.style.horizontally_stretchable = true
   const grid = scroll.add({ type: 'table', column_count: 3 })
-  grid.add({ type: 'label', caption: 'ITEM' })
-  grid.add({ type: 'label', caption: 'QTY' })
-  grid.add({ type: 'label', caption: 'WHY' })
+  grid.add({ type: 'label', caption: 'ITEM', style: 'semibold_label' })
+  grid.add({ type: 'label', caption: 'QTY', style: 'semibold_label' })
+  grid.add({ type: 'label', caption: 'WHY', style: 'semibold_label' })
   for (const item of board.wanted_items.slice(0, MAX_WANTED_ITEMS)) {
     grid.add({ type: 'label', caption: item_caption(item.name) })
     grid.add({ type: 'label', caption: `${item.count}` })
@@ -410,32 +498,70 @@ function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   }
 }
 
+function render_titlebar(root: LuaGuiElement) {
+  const titlebar = root.add({ type: 'flow', direction: 'horizontal' })
+  titlebar.style.horizontally_stretchable = true
+  titlebar.drag_target = root
+  titlebar.add({
+    type: 'label',
+    caption: 'AIRI NPC Console',
+    style: 'frame_title',
+    ignored_by_interaction: true,
+  })
+  const dragger = titlebar.add({
+    type: 'empty-widget',
+    style: 'draggable_space_header',
+    ignored_by_interaction: true,
+  })
+  dragger.style.horizontally_stretchable = true
+  dragger.style.height = 24
+  titlebar.add({
+    type: 'sprite-button',
+    name: CLOSE_BUTTON_NAME,
+    sprite: 'utility/close',
+    style: 'frame_action_button',
+    tooltip: 'Close AIRI NPC Console',
+  })
+}
+
 function render_panel(player: LuaPlayer) {
-  destroy_panel(player)
+  const previous_location = destroy_panel(player)
   if (!task_board_ui_is_open(player.index)) return
 
   // Keep Factorio GUI elements strongly typed. Casting these to `any` makes
   // TypeScriptToLua emit JS-style method calls with the wrong Lua self ABI.
-  const root = player.gui.left.add({
+  const root = player.gui.screen.add({
     type: 'frame',
     name: ROOT_NAME,
     direction: 'vertical',
-    caption: 'AIRI NPC Console',
   })
-  root.style.width = 760
+  root.style.width = WINDOW_WIDTH
+  render_titlebar(root)
+
+  const content = root.add({
+    type: 'frame',
+    direction: 'vertical',
+    style: 'inside_shallow_frame_with_padding',
+  })
+  content.style.width = CONTENT_WIDTH
 
   const board = storage.airi_task_board_ui
   const runtime = runtime_snapshot()
-  const top = root.add({ type: 'table', column_count: 2 })
+  const top = content.add({ type: 'flow', direction: 'horizontal' })
   render_status_panel(top, board, runtime)
   render_controls_panel(top, player, board, runtime)
 
-  render_steps(root, board)
-  render_activity(root, board)
+  render_world_preview(content, runtime)
+  render_steps(content, board)
+  render_activity(content, board)
 
-  const resources = root.add({ type: 'table', column_count: 2 })
+  const resources = content.add({ type: 'flow', direction: 'horizontal' })
   render_inventory(resources, runtime)
   render_wanted_items(resources, board)
+
+  if (previous_location !== undefined) root.location = previous_location
+  else root.force_auto_center()
+  root.bring_to_front()
 }
 
 function render(player: LuaPlayer) {
@@ -503,6 +629,12 @@ export function create_task_board_ui_remote_interface() {
     if (element.name === BUTTON_NAME) {
       toggle_task_board_ui_open(player.index)
       render_panel(player)
+      return
+    }
+    if (element.name === CLOSE_BUTTON_NAME) {
+      clear_terminate_confirmation(player.index)
+      close_task_board_ui(player.index)
+      destroy_panel(player)
       return
     }
     handle_control_click(player, element.name)
