@@ -199,6 +199,12 @@ export function create_tools_remote_interface() {
         }
       }
 
+      let recipe_name: string | undefined
+      if (entity.type === 'assembling-machine') {
+        const [recipe] = entity.get_recipe()
+        recipe_name = recipe?.name
+      }
+
       return {
         found: true,
         actor_position: actor.position,
@@ -210,6 +216,7 @@ export function create_tools_remote_interface() {
           force: entity.force?.name,
           unit_number: entity.unit_number,
           amount: entity.type === 'resource' ? entity.amount : undefined,
+          recipe: recipe_name,
           inventories,
           inventories_truncated: entity.get_max_inventory_index() > MAX_ENTITY_INVENTORIES,
           inventory_items_truncated,
