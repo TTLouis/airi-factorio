@@ -1,4 +1,4 @@
-import type { LuaEntity, LuaInventory, LuaItemStack } from 'factorio:runtime'
+import type { LuaEntity, LuaInventory, LuaItemStack, OnScriptPathRequestFinishedEvent } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersAttackNearestEnemy } from './types'
@@ -24,9 +24,17 @@ const TURRET_ACTOR_CLEARANCE = 2.5
 const TURRET_LOAD_COUNT = 20
 const MAX_SUPPORT_TURRETS = 4
 const TURRET_AMMO_PRIORITY = ['uranium-rounds-magazine', 'piercing-rounds-magazine', 'firearm-magazine']
+const COMBAT_PATH_MAX_ATTEMPTS = 4
+const COMBAT_PATH_REQUEST_TIMEOUT_TICKS = 15 * 60
+const COMBAT_PATH_RETRY_DELAY_TICKS = 30
+const COMBAT_PATH_GOAL_RADIUS = 8
+const COMBAT_PATH_WAYPOINT_DISTANCE = 0.5
+const COMBAT_PATH_PROGRESS_DISTANCE = 0.25
+const COMBAT_PATH_TARGET_REPATH_DISTANCE = 2
 
 type CombatCode = 'started' | 'target_destroyed' | 'area_cleared' | 'no_actor' | 'invalid_radius'
   | 'no_target' | 'no_weapon_or_ammo' | 'actor_changed' | 'low_health' | 'stuck' | 'timeout'
+  | 'path_unreachable' | 'path_timeout'
 
 interface CombatResult {
   accepted: boolean
@@ -49,10 +57,17 @@ interface CombatResult {
   last_turret_unit_number?: number
   turret_ammo_name?: string
   last_turret_ammo_loaded?: number
+  path_request_id?: number
+  path_attempts?: number
+  path_waypoints_remaining?: number
 }
 
 declare const storage: {
   airi_last_combat_result?: CombatResult
+}
+
+function copy_position(position: { x: number, y: number }) {
+  return { x: position.x, y: position.y }
 }
 
 function nearest(actor: ControlledActor, entities: LuaEntity[]) {
@@ -167,6 +182,9 @@ function record(actor: ControlledActor | undefined, task: PlayerParametersAttack
     last_turret_unit_number: task?.last_turret_unit_number,
     turret_ammo_name: task?.turret_ammo_name,
     last_turret_ammo_loaded: task?.last_turret_ammo_loaded,
+    path_request_id: task?.combat_path_request_id,
+    path_attempts: task?.combat_path_attempts,
+    path_waypoints_remaining: task?.combat_path?.length,
   }
   storage.airi_last_combat_result = result
   return result
@@ -195,6 +213,8 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       owner_force_index: actor.force.index,
       targets_destroyed: 0,
       turrets_placed: 0,
+      combat_path: null,
+      combat_path_attempts: 0,
       started_tick: game.tick,
     })
     return [true, combat_mode === 'clear_area' ? 'Area-clear combat task queued' : 'Combat task queued']
@@ -210,6 +230,17 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
 
   function stop_actor_combat(actor: ControlledActor) {
     actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
+  }
+
+  function clear_combat_path(task: PlayerParametersAttackNearestEnemy, reset_attempts = false) {
+    task.combat_path = null
+    task.combat_path_request_id = undefined
+    task.combat_path_requested_tick = undefined
+    task.combat_path_next_retry_tick = undefined
+    task.combat_path_target_position = undefined
+    task.combat_path_last_progress_tick = undefined
+    task.combat_path_last_waypoint_distance = undefined
+    if (reset_attempts) task.combat_path_attempts = 0
   }
 
   function fail(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, code: CombatCode) {
@@ -257,6 +288,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function bind_target(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, target: LuaEntity, reason: 'acquired' | 'preempted') {
+    if (task.target !== target) clear_combat_path(task, true)
     task.target = target
     task.target_name = target.name
     task.target_unit_number = target.unit_number
@@ -317,6 +349,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.target_initial_health = undefined
     task.last_distance = undefined
     task.last_progress_tick = game.tick
+    clear_combat_path(task, true)
   }
 
   function target_destroyed(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
@@ -473,6 +506,135 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.last_progress_tick = game.tick
   }
 
+  function request_static_path(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, target: LuaEntity) {
+    const character = actor.character
+    if (!character) {
+      fail(actor, task, 'no_actor')
+      return false
+    }
+    if ((task.combat_path_attempts ?? 0) >= COMBAT_PATH_MAX_ATTEMPTS) {
+      fail(actor, task, 'path_timeout')
+      return false
+    }
+
+    task.combat_path_attempts = (task.combat_path_attempts ?? 0) + 1
+    task.combat_path = null
+    task.combat_path_target_position = copy_position(target.position)
+    task.combat_path_request_id = actor.surface.request_path({
+      bounding_box: character.prototype.collision_box,
+      collision_mask: character.prototype.collision_mask,
+      radius: COMBAT_PATH_GOAL_RADIUS,
+      start: copy_position(character.position),
+      goal: task.combat_path_target_position,
+      force: actor.force,
+      entity_to_ignore: character,
+      pathfind_flags: {
+        cache: false,
+        no_break: true,
+        prefer_straight_paths: false,
+        allow_paths_through_own_entities: false,
+      },
+    })
+    task.combat_path_requested_tick = game.tick
+    task.combat_path_next_retry_tick = undefined
+    task.combat_path_last_progress_tick = game.tick
+    task.combat_path_last_waypoint_distance = undefined
+    log(`[AUTORIO] Combat path requested id=${task.combat_path_request_id} attempt=${task.combat_path_attempts} from ${serpent.line(character.position)} toward ${serpent.line(target.position)}`)
+    return true
+  }
+
+  function retry_static_path(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, target: LuaEntity, exhausted_code: CombatCode) {
+    actor.set_walking_state({ walking: false, direction: defines.direction.north })
+    task.combat_path = null
+    task.combat_path_request_id = undefined
+    task.combat_path_requested_tick = undefined
+    task.combat_path_next_retry_tick = undefined
+    task.combat_path_last_waypoint_distance = undefined
+    task.combat_path_last_progress_tick = game.tick
+    if ((task.combat_path_attempts ?? 0) >= COMBAT_PATH_MAX_ATTEMPTS) {
+      fail(actor, task, exhausted_code)
+      return false
+    }
+    return request_static_path(actor, task, target)
+  }
+
+  function on_path_finished(event: OnScriptPathRequestFinishedEvent) {
+    const task = manager.player_state.parameters_attack_nearest_enemy
+    if (!task || manager.player_state.task_state !== TaskStates.ATTACKING) return
+    if (task.combat_path_request_id === undefined || event.id !== task.combat_path_request_id) return
+
+    const actor = get_actor()
+    if (!actor || !identity_matches(actor, task)) return
+    const target = task.target
+    if (!target || !is_alive(target) || !is_static_enemy(target)) {
+      clear_combat_path(task, true)
+      return
+    }
+
+    task.combat_path_request_id = undefined
+    task.combat_path_requested_tick = undefined
+
+    if (event.try_again_later || !event.path || event.path.length === 0) {
+      if ((task.combat_path_attempts ?? 0) >= COMBAT_PATH_MAX_ATTEMPTS) {
+        fail(actor, task, 'path_unreachable')
+        return
+      }
+      task.combat_path_next_retry_tick = game.tick + COMBAT_PATH_RETRY_DELAY_TICKS
+      log(`[AUTORIO] Combat path unavailable on attempt ${task.combat_path_attempts ?? 0}; retry scheduled`)
+      return
+    }
+
+    task.combat_path = event.path
+    task.combat_path_last_progress_tick = game.tick
+    task.combat_path_last_waypoint_distance = distance(actor.position, event.path[0].position)
+  }
+
+  function follow_static_path(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, target: LuaEntity) {
+    if (task.combat_path_target_position
+      && distance(task.combat_path_target_position, target.position) >= COMBAT_PATH_TARGET_REPATH_DISTANCE) {
+      clear_combat_path(task, true)
+    }
+
+    if (task.combat_path_request_id !== undefined) {
+      const requested_tick = task.combat_path_requested_tick ?? game.tick
+      if (game.tick - requested_tick > COMBAT_PATH_REQUEST_TIMEOUT_TICKS) {
+        retry_static_path(actor, task, target, 'path_timeout')
+      }
+      return true
+    }
+
+    if (task.combat_path_next_retry_tick !== undefined) {
+      if (game.tick >= task.combat_path_next_retry_tick) request_static_path(actor, task, target)
+      return true
+    }
+
+    const path = task.combat_path
+    if (!path || path.length === 0) return request_static_path(actor, task, target)
+
+    const next_position = path[0].position
+    const waypoint_distance = distance(actor.position, next_position)
+    if (waypoint_distance <= COMBAT_PATH_WAYPOINT_DISTANCE) {
+      path.shift()
+      task.combat_path_last_progress_tick = game.tick
+      task.combat_path_last_waypoint_distance = path.length > 0 ? distance(actor.position, path[0].position) : undefined
+      if (path.length === 0) return request_static_path(actor, task, target)
+      return true
+    }
+
+    const best = task.combat_path_last_waypoint_distance
+    if (best === undefined || waypoint_distance <= best - COMBAT_PATH_PROGRESS_DISTANCE) {
+      task.combat_path_last_waypoint_distance = waypoint_distance
+      task.combat_path_last_progress_tick = game.tick
+    }
+    if (game.tick - (task.combat_path_last_progress_tick ?? game.tick) > STUCK_TICKS) {
+      retry_static_path(actor, task, target, 'stuck')
+      return true
+    }
+
+    walk_toward(actor, next_position)
+    return true
+  }
+
   function tick(actor: ControlledActor) {
     const task = manager.player_state.parameters_attack_nearest_enemy
     if (!task || manager.player_state.task_state !== TaskStates.ATTACKING) {
@@ -527,6 +689,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     if (task.combat_mode === 'clear_area') place_support_turret(actor, task, target)
 
     if (can_shoot) {
+      if (is_static_enemy(target)) clear_combat_path(task, false)
       actor.update_selected_entity(target.position)
       actor.set_shooting_state({ state: defines.shooting.shooting_selected, position: target.position })
       task.last_progress_tick = game.tick
@@ -549,6 +712,12 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       else walk_toward(actor, retreat_position(actor, target))
       return
     }
+
+    if (is_static_enemy(target)) {
+      follow_static_path(actor, task, target)
+      return
+    }
+
     if (game.tick - (task.last_progress_tick ?? started_tick) > STUCK_TICKS) {
       fail(actor, task, 'stuck')
       return
@@ -574,6 +743,16 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       last_turret_unit_number: task?.last_turret_unit_number,
       turret_ammo_name: task?.turret_ammo_name,
       last_turret_ammo_loaded: task?.last_turret_ammo_loaded,
+      path: task
+        ? {
+            request_id: task.combat_path_request_id,
+            attempts: task.combat_path_attempts ?? 0,
+            waypoints_remaining: task.combat_path?.length ?? 0,
+            retry_at_tick: task.combat_path_next_retry_tick,
+            target_position: task.combat_path_target_position,
+            last_progress_tick: task.combat_path_last_progress_tick,
+          }
+        : undefined,
       target: target && target.valid
         ? {
             name: target.name,
@@ -588,5 +767,5 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     }
   }
 
-  return { submit, submit_clear, tick, status }
+  return { submit, submit_clear, tick, on_path_finished, status }
 }
