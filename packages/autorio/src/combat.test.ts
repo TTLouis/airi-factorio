@@ -61,7 +61,7 @@ function world() {
   }
   const surface: any = {
     find_entities_filtered: vi.fn(() => enemies.filter(entity => entity.valid !== false && (entity.health === undefined || entity.health > 0))),
-    find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
+    find_non_colliding_position: vi.fn((_name: string, position: { x: number, y: number }) => ({ x: position.x, y: position.y })),
     create_entity: vi.fn(),
   }
   const identity = { kind: 'standalone_character', actor_id: 42 }
@@ -82,6 +82,28 @@ function world() {
   const manager = new_task_manager(get_actor)
   const controller = new_combat_controller(get_actor, manager)
   return { actor, target, enemies, character, gun, ammo, guns, magazines, main, surface, identity, get_actor, manager, controller }
+}
+
+function makeTurret(unit_number: number, insertedAmmo?: number) {
+  const turretAmmo = inventory([])
+  if (insertedAmmo !== undefined) turretAmmo.insert.mockReturnValue(insertedAmmo)
+  const turret: any = {
+    valid: true,
+    unit_number,
+    get_inventory: vi.fn(() => turretAmmo),
+    destroy: vi.fn(),
+  }
+  return { turret, turretAmmo }
+}
+
+function stageSupport(c: ReturnType<typeof world>) {
+  c.target.type = 'unit-spawner'
+  c.target.name = 'biter-spawner'
+  c.controller.submit_clear(80)
+  c.controller.tick(c.actor)
+  c.actor.position = { x: 6, y: 0 }
+  ;(globalThis as any).game.tick += 1
+  c.controller.tick(c.actor)
 }
 
 describe('bounded combat controller', () => {
@@ -265,104 +287,156 @@ describe('bounded area-clearing combat', () => {
     expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
   })
 
-  it('places and loads a paid gun turret before advancing when support equipment is available', () => {
-    const { actor, target, character, main, surface, controller } = world()
-    target.type = 'unit-spawner'
-    target.name = 'biter-spawner'
-    main.push(itemStack('gun-turret', 2), itemStack('piercing-rounds-magazine', 50))
-    const turretAmmo = inventory([])
-    const turret: any = {
-      valid: true,
-      unit_number: 501,
-      get_inventory: vi.fn(() => turretAmmo),
-      destroy: vi.fn(),
+  it('does not place the first support turret at the task origin and stages only after advancing toward a nest', () => {
+    const c = world()
+    c.target.type = 'unit-spawner'
+    c.target.name = 'biter-spawner'
+    c.target.position = { x: 30, y: 0 }
+    c.main.push(itemStack('gun-turret', 2), itemStack('piercing-rounds-magazine', 50))
+    const { turret } = makeTurret(500)
+    c.surface.create_entity.mockReturnValue(turret)
+
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+    expect(c.surface.create_entity).not.toHaveBeenCalled()
+    expect(c.controller.status()).toMatchObject({
+      initial_static_threats: 1,
+      support_turret_budget: 1,
+      support_stage_started: false,
+    })
+
+    c.actor.position = { x: 6, y: 0 }
+    ;(globalThis as any).game.tick += 1
+    c.controller.tick(c.actor)
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(1)
+    expect(c.controller.status()).toMatchObject({ support_stage_started: true, turrets_placed: 1 })
+  })
+
+  it('refuses a turret candidate inside the NPC clearance zone instead of trapping the actor', () => {
+    const c = world()
+    c.target.type = 'unit-spawner'
+    c.target.name = 'biter-spawner'
+    c.main.push(itemStack('gun-turret', 1), itemStack('firearm-magazine', 20))
+    c.surface.find_non_colliding_position.mockImplementation(() => ({ x: c.actor.position.x, y: c.actor.position.y }))
+    const { turret } = makeTurret(501)
+    c.surface.create_entity.mockReturnValue(turret)
+
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+    c.actor.position = { x: 6, y: 0 }
+    ;(globalThis as any).game.tick += 1
+    c.controller.tick(c.actor)
+
+    expect(c.surface.create_entity).not.toHaveBeenCalled()
+    expect(c.controller.status()).toMatchObject({ turrets_placed: 0, support_stage_started: true })
+  })
+
+  it('scales the deterministic support budget with static nest size and places the bounded staged batch', () => {
+    const c = world()
+    c.enemies.length = 0
+    for (let i = 0; i < 5; i++) {
+      c.enemies.push({
+        valid: true,
+        name: i % 2 === 0 ? 'biter-spawner' : 'small-worm-turret',
+        type: i % 2 === 0 ? 'unit-spawner' : 'turret',
+        unit_number: 600 + i,
+        position: { x: 30 + i * 2, y: i },
+        health: 350,
+      })
     }
-    surface.create_entity.mockReturnValue(turret)
-    character.can_shoot.mockReturnValue(false)
+    c.main.push(itemStack('gun-turret', 4), itemStack('piercing-rounds-magazine', 100))
+    let nextTurret = 700
+    c.surface.create_entity.mockImplementation(() => makeTurret(nextTurret++).turret)
 
-    controller.submit_clear(80)
-    controller.tick(actor)
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+    expect(c.controller.status()).toMatchObject({ initial_static_threats: 5, support_turret_budget: 3, turrets_placed: 0 })
 
-    expect(surface.create_entity).toHaveBeenCalledWith(expect.objectContaining({ name: 'gun-turret' }))
+    c.actor.position = { x: 6, y: 0 }
+    for (let i = 0; i < 3; i++) {
+      ;(globalThis as any).game.tick += 1
+      c.controller.tick(c.actor)
+    }
+
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
+    expect(c.controller.status()).toMatchObject({
+      support_turret_budget: 3,
+      turrets_placed: 3,
+      support_stage_started: true,
+    })
+
+    ;(globalThis as any).game.tick += 1
+    c.controller.tick(c.actor)
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
+  })
+
+  it('places and loads a paid gun turret only after support staging is established', () => {
+    const c = world()
+    c.main.push(itemStack('gun-turret', 2), itemStack('piercing-rounds-magazine', 50))
+    const { turret, turretAmmo } = makeTurret(510)
+    c.surface.create_entity.mockReturnValue(turret)
+    c.character.can_shoot.mockReturnValue(false)
+
+    stageSupport(c)
+
+    expect(c.surface.create_entity).toHaveBeenCalledWith(expect.objectContaining({ name: 'gun-turret' }))
     expect(turret.get_inventory).toHaveBeenCalledWith('turret_ammo')
-    expect(main.remove).toHaveBeenCalledWith({ name: 'gun-turret', count: 1 })
-    expect(main.remove).toHaveBeenCalledWith({ name: 'piercing-rounds-magazine', count: 20 })
+    expect(c.main.remove).toHaveBeenCalledWith({ name: 'gun-turret', count: 1 })
+    expect(c.main.remove).toHaveBeenCalledWith({ name: 'piercing-rounds-magazine', count: 20 })
     expect(turretAmmo.insert).toHaveBeenCalledWith({ name: 'piercing-rounds-magazine', count: 20 })
-    expect(controller.status()).toMatchObject({
+    expect(c.controller.status()).toMatchObject({
       mode: 'clear_area',
       turrets_placed: 1,
-      last_turret_unit_number: 501,
+      support_turret_budget: 1,
+      last_turret_unit_number: 510,
       turret_ammo_name: 'piercing-rounds-magazine',
       last_turret_ammo_loaded: 20,
     })
   })
 
   it('destroys an unpayable scripted turret instead of granting a free support entity', () => {
-    const { actor, target, character, main, surface, controller } = world()
-    target.type = 'unit-spawner'
-    main.push(itemStack('gun-turret', 1), itemStack('firearm-magazine', 20))
-    const turret: any = {
-      valid: true,
-      unit_number: 502,
-      get_inventory: vi.fn(() => inventory([])),
-      destroy: vi.fn(),
-    }
-    surface.create_entity.mockReturnValue(turret)
-    character.can_shoot.mockReturnValue(false)
-    main.remove.mockImplementation(({ name, count }: { name: string, count: number }) => name === 'gun-turret' ? 0 : count)
+    const c = world()
+    c.main.push(itemStack('gun-turret', 1), itemStack('firearm-magazine', 20))
+    const { turret } = makeTurret(502)
+    c.surface.create_entity.mockReturnValue(turret)
+    c.character.can_shoot.mockReturnValue(false)
+    c.main.remove.mockImplementation(({ name, count }: { name: string, count: number }) => name === 'gun-turret' ? 0 : count)
 
-    controller.submit_clear(80)
-    controller.tick(actor)
+    stageSupport(c)
 
     expect(turret.destroy).toHaveBeenCalledTimes(1)
-    expect(controller.status()).toMatchObject({ turrets_placed: 0 })
-    expect(controller.status().last_turret_unit_number).toBeUndefined()
+    expect(c.controller.status()).toMatchObject({ turrets_placed: 0 })
+    expect(c.controller.status().last_turret_unit_number).toBeUndefined()
   })
 
   it('returns the paid turret item when ammunition cannot be removed', () => {
-    const { actor, target, character, main, surface, controller } = world()
-    target.type = 'unit-spawner'
-    main.push(itemStack('gun-turret', 1), itemStack('firearm-magazine', 20))
-    const turret: any = {
-      valid: true,
-      unit_number: 503,
-      get_inventory: vi.fn(() => inventory([])),
-      destroy: vi.fn(),
-    }
-    surface.create_entity.mockReturnValue(turret)
-    character.can_shoot.mockReturnValue(false)
-    const realRemove = main.remove.getMockImplementation()!
-    main.remove.mockImplementation((args: { name: string, count: number }) => args.name === 'firearm-magazine' ? 0 : realRemove(args))
+    const c = world()
+    c.main.push(itemStack('gun-turret', 1), itemStack('firearm-magazine', 20))
+    const { turret } = makeTurret(503)
+    c.surface.create_entity.mockReturnValue(turret)
+    c.character.can_shoot.mockReturnValue(false)
+    const realRemove = c.main.remove.getMockImplementation()!
+    c.main.remove.mockImplementation((args: { name: string, count: number }) => args.name === 'firearm-magazine' ? 0 : realRemove(args))
 
-    controller.submit_clear(80)
-    controller.tick(actor)
+    stageSupport(c)
 
-    expect(main.insert).toHaveBeenCalledWith({ name: 'gun-turret', count: 1 })
+    expect(c.main.insert).toHaveBeenCalledWith({ name: 'gun-turret', count: 1 })
     expect(turret.destroy).toHaveBeenCalledTimes(1)
-    expect(controller.status()).toMatchObject({ turrets_placed: 0 })
+    expect(c.controller.status()).toMatchObject({ turrets_placed: 0 })
   })
 
   it('returns ammunition the turret could not accept and records only the amount actually loaded', () => {
-    const { actor, target, character, main, surface, controller } = world()
-    target.type = 'unit-spawner'
-    main.push(itemStack('gun-turret', 1), itemStack('piercing-rounds-magazine', 20))
-    const turretAmmo = inventory([])
-    turretAmmo.insert.mockReturnValue(5)
-    const turret: any = {
-      valid: true,
-      unit_number: 504,
-      get_inventory: vi.fn(() => turretAmmo),
-      destroy: vi.fn(),
-    }
-    surface.create_entity.mockReturnValue(turret)
-    character.can_shoot.mockReturnValue(false)
+    const c = world()
+    c.main.push(itemStack('gun-turret', 1), itemStack('piercing-rounds-magazine', 20))
+    const { turret, turretAmmo } = makeTurret(504, 5)
+    c.surface.create_entity.mockReturnValue(turret)
+    c.character.can_shoot.mockReturnValue(false)
 
-    controller.submit_clear(80)
-    controller.tick(actor)
+    stageSupport(c)
 
-    expect(main.insert).toHaveBeenCalledWith({ name: 'piercing-rounds-magazine', count: 15 })
+    expect(c.main.insert).toHaveBeenCalledWith({ name: 'piercing-rounds-magazine', count: 15 })
     expect(turret.destroy).not.toHaveBeenCalled()
-    expect(controller.status()).toMatchObject({
+    expect(c.controller.status()).toMatchObject({
       turrets_placed: 1,
       last_turret_unit_number: 504,
       turret_ammo_name: 'piercing-rounds-magazine',
