@@ -36,7 +36,7 @@ class FakeRcon {
         task_state: 'idle',
         queue_empty: true,
         queue_length: 0,
-        last_completed_batch: { batch_id: 7, task_count: 1, task_types: ['mining'] },
+        last_completed_batch: { batch_id: 7, task_count: 1, task_types: ['mining'], tick: 400 },
         basic_operation: { last_result: { operation_id: 9, code: 'completed', completed: true } },
       })
     }
@@ -83,16 +83,21 @@ test('durable plan survives a new agent instance and empty actions cannot preten
 
   const started = await first.request('prepare the furnace', { sender: 'TTLouis' })
   assert.match(started.chatMessage, /^\[Plan 1\/2\] Mine fuel/)
+  assert.equal(started.taskBoard.active_step_id, 'step_1')
   assert.equal(first.active, true)
 
   const stopped = await first.completed()
   assert.match(stopped.chatMessage, /^\[Plan paused\] Load the furnace/)
   assert.equal(stopped.goalStatus, 'blocked')
+  assert.equal(stopped.taskBoard.active_step_id, 'step_2')
+  assert.equal(stopped.taskBoard.completed_count, 1)
   assert.equal(first.active, false)
 
   const saved = JSON.parse(await fsp.readFile(stateFile, 'utf8'))
   assert.equal(saved.plans[0].state.status, 'blocked')
   assert.equal(saved.plans[0].state.current_step, 1)
+  assert.equal(saved.plans[0].state.task_board.total_steps, 2)
+  assert.equal(saved.plans[0].state.task_board.evidence.at(-1).ref, 'batch_7')
 
   let observed
   const second = new NpcAgentLoop({
@@ -109,9 +114,56 @@ test('durable plan survives a new agent instance and empty actions cannot preten
 
   const context = observed.map(message => message.content ?? '').join('\n')
   assert.match(context, /\[PLAN_STATE\]/)
+  assert.match(context, /task_board/)
   assert.match(context, /prepare the furnace/)
   assert.match(context, /no_autorio_operation_for_remaining_plan/)
   assert.match(context, /Load the furnace/)
+})
+
+test('canonical task board prevents model plan-length drift from resetting visible progress', async () => {
+  const canonical = ['Observe area', 'Mine ore', 'Place machine', 'Load machine', 'Verify output']
+  const replies = [
+    planMessage({
+      chatMessage: 'Starting.',
+      plan: canonical,
+      currentStep: 0,
+      operations: [{ name: 'wait', args: { ticks: 1 } }],
+    }),
+    planMessage({
+      chatMessage: 'Continuing the same step.',
+      plan: ['Observe area', 'Extra thought', 'Mine ore', 'Place machine', 'Load machine', 'Verify output', 'Another thought'],
+      currentStep: 0,
+      operations: [{ name: 'wait', args: { ticks: 1 } }],
+    }),
+    planMessage({
+      chatMessage: 'Advancing to construction.',
+      plan: canonical,
+      currentStep: 2,
+      operations: [{ name: 'wait', args: { ticks: 1 } }],
+    }),
+  ]
+  const agent = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    provider: async () => replies.shift(),
+    systemPrompt: 'NPC test prompt',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const first = await agent.request('build a small line', { sender: 'TTLouis' })
+  assert.match(first.chatMessage, /^\[Plan 1\/5\] Observe area/)
+  assert.equal(first.taskBoard.total_steps, 5)
+
+  const second = await agent.completed()
+  assert.match(second.chatMessage, /^\[Plan 1\/5\] Observe area/)
+  assert.equal(second.plan.length, 5)
+  assert.equal(second.taskBoard.total_steps, 5)
+  assert.equal(second.taskBoard.revision >= first.taskBoard.revision, true)
+
+  const third = await agent.completed()
+  assert.match(third.chatMessage, /^\[Plan 3\/5\] Place machine/)
+  assert.equal(third.taskBoard.completed_count, 2)
+  assert.equal(third.taskBoard.active_step_id, 'step_3')
 })
 
 test('Autorio errors feed the detailed task receipt back into the active goal for replanning', async () => {
@@ -145,6 +197,8 @@ test('Autorio errors feed the detailed task receipt back into the active goal fo
   const replanned = await agent.failed('mining failed: no_target; dependent operations cancelled')
 
   assert.equal(replanned.operations[0].name, 'walk_to_entity')
+  assert.equal(replanned.taskBoard.steps[0].description, 'Find another iron patch')
+  assert.equal(replanned.taskBoard.evidence.at(-1).kind, 'operation_error_receipt')
   assert.equal(agent.active, true)
   const continuation = observed[1].map(message => message.content ?? '').join('\n')
   assert.match(continuation, /\[MOD\] Autorio operation error:/)
