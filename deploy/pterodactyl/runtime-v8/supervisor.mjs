@@ -80,10 +80,46 @@ export const AIRI_CONFIG_DEFAULTS = {
 
 export function migrateConfig(raw = {}, env = process.env) {
   check(raw && typeof raw === 'object' && !Array.isArray(raw), 'airi-config.json must be an object')
-  const next = { ...AIRI_CONFIG_DEFAULTS, ...raw }
-  next.providerUrl = env.OPENAI_API_BASEURL ?? raw.providerUrl ?? AIRI_CONFIG_DEFAULTS.providerUrl
-  next.model = env.OPENAI_MODEL ?? raw.model ?? AIRI_CONFIG_DEFAULTS.model
-  delete next.factorioUsername
+  const actorMode = cleanString(env.AIRI_ACTOR_MODE ?? raw.actorMode ?? AIRI_CONFIG_DEFAULTS.actorMode, 'AIRI_ACTOR_MODE', 32)
+  check(actorMode === 'npc', 'This v8 egg currently supports AIRI_ACTOR_MODE=npc only')
+  const chatPlayers = cleanString(
+    env.AIRI_CHAT_PLAYERS
+      ?? env.AIRI_CHAT_PLAYER
+      ?? env.AIRI_PLAYER
+      ?? raw.chatPlayers
+      ?? raw.chatPlayer
+      ?? raw.player
+      ?? AIRI_CONFIG_DEFAULTS.chatPlayers,
+    'AIRI_CHAT_PLAYERS',
+    512,
+  )
+  const next = {
+    actorMode,
+    chatPlayers,
+    providerUrl: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? AIRI_CONFIG_DEFAULTS.providerUrl,
+    model: cleanString(env.OPENAI_MODEL ?? raw.model ?? AIRI_CONFIG_DEFAULTS.model, 'OPENAI_MODEL', 200),
+    save: cleanString(env.SAVE_NAME ?? raw.save ?? AIRI_CONFIG_DEFAULTS.save, 'SAVE_NAME', 160),
+    providerTimeoutMs: safeInteger(
+      env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? AIRI_CONFIG_DEFAULTS.providerTimeoutMs,
+      'PROVIDER_TIMEOUT_MS',
+      1000,
+      600000,
+    ),
+    gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? AIRI_CONFIG_DEFAULTS.gamePort, 'SERVER_PORT', 1024, 65535),
+    maxProviderRequestsPerHour: safeInteger(
+      env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? AIRI_CONFIG_DEFAULTS.maxProviderRequestsPerHour,
+      'MAX_PROVIDER_REQUESTS_PER_HOUR',
+      1,
+      1200,
+    ),
+    shutdownTimeoutMs: safeInteger(
+      env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? AIRI_CONFIG_DEFAULTS.shutdownTimeoutMs,
+      'SHUTDOWN_TIMEOUT_MS',
+      1000,
+      300000,
+    ),
+  }
+  providerEndpoint(next.providerUrl)
   return next
 }
 
