@@ -62,19 +62,28 @@ export async function configureNpcSession(rcon, session, marker = `AIRI_CONFIG_$
   check(/^AIRI_CONFIG_[a-f0-9]{24}:$/.test(marker), 'Invalid configure acknowledgement marker')
 
   const command = `/silent-command local ok,result=pcall(function() return remote.call("airi_deployment","configure","npc",${luaString(session)}) end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
-  let raw = await rcon.command(command)
-  let parsed = parseAcknowledgement(raw, marker)
-  if (!parsed) {
-    raw = await rcon.command(command)
-    parsed = parseAcknowledgement(raw, marker)
-  }
-  check(parsed, 'Game command acknowledgement missing; configure retry exhausted')
-  check(parsed.data.ok === true, `Game command failed; configure retry exhausted: ${JSON.stringify(parsed.data.result)}`)
-  check(parsed.data.result === session, `NPC deployment configure handshake failed: ${JSON.stringify(parsed.data.result)}`)
 
-  const status = await deploymentStatus(rcon, { requireAllowed: true })
-  check(status.session === session, 'Deployment status session does not match configure token')
-  return status
+  for (let bindAttempt = 1; bindAttempt <= 2; bindAttempt++) {
+    let raw = await rcon.command(command)
+    let parsed = parseAcknowledgement(raw, marker)
+    if (!parsed) {
+      raw = await rcon.command(command)
+      parsed = parseAcknowledgement(raw, marker)
+    }
+    check(parsed, 'Game command acknowledgement missing; configure retry exhausted')
+    check(parsed.data.ok === true, `Game command failed; configure retry exhausted: ${JSON.stringify(parsed.data.result)}`)
+    check(parsed.data.result === session, `NPC deployment configure handshake failed: ${JSON.stringify(parsed.data.result)}`)
+
+    const status = await deploymentStatus(rcon)
+    if (status.allowed === true && status.session === session) return status
+
+    if (bindAttempt === 2) {
+      check(status.allowed === true, 'NPC deployment session is not authorized')
+      check(status.session === session, 'Deployment status session does not match configure token')
+    }
+  }
+
+  throw new StagingSessionError('NPC deployment session rebind retry exhausted')
 }
 
 export function validatedOperationCall(command) {
