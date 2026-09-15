@@ -52,3 +52,30 @@ test('completed gather_resource receipt proves its two internal tasks as one com
     operationNames: ['gather_resource'],
   })
 })
+
+test('multiple gather_resource operations can share one receipt and one model continuation', () => {
+  const state = {
+    last_operations: [
+      'gather_resource {"resource_name":"iron-ore","count":20,"search_radius":512}',
+      'gather_resource {"resource_name":"coal","count":10,"search_radius":512}',
+    ],
+  }
+  const evidence = {
+    kind: 'operation_receipt',
+    summary: JSON.stringify({
+      outcome: 'completed',
+      task_state: 'idle',
+      queue_length: 0,
+      batch_id: 8,
+      task_count: 4,
+      task_types: ['walking_to_entity', 'mining', 'walking_to_entity', 'mining'],
+    }),
+  }
+
+  assert.deepEqual(verifyDeterministicReceipt(state, evidence), {
+    verified: true,
+    batchId: 8,
+    taskTypes: ['walking_to_entity', 'mining', 'walking_to_entity', 'mining'],
+    operationNames: ['gather_resource', 'gather_resource'],
+  })
+})
