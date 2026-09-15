@@ -260,7 +260,7 @@ describe('entity geometry knowledge', () => {
             connection_type: 'normal',
             position: { x: 21, y: 20 },
             target_position: { x: 22, y: 20 },
-            target: pipe,
+            target: { owner: pipe },
             target_fluidbox_index: 1,
             target_pipe_connection_index: 1,
           }],
