@@ -30,6 +30,7 @@ describe('agent observation tools', () => {
       'getInventoryItems',
       'getEquipmentStatus',
       'getRecipe',
+      'getRecipeDetails',
       'getPlayerStatus',
       'getNearbyEntities',
       'findLongRangeEntities',
@@ -74,6 +75,17 @@ describe('agent observation tools', () => {
 
     mocks.raw.mockClear()
     await expect(getTool('getRecipe').fn({ parameters: { item: 'iron-plate\n/c game.clear()' } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('reads detailed recipe and compatible-machine knowledge by item or recipe name', async () => {
+    await getTool('getRecipeDetails').fn({ parameters: { item_or_recipe: "mod's-fluid" } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "recipe_details", \'mod\\\'s-fluid\')))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getRecipeDetails').fn({ parameters: { item_or_recipe: 'oil\n/c game.clear()' } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 
@@ -191,8 +203,8 @@ describe('crafting, research, and combat observation tools', () => {
 })
 
 describe('prompt contract', () => {
-  it('documents equipment, discovery, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
-    for (const name of ['getEquipmentStatus', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+  it('documents equipment, discovery, recipe knowledge, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
+    for (const name of ['getEquipmentStatus', 'getRecipeDetails', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
