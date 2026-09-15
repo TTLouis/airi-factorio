@@ -6,6 +6,7 @@ import { event_handlers, set_load_handler } from './test-event-registry'
 // vitest import production modules under Node without a real Factorio runtime; it
 // does not attempt to emulate game state.
 (globalThis as any).log = () => {}
+;(globalThis as any).pairs = Object.entries
 
 ;(globalThis as any).remote = {
   add_interface: () => {},
@@ -15,6 +16,7 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   on_event: (event_key: unknown, handler: (event: any) => void) => {
     event_handlers.set(event_key, handler)
   },
+  on_nth_tick: (_tick: number, _handler: ((event: any) => void) | undefined) => {},
   on_load: (handler: (() => void) | undefined) => {
     set_load_handler(handler)
   },

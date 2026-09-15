@@ -1,7 +1,13 @@
+import { setTimeout as delay } from 'node:timers/promises'
+
 import { actorChanged, deploymentStatus, executeAuthorizedBatch } from './supervisor-adapter.mjs'
 import { parsePlan, renderOperation, toolCommand } from './structured-policy.mjs'
 
 export class AgentLoopError extends Error {}
+
+const THROUGHPUT_MEASUREMENT_TOOL = 'measureTransportThroughput'
+const THROUGHPUT_POLL_MS = process.env.NODE_TEST_CONTEXT ? 1 : 250
+const THROUGHPUT_NO_PROGRESS_MS = process.env.NODE_TEST_CONTEXT ? 100 : 10000
 
 function check(ok, message) {
   if (!ok) throw new AgentLoopError(message)
@@ -30,6 +36,30 @@ function toolSignature(name, args) {
 
 function messageChars(message) {
   return String(message?.content ?? '').length + JSON.stringify(message?.tool_calls ?? '').length
+}
+
+function throughputMeasurementStatusCommand(measurementId) {
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","throughput_measurement_status",${measurementId})))`
+}
+
+function throughputMeasurementCancelCommand(measurementId) {
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","throughput_measurement_cancel",${measurementId})))`
+}
+
+function throughputMeasurementWallMs(args) {
+  const warmup = Number.isSafeInteger(args?.warmup_ticks) ? args.warmup_ticks : 60
+  const window = Number.isSafeInteger(args?.window_ticks) ? args.window_ticks : 300
+  const expected = ((warmup + window) / 60) * 1000
+  return Math.min(180000, Math.max(15000, expected * 3 + 10000))
+}
+
+function throughputToolError(code, message, measurementId) {
+  return JSON.stringify({
+    ok: false,
+    ...(measurementId ? { measurement_id: measurementId } : {}),
+    state: measurementId ? 'cancelled' : 'failed',
+    error: { code, message },
+  })
 }
 
 export class NpcDialogueMemory {
@@ -394,7 +424,7 @@ export class NpcAgentLoop {
 
   prepareToolBatch(message) {
     check(Array.isArray(message.tool_calls) && message.tool_calls.length >= 1 && message.tool_calls.length <= 4, 'Invalid tool call batch')
-    return message.tool_calls.map((tool) => {
+    const prepared = message.tool_calls.map((tool) => {
       check(tool && tool.type === 'function' && typeof tool.id === 'string' && tool.id.length >= 1 && tool.id.length <= 200, 'Invalid tool call')
       check(tool.function && typeof tool.function.name === 'string' && typeof tool.function.arguments === 'string', 'Invalid tool function')
       const args = strictJson(tool.function.arguments, 'tool arguments')
@@ -406,6 +436,78 @@ export class NpcAgentLoop {
         signature: toolSignature(tool.function.name, args),
       }
     })
+    const throughputMeasurements = prepared.filter(entry => entry.tool.function.name === THROUGHPUT_MEASUREMENT_TOOL)
+    check(
+      throughputMeasurements.length === 0 || (throughputMeasurements.length === 1 && prepared.length === 1),
+      'measureTransportThroughput must be called alone because it owns a bounded multi-tick observation window',
+    )
+    return prepared
+  }
+
+  async cancelThroughputMeasurement(measurementId) {
+    try { await this.rcon.command(throughputMeasurementCancelCommand(measurementId)) }
+    catch {}
+  }
+
+  async runThroughputMeasurement(entry) {
+    await this.assertCurrent()
+    let startRaw
+    try { startRaw = String(await this.rcon.command(entry.command)).slice(0, 16000) }
+    catch (error) {
+      return throughputToolError('MEASUREMENT_RCON_ERROR', error instanceof Error ? error.message : String(error))
+    }
+    await this.assertCurrent()
+
+    let start
+    try { start = JSON.parse(startRaw) }
+    catch { return throughputToolError('MEASUREMENT_PROTOCOL_ERROR', 'Invalid throughput measurement start JSON') }
+    if (start?.ok !== true || start?.state !== 'running') return startRaw
+    if (!Number.isSafeInteger(start.measurement_id) || start.measurement_id < 1) {
+      return throughputToolError('MEASUREMENT_PROTOCOL_ERROR', 'Measurement start returned an invalid id')
+    }
+
+    const measurementId = start.measurement_id
+    const deadline = Date.now() + throughputMeasurementWallMs(entry.args)
+    let lastTick = Number.isFinite(start.started_tick) ? start.started_tick : undefined
+    let lastProgressAt = Date.now()
+
+    try {
+      while (Date.now() <= deadline) {
+        await delay(THROUGHPUT_POLL_MS)
+        await this.assertCurrent()
+        let raw
+        try { raw = String(await this.rcon.command(throughputMeasurementStatusCommand(measurementId))).slice(0, 16000) }
+        catch (error) {
+          await this.cancelThroughputMeasurement(measurementId)
+          return throughputToolError('MEASUREMENT_RCON_ERROR', error instanceof Error ? error.message : String(error), measurementId)
+        }
+        await this.assertCurrent()
+
+        let status
+        try { status = JSON.parse(raw) }
+        catch {
+          await this.cancelThroughputMeasurement(measurementId)
+          return throughputToolError('MEASUREMENT_PROTOCOL_ERROR', 'Invalid throughput measurement status JSON', measurementId)
+        }
+        if (status?.state !== 'running') return raw
+
+        if (Number.isFinite(status.current_tick) && (lastTick === undefined || status.current_tick > lastTick)) {
+          lastTick = status.current_tick
+          lastProgressAt = Date.now()
+        }
+        if (Date.now() - lastProgressAt > THROUGHPUT_NO_PROGRESS_MS) {
+          await this.cancelThroughputMeasurement(measurementId)
+          return throughputToolError('MEASUREMENT_CLOCK_STALLED', 'Factorio simulation tick did not advance while measuring throughput', measurementId)
+        }
+      }
+
+      await this.cancelThroughputMeasurement(measurementId)
+      return throughputToolError('MEASUREMENT_WALL_TIMEOUT', 'Throughput measurement exceeded its bounded wall-clock budget', measurementId)
+    }
+    catch (error) {
+      await this.cancelThroughputMeasurement(measurementId)
+      throw error
+    }
   }
 
   async handleToolBatch(message, prepared = this.prepareToolBatch(message)) {
@@ -421,9 +523,14 @@ export class NpcAgentLoop {
         output = `[HARNESS] Duplicate observation suppressed. Reuse this cached result and act or report a blocker instead of repeating the same tool call.\n${cached}`
       }
       else {
-        await this.assertCurrent()
-        output = String(await this.rcon.command(entry.command)).slice(0, 12000)
-        await this.assertCurrent()
+        if (entry.tool.function.name === THROUGHPUT_MEASUREMENT_TOOL) {
+          output = await this.runThroughputMeasurement(entry)
+        }
+        else {
+          await this.assertCurrent()
+          output = String(await this.rcon.command(entry.command)).slice(0, 12000)
+          await this.assertCurrent()
+        }
         this.toolCache.set(entry.signature, output)
       }
       this.messages.push({ role: 'tool', tool_call_id: entry.tool.id, content: String(output).slice(0, 16000) })
