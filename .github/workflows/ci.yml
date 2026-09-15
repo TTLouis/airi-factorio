@@ -67,7 +67,9 @@ jobs:
           node-version: '24'
 
       - name: Check generated egg artifacts
-        run: node deploy/pterodactyl/build-payload.mjs --check
+        run: |
+          sha256sum deploy/pterodactyl/payload-src/installer.sh
+          node deploy/pterodactyl/build-payload.mjs --check
 
       - name: Test payload verifier portability
         run: node --test deploy/pterodactyl/build-payload.test.mjs
