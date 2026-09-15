@@ -33,7 +33,12 @@ function inventory(items: any[] = []) {
   return value
 }
 
+function waypoint(x: number, y = 0) {
+  return { position: { x, y }, needs_destroy_to_reach: false }
+}
+
 function world() {
+  let nextPathId = 100
   const target: any = {
     valid: true,
     name: 'small-biter',
@@ -52,6 +57,10 @@ function world() {
     health: 250,
     max_health: 250,
     selected_gun_index: 1,
+    prototype: {
+      collision_box: [[-0.2, -0.2], [0.2, 0.2]],
+      collision_mask: { layers: { player: true }, consider_tile_transitions: true },
+    },
     can_shoot: vi.fn(() => false),
     get_inventory: vi.fn((index: unknown) => {
       if (index === (globalThis as any).defines.inventory.character_guns) return guns
@@ -62,6 +71,7 @@ function world() {
   const surface: any = {
     find_entities_filtered: vi.fn(() => enemies.filter(entity => entity.valid !== false && (entity.health === undefined || entity.health > 0))),
     find_non_colliding_position: vi.fn((_name: string, position: { x: number, y: number }) => ({ x: position.x, y: position.y })),
+    request_path: vi.fn(() => ++nextPathId),
     create_entity: vi.fn(),
   }
   const identity = { kind: 'standalone_character', actor_id: 42 }
@@ -78,6 +88,7 @@ function world() {
     get_main_inventory: () => main,
     entity_build_args: () => ({ force: actor.force }),
   }
+  Object.defineProperty(character, 'position', { get: () => actor.position })
   const get_actor = vi.fn<() => ControlledActor | undefined>(() => actor)
   const manager = new_task_manager(get_actor)
   const controller = new_combat_controller(get_actor, manager)
@@ -158,14 +169,89 @@ describe('bounded combat controller', () => {
   })
 
   it('does not advance onto a nest once the selected weapon can fire at it', () => {
-    const { actor, target, character, controller } = world()
+    const { actor, target, character, surface, controller } = world()
     target.type = 'unit-spawner'
     target.name = 'biter-spawner'
     character.can_shoot.mockReturnValue(true)
     controller.submit(40)
     controller.tick(actor)
+    expect(surface.request_path).not.toHaveBeenCalled()
     expect(actor.set_walking_state).toHaveBeenLastCalledWith({ walking: false, direction: 'north' })
     expect(actor.set_shooting_state).toHaveBeenLastCalledWith({ state: 'shooting_selected', position: target.position })
+  })
+
+  it('uses Factorio pathfinding from the real NPC position instead of walking straight into cliffs or water toward a nest', () => {
+    const { actor, target, character, surface, controller } = world()
+    target.type = 'unit-spawner'
+    target.name = 'biter-spawner'
+    target.position = { x: 30, y: 0 }
+    character.can_shoot.mockReturnValue(false)
+
+    controller.submit(40)
+    controller.tick(actor)
+
+    expect(surface.request_path).toHaveBeenCalledWith(expect.objectContaining({
+      start: { x: 0, y: 0 },
+      goal: { x: 30, y: 0 },
+      radius: 8,
+    }))
+    expect(actor.set_walking_state).not.toHaveBeenCalledWith(expect.objectContaining({ walking: true }))
+    const requestId = controller.status().path.request_id
+    controller.on_path_finished({ id: requestId, path: [waypoint(0, 5), waypoint(15, 5)], try_again_later: false } as any)
+
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+    expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
+    expect(controller.status()).toMatchObject({ path: { attempts: 1, waypoints_remaining: 2 } })
+  })
+
+  it('bounds repeated no-path results and cancels dependent combat work with an explicit receipt', () => {
+    const { actor, target, manager, controller } = world()
+    target.type = 'unit-spawner'
+    target.name = 'biter-spawner'
+    target.position = { x: 40, y: 0 }
+    controller.submit(80)
+    manager.add_task({ type: TaskStates.WAITING, remaining_ticks: 60 })
+    controller.tick(actor)
+
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      const requestId = controller.status().path.request_id
+      expect(requestId).toBeDefined()
+      controller.on_path_finished({ id: requestId, path: undefined, try_again_later: false } as any)
+      if (attempt < 4) {
+        expect(manager.player_state.task_state).toBe(TaskStates.ATTACKING)
+        ;(globalThis as any).game.tick += 30
+        controller.tick(actor)
+      }
+    }
+
+    expect(controller.status()).toMatchObject({ last_result: { code: 'path_unreachable', accepted: false } })
+    expect(manager.get_status_snapshot()).toMatchObject({ task_state: TaskStates.IDLE, queue_length: 0 })
+  })
+
+  it('ignores a stale static-nest path after a mobile threat preempts the target', () => {
+    const { actor, target, enemies, controller } = world()
+    target.type = 'unit-spawner'
+    target.name = 'biter-spawner'
+    target.position = { x: 30, y: 0 }
+    controller.submit_clear(80)
+    controller.tick(actor)
+    const staleRequest = controller.status().path.request_id
+
+    enemies.push({
+      valid: true,
+      name: 'small-biter',
+      type: 'unit',
+      unit_number: 900,
+      position: { x: 8, y: 0 },
+      health: 15,
+    })
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+    expect(controller.status()).toMatchObject({ target: { name: 'small-biter' }, path: { request_id: undefined, attempts: 0 } })
+
+    controller.on_path_finished({ id: staleRequest, path: [waypoint(12, 6)], try_again_later: false } as any)
+    expect(controller.status()).toMatchObject({ target: { name: 'small-biter' }, path: { waypoints_remaining: 0 } })
   })
 
   it('completes a one-shot task only after the acquired target is gone instead of retargeting forever', () => {
