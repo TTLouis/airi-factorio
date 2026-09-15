@@ -5,8 +5,10 @@ import { distance } from './utils/math'
 const MIN_FOLLOW_DISTANCE = 1
 const MAX_FOLLOW_DISTANCE = 64
 const FOLLOW_HYSTERESIS = 1.5
+const FOLLOW_REPATH_COOLDOWN_TICKS = 2 * 60
 
-type FollowCode = 'following' | 'holding' | 'stopped' | 'no_actor' | 'invalid_player' | 'player_unavailable' | 'different_surface'
+type FollowCode = 'following' | 'holding' | 'stopped' | 'no_actor' | 'invalid_player' | 'player_unavailable' | 'different_surface' | 'navigation_blocked'
+type NavigateToPlayer = (player_name: string, reach_distance: number) => [boolean, string]
 
 interface FollowState {
   active: boolean
@@ -14,6 +16,7 @@ interface FollowState {
   follow_distance?: number
   code: FollowCode
   updated_tick: number
+  last_navigation_tick?: number
 }
 
 declare const storage: {
@@ -36,7 +39,7 @@ function stop_walking(actor: ControlledActor | undefined) {
   actor.set_walking_state({ walking: false, direction: defines.direction.north })
 }
 
-export function new_follow_controller(get_actor: () => ControlledActor | undefined) {
+export function new_follow_controller(get_actor: () => ControlledActor | undefined, navigate_to_player?: NavigateToPlayer) {
   function submit(player_name: string, follow_distance: number = 4): [boolean, string] {
     const actor = get_actor()
     if (!actor || !actor.is_valid || !actor.character) {
@@ -144,6 +147,21 @@ export function new_follow_controller(get_actor: () => ControlledActor | undefin
       return
     }
 
+    if (navigate_to_player) {
+      stop_walking(actor)
+      if (state.last_navigation_tick !== undefined && game.tick - state.last_navigation_tick < FOLLOW_REPATH_COOLDOWN_TICKS) {
+        return
+      }
+      const [accepted] = navigate_to_player(state.player_name, follow_distance)
+      state.last_navigation_tick = game.tick
+      state.code = accepted ? 'following' : 'navigation_blocked'
+      state.updated_tick = game.tick
+      return
+    }
+
+    // Legacy/local fallback for callers that do not wire the shared navigation
+    // controller. Production Autorio supplies navigate_to_player so persistent
+    // follow receives the same cliff/water-aware pathfinding as walk_to_player.
     actor.set_walking_state({
       walking: true,
       direction: direction_towards(actor.position, player.position),
