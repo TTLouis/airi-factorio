@@ -305,10 +305,10 @@ export class Session {
       const text = routeNpcRequest(chat[2], this.npcName)
       if (!text) return
       const stop = text.toLowerCase() === 'stop'
+      if (stop) this.agent.cancel('user_stop_immediate')
       this.queueEvent(async () => {
         if (stop) {
           if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan('user_stop')
-          else this.agent.cancel()
           await this.ensureAuthorization()
           await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")')
           await this.printChat('Paused the current AIRI plan and cancelled active Autorio work. Say continue/resume when you want me to pick it back up.')
