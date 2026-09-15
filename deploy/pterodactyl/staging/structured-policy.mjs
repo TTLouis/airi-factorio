@@ -182,6 +182,13 @@ export const toolDefinitions = [
     required: ['name'],
     additionalProperties: false,
   }),
+  functionTool('findNearestEnemy', 'Use Factorio native nearest-enemy search to find the closest hostile entity without knowing its prototype name, up to 4096 tiles.', {
+    type: 'object',
+    properties: {
+      max_distance: { type: 'integer', minimum: 1, maximum: 4096, default: 1024 },
+    },
+    additionalProperties: false,
+  }),
   functionTool('getEntityStatus', 'Inspect one nearest exact-name local entity.', {
     type: 'object',
     properties: { name: nameStringSchema, radius: { type: 'integer', minimum: 1, maximum: 32, default: 8 } },
@@ -249,6 +256,11 @@ export function toolCommand(name, rawArgs = {}) {
       const maxRadius = integer(args.max_radius ?? 1024, 'max_radius', 64, 4096)
       const limit = integer(args.limit ?? 8, 'limit', 1, 16)
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",${luaString(entityName)},${maxRadius},${limit})))`
+    }
+    case 'findNearestEnemy': {
+      noExtra(args, ['max_distance'])
+      const maxDistance = integer(args.max_distance ?? 1024, 'max_distance', 1, 4096)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_nearest_enemy",${maxDistance})))`
     }
     case 'getEntityStatus': {
       noExtra(args, ['name', 'radius'])
