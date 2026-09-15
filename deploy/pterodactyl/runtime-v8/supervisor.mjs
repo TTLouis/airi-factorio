@@ -137,6 +137,7 @@ export class Session {
     this.expectedStop = false
     this.eventQueue = Promise.resolve()
     this.lastCompletionAt = 0
+    this.lastErrorAt = 0
     this.lastStatus = null
     this.authorizationPromise = null
     this.npcName = 'AIRI'
@@ -204,8 +205,9 @@ export class Session {
       }
 
       if (this.agent?.active) {
-        this.agent.cancel()
-        this.log('NPC identity/session changed; active model turn cancelled before rebind')
+        if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan('npc_identity_or_session_changed')
+        else this.agent.cancel()
+        this.log('NPC identity/session changed; active model turn paused before rebind')
       }
       return this.bindNpc()
     })()
@@ -257,6 +259,7 @@ export class Session {
       rcon: this.rcon,
       systemPrompt: prompt,
       npcId: this.npcId,
+      stateFile: path.join(this.root, '.airi', 'npc-state.json'),
       provider: (messages, context) => this.provider({
         base: this.config.base,
         key: this.config.key,
@@ -266,6 +269,7 @@ export class Session {
       reserve: async () => reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget),
       log: message => this.log(`[AIRI agent] ${redact(secrets, message)}`),
     })
+    await this.agent.loadPersistentState()
 
     this.ready = true
     this.poll = setInterval(() => {
@@ -301,14 +305,16 @@ export class Session {
       const text = routeNpcRequest(chat[2], this.npcName)
       if (!text) return
       const stop = text.toLowerCase() === 'stop'
-      if (stop) this.agent.cancel()
       this.queueEvent(async () => {
-        await this.ensureAuthorization()
         if (stop) {
+          if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan('user_stop')
+          else this.agent.cancel()
+          await this.ensureAuthorization()
           await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")')
-          await this.printChat('Cancelled AIRI work.')
+          await this.printChat('Paused the current AIRI plan and cancelled active Autorio work. Say continue/resume when you want me to pick it back up.')
           return
         }
+        await this.ensureAuthorization()
         const result = await this.agent.request(text, { sender: chat[1] })
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
@@ -317,10 +323,11 @@ export class Session {
 
     const recovery = line.match(/\[AUTORIO\] Recovered standalone NPC actor_id=(\d+) -> (\d+) without inventory transfer/)
     if (recovery) {
-      this.agent.cancel()
       this.queueEvent(async () => {
+        if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan('actor_replaced')
+        else this.agent.cancel()
         await this.ensureAuthorization()
-        await this.printChat(`I was killed or lost my body and respawned. Previous actor ${recovery[1]}, replacement actor ${recovery[2]}. The interrupted task was cancelled.`)
+        await this.printChat(`I was killed or lost my body and respawned. Previous actor ${recovery[1]}, replacement actor ${recovery[2]}. The interrupted plan was paused and can be resumed after I re-observe the world.`)
       })
       return
     }
@@ -337,9 +344,19 @@ export class Session {
       return
     }
 
-    if (line.includes('[AUTORIO] [ERROR]')) {
-      this.agent.cancel()
-      this.log('[AIRI agent] Autorio reported an error; active model turn cancelled')
+    const autorioError = line.match(/\[AUTORIO\] \[ERROR\] (.+)$/)
+    if (autorioError && Date.now() - this.lastErrorAt > 250) {
+      this.lastErrorAt = Date.now()
+      this.queueEvent(async () => {
+        if (!this.agent.active) {
+          this.log(`[AIRI agent] Autorio error with no active model goal: ${autorioError[1]}`)
+          return
+        }
+        await this.ensureAuthorization()
+        if (!this.agent.active) return
+        const result = typeof this.agent.failed === 'function' ? await this.agent.failed(autorioError[1]) : null
+        if (result?.chatMessage) await this.printChat(result.chatMessage)
+      }, { reportError: true })
     }
   }
 
@@ -349,9 +366,18 @@ export class Session {
     this.stopping = true
     this.ready = false
     if (this.poll) clearInterval(this.poll)
-    this.agent?.cancel()
     this.stopPromise = (async () => {
       let clean = true
+      if (this.agent?.active) {
+        try {
+          if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan(`server_stop_${reason}`)
+          else this.agent.cancel()
+        }
+        catch (error) {
+          clean = false
+          this.log(`Unable to persist active AIRI plan before shutdown: ${error instanceof Error ? error.message : error}`)
+        }
+      }
       if (this.rcon && this.gameChild?.alive()) {
         this.rcon.timeout = Math.min(this.config.stopMs, 30000)
         try { await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")') }
