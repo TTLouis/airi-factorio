@@ -48,7 +48,10 @@ const crafting_controller = new_crafting_controller(get_controlled_actor, task_m
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
 const equipment_controller = new_equipment_controller(get_controlled_actor)
-const follow_controller = new_follow_controller(get_controlled_actor)
+const follow_controller = new_follow_controller(
+  get_controlled_actor,
+  (player_name, follow_distance) => navigation_controller.submit_player(player_name, follow_distance),
+)
 const defense_controller = new_defense_controller(get_controlled_actor)
 
 remote.add_interface('autorio_navigation', {
@@ -299,6 +302,10 @@ script.on_event(defines.events.on_tick, (unused_event) => {
 
   if (task_manager.player_state.task_state === TaskStates.IDLE) {
     follow_controller.tick(actor)
+    if (task_manager.player_state.task_state !== TaskStates.IDLE) {
+      defense_controller.suspend(actor)
+      return
+    }
     if (follow_controller.status().active) defense_controller.tick(actor)
     else defense_controller.suspend(actor)
     return
