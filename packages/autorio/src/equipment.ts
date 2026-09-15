@@ -5,6 +5,10 @@ const MAX_EQUIPMENT_SLOTS = 64
 
 type EquipmentInventoryKind = 'weapon' | 'ammo' | 'armor'
 
+type StandaloneActorResult
+  = | { actor: ControlledActor }
+    | { error: string }
+
 function stack_summary(stack: LuaItemStack | undefined) {
   if (!stack || !stack.valid_for_read) return undefined
   return {
@@ -43,11 +47,11 @@ function equipment_inventory(actor: ControlledActor, kind: EquipmentInventoryKin
   return character.get_inventory(defines.inventory.character_armor)
 }
 
-function standalone_actor(get_actor: () => ControlledActor | undefined): [ControlledActor | undefined, string | undefined] {
+function standalone_actor(get_actor: () => ControlledActor | undefined): StandaloneActorResult {
   const actor = get_actor()
-  if (!actor || !actor.is_valid || !actor.character) return [undefined, 'no_actor']
-  if (actor.status_snapshot().kind !== 'standalone_character') return [undefined, 'standalone_npc_required']
-  return [actor, undefined]
+  if (!actor || !actor.is_valid || !actor.character) return { error: 'no_actor' }
+  if (actor.status_snapshot().kind !== 'standalone_character') return { error: 'standalone_npc_required' }
+  return { actor }
 }
 
 export function new_equipment_controller(get_actor: () => ControlledActor | undefined) {
@@ -80,8 +84,9 @@ export function new_equipment_controller(get_actor: () => ControlledActor | unde
   }
 
   function equip(item_name: string, kind: EquipmentInventoryKind, slot: number): [boolean, string] {
-    const [actor, error] = standalone_actor(get_actor)
-    if (!actor) return [false, error ?? 'no_actor']
+    const resolved = standalone_actor(get_actor)
+    if ('error' in resolved) return [false, resolved.error]
+    const actor = resolved.actor
     if (typeof item_name !== 'string' || item_name.length === 0) return [false, 'invalid_item']
     if (!valid_slot(slot)) return [false, 'invalid_slot']
 
@@ -89,7 +94,7 @@ export function new_equipment_controller(get_actor: () => ControlledActor | unde
     if (!destination || slot > destination.length) return [false, 'slot_unavailable']
     const main = actor.get_main_inventory()
     if (!main) return [false, 'no_main_inventory']
-    const source = main.find_item_stack(item_name)
+    const [source] = main.find_item_stack(item_name)
     if (!source || !source.valid_for_read) return [false, 'item_not_in_main_inventory']
 
     const target = destination[slot - 1]
@@ -114,8 +119,10 @@ export function new_equipment_controller(get_actor: () => ControlledActor | unde
   }
 
   function select_weapon_slot(slot: number): [boolean, string] {
-    const [actor, error] = standalone_actor(get_actor)
-    if (!actor || !actor.character) return [false, error ?? 'no_actor']
+    const resolved = standalone_actor(get_actor)
+    if ('error' in resolved) return [false, resolved.error]
+    const actor = resolved.actor
+    if (!actor.character) return [false, 'no_actor']
     if (!valid_slot(slot)) return [false, 'invalid_slot']
     const guns = equipment_inventory(actor, 'weapon')
     if (!guns || slot > guns.length) return [false, 'slot_unavailable']
