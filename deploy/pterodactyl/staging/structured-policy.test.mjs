@@ -12,6 +12,9 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.deepEqual(parseOperation({ name: 'follow_player', args: { player_name: 'TTLouis' } }), {
     name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 4 },
   })
+  assert.deepEqual(parseOperation({ name: 'set_auto_defense', args: { enabled: false } }), {
+    name: 'set_auto_defense', args: { enabled: false },
+  })
   assert.deepEqual(parseOperation({ name: 'walk_to_player', args: { player_name: 'TTLouis' } }), {
     name: 'walk_to_player', args: { player_name: 'TTLouis' },
   })
@@ -36,6 +39,7 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.equal(renderOperation({ name: 'wait', args: { ticks: 60 } }), "remote.call('autorio_operations','wait',60)")
   assert.equal(renderOperation({ name: 'place_entity', args: { entity_name: "mod's-chest" } }), "remote.call('autorio_operations','place_entity','mod\\'s-chest')")
   assert.equal(renderOperation({ name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 3.5 } }), "remote.call('autorio_operations','follow_player','TTLouis',3.5)")
+  assert.equal(renderOperation({ name: 'set_auto_defense', args: { enabled: true } }), "remote.call('autorio_operations','set_auto_defense',true)")
   assert.equal(renderOperation({ name: 'walk_to_player', args: { player_name: 'TTLouis' } }), "remote.call('autorio_operations','walk_to_player','TTLouis')")
   assert.equal(renderOperation({ name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 2 } }), "remote.call('autorio_operations','equip_weapon','rocket-launcher',2)")
   assert.equal(renderOperation({ name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 2 } }), "remote.call('autorio_operations','equip_ammo','atomic-bomb',2)")
@@ -54,6 +58,7 @@ test('operation policy rejects arbitrary code, extra args, and oversized bounded
     { name: 'walk_to_player', args: { player_name: 'TTLouis', search_radius: 10 } },
     { name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 65 } },
     { name: 'follow_player', args: { player_name: 'TTLouis\n/c game.clear()' } },
+    { name: 'set_auto_defense', args: { enabled: 'yes' } },
     { name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 65 } },
     { name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 0 } },
     { name: 'equip_armor', args: { item_name: 'modular-armor', slot: 1 } },
@@ -90,6 +95,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'getEntityStatus',
     'getNavigationStatus',
     'getFollowStatus',
+    'getDefenseStatus',
     'getCraftingStatus',
     'getResearchStatus',
     'getResearchRequest',
@@ -107,6 +113,7 @@ test('read-only tool renderer targets native actor-aware interfaces without play
   assert.equal(toolCommand('getActorStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor","status")))')
   assert.equal(toolCommand('getEquipmentStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_equipment","status")))')
   assert.equal(toolCommand('getFollowStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_follow","status")))')
+  assert.equal(toolCommand('getDefenseStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_defense","status")))')
   assert.equal(toolCommand('getCraftingStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting","status")))')
   assert.equal(toolCommand('getResearchRequest', { request_id: 42 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","request_result",42)))')
   assert.equal(toolCommand('getRecipe', { item: 'iron-gear-wheel' }), '/silent-command remote.call("autorio_tools","get_recipe",\'iron-gear-wheel\')')
@@ -120,6 +127,7 @@ test('read-only tool renderer targets native actor-aware interfaces without play
 test('tool calls reject unknown names, unsafe names, extras, and out-of-bound scans', () => {
   assert.throws(() => toolCommand('shell', {}))
   assert.throws(() => toolCommand('getEquipmentStatus', { slot: 1 }))
+  assert.throws(() => toolCommand('getDefenseStatus', { enabled: false }))
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate', force: 'enemy' }))
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate\n/c game.clear()' }))
   assert.throws(() => toolCommand('getPlayerStatus', { player_name: 'TTLouis', force: 'enemy' }))
