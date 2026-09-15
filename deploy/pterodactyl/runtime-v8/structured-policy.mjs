@@ -2,20 +2,19 @@ import * as base from '../staging/structured-policy.mjs'
 
 export * from '../staging/structured-policy.mjs'
 
-function check(ok, message) {
-  if (!ok) throw new base.PolicyError(message)
-}
-
+function check(ok, message) { if (!ok) throw new base.PolicyError(message) }
 function exactKeys(value, allowed) {
   check(value && typeof value === 'object' && !Array.isArray(value), 'Expected object')
   check(Object.keys(value).every(key => allowed.includes(key)), 'Unexpected argument')
 }
-
 function positiveRate(value) {
   check(typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1_000_000_000, 'rate_per_second must be a positive number up to 1000000000')
   return value
 }
-
+function positiveInteger(value, label) {
+  check(Number.isSafeInteger(value) && value > 0, `${label} must be a positive integer`)
+  return value
+}
 function stringArray(value, label) {
   check(Array.isArray(value) && value.length <= 64, `${label} must be an array with at most 64 entries`)
   return value.map(base.factorioName)
@@ -27,11 +26,7 @@ function parseSolveProduction(args) {
   check(args.target.type === 'item' || args.target.type === 'fluid', 'target.type must be item or fluid')
   const parsed = {
     calculation_id: base.factorioName(args.calculation_id),
-    target: {
-      type: args.target.type,
-      name: base.factorioName(args.target.name),
-      rate_per_second: positiveRate(args.target.rate_per_second),
-    },
+    target: { type: args.target.type, name: base.factorioName(args.target.name), rate_per_second: positiveRate(args.target.rate_per_second) },
   }
   if (args.included_recipe_names !== undefined) parsed.included_recipe_names = stringArray(args.included_recipe_names, 'included_recipe_names')
   if (args.machine_selections !== undefined) {
@@ -59,8 +54,14 @@ function renderSolveProduction(args) {
 }
 
 function parseTransportCapacity(args) {
-  exactKeys(args, ['kind', 'prototype_name', 'scope', 'required_rate_per_second', 'item_name'])
-  check(args.kind === 'belt' || args.kind === 'inserter', 'kind must be belt or inserter')
+  exactKeys(args, ['kind', 'prototype_name', 'scope', 'required_rate_per_second', 'item_name', 'unit_number'])
+  check(args.kind === 'belt' || args.kind === 'inserter' || args.kind === 'inserter_instance', 'kind must be belt, inserter, or inserter_instance')
+  if (args.kind === 'inserter_instance') {
+    check(args.prototype_name === undefined && args.scope === undefined && args.required_rate_per_second === undefined && args.item_name === undefined, 'inserter_instance only accepts unit_number')
+    return { kind: args.kind, unit_number: positiveInteger(args.unit_number, 'unit_number') }
+  }
+
+  check(args.unit_number === undefined, 'unit_number is only valid for inserter_instance')
   const parsed = { kind: args.kind, prototype_name: base.factorioName(args.prototype_name) }
   if (args.kind === 'belt') {
     check(args.item_name === undefined, 'item_name is only valid for inserter capacity')
@@ -79,6 +80,9 @@ function parseTransportCapacity(args) {
 
 function renderTransportCapacity(args) {
   const parsed = parseTransportCapacity(args)
+  if (parsed.kind === 'inserter_instance') {
+    return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","capacity",{kind='inserter_instance',unit_number=${parsed.unit_number}})))`
+  }
   const fields = [`kind=${base.luaString(parsed.kind)}`, `prototype_name=${base.luaString(parsed.prototype_name)}`]
   if (parsed.scope !== undefined) fields.push(`scope=${base.luaString(parsed.scope)}`)
   if (parsed.required_rate_per_second !== undefined) fields.push(`required_rate_per_second=${parsed.required_rate_per_second}`)
@@ -98,8 +102,7 @@ const solveProductionDefinition = {
         target: {
           type: 'object', additionalProperties: false, required: ['type', 'name', 'rate_per_second'],
           properties: {
-            type: { type: 'string', enum: ['item', 'fluid'] },
-            name: { type: 'string', minLength: 1, maxLength: 200 },
+            type: { type: 'string', enum: ['item', 'fluid'] }, name: { type: 'string', minLength: 1, maxLength: 200 },
             rate_per_second: { type: 'number', exclusiveMinimum: 0, maximum: 1000000000 },
           },
         },
@@ -108,10 +111,7 @@ const solveProductionDefinition = {
           type: 'array', maxItems: 64,
           items: {
             type: 'object', additionalProperties: false, required: ['recipe_name', 'machine_name'],
-            properties: {
-              recipe_name: { type: 'string', minLength: 1, maxLength: 200 },
-              machine_name: { type: 'string', minLength: 1, maxLength: 200 },
-            },
+            properties: { recipe_name: { type: 'string', minLength: 1, maxLength: 200 }, machine_name: { type: 'string', minLength: 1, maxLength: 200 } },
           },
         },
       },
@@ -123,22 +123,22 @@ const transportCapacityDefinition = {
   type: 'function',
   function: {
     name: 'getTransportCapacity',
-    description: 'Read live deterministic transport facts. Belt lane/whole-belt limits include researched stacking but stacked capacity is only a transport ceiling. Inserter results expose hand/research/movement facts with transfer_rate.validated=false; never infer a fixed inserter items-per-second rate from them.',
+    description: 'Read live deterministic transport facts. Belt lane/whole-belt limits include researched stacking but stacked capacity is only a transport ceiling. Inserter prototype facts do not imply throughput. For an already observed placed inserter, kind inserter_instance plus exact unit_number returns its current pickup count, override, lane permissions and actual pickup/drop targets. Inserter transfer_rate remains unvalidated; never infer fixed items-per-second.',
     parameters: {
-      type: 'object', additionalProperties: false, required: ['kind', 'prototype_name'],
+      type: 'object', additionalProperties: false, required: ['kind'],
       properties: {
-        kind: { type: 'string', enum: ['belt', 'inserter'] },
+        kind: { type: 'string', enum: ['belt', 'inserter', 'inserter_instance'] },
         prototype_name: { type: 'string', minLength: 1, maxLength: 200 },
         scope: { type: 'string', enum: ['lane', 'belt'] },
         required_rate_per_second: { type: 'number', exclusiveMinimum: 0, maximum: 1000000000 },
         item_name: { type: 'string', minLength: 1, maxLength: 200 },
+        unit_number: { type: 'integer', minimum: 1 },
       },
     },
   },
 }
 
 export const toolDefinitions = [...base.toolDefinitions, solveProductionDefinition, transportCapacityDefinition]
-
 export function toolCommand(name, args) {
   if (name === 'solveProduction') return renderSolveProduction(args)
   if (name === 'getTransportCapacity') return renderTransportCapacity(args)

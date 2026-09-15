@@ -4,7 +4,6 @@ import { z } from 'zod'
 import { factorioNameSchema, renderLuaString } from './operations'
 
 const logger = createLogg('transport-capacity-tool').useGlobalConfig()
-
 const boundedRate = z.number().positive().max(1_000_000_000)
 
 const beltCapacitySchema = z.object({
@@ -20,10 +19,23 @@ const inserterCapacitySchema = z.object({
   item_name: factorioNameSchema.optional(),
 }).strict()
 
-export const transportCapacitySchema = z.discriminatedUnion('kind', [beltCapacitySchema, inserterCapacitySchema])
+const inserterInstanceCapacitySchema = z.object({
+  kind: z.literal('inserter_instance'),
+  unit_number: z.number().int().positive(),
+}).strict()
+
+export const transportCapacitySchema = z.discriminatedUnion('kind', [
+  beltCapacitySchema,
+  inserterCapacitySchema,
+  inserterInstanceCapacitySchema,
+])
 
 export function renderTransportCapacityRequest(raw: unknown) {
   const request = transportCapacitySchema.parse(raw)
+  if (request.kind === 'inserter_instance') {
+    return `{kind='inserter_instance',unit_number=${request.unit_number}}`
+  }
+
   const fields = [
     `kind=${renderLuaString(request.kind)}`,
     `prototype_name=${renderLuaString(request.prototype_name)}`,
@@ -40,7 +52,7 @@ export function renderTransportCapacityRequest(raw: unknown) {
 
 export const getTransportCapacityTool = {
   name: 'getTransportCapacity',
-  description: 'Read deterministic live transport-capacity facts. For belts, validates one lane or a whole belt against live prototype speed and force belt-stack research. Stacked capacity is only a belt transport ceiling and does not prove upstream stack creation. For inserters, returns hand/research/movement facts but explicitly does NOT claim a fixed items-per-second rate; never infer inserter throughput from those facts.',
+  description: 'Read deterministic live transport-capacity facts. For belts, validates one lane or a whole belt against live prototype speed and force belt-stack research. Stacked capacity is only a belt transport ceiling and does not prove upstream stack creation. For inserter prototypes, returns hand/research/movement facts. For an observed placed inserter, use kind inserter_instance with its exact unit_number to read current target pickup count, override, lane permissions, and actual pickup/drop targets. Inserter transfer_rate remains unvalidated: never infer a fixed items-per-second rate from these facts.',
   schema: transportCapacitySchema,
   fn: async ({ parameters }: { parameters: unknown }) => {
     const request = transportCapacitySchema.parse(parameters)

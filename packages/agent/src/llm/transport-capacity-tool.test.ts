@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ raw: vi.fn() }))
-vi.mock('factorio-rcon-api-client', () => ({
-  v2FactorioConsoleCommandRawPost: mocks.raw,
-}))
+vi.mock('factorio-rcon-api-client', () => ({ v2FactorioConsoleCommandRawPost: mocks.raw }))
 
 import { agentTools } from './tool-set'
 import { getTransportCapacityTool, renderTransportCapacityRequest, transportCapacitySchema } from './transport-capacity-tool'
@@ -20,10 +18,7 @@ describe('getTransportCapacity ordinary-agent tool', () => {
 
   it('renders a lane validation request through autorio_planning capacity', async () => {
     const parameters = {
-      kind: 'belt' as const,
-      prototype_name: 'transport-belt',
-      scope: 'lane' as const,
-      required_rate_per_second: 7.5,
+      kind: 'belt' as const, prototype_name: 'transport-belt', scope: 'lane' as const, required_rate_per_second: 7.5,
     }
     expect(renderTransportCapacityRequest(parameters)).toBe("{kind='belt',prototype_name='transport-belt',scope='lane',required_rate_per_second=7.5}")
     await getTransportCapacityTool.fn({ parameters })
@@ -32,11 +27,18 @@ describe('getTransportCapacity ordinary-agent tool', () => {
     } })
   })
 
+  it('renders an exact placed inserter request by unit number', () => {
+    expect(renderTransportCapacityRequest({ kind: 'inserter_instance', unit_number: 42 }))
+      .toBe("{kind='inserter_instance',unit_number=42}")
+  })
+
   it('keeps inserter requests separate from belt rate validation', () => {
     expect(renderTransportCapacityRequest({ kind: 'inserter', prototype_name: 'bulk-inserter', item_name: 'iron-plate' }))
       .toBe("{kind='inserter',prototype_name='bulk-inserter',item_name='iron-plate'}")
     expect(() => transportCapacitySchema.parse({ kind: 'inserter', prototype_name: 'bulk-inserter', required_rate_per_second: 10 })).toThrow()
     expect(() => transportCapacitySchema.parse({ kind: 'belt', prototype_name: 'transport-belt', item_name: 'iron-plate' })).toThrow()
+    expect(() => transportCapacitySchema.parse({ kind: 'inserter_instance', unit_number: 0 })).toThrow()
+    expect(() => transportCapacitySchema.parse({ kind: 'inserter_instance', unit_number: 42, prototype_name: 'fast-inserter' })).toThrow()
   })
 
   it('rejects unsafe, extra, zero, and over-limit requests before RCON', async () => {
