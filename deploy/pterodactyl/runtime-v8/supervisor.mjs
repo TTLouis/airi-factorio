@@ -38,6 +38,10 @@ const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow
 const UI_PROMPT_MARKER = '[AIRI_UI_PROMPT]'
 const UI_PROMPT_MAX_CHARS = 4000
 const SYSTEM_RECOVERY_PAUSE_REASONS = new Set(['npc_identity_or_session_changed', 'actor_replaced'])
+const UI_AGENT_PHASES = new Set(['idle', 'thinking', 'observing', 'executing', 'waiting', 'error'])
+const UI_LIVE_ACTIVITY_LIMIT = 8
+const UI_SYNC_BATCH_MS = 50
+const UI_STALE_THINKING_MS = 5000
 
 const RUNTIME_RELIABILITY_GUIDANCE = `
 ## Runtime reliability additions
@@ -287,8 +291,30 @@ export function deriveWantedItems(state) {
 
 function activityKindFromEvidence(kind) {
   if (/error|failed|blocked/i.test(kind)) return 'blocker'
-  if (/receipt|result|completed/i.test(kind)) return 'result'
+  if (/receipt|result|completed|verification/i.test(kind)) return 'result'
   return 'observation'
+}
+
+// Receipts are stored as JSON for the model; render them as one readable line for players.
+export function evidenceText(item) {
+  const summary = uiText(item?.summary, 1000)
+  if (!summary.startsWith('{')) return summary
+  let parsed
+  try { parsed = JSON.parse(item.summary) }
+  catch { return summary }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return summary
+  const batch = Number.isSafeInteger(parsed.batch_id) ? `batch ${parsed.batch_id}` : 'batch'
+  if (item?.kind === 'deterministic_verification') {
+    const operations = Array.isArray(parsed.operations) && parsed.operations.length > 0 ? ` (${parsed.operations.join(', ')})` : ''
+    return uiText(`Verified ${batch} complete${operations}`, 1000)
+  }
+  if (/receipt/i.test(String(item?.kind ?? ''))) {
+    const count = Number.isSafeInteger(parsed.task_count) ? `${parsed.task_count} task(s)` : 'tasks'
+    const types = Array.isArray(parsed.task_types) && parsed.task_types.length > 0 ? ` [${parsed.task_types.join(', ')}]` : ''
+    const reason = parsed.reason ? ` — ${parsed.reason}` : ''
+    return uiText(`Autorio ${batch} ${parsed.outcome ?? 'finished'}: ${count}${types}${reason}`, 1000)
+  }
+  return summary
 }
 
 export function deriveActivity(state) {
@@ -296,7 +322,7 @@ export function deriveActivity(state) {
   const entries = []
   const evidence = Array.isArray(state.task_board?.evidence) ? state.task_board.evidence.slice(-4) : []
   for (const item of evidence) {
-    const summary = uiText(item?.summary, 1000)
+    const summary = evidenceText(item)
     if (summary) entries.push({ kind: activityKindFromEvidence(uiText(item?.kind, 64)), text: summary })
   }
   const chat = uiText(state.last_chat_message, 1000)
@@ -312,9 +338,86 @@ export function deriveActivity(state) {
   return entries.slice(-12)
 }
 
-export function taskBoardUiSnapshot(state) {
+// Maps agent-loop trace events onto the live phase shown in the in-game console.
+// Returns undefined for events that do not change what the player should see.
+export function liveAgentEvent(event, data = {}) {
+  const count = value => Array.isArray(value) ? value.length : 0
+  switch (event) {
+    case 'request.received':
+      return {
+        phase: 'thinking',
+        detail: `Reading request from ${uiText(data.sender, 64) || 'player'}`,
+        objective: uiText(data.text, 500),
+        activity: { kind: 'observation', text: `${uiText(data.sender, 64) || 'Player'}: ${uiText(data.text, 300)}` },
+      }
+    case 'provider.request':
+      return {
+        phase: 'thinking',
+        detail: data.recovery_attempt > 0
+          ? `Recovering plan (attempt ${data.recovery_attempt})`
+          : `Thinking (model round ${(Number.isSafeInteger(data.round) ? data.round : 0) + 1})`,
+      }
+    case 'tool.call':
+      return {
+        phase: 'observing',
+        detail: `Checking ${uiText(data.name, 64)}`,
+        activity: { kind: 'observation', text: `Tool ${uiText(data.name, 64)}${data.cached ? ' (cached)' : ''}` },
+      }
+    case 'plan.accepted':
+      return { phase: 'executing', detail: uiText(data.chat_message, 200) || 'Plan accepted' }
+    case 'operations.admit':
+      return { phase: 'executing', detail: `Submitting ${count(data.operations)} operation(s) to Autorio` }
+    case 'request.waiting':
+      return { phase: 'waiting', detail: `Autorio is running ${data.operation_count ?? 0} operation(s)` }
+    case 'request.completed':
+      return { phase: 'idle', detail: 'Finished the last request' }
+    case 'factorio.completed_signal':
+      return { phase: 'thinking', detail: 'Batch finished; checking the result', activity: { kind: 'result', text: 'Autorio batch completed' } }
+    case 'factorio.error_continuation':
+      return { phase: 'thinking', detail: 'Autorio reported an error; replanning' }
+    case 'replan.started':
+      return { phase: 'thinking', detail: 'Recovering from an invalid model response', activity: { kind: 'system', text: `Replanning: ${uiText(data.reason, 200)}` } }
+    case 'provider.error':
+      if (data.cancelled) return { phase: 'idle', detail: 'Model request cancelled' }
+      return { phase: 'error', detail: `Model request failed: ${uiText(data.message, 200)}`, activity: { kind: 'blocker', text: `Model request failed: ${uiText(data.message, 300)}` } }
+    case 'request.failed':
+      if (expectedCancellation(data.message)) return { phase: 'idle', detail: 'Request cancelled' }
+      return { phase: 'error', detail: uiText(data.message, 200) || 'Request failed', activity: { kind: 'blocker', text: uiText(data.message, 300) || 'Request failed' } }
+    case 'request.cancelled':
+      return { phase: 'idle', detail: `Cancelled (${uiText(data.reason, 64) || 'cancelled'})` }
+    case 'factorio.status':
+      // Task receipts update board evidence and may advance the active step.
+      return { refresh: true }
+    default:
+      return undefined
+  }
+}
+
+export function taskBoardUiSnapshot(state, live) {
   const board = state?.task_board
-  if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps)) return undefined
+  const agent = {
+    phase: UI_AGENT_PHASES.has(live?.phase) ? live.phase : 'idle',
+    detail: uiText(live?.detail, 300),
+  }
+  const liveActivity = Array.isArray(live?.activity) ? live.activity : []
+  if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps)) {
+    // No durable plan yet (or a chat-only reply): still show what AIRI is doing.
+    if (!live || (agent.phase === 'idle' && liveActivity.length === 0)) return undefined
+    return {
+      goal_id: '',
+      objective: uiText(live.objective, 500),
+      status: 'idle',
+      blocker: '',
+      pause_reason: '',
+      completed_count: 0,
+      total_steps: 0,
+      active_index: 0,
+      steps: [],
+      activity: liveActivity.slice(-12),
+      wanted_items: [],
+      agent,
+    }
+  }
   return {
     goal_id: String(board.goal_id ?? state.goal_id ?? '').slice(0, 100),
     objective: String(state.objective ?? '').slice(0, 500),
@@ -329,8 +432,9 @@ export function taskBoardUiSnapshot(state) {
       description: String(step?.description ?? '').slice(0, 500),
       status: step?.status,
     })),
-    activity: deriveActivity(state),
+    activity: [...deriveActivity(state), ...liveActivity].slice(-12),
     wanted_items: deriveWantedItems(state),
+    agent,
   }
 }
 
@@ -487,6 +591,51 @@ export class Session {
     this.authorizationPromise = null
     this.npcName = 'AIRI'
     this.npcId = 'airi'
+    this.agentLive = { phase: 'idle', detail: '', objective: '', at: 0, activity: [] }
+    this.uiSyncDirty = false
+    this.uiSyncRunning = null
+  }
+
+  onAgentActivity(event, data) {
+    const update = liveAgentEvent(event, data)
+    if (!update) return
+    if (update.phase) Object.assign(this.agentLive, { phase: update.phase, detail: update.detail ?? '', at: Date.now() })
+    if (update.objective) this.agentLive.objective = update.objective
+    if (update.activity) this.agentLive.activity = [...this.agentLive.activity, update.activity].slice(-UI_LIVE_ACTIVITY_LIMIT)
+    this.requestTaskBoardUiSync()
+  }
+
+  liveAgentStatus() {
+    const live = this.agentLive
+    let { phase, detail } = live
+    // Pausing or cancelling resets the loop without a trace event, so an inactive
+    // agent must not keep advertising work it is no longer doing.
+    const inactive = !this.agent?.active
+    if (inactive && (phase === 'executing' || phase === 'waiting' || (phase === 'thinking' && Date.now() - live.at > UI_STALE_THINKING_MS))) {
+      phase = 'idle'
+      detail = ''
+    }
+    return { phase, detail, objective: live.objective, activity: live.activity }
+  }
+
+  // Coalesces bursts of trace events into sequential snapshot pushes so the
+  // console follows the agent live without flooding RCON or reordering state.
+  requestTaskBoardUiSync() {
+    this.uiSyncDirty = true
+    if (this.uiSyncRunning) return this.uiSyncRunning
+    this.uiSyncRunning = (async () => {
+      try {
+        while (this.uiSyncDirty && this.rcon && !this.stopping) {
+          await delay(UI_SYNC_BATCH_MS)
+          this.uiSyncDirty = false
+          await this.syncTaskBoardUi()
+        }
+      }
+      finally {
+        this.uiSyncRunning = null
+      }
+    })()
+    return this.uiSyncRunning
   }
 
   updateNpcIdentity(status) {
@@ -610,7 +759,7 @@ export class Session {
 
   async syncTaskBoardUi(state = this.currentPlanState()) {
     if (!this.rcon) return false
-    const snapshot = taskBoardUiSnapshot(state)
+    const snapshot = taskBoardUiSnapshot(state, this.liveAgentStatus())
     if (!snapshot) return this.clearTaskBoardUi()
     try {
       const json = JSON.stringify(snapshot)
@@ -685,6 +834,7 @@ export class Session {
       }, messages, context),
       reserve: async () => reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget),
       log: message => this.log(`[AIRI agent] ${redact(secrets, message)}`),
+      onActivity: (event, data) => this.onAgentActivity(event, data),
     })
     await this.agent.loadPersistentState()
     await this.syncTaskBoardUi()

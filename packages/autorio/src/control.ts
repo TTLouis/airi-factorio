@@ -30,7 +30,7 @@ import { new_recipe_configuration_runtime } from './recipe_configuration'
 import { new_research_controller } from './research'
 import { with_research_trigger } from './research_trigger'
 import { new_task_manager } from './task_manager'
-import { create_task_board_ui_remote_interface } from './task_board_ui'
+import { create_task_board_ui_remote_interface, set_task_board_world_task_provider } from './task_board_ui'
 import { create_tools_remote_interface } from './tools'
 import { TaskStates } from './types'
 import { direction_towards } from './utils/direction'
@@ -46,6 +46,7 @@ create_task_board_ui_remote_interface()
 let setup_complete = false
 
 export const task_manager = new_task_manager(get_controlled_actor)
+set_task_board_world_task_provider(() => task_manager.get_status_snapshot())
 const awareness_controller = new_awareness_controller()
 const basic_operation_controller = new_basic_operation_controller(get_controlled_actor, task_manager)
 const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_operation_controller)

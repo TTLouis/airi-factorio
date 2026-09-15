@@ -1,15 +1,95 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
+import { NpcAgentLoop } from './npc-agent-loop.mjs'
 import {
   deriveActivity,
   deriveWantedItems,
+  evidenceText,
   executeUiControl,
+  liveAgentEvent,
   parseUiControlLine,
   parseUiPromptLine,
   Session,
   taskBoardUiSnapshot,
 } from './supervisor.mjs'
+
+test('agent trace events map onto live console phases', () => {
+  assert.equal(liveAgentEvent('request.received', { sender: 'TTLouis', text: 'build power' }).phase, 'thinking')
+  assert.equal(liveAgentEvent('request.received', { sender: 'TTLouis', text: 'build power' }).objective, 'build power')
+  assert.equal(liveAgentEvent('provider.request', { round: 1 }).detail, 'Thinking (model round 2)')
+  assert.deepEqual(liveAgentEvent('tool.call', { name: 'getInventory', cached: false }).activity, { kind: 'observation', text: 'Tool getInventory' })
+  assert.equal(liveAgentEvent('request.waiting', { operation_count: 3 }).phase, 'waiting')
+  assert.equal(liveAgentEvent('request.completed').phase, 'idle')
+  assert.equal(liveAgentEvent('provider.error', { message: 'Provider request cancelled', cancelled: true }).phase, 'idle')
+  assert.equal(liveAgentEvent('provider.error', { message: 'HTTP 500' }).phase, 'error')
+  assert.equal(liveAgentEvent('request.failed', { message: 'Model turn was cancelled or superseded' }).phase, 'idle')
+  assert.deepEqual(liveAgentEvent('factorio.status', {}), { refresh: true })
+  assert.equal(liveAgentEvent('budget.reserved', {}), undefined)
+})
+
+test('agent loop forwards trace events to the activity listener even without a trace file', async () => {
+  const seen = []
+  const loop = Object.create(NpcAgentLoop.prototype)
+  Object.assign(loop, { behaviorTrace: null, onActivity: (event, data) => seen.push([event, data]), log: () => {} })
+  await loop.traceEvent('tool.call', { name: 'getInventory' })
+  assert.deepEqual(seen, [['tool.call', { name: 'getInventory' }]])
+})
+
+test('task receipts render as readable activity lines', () => {
+  assert.equal(
+    evidenceText({ kind: 'operation_receipt', summary: JSON.stringify({ outcome: 'completed', batch_id: 12, task_count: 2, task_types: ['walking_to_entity', 'mining'] }) }),
+    'Autorio batch 12 completed: 2 task(s) [walking_to_entity, mining]',
+  )
+  assert.equal(
+    evidenceText({ kind: 'deterministic_verification', summary: JSON.stringify({ batch_id: 12, operations: ['gather_resource'] }) }),
+    'Verified batch 12 complete (gather_resource)',
+  )
+  assert.equal(evidenceText({ kind: 'operation_receipt', summary: '{not json' }), '{not json')
+})
+
+test('task board projection still reports live agent work before a durable plan exists', () => {
+  assert.equal(taskBoardUiSnapshot(undefined), undefined)
+  assert.equal(taskBoardUiSnapshot(undefined, { phase: 'idle', detail: '', activity: [] }), undefined)
+  const snapshot = taskBoardUiSnapshot(undefined, {
+    phase: 'observing',
+    detail: 'Checking getInventory',
+    objective: 'build power',
+    activity: [{ kind: 'observation', text: 'Tool getInventory' }],
+  })
+  assert.equal(snapshot.status, 'idle')
+  assert.deepEqual(snapshot.steps, [])
+  assert.equal(snapshot.objective, 'build power')
+  assert.deepEqual(snapshot.agent, { phase: 'observing', detail: 'Checking getInventory' })
+  assert.deepEqual(snapshot.activity, [{ kind: 'observation', text: 'Tool getInventory' }])
+})
+
+test('live agent activity is pushed to the console as coalesced ordered syncs', async () => {
+  const synced = []
+  const session = Object.create(Session.prototype)
+  Object.assign(session, {
+    rcon: {},
+    stopping: false,
+    agent: { active: true },
+    agentLive: { phase: 'idle', detail: '', objective: '', at: 0, activity: [] },
+    uiSyncDirty: false,
+    uiSyncRunning: null,
+    syncTaskBoardUi: async () => { synced.push(session.liveAgentStatus()) },
+  })
+  session.onAgentActivity('request.received', { sender: 'TTLouis', text: 'build power' })
+  session.onAgentActivity('provider.request', { round: 0 })
+  session.onAgentActivity('tool.call', { name: 'getInventory' })
+  await session.uiSyncRunning
+  assert.equal(synced.length, 1)
+  assert.equal(synced[0].phase, 'observing')
+  assert.equal(synced[0].objective, 'build power')
+  assert.equal(synced[0].activity.length, 2)
+
+  session.agent.active = false
+  session.onAgentActivity('request.waiting', { operation_count: 2 })
+  await session.uiSyncRunning
+  assert.equal(synced.at(-1).phase, 'idle')
+})
 
 test('UI control parser accepts fixed mod events and rejects chat spoofing or arbitrary actions', () => {
   const event = parseUiControlLine('12.3 Script @__autorio__: [AIRI_UI_CONTROL] {"version":1,"action":"follow","player_index":7,"player_name":"TTLouis","tick":900}')

@@ -128,6 +128,36 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain("surface_index: LuaSurface['index']")
   })
 
+  it('accepts plan-less live agent snapshots and bounds the agent phase', () => {
+    const idle = sanitize_task_board_ui_snapshot({
+      goal_id: '', objective: 'build power', status: 'idle', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 0, active_index: 0, steps: [], activity: [], wanted_items: [],
+      agent: { phase: 'observing', detail: 'Checking getInventory' },
+    })
+    expect(idle).toMatchObject({ status: 'idle', steps: [], agent: { phase: 'observing', detail: 'Checking getInventory' } })
+    expect(task_board_activity_for_display(idle)).toEqual([])
+
+    const legacy = sanitize_task_board_ui_snapshot({
+      goal_id: 'goal', objective: 'test', status: 'active', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 1, active_index: 0,
+      steps: [{ id: 'step_1', description: 'Test', status: 'active' }],
+      agent: { phase: 'plotting', detail: 'x' },
+    })
+    expect(legacy?.agent.phase).toBe('idle')
+    expect(sanitize_task_board_ui_snapshot({ steps: [] })?.agent).toEqual({ phase: 'idle', detail: '' })
+  })
+
+  it('uses a vanilla square mod-gui button instead of a text button in gui.top', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("const MOD_GUI_TOP_FRAME_NAME = 'mod_gui_top_frame'")
+    expect(source).toContain("style: 'slot_window_frame'")
+    expect(source).toContain("style: 'mod_gui_inside_deep_frame'")
+    expect(source).toMatch(/type: 'sprite-button',\s+name: BUTTON_NAME,\s+sprite: 'entity\/character'/)
+    expect(source).toContain("style: 'slot_button'")
+    expect(source).toContain('button.toggled = task_board_ui_is_open(player.index)')
+    expect(source).not.toContain("caption: 'AIRI',")
+  })
+
   it('uses a movable screen window with native Factorio title, content, section, and control styles', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain('player.gui.screen.add')
@@ -135,23 +165,35 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain("style: 'draggable_space_header'")
     expect(source).toContain("style: 'frame_action_button'")
     expect(source).toContain("style: 'subheader_frame'")
-    expect(source).toContain("style: 'inside_shallow_frame_with_padding'")
+    expect(source).toContain("style: 'inside_shallow_frame'")
     expect(source).toContain("style: 'dialog_button'")
     expect(source).toContain("style: 'red_button'")
     expect(source).toContain("style: follow?.active ? 'red_button' : 'confirm_button'")
+    expect(source).toContain("style: 'deep_slots_scroll_pane'")
+    expect(source).toContain("type: 'progressbar'")
     expect(source).toContain('root.location = previous_location')
     expect(source).toContain('HALF_SECTION_WIDTH')
-    expect(source).toContain('TOP_SECTION_HEIGHT')
-    expect(source).toContain('RESOURCE_SECTION_HEIGHT')
+    // Fixed section heights clipped content; sections now stretch to their row.
+    expect(source).not.toContain('TOP_SECTION_HEIGHT')
+    expect(source).not.toContain('RESOURCE_SECTION_HEIGHT')
   })
 
-  it('renders a native Factorio camera preview bound to the current actor world position', () => {
+  it('puts a native Factorio camera preview in the right column bound to the current actor', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain("type: 'camera'")
     expect(source).toContain('position: preview.position')
     expect(source).toContain('surface_index: preview.surface_index')
     expect(source).toContain('camera.entity = preview.entity')
-    expect(source).toContain('WORLD_PREVIEW_SECTION_HEIGHT')
+    expect(source).toContain('PREVIEW_COLUMN_WIDTH')
+    expect(source).toMatch(/const right = columns\.add[\s\S]*render_world_preview\(right, runtime\)/)
+  })
+
+  it('shows live mod task state and when AIRI last synced', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const control = readFileSync(new URL('./control.ts', import.meta.url), 'utf8')
+    expect(source).toContain('storage.airi_task_board_ui_synced_tick = game.tick')
+    expect(source).toContain("add_key_value(table, 'WORLD', world_task_summary(runtime.world_task)")
+    expect(control).toContain('set_task_board_world_task_provider(() => task_manager.get_status_snapshot())')
   })
 
   it('provides a direct AIRI prompt field that preserves drafts and emits a fixed structured prompt event', () => {

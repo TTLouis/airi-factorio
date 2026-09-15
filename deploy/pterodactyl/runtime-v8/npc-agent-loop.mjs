@@ -553,6 +553,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.traceRequest = null
     this.traceRequestSequence = 0
     this.planUpdateReason = 'request'
+    this.onActivity = typeof options.onActivity === 'function' ? options.onActivity : null
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
       ?? (process.env.NODE_TEST_CONTEXT ? null : path.resolve(process.cwd(), 'logs', 'airi-behavior.jsonl'))
@@ -626,6 +627,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   traceEvent(event, data = {}) {
+    if (this.onActivity) {
+      try { this.onActivity(event, data) }
+      catch (error) { this.log(`[trace] activity listener failed: ${error instanceof Error ? error.message : String(error)}`) }
+    }
     if (!this.behaviorTrace) return Promise.resolve()
     const request = this.traceRequest
     if (['request.received', 'provider.error', 'plan.accepted', 'operations.ack', 'request.completed', 'request.failed'].includes(event)) {
