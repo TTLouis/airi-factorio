@@ -61,13 +61,8 @@ beforeEach(() => {
 
 describe('follow auto-defense controller', () => {
   it('fires at the nearest shootable enemy without taking over walking', () => {
-    const { target, surface, controller, set_shooting_state, update_selected_entity } = world()
-
-    expect(controller.tick(world().actor)).toBe(true)
-
-    expect(surface.find_nearest_enemy).not.toHaveBeenCalled()
-    // Use a single coherent actor/controller pair for the actual assertions.
     const actual = world()
+
     expect(actual.controller.tick(actual.actor)).toBe(true)
     expect(actual.surface.find_nearest_enemy).toHaveBeenCalledWith({
       position: actual.actor.position,
@@ -78,10 +73,6 @@ describe('follow auto-defense controller', () => {
     expect(actual.set_shooting_state).toHaveBeenCalledWith({ state: 'shooting_selected', position: actual.target.position })
     expect((actual.actor as any).set_walking_state).toBeUndefined()
     expect(actual.controller.status()).toMatchObject({ enabled: true, code: 'engaging', target_name: 'small-biter' })
-
-    void target
-    void set_shooting_state
-    void update_selected_entity
   })
 
   it('stops firing when auto-defense is explicitly disabled', () => {
