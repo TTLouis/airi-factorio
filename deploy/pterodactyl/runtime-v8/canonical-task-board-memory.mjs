@@ -34,4 +34,11 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     const guarded = canonicalContinuationPlan(previousBoard, plan, options)
     return super.reconcileTaskBoard(key, previousBoard, guarded, stateResult, options)
   }
+
+  terminatePlan(key) {
+    const previous = key ? this.planByNpc.get(key) : undefined
+    if (!previous) return undefined
+    this.planByNpc.delete(key)
+    return previous
+  }
 }

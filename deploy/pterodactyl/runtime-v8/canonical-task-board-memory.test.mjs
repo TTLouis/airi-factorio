@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { canonicalContinuationPlan } from './canonical-task-board-memory.mjs'
+import { canonicalContinuationPlan, CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 
 function board() {
   return {
@@ -47,4 +47,20 @@ test('explicit failure replan is still allowed to replace the remaining suffix',
     currentStep: 2,
   }
   assert.equal(canonicalContinuationPlan(board(), proposal, { allowReplan: true }), proposal)
+})
+
+test('terminatePlan removes one durable goal without implying completion', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', {
+    goal_id: 'goal_1',
+    status: 'active',
+    plan: ['Build boiler'],
+    current_step: 0,
+    revision: 1,
+    history: [],
+  })
+  const previous = memory.terminatePlan('npc:airi')
+  assert.equal(previous.goal_id, 'goal_1')
+  assert.equal(memory.planByNpc.has('npc:airi'), false)
+  assert.equal(memory.currentPlan('npc:airi'), undefined)
 })
