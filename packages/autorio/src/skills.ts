@@ -158,8 +158,7 @@ const SKILL_EXPORT_BUTTON_PREFIX = 'airi_skill_export__'
 const FACTORY_ANALYZE_BUTTON_NAME = 'airi_skill_learn_area'
 const FACTORY_SAVE_BUTTON_PREFIX = 'airi_skill_save_block__'
 const FACTORY_DEFAULT_RADIUS = 12
-const SKILL_SECTION_WIDTH = 868
-const SKILL_SECTION_HEIGHT = 330
+const SKILL_SECTION_PADDING = 10
 const MAX_UI_SKILLS = 6
 const MAX_UI_BLOCKS = 4
 
@@ -738,16 +737,21 @@ export function create_skill_remote_interface() {
   })
 }
 
+// Sized by the console column that hosts it. A fixed size here would widen the
+// whole window and clip its own content once the skill list grows.
 function add_skill_section(parent: LuaGuiElement) {
-  const section = parent.add({ type: 'flow', direction: 'vertical' })
-  section.style.width = SKILL_SECTION_WIDTH
-  section.style.height = SKILL_SECTION_HEIGHT
+  const section = parent.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame' })
+  section.style.horizontally_stretchable = true
+  section.style.vertically_stretchable = true
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
   header.style.horizontally_stretchable = true
+  header.style.vertical_align = 'center'
   header.add({ type: 'label', caption: 'Learned / Candidate Skills', style: 'subheader_caption_label' })
-  const body = section.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame_with_padding' })
+  const body = section.add({ type: 'flow', direction: 'vertical' })
   body.style.horizontally_stretchable = true
   body.style.vertically_stretchable = true
+  body.style.padding = SKILL_SECTION_PADDING
+  body.style.vertical_spacing = 6
   return body
 }
 
