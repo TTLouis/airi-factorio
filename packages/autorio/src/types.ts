@@ -128,7 +128,9 @@ export interface PlayerParametersAttackNearestEnemy {
   targets_destroyed?: number
   turrets_placed?: number
   last_turret_position?: MapPositionStruct
+  last_turret_unit_number?: number
   turret_ammo_name?: string
+  last_turret_ammo_loaded?: number
 }
 
 export interface PlayerParametersResearchTechnology {
