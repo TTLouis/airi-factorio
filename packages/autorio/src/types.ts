@@ -12,6 +12,7 @@ export enum TaskStates {
   RESEARCHING = 'researching',
   WALKING_DIRECT = 'walking_direct',
   MOVING_ITEMS = 'moving_items',
+  SETTING_RECIPE = 'setting_recipe',
   ATTACKING = 'attacking',
   WAITING = 'waiting',
 }
@@ -98,6 +99,18 @@ export interface PlayerParametersMoveItems {
   to_player?: boolean
 }
 
+export interface PlayerParametersSetRecipe {
+  type: TaskStates.SETTING_RECIPE
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
+  /** Stable Factorio entity identity. Recipe configuration never falls back to a same-name machine. */
+  target_unit_number: number
+  /** Exact Factorio recipe prototype name to set on the target assembling machine. */
+  recipe_name: string
+}
+
 export interface PlayerParametersCraftItem {
   type: TaskStates.CRAFTING
   item_name: string
@@ -168,6 +181,7 @@ export type PlayerParameters
     | PlayerParametersMineEntity
     | PlayerParametersPlaceEntity
     | PlayerParametersMoveItems
+    | PlayerParametersSetRecipe
     | PlayerParametersCraftItem
     | PlayerParametersAttackNearestEnemy
     | PlayerParametersResearchTechnology
@@ -180,6 +194,7 @@ export interface PlayerState {
   parameters_mine_entity?: PlayerParametersMineEntity
   parameters_place_entity?: PlayerParametersPlaceEntity
   parameters_move_items?: PlayerParametersMoveItems
+  parameters_set_recipe?: PlayerParametersSetRecipe
   parameters_craft_item?: PlayerParametersCraftItem
   parameters_attack_nearest_enemy?: PlayerParametersAttackNearestEnemy
   parameters_research_technology?: PlayerParametersResearchTechnology
