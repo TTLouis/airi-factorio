@@ -1,7 +1,9 @@
 import type { ControlledActor } from './actors/types'
 import type { ProductionSolveResult } from './production_planning'
 import type { LiveProductionSolveRequest } from './production_planning_live'
+import type { ThroughputCapacityRequest } from './throughput_capacity'
 import { solve_live_production } from './production_planning_live'
+import { throughput_capacity } from './throughput_capacity'
 
 export function create_production_planning_remote_interface(get_actor: () => ControlledActor | undefined) {
   remote.add_interface('autorio_planning', {
@@ -18,6 +20,11 @@ export function create_production_planning_remote_interface(get_actor: () => Con
         }
       }
       return solve_live_production(actor, request)
+    },
+    capacity: (request: ThroughputCapacityRequest) => {
+      const actor = get_actor()
+      if (!actor) return { ok: false, error: { code: 'INVALID_REQUEST', message: 'controlled actor is unavailable' } }
+      return throughput_capacity(actor, request)
     },
   })
 }

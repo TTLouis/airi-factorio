@@ -52,8 +52,37 @@ describe('autorio_planning remote contract', () => {
     ])
   })
 
+  it('exposes deterministic belt capacity through the same planning interface', () => {
+    let planning: { capacity: (request: any) => any } | undefined
+    ;(globalThis as any).remote = {
+      add_interface: (_name: string, methods: any) => { planning = methods },
+    }
+    ;(globalThis as any).prototypes = {
+      entity: { 'transport-belt': { name: 'transport-belt', type: 'transport-belt', belt_speed: 0.03125 } },
+      item: {},
+    }
+    const controlled = actor({ belt_stack_size_bonus: 1 })
+
+    create_production_planning_remote_interface(() => controlled)
+    const result = planning!.capacity({
+      kind: 'belt', prototype_name: 'transport-belt', scope: 'lane', required_rate_per_second: 10,
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      kind: 'belt',
+      validation: {
+        scope: 'lane',
+        unstacked_capacity_items_per_second: 7.5,
+        stacked_capacity_items_per_second: 15,
+        fits_unstacked: false,
+        fits_stacked: true,
+      },
+    })
+  })
+
   it('fails closed when there is no controlled actor', () => {
-    let planning: { solve: (request: any) => any } | undefined
+    let planning: { solve: (request: any) => any, capacity: (request: any) => any } | undefined
     ;(globalThis as any).remote = {
       add_interface: (_name: string, methods: any) => {
         planning = methods
@@ -74,5 +103,13 @@ describe('autorio_planning remote contract', () => {
         message: 'controlled actor is unavailable',
       },
     })
+    expect(planning!.capacity({ kind: 'belt', prototype_name: 'transport-belt' })).toEqual({
+      ok: false,
+      error: { code: 'INVALID_REQUEST', message: 'controlled actor is unavailable' },
+    })
   })
 })
+
+function actor(force: Record<string, unknown>) {
+  return { is_valid: true, force } as unknown as ControlledActor
+}
