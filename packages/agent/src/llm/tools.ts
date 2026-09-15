@@ -51,6 +51,10 @@ const recipeDetailsSchema = z.object({
   item_or_recipe: factorioNameSchema,
 }).strict()
 
+const prototypeDetailsSchema = z.object({
+  name: factorioNameSchema,
+}).strict()
+
 async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow' | 'autorio_defense' | 'autorio_equipment') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
@@ -121,6 +125,18 @@ export const tools: ToolFunction[] = [
       const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "recipe_details", ${renderLuaString(parsed.item_or_recipe)})))`
       const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
       logger.withFields({ output: response.data.output, parameters: parsed }).debug('Detailed recipe knowledge')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getPrototypeDetails',
+    description: 'Read bounded static prototype/build knowledge for an item, fluid, or entity name: item stack/place result, entity footprint and build boxes, crafting/mining capabilities, belt speed, inserter offsets, fluidbox roles, and selected energy/capability metadata.',
+    schema: prototypeDetailsSchema,
+    fn: async ({ parameters }) => {
+      const parsed = prototypeDetailsSchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_prototypes", "details", ${renderLuaString(parsed.name)})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Prototype build details')
       return response.data.output
     },
   },
