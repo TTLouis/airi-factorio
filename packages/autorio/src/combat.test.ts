@@ -11,21 +11,48 @@ beforeEach(() => {
   ;(globalThis as any).log = vi.fn()
 })
 
+function itemStack(name?: string, count = 0) {
+  return { valid_for_read: !!name, name, count }
+}
+
+function inventory(items: any[] = []) {
+  const value: any = items
+  value.find_item_stack = vi.fn((name: string) => {
+    const index = items.findIndex(item => item.valid_for_read && item.name === name)
+    return index >= 0 ? [items[index], index + 1] : [undefined, undefined]
+  })
+  value.remove = vi.fn(({ name, count }: { name: string, count: number }) => {
+    const item = items.find(candidate => candidate.valid_for_read && candidate.name === name)
+    if (!item) return 0
+    const removed = Math.min(item.count, count)
+    item.count -= removed
+    if (item.count <= 0) item.valid_for_read = false
+    return removed
+  })
+  value.insert = vi.fn(({ count }: { count: number }) => count)
+  return value
+}
+
 function world() {
   const target: any = {
     valid: true,
     name: 'small-biter',
+    type: 'unit',
     unit_number: 88,
     position: { x: 20, y: 0 },
     health: 15,
   }
+  const enemies: any[] = [target]
   const gun = { valid_for_read: true }
   const ammo = { valid_for_read: true }
   // typed-factorio exposes LuaInventory with normal TypeScript array semantics:
   // Factorio slot 1 is TypeScript index 0.
   const guns: any = [gun]
   const magazines: any = [ammo]
+  const main = inventory([])
   const character: any = {
+    health: 250,
+    max_health: 250,
     selected_gun_index: 1,
     can_shoot: vi.fn(() => false),
     get_inventory: vi.fn((index: unknown) => {
@@ -35,7 +62,9 @@ function world() {
     }),
   }
   const surface: any = {
-    find_entities_filtered: vi.fn(() => [target]),
+    find_entities_filtered: vi.fn(() => enemies.filter(entity => entity.valid !== false && (entity.health === undefined || entity.health > 0))),
+    find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
+    create_entity: vi.fn(),
   }
   const identity = { kind: 'standalone_character', actor_id: 42 }
   const actor: any = {
@@ -48,11 +77,13 @@ function world() {
     set_walking_state: vi.fn(),
     set_shooting_state: vi.fn(),
     update_selected_entity: vi.fn(),
+    get_main_inventory: () => main,
+    entity_build_args: () => ({ force: actor.force }),
   }
   const get_actor = vi.fn<() => ControlledActor | undefined>(() => actor)
   const manager = new_task_manager(get_actor)
   const controller = new_combat_controller(get_actor, manager)
-  return { actor, target, character, gun, ammo, surface, identity, get_actor, manager, controller }
+  return { actor, target, enemies, character, gun, ammo, guns, magazines, main, surface, identity, get_actor, manager, controller }
 }
 
 describe('bounded combat controller', () => {
@@ -72,9 +103,9 @@ describe('bounded combat controller', () => {
     expect(manager.player_state.task_state).toBe(TaskStates.IDLE)
   })
 
-  it('fails a no-target task and cancels dependent work', () => {
-    const { actor, surface, manager, controller } = world()
-    surface.find_entities_filtered.mockReturnValue([])
+  it('fails a no-target one-shot task and cancels dependent work', () => {
+    const { actor, enemies, manager, controller } = world()
+    enemies.length = 0
     controller.submit(40)
     manager.add_task({ type: TaskStates.WAITING, remaining_ticks: 60 })
     controller.tick(actor)
@@ -90,7 +121,7 @@ describe('bounded combat controller', () => {
     expect(controller.status()).toMatchObject({ last_result: { code: 'started', accepted: true } })
   })
 
-  it('walks while out of range, then stops walking and shoots the selected target', () => {
+  it('kites a mobile enemy while shooting instead of stopping in melee range', () => {
     const { actor, target, character, controller } = world()
     controller.submit(40)
     controller.tick(actor)
@@ -102,11 +133,22 @@ describe('bounded combat controller', () => {
     ;(globalThis as any).game.tick += 1
     controller.tick(actor)
     expect(actor.update_selected_entity).toHaveBeenCalledWith(target.position)
+    expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
+    expect(actor.set_shooting_state).toHaveBeenLastCalledWith({ state: 'shooting_selected', position: target.position })
+  })
+
+  it('does not advance onto a nest once the selected weapon can fire at it', () => {
+    const { actor, target, character, controller } = world()
+    target.type = 'unit-spawner'
+    target.name = 'biter-spawner'
+    character.can_shoot.mockReturnValue(true)
+    controller.submit(40)
+    controller.tick(actor)
     expect(actor.set_walking_state).toHaveBeenLastCalledWith({ walking: false, direction: 'north' })
     expect(actor.set_shooting_state).toHaveBeenLastCalledWith({ state: 'shooting_selected', position: target.position })
   })
 
-  it('completes only after the acquired target is gone instead of retargeting forever', () => {
+  it('completes a one-shot task only after the acquired target is gone instead of retargeting forever', () => {
     const { actor, target, surface, manager, controller } = world()
     controller.submit(40)
     controller.tick(actor)
@@ -160,7 +202,7 @@ describe('bounded combat controller', () => {
     expect(controller.status()).toMatchObject({ last_result: { code: 'stuck' } })
   })
 
-  it('bounds the entire combat task to one simulation minute', () => {
+  it('bounds a one-shot combat task to one simulation minute', () => {
     const { actor, character, controller } = world()
     character.can_shoot.mockReturnValue(true)
     controller.submit(40)
@@ -168,5 +210,83 @@ describe('bounded combat controller', () => {
     ;(globalThis as any).game.tick += 3601
     controller.tick(actor)
     expect(controller.status()).toMatchObject({ last_result: { code: 'timeout' } })
+  })
+})
+
+describe('bounded area-clearing combat', () => {
+  it('reacquires enemies until the bounded area is actually clear', () => {
+    const { actor, target, enemies, manager, controller } = world()
+    const second: any = {
+      valid: true,
+      name: 'biter-spawner',
+      type: 'unit-spawner',
+      unit_number: 99,
+      position: { x: 30, y: 0 },
+      health: 350,
+    }
+    enemies.push(second)
+
+    expect(controller.submit_clear(80)).toEqual([true, 'Area-clear combat task queued'])
+    controller.tick(actor)
+    target.valid = false
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+    expect(controller.status()).toMatchObject({ mode: 'clear_area', targets_destroyed: 1, target: { name: 'biter-spawner' } })
+
+    second.valid = false
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+    expect(controller.status()).toMatchObject({ last_result: { code: 'area_cleared', completed: true, targets_destroyed: 2 } })
+    expect(manager.player_state.task_state).toBe(TaskStates.IDLE)
+  })
+
+  it('places and loads a gun turret before advancing when support equipment is available', () => {
+    const { actor, target, character, main, surface, controller } = world()
+    target.type = 'unit-spawner'
+    target.name = 'biter-spawner'
+    main.push(itemStack('gun-turret', 2), itemStack('piercing-rounds-magazine', 50))
+    const turretAmmo = inventory([])
+    const turret: any = {
+      valid: true,
+      get_inventory: vi.fn(() => turretAmmo),
+      destroy: vi.fn(),
+    }
+    surface.create_entity.mockReturnValue(turret)
+    character.can_shoot.mockReturnValue(false)
+
+    controller.submit_clear(80)
+    controller.tick(actor)
+
+    expect(surface.create_entity).toHaveBeenCalledWith(expect.objectContaining({ name: 'gun-turret' }))
+    expect(turret.get_inventory).toHaveBeenCalledWith('turret_ammo')
+    expect(turretAmmo.insert).toHaveBeenCalledWith({ name: 'piercing-rounds-magazine', count: 20 })
+    expect(main.remove).toHaveBeenCalledWith({ name: 'gun-turret', count: 1 })
+    expect(main.remove).toHaveBeenCalledWith({ name: 'piercing-rounds-magazine', count: 20 })
+    expect(controller.status()).toMatchObject({ mode: 'clear_area', turrets_placed: 1, turret_ammo_name: 'piercing-rounds-magazine' })
+  })
+
+  it('retreats toward the latest support turret while firing at a close mobile threat', () => {
+    const { actor, character, manager, controller } = world()
+    controller.submit_clear(80)
+    const task = manager.player_state.parameters_attack_nearest_enemy!
+    task.last_turret_position = { x: -10, y: 0 }
+    task.turrets_placed = 1
+    character.can_shoot.mockReturnValue(true)
+    actor.position = { x: 15, y: 0 }
+
+    controller.tick(actor)
+    expect(actor.set_shooting_state).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'shooting_selected' }))
+    expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
+  })
+
+  it('aborts instead of making a suicidal unsupported push at low health', () => {
+    const { actor, character, manager, controller } = world()
+    character.health = 50
+    character.max_health = 250
+    controller.submit_clear(80)
+    manager.add_task({ type: TaskStates.WAITING, remaining_ticks: 60 })
+    controller.tick(actor)
+    expect(controller.status()).toMatchObject({ last_result: { code: 'low_health', accepted: false } })
+    expect(manager.get_status_snapshot()).toMatchObject({ task_state: 'idle', queue_length: 0 })
   })
 })
