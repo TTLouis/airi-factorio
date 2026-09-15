@@ -1,7 +1,10 @@
+import type { LuaEntity, UnitNumber } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 
 const MAX_RECIPE_MATCHES = 8
 const MAX_MACHINE_MATCHES = 32
+const MAX_FLUID_STORAGES = 16
+const MAX_PIPE_CONNECTIONS = 16
 
 interface RecipeCandidate {
   name: string
@@ -117,6 +120,67 @@ function product_summary(product: any) {
   }
 }
 
+function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
+  return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
+}
+
+function entity_summary(entity: LuaEntity | undefined) {
+  if (!entity || !entity.valid) return undefined
+  return {
+    name: entity.name,
+    type: entity.type,
+    unit_number: entity.unit_number,
+    position: entity.position,
+    direction: entity.direction,
+    force: entity.force?.name,
+  }
+}
+
+function fluidbox_prototype_summary(value: any) {
+  if (!value) return []
+  const values: any[] = value.production_type ? [value] : value
+  const result: Array<Record<string, unknown>> = []
+  for (const prototype of values) {
+    result.push({
+      index: prototype.index,
+      production_type: prototype.production_type,
+      filter: prototype.filter?.name,
+      minimum_temperature: prototype.minimum_temperature,
+      maximum_temperature: prototype.maximum_temperature,
+    })
+  }
+  return result
+}
+
+function fluid_storage_summary(entity: LuaEntity, index: number) {
+  const prototypes_for_storage = fluidbox_prototype_summary(entity.get_fluid_box_prototype(index))
+  const connections = entity.get_fluid_box_pipe_connections(index) ?? []
+  const current_fluid = entity.get_fluid(index)
+
+  return {
+    index,
+    capacity: entity.get_fluid_capacity(index),
+    current_fluid: current_fluid
+      ? {
+          name: current_fluid.name,
+          amount: current_fluid.amount,
+          temperature: current_fluid.temperature,
+        }
+      : undefined,
+    prototypes: prototypes_for_storage,
+    pipe_connections_truncated: connections.length > MAX_PIPE_CONNECTIONS,
+    pipe_connections: connections.slice(0, MAX_PIPE_CONNECTIONS).map(connection => ({
+      flow_direction: connection.flow_direction,
+      connection_type: connection.connection_type,
+      position: connection.position,
+      target_position: connection.target_position,
+      target: entity_summary(connection.target),
+      target_fluidbox_index: connection.target_fluidbox_index,
+      target_pipe_connection_index: connection.target_pipe_connection_index,
+    })),
+  }
+}
+
 export function recipe_details_for_actor(actor: ControlledActor, item_or_recipe: string) {
   const { candidates, truncated } = recipe_candidates(actor, item_or_recipe)
   if (candidates.length === 0) {
@@ -151,6 +215,63 @@ export function recipe_details_for_actor(actor: ControlledActor, item_or_recipe:
   }
 }
 
+export function entity_geometry_for_actor(actor: ControlledActor, unit_number: number) {
+  if (unit_number < 1 || math.floor(unit_number) !== unit_number) {
+    return {
+      found: false,
+      unit_number,
+      error: 'invalid unit_number',
+    }
+  }
+
+  const entity = game.get_entity_by_unit_number(unit_number as UnitNumber)
+  if (!entity || !entity.valid) {
+    return {
+      found: false,
+      unit_number,
+      error: 'entity not found',
+    }
+  }
+  if (entity.surface.index !== actor.surface.index) {
+    return {
+      found: false,
+      unit_number,
+      error: 'entity is on another surface',
+    }
+  }
+
+  const fluid_storage_count = entity.fluids_count
+  const returned_fluid_storages = math.min(fluid_storage_count, MAX_FLUID_STORAGES)
+  const fluid_storages: Array<Record<string, unknown>> = []
+  for (let index = 1; index <= returned_fluid_storages; index++) {
+    fluid_storages.push(fluid_storage_summary(entity, index))
+  }
+
+  const inserter = entity.type === 'inserter'
+  const mining_drill = entity.type === 'mining-drill'
+
+  return {
+    found: true,
+    distance: math.sqrt(squared_distance(actor.position, entity.position)),
+    entity: entity_summary(entity),
+    item_io: inserter
+      ? {
+          pickup_position: entity.pickup_position,
+          drop_position: entity.drop_position,
+          pickup_target: entity_summary(entity.pickup_target),
+          drop_target: entity_summary(entity.drop_target),
+        }
+      : mining_drill
+        ? {
+            drop_position: entity.drop_position,
+            drop_target: entity_summary(entity.drop_target),
+          }
+        : undefined,
+    fluid_storages_truncated: fluid_storage_count > MAX_FLUID_STORAGES,
+    fluid_storages,
+  }
+}
+
 export function create_knowledge_remote_interface(get_actor: () => ControlledActor | undefined) {
   remote.add_interface('autorio_knowledge', {
     recipe_details: (item_or_recipe: string) => {
@@ -163,6 +284,17 @@ export function create_knowledge_remote_interface(get_actor: () => ControlledAct
         }
       }
       return recipe_details_for_actor(actor, item_or_recipe)
+    },
+    entity_geometry: (unit_number: number) => {
+      const actor = get_actor()
+      if (!actor || !actor.is_valid) {
+        return {
+          found: false,
+          unit_number,
+          error: 'no controlled actor',
+        }
+      }
+      return entity_geometry_for_actor(actor, unit_number)
     },
   })
 }
