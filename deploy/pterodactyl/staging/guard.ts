@@ -21,6 +21,8 @@ function actor_status() {
       kind?: string
       valid?: boolean
       has_character?: boolean
+      name?: string
+      npc_id?: string
     }
     connected_players?: number
   }
@@ -107,6 +109,8 @@ remote.add_interface('airi_deployment', {
       mode: state().airi_deployment_mode,
       actor_id: actor.actor?.actor_id,
       actor_kind: actor.actor?.kind,
+      actor_name: actor.actor?.name,
+      npc_id: actor.actor?.npc_id,
       connected_players: actor.connected_players ?? 0,
       allowed: current_matches_session(),
       idle: tasks.task_state === 'idle' && tasks.queue_empty === true && tasks.queue_length === 0,
