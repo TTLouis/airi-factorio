@@ -1,0 +1,91 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+
+import {
+  addTaskBoardEvidence,
+  createTaskBoard,
+  reconcileTaskBoard,
+  sanitizeTaskBoard,
+  setTaskBoardStatus,
+  taskBoardProgress,
+} from './task-board-lite.mjs'
+
+test('creates a bounded canonical board with stable step ids', () => {
+  const board = createTaskBoard(['observe', 'build', 'verify'], 0, { goalId: 'goal_1', now: 100 })
+  assert.equal(board.goal_id, 'goal_1')
+  assert.equal(board.total_steps, 3)
+  assert.equal(board.active_step_id, 'step_1')
+  assert.deepEqual(board.steps.map(step => [step.id, step.status]), [
+    ['step_1', 'active'],
+    ['step_2', 'pending'],
+    ['step_3', 'pending'],
+  ])
+  assert.deepEqual(taskBoardProgress(board), {
+    status: 'active', completed: 0, total: 3, index: 1,
+    step_id: 'step_1', step: 'observe', blocker: '', pause_reason: '', revision: 1,
+  })
+})
+
+test('does not let a continuation silently expand 1/5 into 1/7', () => {
+  const original = createTaskBoard(['one', 'two', 'three', 'four', 'five'], 0, { now: 10 })
+  const changed = reconcileTaskBoard(original, ['one', 'extra-a', 'two', 'three', 'four', 'five', 'extra-b'], 0, { now: 20 })
+  assert.equal(changed, original)
+  assert.equal(taskBoardProgress(changed).total, 5)
+  assert.equal(taskBoardProgress(changed).index, 1)
+})
+
+test('advances only when the incoming active step matches a later canonical step', () => {
+  const original = createTaskBoard(['observe', 'build', 'load', 'verify'], 0, { now: 10 })
+  const advanced = reconcileTaskBoard(original, ['observe', 'build', 'load', 'verify'], 2, { now: 20 })
+  assert.equal(advanced.active_step_id, 'step_3')
+  assert.equal(advanced.completed_count, 2)
+  assert.equal(advanced.total_steps, 4)
+  assert.deepEqual(advanced.steps.map(step => step.status), ['completed', 'completed', 'active', 'pending'])
+})
+
+test('failure recovery may replace only the remaining suffix without losing completed progress', () => {
+  let board = createTaskBoard(['observe', 'walk', 'build', 'verify'], 0, { now: 10 })
+  board = reconcileTaskBoard(board, ['observe', 'walk', 'build', 'verify'], 2, { now: 20 })
+  const replanned = reconcileTaskBoard(board, ['observe', 'walk', 'escape water', 'repath', 'build', 'verify'], 2, { now: 30, allowReplan: true })
+  assert.equal(replanned.completed_count, 2)
+  assert.equal(replanned.active_index, 2)
+  assert.deepEqual(replanned.steps.map(step => step.description), ['observe', 'walk', 'escape water', 'repath', 'build', 'verify'])
+  assert.equal(replanned.steps[0].status, 'completed')
+  assert.equal(replanned.steps[1].status, 'completed')
+  assert.equal(replanned.steps[2].status, 'active')
+})
+
+test('records blockers, pauses, completion and bounded evidence as board truth', () => {
+  let board = createTaskBoard(['build', 'verify'], 0, { now: 1 })
+  board = addTaskBoardEvidence(board, { summary: 'batch_7 completed', ref: 'batch_7', now: 2 })
+  assert.equal(board.evidence.at(-1).step_id, 'step_1')
+  assert.equal(board.evidence.at(-1).ref, 'batch_7')
+
+  board = setTaskBoardStatus(board, 'blocked', { blocker: 'placement_collision', now: 3 })
+  assert.equal(board.status, 'blocked')
+  assert.equal(board.steps[0].status, 'blocked')
+
+  board = setTaskBoardStatus(board, 'paused', { pauseReason: 'user_stop', now: 4 })
+  assert.equal(board.steps[0].status, 'paused')
+
+  board = setTaskBoardStatus(board, 'completed', { now: 5 })
+  assert.equal(board.completed_count, 2)
+  assert.equal(board.active_step_id, undefined)
+  assert.deepEqual(board.steps.map(step => step.status), ['completed', 'completed'])
+})
+
+test('sanitizes persisted board data and migrates a legacy plan when board is missing', () => {
+  const legacy = sanitizeTaskBoard(undefined, { fallbackPlan: ['a', 'b'], fallbackCurrentStep: 1, goalId: 'goal_old', now: 50 })
+  assert.equal(legacy.goal_id, 'goal_old')
+  assert.equal(legacy.active_step_id, 'step_2')
+  assert.equal(legacy.completed_count, 1)
+
+  const restored = sanitizeTaskBoard({
+    ...legacy,
+    evidence: [{ id: 'e1', kind: 'operation_receipt', summary: 'ok', ref: 'batch_1', at: 51, step_id: 'step_2' }],
+    events: [...legacy.events, { seq: 2, type: 'evidence', at: 51, revision: 2, evidence_id: 'e1' }],
+  }, { goalId: 'goal_old', now: 60 })
+  assert.equal(restored.total_steps, 2)
+  assert.equal(restored.evidence[0].ref, 'batch_1')
+  assert.equal(restored.events.at(-1).type, 'evidence')
+})
