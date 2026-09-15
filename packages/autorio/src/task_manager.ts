@@ -53,6 +53,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     player_state.parameters_mine_entity = undefined
     player_state.parameters_place_entity = undefined
     player_state.parameters_move_items = undefined
+    player_state.parameters_set_recipe = undefined
     player_state.parameters_craft_item = undefined
     player_state.parameters_attack_nearest_enemy = undefined
     player_state.parameters_research_technology = undefined
@@ -95,6 +96,9 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
         break
       case TaskStates.MOVING_ITEMS:
         player_state.parameters_move_items = task
+        break
+      case TaskStates.SETTING_RECIPE:
+        player_state.parameters_set_recipe = task
         break
       case TaskStates.CRAFTING:
         player_state.parameters_craft_item = task
@@ -161,9 +165,20 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
               item_name: task.item_name,
               entity_name: task.entity_name,
               player_name: task.player_name,
+              target_unit_number: task.target_unit_number,
               max_count: task.max_count,
               to_entity: task.to_entity,
               to_player: task.to_player,
+            }
+          : { type: player_state.task_state }
+      }
+      case TaskStates.SETTING_RECIPE: {
+        const task = player_state.parameters_set_recipe
+        return task
+          ? {
+              type: task.type,
+              target_unit_number: task.target_unit_number,
+              recipe_name: task.recipe_name,
             }
           : { type: player_state.task_state }
       }
