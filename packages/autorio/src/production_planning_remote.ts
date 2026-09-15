@@ -8,6 +8,7 @@ import type { ThroughputMeasurementRequest } from './throughput_measurement'
 import { validate_construction_execution_plan } from './construction_execution'
 import { local_spatial_observation, plan_placement, select_navigation_escape_point } from './construction_planning'
 import { solve_live_production } from './production_planning_live'
+import { plan_research_path } from './research_path'
 import { throughput_capacity } from './throughput_capacity'
 import { new_throughput_measurement_controller } from './throughput_measurement'
 
@@ -55,6 +56,11 @@ export function create_production_planning_remote_interface(
       const actor = get_actor()
       if (!actor) return { ok: false, error: { code: 'INVALID_REQUEST', message: 'controlled actor is unavailable' } }
       return validate_construction_execution_plan(actor, request)
+    },
+    research_path: (name: string, max_nodes: number = 32) => {
+      const actor = get_actor()
+      if (!actor) return { ok: false, error: { code: 'INVALID_REQUEST', message: 'controlled actor is unavailable' } }
+      return plan_research_path(actor, name, max_nodes)
     },
     navigation_escape: (target_position: { x: number, y: number }, radius: number = 6) => {
       const actor = get_actor()
