@@ -9,3 +9,6 @@ dist
 .env
 .env.*
 *.log
+data
+/data
+/data/**
