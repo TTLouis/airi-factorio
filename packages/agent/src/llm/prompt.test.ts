@@ -6,6 +6,7 @@ const documentedOperations = [
   'walk_to_player',
   'follow_player',
   'stop_follow_player',
+  'set_auto_defense',
   'equip_weapon',
   'equip_ammo',
   'equip_armor',
@@ -13,9 +14,11 @@ const documentedOperations = [
   'mine_entity',
   'place_entity',
   'move_items',
+  'move_items_exact',
   'move_items_with_player',
   'craft_item',
   'attack_nearest_enemy',
+  'clear_enemy_area',
   'research_technology',
   'wait',
 ]
@@ -80,6 +83,13 @@ describe('production Factorio prompt contract', () => {
     for (const operation of documentedOperations) {
       expect(prompt).toContain(operation)
     }
+  })
+
+  it('prefers stable exact entity identity for item transfers when available', () => {
+    expect(prompt).toContain('Entity summaries include `unit_number`')
+    expect(prompt).toContain('prefer `move_items_exact` over name-based `move_items`')
+    expect(prompt).toContain('Never silently redirect a failed exact transfer to another same-name entity')
+    expect(prompt).toContain('The target must still exist, be on AIRI\'s surface and force, and be within 8 tiles')
   })
 
   it('documents equipment as separate state and requires combat readiness checks', () => {
