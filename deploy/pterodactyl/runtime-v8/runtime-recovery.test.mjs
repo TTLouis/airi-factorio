@@ -65,7 +65,7 @@ test('chat provider failure is reported in game and the event queue remains usab
   assert.ok(commands.some(command => command.includes('Recovered.')))
 })
 
-test('!airi stop cancels an in-flight model turn immediately', async () => {
+test('!airi stop cancels an in-flight model turn immediately and reports that the plan is paused', async () => {
   const { session, commands } = sessionFixture()
   let cancelled = 0
   let releaseQueue
@@ -82,5 +82,5 @@ test('!airi stop cancels an in-flight model turn immediately', async () => {
   releaseQueue()
   await session.eventQueue
   assert.ok(commands.some(command => command.includes('airi_deployment')))
-  assert.ok(commands.some(command => command.includes('Cancelled AIRI work.')))
+  assert.ok(commands.some(command => command.includes('Paused the current AIRI plan')))
 })
