@@ -7,6 +7,8 @@ import { TaskStates } from './types'
 type Manager = ReturnType<typeof new_task_manager>
 type BasicController = ReturnType<typeof new_basic_operation_controller>
 
+const PLAYER_TRANSFER_DISTANCE = 8
+
 function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
   let min_distance = math.huge
   let nearest: LuaEntity | null = null
@@ -18,6 +20,10 @@ function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
     }
   }
   return nearest
+}
+
+function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
+  return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
 
 export function new_basic_operation_runtime(manager: Manager, controller: BasicController) {
@@ -55,11 +61,6 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
 
     const target = current_mining_target(actor)
     if (!target) {
-      // A standalone scripted character has no LuaPlayer mined-entity event. A
-      // disappeared selected entity is the engine-visible completion boundary
-      // retained from the verified mining harness. Cross-world interference is
-      // still treated fail-closed at actor identity boundaries; stronger product
-      // attribution can be layered on top without changing this receipt model.
       task.count -= 1
       task.position = undefined
       task.last_target_amount = undefined
@@ -97,9 +98,6 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return
     }
 
-    // Factorio throws a fatal script error when find_entities_filtered receives
-    // an unknown prototype name. Model/user supplied strings must therefore be
-    // validated before they reach any prototype-filtered engine call.
     if (!prototypes.entity[task.entity_name]) {
       controller.fail(actor, task, 'invalid_entity')
       return
@@ -206,6 +204,67 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     return [true, 'Entity placed successfully', entity]
   }
 
+  function move_items_with_player(actor: ControlledActor) {
+    const task = manager.player_state.parameters_move_items
+    if (!task?.player_name) return undefined
+
+    const player = game.get_player(task.player_name)
+    if (!player || !player.valid || !player.connected || !player.character) {
+      controller.fail(actor, task, 'player_unavailable')
+      return 0
+    }
+    if (player.surface.index !== actor.surface.index) {
+      controller.fail(actor, task, 'different_surface')
+      return 0
+    }
+    if (squared_distance(actor.position, player.position) > PLAYER_TRANSFER_DISTANCE ** 2) {
+      controller.fail(actor, task, 'too_far')
+      return 0
+    }
+
+    const actor_inventory = actor.get_main_inventory()
+    const player_inventory = player.get_main_inventory()
+    if (!actor_inventory || !player_inventory) {
+      controller.fail(actor, task, 'no_inventory')
+      return 0
+    }
+
+    let moved = 0
+    if (task.to_player) {
+      const [item_stack] = actor_inventory.find_item_stack(task.item_name)
+      if (!item_stack) {
+        controller.fail(actor, task, 'item_missing')
+        return 0
+      }
+      const to_move = math.min(item_stack.count, task.max_count)
+      moved = player_inventory.insert({ name: task.item_name, count: to_move })
+      if (moved > 0) actor_inventory.remove({ name: task.item_name, count: moved })
+    }
+    else {
+      const [item_stack] = player_inventory.find_item_stack(task.item_name)
+      if (!item_stack) {
+        controller.fail(actor, task, 'item_missing')
+        return 0
+      }
+      const to_move = math.min(item_stack.count, task.max_count)
+      if (actor_inventory.can_insert({ name: task.item_name, count: to_move })) {
+        const removed = player_inventory.remove({ name: task.item_name, count: to_move })
+        if (removed > 0) {
+          moved = actor_inventory.insert({ name: task.item_name, count: removed })
+          if (moved < removed) player_inventory.insert({ name: task.item_name, count: removed - moved })
+        }
+      }
+    }
+
+    if (moved <= 0) {
+      controller.fail(actor, task, 'nothing_moved', { moved_count: 0 })
+      return 0
+    }
+    log(`[AUTORIO] Moved ${moved} ${task.item_name} ${task.to_player ? 'to' : 'from'} player ${task.player_name}`)
+    controller.complete(actor, task, { moved_count: moved })
+    return moved
+  }
+
   function state_moving_items(actor: ControlledActor) {
     const task = manager.player_state.parameters_move_items
     if (!task) {
@@ -217,7 +276,9 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return 0
     }
 
-    if (!prototypes.entity[task.entity_name]) {
+    if (task.player_name) return move_items_with_player(actor)
+
+    if (!task.entity_name || !prototypes.entity[task.entity_name]) {
       controller.fail(actor, task, 'invalid_entity')
       return 0
     }

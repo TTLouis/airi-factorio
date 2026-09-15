@@ -20,6 +20,9 @@ export interface PlayerParametersWalkToEntity {
   type: TaskStates.WALKING_TO_ENTITY
   entity_name: string
   search_radius: number
+  /** When set, navigation binds this exact connected player's character instead
+   * of searching for a generic character prototype. */
+  target_player_name?: string
   path: PathfinderWaypoint[] | null
   path_drawn: boolean
   path_index: number
@@ -81,9 +84,13 @@ export interface PlayerParametersMoveItems {
   owner_actor_kind?: string
   owner_force_index?: number
   item_name: string
-  entity_name: string
+  /** Exact entity prototype target for entity transfers. */
+  entity_name?: string
+  /** Exact connected player target for player transfers. */
+  player_name?: string
   max_count: number
-  to_entity: boolean
+  to_entity?: boolean
+  to_player?: boolean
 }
 
 export interface PlayerParametersCraftItem {

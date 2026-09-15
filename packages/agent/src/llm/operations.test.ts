@@ -8,6 +8,8 @@ describe('structured Autorio operations', () => {
       { name: 'craft_item', args: { item_name: 'iron-gear-wheel' } },
       { name: 'attack_nearest_enemy', args: {} },
       { name: 'follow_player', args: { player_name: 'Louis' } },
+      { name: 'walk_to_player', args: { player_name: 'Louis' } },
+      { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
     ])
 
     expect(operations).toEqual([
@@ -15,6 +17,8 @@ describe('structured Autorio operations', () => {
       { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1 } },
       { name: 'attack_nearest_enemy', args: { search_radius: 50 } },
       { name: 'follow_player', args: { player_name: 'Louis', follow_distance: 4 } },
+      { name: 'walk_to_player', args: { player_name: 'Louis' } },
+      { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
     ])
   })
 
@@ -67,6 +71,9 @@ describe('structured Autorio operations', () => {
       { name: 'move_items', args: { item_name: 'iron-plate', entity_name: 'steel-chest', max_count: 100001, to_entity: true } },
     ])).toThrow()
     expect(() => parseStructuredOperations([
+      { name: 'move_items_with_player', args: { item_name: 'iron-plate', player_name: 'Louis', max_count: 100001, to_player: true } },
+    ])).toThrow()
+    expect(() => parseStructuredOperations([
       { name: 'attack_nearest_enemy', args: { search_radius: 257 } },
     ])).toThrow()
   })
@@ -74,14 +81,18 @@ describe('structured Autorio operations', () => {
   it('renders validated operations into the existing Autorio remote-call format', () => {
     expect(renderStructuredOperations([
       { name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 1024 } },
+      { name: 'walk_to_player', args: { player_name: 'Louis' } },
       { name: 'follow_player', args: { player_name: 'Louis', follow_distance: 5 } },
       { name: 'stop_follow_player', args: {} },
       { name: 'mine_entity', args: { entity_name: 'iron-ore', count: 8 } },
+      { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
     ])).toEqual([
       "remote.call('autorio_operations', 'walk_to_entity', 'iron-ore', 1024)",
+      "remote.call('autorio_operations', 'walk_to_player', 'Louis')",
       "remote.call('autorio_operations', 'follow_player', 'Louis', 5)",
       "remote.call('autorio_operations', 'stop_follow_player')",
       "remote.call('autorio_operations', 'mine_entity', 'iron-ore', 8)",
+      "remote.call('autorio_operations', 'move_items_with_player', 'stone', 'Louis', 10, true)",
     ])
   })
 

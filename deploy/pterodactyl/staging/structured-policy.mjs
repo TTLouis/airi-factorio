@@ -32,11 +32,13 @@ function exactKeys(value, allowed) {
 
 const operationKeys = {
   walk_to_entity: ['entity_name', 'search_radius'],
+  walk_to_player: ['player_name'],
   follow_player: ['player_name', 'follow_distance'],
   stop_follow_player: [],
   mine_entity: ['entity_name', 'count'],
   place_entity: ['entity_name'],
   move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
+  move_items_with_player: ['item_name', 'player_name', 'max_count', 'to_player'],
   craft_item: ['item_name', 'count'],
   attack_nearest_enemy: ['search_radius'],
   research_technology: ['technology_name'],
@@ -54,6 +56,8 @@ export function parseOperation(value) {
   switch (name) {
     case 'walk_to_entity':
       return { name, args: { entity_name: factorioName(args.entity_name), search_radius: integer(args.search_radius, 'search_radius', 1, 4096) } }
+    case 'walk_to_player':
+      return { name, args: { player_name: factorioName(args.player_name) } }
     case 'follow_player':
       return { name, args: { player_name: factorioName(args.player_name), follow_distance: finiteNumber(args.follow_distance ?? 4, 'follow_distance', 1, 64) } }
     case 'stop_follow_player':
@@ -65,6 +69,9 @@ export function parseOperation(value) {
     case 'move_items':
       check(typeof args.to_entity === 'boolean', 'to_entity must be boolean')
       return { name, args: { item_name: factorioName(args.item_name), entity_name: factorioName(args.entity_name), max_count: integer(args.max_count, 'max_count', 1, 100000), to_entity: args.to_entity } }
+    case 'move_items_with_player':
+      check(typeof args.to_player === 'boolean', 'to_player must be boolean')
+      return { name, args: { item_name: factorioName(args.item_name), player_name: factorioName(args.player_name), max_count: integer(args.max_count, 'max_count', 1, 100000), to_player: args.to_player } }
     case 'craft_item':
       return { name, args: { item_name: factorioName(args.item_name), count: integer(args.count ?? 1, 'count', 1, 1000) } }
     case 'attack_nearest_enemy':
@@ -82,11 +89,13 @@ export function renderOperation(value) {
   const operation = parseOperation(value)
   switch (operation.name) {
     case 'walk_to_entity': return `remote.call('autorio_operations','walk_to_entity',${luaString(operation.args.entity_name)},${operation.args.search_radius})`
+    case 'walk_to_player': return `remote.call('autorio_operations','walk_to_player',${luaString(operation.args.player_name)})`
     case 'follow_player': return `remote.call('autorio_operations','follow_player',${luaString(operation.args.player_name)},${operation.args.follow_distance})`
     case 'stop_follow_player': return `remote.call('autorio_operations','stop_follow_player')`
     case 'mine_entity': return `remote.call('autorio_operations','mine_entity',${luaString(operation.args.entity_name)},${operation.args.count})`
     case 'place_entity': return `remote.call('autorio_operations','place_entity',${luaString(operation.args.entity_name)})`
     case 'move_items': return `remote.call('autorio_operations','move_items',${luaString(operation.args.item_name)},${luaString(operation.args.entity_name)},${operation.args.max_count},${operation.args.to_entity})`
+    case 'move_items_with_player': return `remote.call('autorio_operations','move_items_with_player',${luaString(operation.args.item_name)},${luaString(operation.args.player_name)},${operation.args.max_count},${operation.args.to_player})`
     case 'craft_item': return `remote.call('autorio_operations','craft_item',${luaString(operation.args.item_name)},${operation.args.count})`
     case 'attack_nearest_enemy': return `remote.call('autorio_operations','attack_nearest_enemy',${operation.args.search_radius})`
     case 'research_technology': return `remote.call('autorio_operations','research_technology',${luaString(operation.args.technology_name)})`
@@ -123,6 +132,9 @@ export const toolDefinitions = [
   functionTool('getInventoryItems', 'Read AIRI standalone actor inventory.', emptyObjectSchema),
   functionTool('getRecipe', 'Read one exact recipe for AIRI force.', {
     type: 'object', properties: { item: nameStringSchema }, required: ['item'], additionalProperties: false,
+  }),
+  functionTool('getPlayerStatus', 'Read one exact human player by name, including availability, surface, position, and distance from AIRI when comparable.', {
+    type: 'object', properties: { player_name: nameStringSchema }, required: ['player_name'], additionalProperties: false,
   }),
   functionTool('getNearbyEntities', 'Inspect a bounded local area around AIRI.', {
     type: 'object',
@@ -190,6 +202,9 @@ export function toolCommand(name, rawArgs = {}) {
     case 'getRecipe':
       noExtra(args, ['item'])
       return `/silent-command remote.call("autorio_tools","get_recipe",${luaString(factorioName(args.item))})`
+    case 'getPlayerStatus':
+      noExtra(args, ['player_name'])
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_player_status",${luaString(factorioName(args.player_name))})))`
     case 'getNearbyEntities': {
       noExtra(args, ['radius', 'name', 'type', 'limit'])
       const radius = integer(args.radius ?? 20, 'radius', 1, 64)

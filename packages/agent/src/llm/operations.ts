@@ -20,6 +20,12 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     }).strict(),
   }).strict(),
   z.object({
+    name: z.literal('walk_to_player'),
+    args: z.object({
+      player_name: factorioNameSchema,
+    }).strict(),
+  }).strict(),
+  z.object({
     name: z.literal('follow_player'),
     args: z.object({
       player_name: factorioNameSchema,
@@ -50,6 +56,15 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
       entity_name: factorioNameSchema,
       max_count: transferCount,
       to_entity: z.boolean(),
+    }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('move_items_with_player'),
+    args: z.object({
+      item_name: factorioNameSchema,
+      player_name: factorioNameSchema,
+      max_count: transferCount,
+      to_player: z.boolean(),
     }).strict(),
   }).strict(),
   z.object({
@@ -91,11 +106,13 @@ const callEnd = `\\s*\\)$`
 
 const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]walk_to_entity['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
+  new RegExp(`${callStart}['"]walk_to_player['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]follow_player['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]stop_follow_player['"]${callEnd}`),
   new RegExp(`${callStart}['"]mine_entity['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]place_entity['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]move_items['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
+  new RegExp(`${callStart}['"]move_items_with_player['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]craft_item['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]attack_nearest_enemy['"](?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]research_technology['"]${separator}${quotedSafeName}${callEnd}`),
@@ -126,6 +143,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
   switch (operation.name) {
     case 'walk_to_entity':
       return `remote.call('autorio_operations', 'walk_to_entity', ${renderLuaString(operation.args.entity_name)}, ${operation.args.search_radius})`
+    case 'walk_to_player':
+      return `remote.call('autorio_operations', 'walk_to_player', ${renderLuaString(operation.args.player_name)})`
     case 'follow_player':
       return `remote.call('autorio_operations', 'follow_player', ${renderLuaString(operation.args.player_name)}, ${operation.args.follow_distance})`
     case 'stop_follow_player':
@@ -136,6 +155,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'place_entity', ${renderLuaString(operation.args.entity_name)})`
     case 'move_items':
       return `remote.call('autorio_operations', 'move_items', ${renderLuaString(operation.args.item_name)}, ${renderLuaString(operation.args.entity_name)}, ${operation.args.max_count}, ${operation.args.to_entity})`
+    case 'move_items_with_player':
+      return `remote.call('autorio_operations', 'move_items_with_player', ${renderLuaString(operation.args.item_name)}, ${renderLuaString(operation.args.player_name)}, ${operation.args.max_count}, ${operation.args.to_player})`
     case 'craft_item':
       return `remote.call('autorio_operations', 'craft_item', ${renderLuaString(operation.args.item_name)}, ${operation.args.count})`
     case 'attack_nearest_enemy':

@@ -26,40 +26,24 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
 
   function run_cancel_cleanup() {
     const handler = cancel_handlers[player_state.task_state]
-    if (handler) {
-      handler()
-    }
+    if (handler) handler()
   }
 
   function stop_task_controls() {
-    // Clearing our task record does not clear a standalone character's engine
-    // inputs. Stop the outgoing task's controls before a queued task can start.
-    // Do not stop unrelated controls (e.g. a human walking while hand-crafting),
-    // and do not resolve/spawn an actor for an already-idle reset.
     const state = player_state.task_state
     const stop_walking = state === TaskStates.WALKING_TO_ENTITY
       || state === TaskStates.WALKING_DIRECT
       || state === TaskStates.ATTACKING
     const stop_mining = state === TaskStates.MINING
     const stop_shooting = state === TaskStates.ATTACKING
-    if (!stop_walking && !stop_mining && !stop_shooting) {
-      return
-    }
+    if (!stop_walking && !stop_mining && !stop_shooting) return
 
     const actor = get_controlled_actor()
-    if (!actor || !actor.is_valid || !actor.character) {
-      return
-    }
+    if (!actor || !actor.is_valid || !actor.character) return
 
-    if (stop_walking) {
-      actor.set_walking_state({ walking: false, direction: defines.direction.north })
-    }
-    if (stop_mining) {
-      actor.set_mining_state({ mining: false })
-    }
-    if (stop_shooting) {
-      actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
-    }
+    if (stop_walking) actor.set_walking_state({ walking: false, direction: defines.direction.north })
+    if (stop_mining) actor.set_mining_state({ mining: false })
+    if (stop_shooting) actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
   }
 
   function clear_task_state_without_controls() {
@@ -113,9 +97,6 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
         player_state.parameters_move_items = task
         break
       case TaskStates.CRAFTING:
-        // Native queue admission/start belongs to the crafting controller so it
-        // can bind actor identity, reject an already-busy native queue, verify
-        // output, and clean up only task-owned native work on cancellation.
         player_state.parameters_craft_item = task
         break
       case TaskStates.ATTACKING:
@@ -144,6 +125,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
           ? {
               type: task.type,
               entity_name: task.entity_name,
+              player_name: task.target_player_name,
               search_radius: task.search_radius,
               path_index: task.path_index,
               calculating_path: task.calculating_path,
@@ -178,16 +160,16 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
               type: task.type,
               item_name: task.item_name,
               entity_name: task.entity_name,
+              player_name: task.player_name,
               max_count: task.max_count,
               to_entity: task.to_entity,
+              to_player: task.to_player,
             }
           : { type: player_state.task_state }
       }
       case TaskStates.CRAFTING: {
         const task = player_state.parameters_craft_item
-        if (!task) {
-          return { type: player_state.task_state }
-        }
+        if (!task) return { type: player_state.task_state }
         const actor = get_controlled_actor()
         return {
           type: task.type,
@@ -243,13 +225,10 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
   function cancel_all_tasks() {
     run_cancel_cleanup()
     reset_task_state()
-    task_queue.length = 0 // can use this to clear the array in lua
+    task_queue.length = 0
   }
 
   function discard_all_tasks_after_actor_loss() {
-    // The previous actor is already invalid. Do not call task cleanup or
-    // stop_task_controls(), because resolving an actor here would enter
-    // replacement creation again. Native state on the dead body is gone with it.
     clear_task_state_without_controls()
     task_queue.length = 0
   }
@@ -260,12 +239,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
   })
 
   register_actor_mode_transition_handler(({ previous_mode, next_mode }) => {
-    if (player_state.task_state === TaskStates.IDLE && task_queue.length === 0) {
-      return
-    }
-    // set_actor_mode invokes this hook before changing storage.airi_actor_mode,
-    // so cancellation resolves the previous actor and stops/cancels only work
-    // that belonged to that actor (including an owned native crafting queue).
+    if (player_state.task_state === TaskStates.IDLE && task_queue.length === 0) return
     cancel_all_tasks()
     log(`[AUTORIO] Cancelled active and queued work before actor mode change ${previous_mode} -> ${next_mode}`)
   })

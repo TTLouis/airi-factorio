@@ -112,6 +112,11 @@ remote.add_interface('autorio_operations', {
     log(`[AUTORIO] New walk_to_entity task: ${entity_name}, radius: ${search_radius}`)
     return navigation_controller.submit(entity_name, search_radius)
   },
+  walk_to_player: (player_name: string): [boolean, string] => {
+    const result = navigation_controller.submit_player(player_name)
+    if (result[0]) log(`[AUTORIO] New walk_to_player task: ${player_name}`)
+    return result
+  },
   follow_player: (player_name: string, follow_distance: number = 4): [boolean, string] => {
     const result = follow_controller.submit(player_name, follow_distance)
     if (result[0]) log(`[AUTORIO] Follow mode enabled for ${player_name} at distance ${follow_distance}`)
@@ -132,6 +137,13 @@ remote.add_interface('autorio_operations', {
     const result = basic_operation_controller.submit_move(item_name, entity_name, max_count, to_entity)
     if (result[0]) {
       log(`[AUTORIO] New move_items task for ${item_name} ${to_entity ? 'to' : 'from'} ${entity_name}`)
+    }
+    return result
+  },
+  move_items_with_player: (item_name: string, player_name: string, max_count: number, to_player: boolean): [boolean, string] => {
+    const result = basic_operation_controller.submit_player_move(item_name, player_name, max_count, to_player)
+    if (result[0]) {
+      log(`[AUTORIO] New player item transfer for ${item_name} ${to_player ? 'to' : 'from'} ${player_name}`)
     }
     return result
   },
@@ -157,8 +169,6 @@ remote.add_interface('autorio_operations', {
     }
   },
   log_actor_info: () => log_actor_info(),
-  // Compatibility alias for older callers. The player id is intentionally ignored:
-  // diagnostics now always describe AIRI's selected ControlledActor.
   log_player_info: (_player_id?: number) => log_actor_info(),
 })
 
@@ -180,8 +190,6 @@ export function get_nearest_entity(actor: ControlledActor, entities: LuaEntity[]
   return nearest_entity
 }
 
-// Kept exported for the historical regression tests; production dispatch reaches
-// the same owned runtime through on_tick below.
 export function state_moving_items(actor: ControlledActor) {
   return basic_operation_runtime.state_moving_items(actor)
 }
@@ -210,8 +218,6 @@ function state_walking_direct(actor: ControlledActor) {
   }
 }
 
-// FIXME: who are changing the selected entity while mining?
-// This only happens in multiplayer, why?
 script.on_event(defines.events.on_selected_entity_changed, (unused_event: OnSelectedEntityChangedEvent) => {})
 
 script.on_event(defines.events.on_script_path_request_finished, (event: OnScriptPathRequestFinishedEvent) => {
@@ -225,8 +231,6 @@ script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEnti
 })
 
 function setup() {
-  // Production setup must never delete world enemies. Deterministic tests own
-  // their fixtures explicitly; combat must interact with real enemy entities.
   setup_complete = true
   log('[AUTORIO] Setup complete')
 }
@@ -251,8 +255,6 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     return
   }
 
-  // Persistent follow is a background mode. Any explicit task temporarily owns
-  // movement/control; follow resumes automatically when the task queue returns idle.
   follow_controller.suspend(actor)
 
   if (task_manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
@@ -287,14 +289,8 @@ script.on_event(defines.events.on_tick, (unused_event) => {
 script.on_event(defines.events.on_player_crafted_item, (event: OnPlayerCraftedItemEvent) => {
   const actor = get_controlled_actor()
   if (!actor || !actor.owns_player_index(event.player_index)) {
-    // Not our controlled actor's craft (e.g. another connected player) — ignore it.
-    // Standalone NPC crafting produces no LuaPlayer event at all.
     return
   }
-
-  // This event is diagnostic only. Queue ownership and completion are verified
-  // by the crafting controller against the controlled actor's native queue and
-  // real inventory output; a player-sourced event cannot complete an NPC task.
   log(`[AUTORIO] Actor ${actor.status_snapshot().name} crafted item: ${event.item_stack.name}`)
 })
 

@@ -50,33 +50,36 @@ export function new_follow_controller(get_actor: () => ControlledActor | undefin
 
     const bounded_distance = math.max(MIN_FOLLOW_DISTANCE, math.min(MAX_FOLLOW_DISTANCE, follow_distance || 4))
     const player = game.get_player(player_name)
-    if (!player || !player.valid || !player.connected || !player.character) {
+    if (!player || !player.valid) {
       storage.airi_follow_state = {
         active: false,
         player_name,
         follow_distance: bounded_distance,
-        code: 'player_unavailable',
+        code: 'invalid_player',
         updated_tick: game.tick,
       }
-      return [false, 'Player is not connected with a character']
-    }
-    if (player.surface.index !== actor.surface.index) {
-      storage.airi_follow_state = {
-        active: false,
-        player_name,
-        follow_distance: bounded_distance,
-        code: 'different_surface',
-        updated_tick: game.tick,
-      }
-      return [false, 'Player is on a different surface']
+      return [false, 'Player does not exist']
     }
 
     storage.airi_follow_state = {
       active: true,
       player_name,
       follow_distance: bounded_distance,
-      code: 'following',
+      code: (!player.connected || !player.character)
+        ? 'player_unavailable'
+        : player.surface.index !== actor.surface.index
+          ? 'different_surface'
+          : 'following',
       updated_tick: game.tick,
+    }
+
+    if (!player.connected || !player.character) {
+      stop_walking(actor)
+      return [true, `Follow armed for ${player_name}; waiting for the player to be available`]
+    }
+    if (player.surface.index !== actor.surface.index) {
+      stop_walking(actor)
+      return [true, `Follow armed for ${player_name}; waiting for the player to return to this surface`]
     }
     return [true, `Following ${player_name}`]
   }
@@ -103,16 +106,25 @@ export function new_follow_controller(get_actor: () => ControlledActor | undefin
     if (!state.active || !state.player_name) return
 
     const player = game.get_player(state.player_name)
-    if (!player || !player.valid || !player.connected || !player.character) {
+    if (!player || !player.valid) {
       stop_walking(actor)
       state.active = false
+      state.code = 'invalid_player'
+      state.updated_tick = game.tick
+      return
+    }
+
+    // Disconnects, death screens and the short respawn window are transient.
+    // Keep the follow intent armed so the same named LuaPlayer is reacquired
+    // automatically after reconnect/respawn, including a replacement character.
+    if (!player.connected || !player.character) {
+      stop_walking(actor)
       state.code = 'player_unavailable'
       state.updated_tick = game.tick
       return
     }
     if (player.surface.index !== actor.surface.index) {
       stop_walking(actor)
-      state.active = false
       state.code = 'different_surface'
       state.updated_tick = game.tick
       return
@@ -153,8 +165,8 @@ export function new_follow_controller(get_actor: () => ControlledActor | undefin
             connected: player.connected,
             has_character: !!player.character,
             surface: player.surface.name,
-            position: player.position,
-            distance: actor && player.surface.index === actor.surface.index
+            position: player.character ? player.position : undefined,
+            distance: actor && player.character && player.surface.index === actor.surface.index
               ? distance(actor.position, player.position)
               : undefined,
           }

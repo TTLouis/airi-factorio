@@ -29,6 +29,7 @@ describe('agent observation tools', () => {
       'getTaskStatus',
       'getInventoryItems',
       'getRecipe',
+      'getPlayerStatus',
       'getNearbyEntities',
       'findLongRangeEntities',
       'getEntityStatus',
@@ -64,6 +65,17 @@ describe('agent observation tools', () => {
 
     mocks.raw.mockClear()
     await expect(getTool('getRecipe').fn({ parameters: { item: 'iron-plate\n/c game.clear()' } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('reads exact human player status by name', async () => {
+    await getTool('getPlayerStatus').fn({ parameters: { player_name: 'TTLouis' } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_player_status", \'TTLouis\')))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getPlayerStatus').fn({ parameters: { player_name: 'TTLouis\n/c game.clear()' } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 
@@ -152,13 +164,14 @@ describe('crafting, research, and combat observation tools', () => {
 })
 
 describe('prompt contract', () => {
-  it('documents discovery, follow, navigation, crafting, research, and combat tools', () => {
-    for (const name of ['findLongRangeEntities', 'getFollowStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+  it('documents discovery, player interaction, follow, navigation, crafting, research, and combat tools', () => {
+    for (const name of ['getPlayerStatus', 'findLongRangeEntities', 'getFollowStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
-    expect(prompt).toContain('follow_player')
-    expect(prompt).toContain('stop_follow_player')
+    for (const operation of ['walk_to_player', 'move_items_with_player', 'follow_player', 'stop_follow_player']) {
+      expect(prompt).toContain(operation)
+    }
     expect(prompt).toContain('4096')
     expect(prompt).toContain('[CHAT] <username>: <message>')
   })

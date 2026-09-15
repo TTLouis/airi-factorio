@@ -30,6 +30,10 @@ const entityStatusSchema = z.object({
   radius: z.number().int().min(1).max(32).default(8),
 }).strict()
 
+const playerStatusSchema = z.object({
+  player_name: factorioNameSchema,
+}).strict()
+
 async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
@@ -89,6 +93,18 @@ export const tools: ToolFunction[] = [
     },
   },
   {
+    name: 'getPlayerStatus',
+    description: 'Inspect one exact human player by name: connection/character availability, surface, position, and distance from AIRI when comparable.',
+    schema: playerStatusSchema,
+    fn: async ({ parameters }) => {
+      const parsed = playerStatusSchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_player_status", ${renderLuaString(parsed.player_name)})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Player status')
+      return response.data.output
+    },
+  },
+  {
     name: 'getNearbyEntities',
     description: 'Inspect a bounded area around AIRI and return compact nearby entity summaries. Use optional exact prototype name/type filters to reduce noise.',
     schema: nearbyEntitiesSchema,
@@ -134,7 +150,7 @@ export const tools: ToolFunction[] = [
   },
   {
     name: 'getFollowStatus',
-    description: 'Read AIRI persistent player-follow state, target player, configured distance, current distance, and whether follow movement is active or blocked.',
+    description: 'Read AIRI persistent player-follow state, target player, configured distance, current distance, and whether follow movement is active, waiting for player availability, or blocked by surface mismatch.',
     schema: z.object({}).strict(),
     fn: async () => readRemoteStatus('autorio_follow'),
   },

@@ -13,7 +13,7 @@ type BasicOperationCode = 'queued' | 'completed' | 'cancelled'
   | 'no_actor' | 'invalid_count' | 'invalid_ticks' | 'invalid_max_count'
   | 'actor_changed' | 'no_target' | 'target_gone' | 'no_inventory'
   | 'invalid_entity' | 'item_missing' | 'no_position' | 'create_failed'
-  | 'nothing_moved'
+  | 'nothing_moved' | 'player_unavailable' | 'different_surface' | 'too_far'
 
 export interface BasicOperationResult {
   operation_id?: number
@@ -26,10 +26,12 @@ export interface BasicOperationResult {
   actor_kind?: string
   force_index?: number
   entity_name?: string
+  player_name?: string
   item_name?: string
   requested_count?: number
   moved_count?: number
   to_entity?: boolean
+  to_player?: boolean
   requested_ticks?: number
 }
 
@@ -92,9 +94,11 @@ function result_for(actor: ControlledActor | undefined, task: BasicTask | undefi
     actor_kind: bound?.actor_kind ?? identity?.kind,
     force_index: bound?.force_index ?? (actor?.is_valid ? actor.force.index : undefined),
     entity_name: task && 'entity_name' in task ? task.entity_name : undefined,
+    player_name: task?.type === TaskStates.MOVING_ITEMS ? task.player_name : undefined,
     item_name: task && 'item_name' in task ? task.item_name : undefined,
     requested_count: task?.type === TaskStates.MINING ? (task.requested_count ?? task.count) : undefined,
     to_entity: task?.type === TaskStates.MOVING_ITEMS ? task.to_entity : undefined,
+    to_player: task?.type === TaskStates.MOVING_ITEMS ? task.to_player : undefined,
     requested_ticks: task?.type === TaskStates.WAITING ? (task.requested_ticks ?? task.remaining_ticks) : undefined,
     ...details,
   }
@@ -169,6 +173,28 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
     return [true, 'Task started']
   }
 
+  function submit_player_move(item_name: string, player_name: string, max_count: number, to_player: boolean): [boolean, string] {
+    if (!valid_integer(max_count, 1, 100000)) {
+      result_for(get_actor(), undefined, false, false, 'invalid_max_count')
+      return [false, 'max_count must be an integer from 1 to 100000']
+    }
+    if (typeof player_name !== 'string' || player_name.length === 0) {
+      result_for(get_actor(), undefined, false, false, 'player_unavailable')
+      return [false, 'player_name is required']
+    }
+    const actor = actor_for_submission()
+    if (!actor) return [false, 'No controlled actor']
+    const task: PlayerParametersMoveItems = {
+      type: TaskStates.MOVING_ITEMS,
+      item_name,
+      player_name,
+      max_count,
+      to_player,
+    }
+    if (!queue(task, actor)) return [false, 'No controlled actor']
+    return [true, 'Task started']
+  }
+
   function submit_wait(ticks: number): [boolean, string] {
     if (!valid_integer(ticks, 1, 360000)) {
       result_for(get_actor(), undefined, false, false, 'invalid_ticks')
@@ -192,9 +218,6 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
   }
 
   function fail(actor: ControlledActor | undefined, task: BasicTask, code: BasicOperationCode, details: Partial<BasicOperationResult> = {}) {
-    // cancel_all_tasks owns control cleanup and dependent queue invalidation. Its
-    // registered basic-operation cancellation callback is suppressed so the
-    // explicit failure receipt remains authoritative.
     suppress_cancel_receipt = true
     manager.cancel_all_tasks()
     suppress_cancel_receipt = false
@@ -228,6 +251,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
     submit_mining,
     submit_placement,
     submit_move,
+    submit_player_move,
     submit_wait,
     complete,
     fail,

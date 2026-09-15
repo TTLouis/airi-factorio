@@ -3,9 +3,13 @@ import prompt from './prompt.md?raw'
 
 const documentedOperations = [
   'walk_to_entity',
+  'walk_to_player',
+  'follow_player',
+  'stop_follow_player',
   'mine_entity',
   'place_entity',
   'move_items',
+  'move_items_with_player',
   'craft_item',
   'attack_nearest_enemy',
   'research_technology',
@@ -26,9 +30,11 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('getTaskStatus()')
     expect(prompt).toContain('getInventoryItems()')
     expect(prompt).toContain('getRecipe(item)')
+    expect(prompt).toContain('getPlayerStatus({ player_name })')
     expect(prompt).toContain('getNearbyEntities({ radius?, name?, type?, limit? })')
     expect(prompt).toContain('getEntityStatus({ name, radius? })')
     expect(prompt).toContain('getNavigationStatus()')
+    expect(prompt).toContain('getFollowStatus()')
     expect(prompt).toContain('getCraftingStatus()')
     expect(prompt).toContain('getCombatStatus()')
     expect(prompt).toContain('Radius is limited to 64 tiles')
@@ -47,7 +53,7 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('path_timeout')
     expect(prompt).toContain('replan instead of repeating blindly')
     expect(prompt).toContain('inspect the local area before choosing movement, mining, or combat')
-    expect(prompt).toContain('verify the relevant inventory/entity state before depending on that result')
+    expect(prompt).toContain('verify the relevant state before depending on the result')
   })
 
   it('distinguishes passive transport-belt displacement from AIRI walking', () => {
@@ -68,6 +74,11 @@ describe('production Factorio prompt contract', () => {
     for (const operation of documentedOperations) {
       expect(prompt).toContain(operation)
     }
+  })
+
+  it('documents persistent follow recovery across player lifecycle changes', () => {
+    expect(prompt).toContain('Disconnects, death/respawn, or temporary surface mismatch do not cancel an existing follow intent')
+    expect(prompt).toContain('automatically reacquires the same named player after reconnect/respawn')
   })
 
   it('requires structured operations instead of model-generated Lua', () => {

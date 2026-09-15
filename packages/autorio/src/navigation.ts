@@ -20,6 +20,7 @@ const PROGRESS_DISTANCE = 0.25
 type NavigationCode = 'started' | 'reached' | 'no_actor' | 'invalid_radius' | 'invalid_entity_name'
   | 'no_target' | 'actor_changed' | 'target_gone' | 'path_start_unavailable'
   | 'path_busy' | 'unreachable' | 'path_timeout' | 'stuck' | 'timeout'
+  | 'player_unavailable' | 'different_surface'
 
 interface NavigationResult {
   accepted: boolean
@@ -30,6 +31,7 @@ interface NavigationResult {
   actor_kind?: string
   force_index?: number
   entity_name?: string
+  player_name?: string
   target_unit_number?: number
   target_position?: { x: number, y: number }
   path_request_id?: number
@@ -97,6 +99,7 @@ function record(actor: ControlledActor | undefined, task: PlayerParametersWalkTo
     actor_kind: identity?.kind,
     force_index: actor?.is_valid ? actor.force.index : undefined,
     entity_name: task?.entity_name,
+    player_name: task?.target_player_name,
     target_unit_number: task?.target_unit_number,
     target_position: task?.target_position ? copy_position(task.target_position) : undefined,
     path_request_id: task?.path_request_id,
@@ -124,7 +127,36 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     rendering.clear()
     manager.reset_task_state()
     manager.next_task()
-    log(`[AUTORIO] Navigation task complete: reached ${task.entity_name}`)
+    log(`[AUTORIO] Navigation task complete: reached ${task.target_player_name ?? task.entity_name}`)
+  }
+
+  function actor_for_submission() {
+    const actor = get_actor()
+    const identity = actor?.is_valid ? actor.status_snapshot() : undefined
+    if (!actor || !actor.is_valid || !actor.character || identity?.actor_id === undefined) {
+      record(actor, undefined, false, false, 'no_actor')
+      return undefined
+    }
+    return { actor, identity }
+  }
+
+  function make_task(actor: ControlledActor, identity: ReturnType<ControlledActor['status_snapshot']>, entity_name: string, search_radius: number, target_player_name?: string): PlayerParametersWalkToEntity {
+    return {
+      type: TaskStates.WALKING_TO_ENTITY,
+      entity_name,
+      search_radius,
+      target_player_name,
+      path: null,
+      path_drawn: false,
+      path_index: 1,
+      calculating_path: false,
+      target_position: null,
+      target: null,
+      owner_actor_id: identity.actor_id,
+      owner_actor_kind: identity.kind,
+      owner_force_index: actor.force.index,
+      path_attempts: 0,
+    }
   }
 
   function submit(entity_name: string, search_radius: number): boolean {
@@ -137,29 +169,29 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return false
     }
 
-    const actor = get_actor()
-    const identity = actor?.is_valid ? actor.status_snapshot() : undefined
-    if (!actor || !actor.is_valid || !actor.character || identity?.actor_id === undefined) {
-      record(actor, undefined, false, false, 'no_actor')
-      return false
-    }
-
-    manager.add_task({
-      type: TaskStates.WALKING_TO_ENTITY,
-      entity_name,
-      search_radius,
-      path: null,
-      path_drawn: false,
-      path_index: 1,
-      calculating_path: false,
-      target_position: null,
-      target: null,
-      owner_actor_id: identity.actor_id,
-      owner_actor_kind: identity.kind,
-      owner_force_index: actor.force.index,
-      path_attempts: 0,
-    })
+    const resolved = actor_for_submission()
+    if (!resolved || resolved.identity.actor_id === undefined) return false
+    manager.add_task(make_task(resolved.actor, resolved.identity, entity_name, search_radius))
     return true
+  }
+
+  function submit_player(player_name: string): [boolean, string] {
+    if (typeof player_name !== 'string' || player_name.length === 0) {
+      return [false, 'player_name is required']
+    }
+    const resolved = actor_for_submission()
+    if (!resolved || resolved.identity.actor_id === undefined) return [false, 'No controlled actor']
+    const player = game.get_player(player_name)
+    if (!player || !player.valid || !player.connected || !player.character) {
+      record(resolved.actor, undefined, false, false, 'player_unavailable')
+      return [false, 'Player is not connected with a character']
+    }
+    if (player.surface.index !== resolved.actor.surface.index) {
+      record(resolved.actor, undefined, false, false, 'different_surface')
+      return [false, 'Player is on a different surface']
+    }
+    manager.add_task(make_task(resolved.actor, resolved.identity, player.character.name, MAX_SEARCH_RADIUS, player_name))
+    return [true, 'Task started']
   }
 
   function request_path(actor: ControlledActor, task: PlayerParametersWalkToEntity) {
@@ -221,11 +253,26 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
   }
 
   function acquire(actor: ControlledActor, task: PlayerParametersWalkToEntity) {
-    const target = nearest(actor, actor.surface.find_entities_filtered({
-      position: actor.position,
-      radius: task.search_radius,
-      name: task.entity_name,
-    }))
+    let target: LuaEntity | undefined
+    if (task.target_player_name) {
+      const player = game.get_player(task.target_player_name)
+      if (!player || !player.valid || !player.connected || !player.character) {
+        fail(actor, task, 'player_unavailable')
+        return false
+      }
+      if (player.surface.index !== actor.surface.index) {
+        fail(actor, task, 'different_surface')
+        return false
+      }
+      target = player.character
+    }
+    else {
+      target = nearest(actor, actor.surface.find_entities_filtered({
+        position: actor.position,
+        radius: task.search_radius,
+        name: task.entity_name,
+      }))
+    }
     if (!target) {
       fail(actor, task, 'no_target')
       return false
@@ -331,6 +378,27 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     return true
   }
 
+  function refresh_player_target(actor: ControlledActor, task: PlayerParametersWalkToEntity) {
+    if (!task.target_player_name) return true
+    const player = game.get_player(task.target_player_name)
+    if (!player || !player.valid || !player.connected || !player.character) {
+      fail(actor, task, 'player_unavailable')
+      return false
+    }
+    if (player.surface.index !== actor.surface.index) {
+      fail(actor, task, 'different_surface')
+      return false
+    }
+    if (task.target !== player.character) {
+      task.target = player.character
+      task.target_unit_number = player.character.unit_number
+      task.target_position = copy_position(player.character.position)
+      repath(actor, task, 'stuck')
+      return false
+    }
+    return true
+  }
+
   function tick(actor: ControlledActor) {
     const task = manager.player_state.parameters_walk_to_entity
     if (!task || manager.player_state.task_state !== TaskStates.WALKING_TO_ENTITY) return
@@ -340,6 +408,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     }
 
     if (!task.target && !acquire(actor, task)) return
+    if (!refresh_player_target(actor, task)) return
 
     const target = task.target
     if (!target || !target.valid) {
@@ -389,6 +458,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     return {
       task_active: manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY,
       actor: actor?.status_snapshot(),
+      player_name: task?.target_player_name,
       target: target && target.valid
         ? {
             name: target.name,
@@ -411,5 +481,5 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     }
   }
 
-  return { submit, tick, on_path_finished, status }
+  return { submit, submit_player, tick, on_path_finished, status }
 }

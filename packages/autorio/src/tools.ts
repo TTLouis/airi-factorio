@@ -53,6 +53,34 @@ export function create_tools_remote_interface() {
       rcon.print(serpent.block(ingredients))
       return true
     },
+    get_player_status: (player_name: string) => {
+      const actor = get_controlled_actor()
+      const player = game.get_player(player_name)
+      if (!player || !player.valid) {
+        return {
+          found: false,
+          player_name,
+          error: 'player not found',
+        }
+      }
+      const same_surface = !!actor && actor.surface.index === player.surface.index
+      const player_position = player.character ? player.position : undefined
+      return {
+        found: true,
+        player: {
+          name: player.name,
+          connected: player.connected,
+          has_character: !!player.character,
+          surface: player.surface.name,
+          position: player_position,
+        },
+        actor: actor?.status_snapshot(),
+        same_surface,
+        distance: actor && player_position && same_surface
+          ? math.sqrt(squared_distance(actor.position, player_position))
+          : undefined,
+      }
+    },
     get_nearby_entities: (radius: number = 20, name?: string, entity_type?: string, limit: number = 50) => {
       const actor = get_controlled_actor()
       if (!actor) {

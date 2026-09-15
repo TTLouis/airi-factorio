@@ -12,12 +12,20 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.deepEqual(parseOperation({ name: 'follow_player', args: { player_name: 'TTLouis' } }), {
     name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 4 },
   })
+  assert.deepEqual(parseOperation({ name: 'walk_to_player', args: { player_name: 'TTLouis' } }), {
+    name: 'walk_to_player', args: { player_name: 'TTLouis' },
+  })
+  assert.deepEqual(parseOperation({ name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: true } }), {
+    name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: true },
+  })
   assert.deepEqual(parseOperation({ name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 4096 } }), {
     name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 4096 },
   })
   assert.equal(renderOperation({ name: 'wait', args: { ticks: 60 } }), "remote.call('autorio_operations','wait',60)")
   assert.equal(renderOperation({ name: 'place_entity', args: { entity_name: "mod's-chest" } }), "remote.call('autorio_operations','place_entity','mod\\'s-chest')")
   assert.equal(renderOperation({ name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 3.5 } }), "remote.call('autorio_operations','follow_player','TTLouis',3.5)")
+  assert.equal(renderOperation({ name: 'walk_to_player', args: { player_name: 'TTLouis' } }), "remote.call('autorio_operations','walk_to_player','TTLouis')")
+  assert.equal(renderOperation({ name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: true } }), "remote.call('autorio_operations','move_items_with_player','stone','TTLouis',10,true)")
   assert.equal(renderOperation({ name: 'stop_follow_player', args: {} }), "remote.call('autorio_operations','stop_follow_player')")
 })
 
@@ -27,8 +35,10 @@ test('operation policy rejects arbitrary code, extra args, and oversized bounded
     { name: 'wait', args: { ticks: 60, lua: 'game.clear()' } },
     { name: 'wait', args: { ticks: 360001 } },
     { name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 4097 } },
+    { name: 'walk_to_player', args: { player_name: 'TTLouis', search_radius: 10 } },
     { name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 65 } },
     { name: 'follow_player', args: { player_name: 'TTLouis\n/c game.clear()' } },
+    { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: 'yes' } },
     { name: 'stop_follow_player', args: { player_name: 'TTLouis' } },
     { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } },
     { name: 'mine_entity', args: { entity_name: 'iron-ore\n/c game.clear()', count: 1 } },
@@ -53,6 +63,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'getTaskStatus',
     'getInventoryItems',
     'getRecipe',
+    'getPlayerStatus',
     'getNearbyEntities',
     'findLongRangeEntities',
     'getEntityStatus',
@@ -66,6 +77,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
   ])
   for (const tool of toolDefinitions) assert.equal(tool.function.parameters.additionalProperties, false)
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getRecipe').function.parameters.required, ['item'])
+  assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getPlayerStatus').function.parameters.required, ['player_name'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'findLongRangeEntities').function.parameters.required, ['name'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getResearchRequest').function.parameters.required, ['request_id'])
 })
@@ -76,6 +88,7 @@ test('read-only tool renderer targets native actor-aware interfaces without play
   assert.equal(toolCommand('getCraftingStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting","status")))')
   assert.equal(toolCommand('getResearchRequest', { request_id: 42 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","request_result",42)))')
   assert.equal(toolCommand('getRecipe', { item: 'iron-gear-wheel' }), '/silent-command remote.call("autorio_tools","get_recipe",\'iron-gear-wheel\')')
+  assert.equal(toolCommand('getPlayerStatus', { player_name: 'TTLouis' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_player_status",\'TTLouis\')))')
   assert.equal(toolCommand('getNearbyEntities', { radius: 32, name: 'iron-ore', type: 'resource', limit: 25 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_nearby_entities",32,\'iron-ore\',\'resource\',25)))')
   assert.equal(toolCommand('findLongRangeEntities', { name: 'iron-ore', max_radius: 2048, limit: 4 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",\'iron-ore\',2048,4)))')
   assert.equal(toolCommand('findLongRangeEntities', { name: 'copper-ore' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",\'copper-ore\',1024,8)))')
@@ -86,6 +99,8 @@ test('tool calls reject unknown names, unsafe names, extras, and out-of-bound sc
   assert.throws(() => toolCommand('shell', {}))
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate', force: 'enemy' }))
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate\n/c game.clear()' }))
+  assert.throws(() => toolCommand('getPlayerStatus', { player_name: 'TTLouis', force: 'enemy' }))
+  assert.throws(() => toolCommand('getPlayerStatus', { player_name: 'TTLouis\n/c game.clear()' }))
   assert.throws(() => toolCommand('getNearbyEntities', { radius: 65 }))
   assert.throws(() => toolCommand('findLongRangeEntities', { name: 'iron-ore', max_radius: 4097 }))
   assert.throws(() => toolCommand('findLongRangeEntities', { name: 'iron-ore', limit: 17 }))
