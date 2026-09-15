@@ -36,6 +36,7 @@ describe('agent observation tools', () => {
       'findLongRangeEntities',
       'findNearestEnemy',
       'getEntityStatus',
+      'getEntityGeometry',
       'getNavigationStatus',
       'getFollowStatus',
       'getDefenseStatus',
@@ -148,6 +149,19 @@ describe('agent observation tools', () => {
       input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_entity_status", \'wooden-chest\', 8)))',
     } })
   })
+
+  it('renders exact unit-number geometry lookup and rejects invalid ids', async () => {
+    await getTool('getEntityGeometry').fn({ parameters: { unit_number: 4242 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "entity_geometry", 4242)))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getEntityGeometry').fn({ parameters: { unit_number: 0 } })).rejects.toThrow()
+    await expect(getTool('getEntityGeometry').fn({ parameters: { unit_number: 1.5 } })).rejects.toThrow()
+    await expect(getTool('getEntityGeometry').fn({ parameters: { unit_number: 42, radius: 8 } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
 })
 
 describe('navigation and follow observation tools', () => {
@@ -203,8 +217,8 @@ describe('crafting, research, and combat observation tools', () => {
 })
 
 describe('prompt contract', () => {
-  it('documents equipment, discovery, recipe knowledge, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
-    for (const name of ['getEquipmentStatus', 'getRecipeDetails', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+  it('documents equipment, discovery, recipe knowledge, geometry, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
+    for (const name of ['getEquipmentStatus', 'getRecipeDetails', 'getEntityGeometry', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
