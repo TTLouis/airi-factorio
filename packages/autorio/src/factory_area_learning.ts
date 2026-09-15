@@ -54,26 +54,15 @@ export interface FactoryEntityObservation {
     products: Array<{ type: string, name: string, amount?: number }>
   }
   inventories: FactoryInventorySnapshot[]
-  belt?: {
-    inputs: string[]
-    outputs: string[]
-  }
+  belt?: { inputs: string[], outputs: string[] }
   inserter?: {
     pickup_position: { x: number, y: number }
     drop_position: { x: number, y: number }
     pickup_target?: string
     drop_target?: string
   }
-  power?: {
-    status?: unknown
-    energy?: number
-    electric_network_id?: number
-  }
-  mining?: {
-    resources: string[]
-    drop_position?: { x: number, y: number }
-    drop_target?: string
-  }
+  power?: { status?: unknown, energy?: number, electric_network_id?: number }
+  mining?: { resources: string[], drop_position?: { x: number, y: number }, drop_target?: string }
   fluid_connections: Array<{
     fluidbox_index: number
     target?: string
@@ -181,10 +170,7 @@ function valid_bounds(value: any): value is FactoryAreaBounds {
 }
 
 function resolve_area(actor: ControlledActor, request: FactoryAreaLearningRequest): { area: FactoryAreaBounds, center: { x: number, y: number }, half_size: number } | { error: string } {
-  if (request.surface_index !== undefined && request.surface_index !== actor.surface.index) {
-    return { error: 'Factory Area Learning V1 only scans the controlled actor surface' }
-  }
-
+  if (request.surface_index !== undefined && request.surface_index !== actor.surface.index) return { error: 'Factory Area Learning V1 only scans the controlled actor surface' }
   let area: FactoryAreaBounds
   if (request.area !== undefined) {
     if (!valid_bounds(request.area)) return { error: 'area must have finite left_top/right_bottom coordinates with positive size' }
@@ -203,11 +189,7 @@ function resolve_area(actor: ControlledActor, request: FactoryAreaLearningReques
       right_bottom: { x: position.x + radius, y: position.y + radius },
     }
   }
-
-  const center = {
-    x: (area.left_top.x + area.right_bottom.x) / 2,
-    y: (area.left_top.y + area.right_bottom.y) / 2,
-  }
+  const center = { x: (area.left_top.x + area.right_bottom.x) / 2, y: (area.left_top.y + area.right_bottom.y) / 2 }
   const width = area.right_bottom.x - area.left_top.x
   const height = area.right_bottom.y - area.left_top.y
   const half_size = math.max(4, math.min(MAX_RADIUS, math.ceil(math.max(width, height) / 2)))
@@ -220,28 +202,13 @@ function point_in_area(position: { x: number, y: number }, area: FactoryAreaBoun
 }
 
 function relevant_entity(entity: LuaEntity) {
-  return entity.type === 'assembling-machine'
-    || entity.type === 'furnace'
-    || entity.type === 'mining-drill'
-    || entity.type === 'rocket-silo'
-    || entity.type === 'inserter'
-    || entity.type === 'transport-belt'
-    || entity.type === 'underground-belt'
-    || entity.type === 'splitter'
-    || entity.type === 'linked-belt'
-    || entity.type === 'loader'
-    || entity.type === 'loader-1x1'
-    || entity.type === 'container'
-    || entity.type === 'logistic-container'
-    || entity.type === 'infinity-container'
-    || entity.type === 'electric-pole'
-    || entity.type === 'pipe'
-    || entity.type === 'pipe-to-ground'
-    || entity.type === 'storage-tank'
-    || entity.type === 'pump'
-    || entity.type === 'offshore-pump'
-    || entity.type === 'boiler'
-    || entity.type === 'generator'
+  return entity.type === 'assembling-machine' || entity.type === 'furnace' || entity.type === 'mining-drill'
+    || entity.type === 'rocket-silo' || entity.type === 'inserter' || entity.type === 'transport-belt'
+    || entity.type === 'underground-belt' || entity.type === 'splitter' || entity.type === 'linked-belt'
+    || entity.type === 'loader' || entity.type === 'loader-1x1' || entity.type === 'container'
+    || entity.type === 'logistic-container' || entity.type === 'infinity-container' || entity.type === 'electric-pole'
+    || entity.type === 'pipe' || entity.type === 'pipe-to-ground' || entity.type === 'storage-tank'
+    || entity.type === 'pump' || entity.type === 'offshore-pump' || entity.type === 'boiler' || entity.type === 'generator'
 }
 
 function entity_category(entity: LuaEntity) {
@@ -277,31 +244,28 @@ function sort_entities(values: LuaEntity[]) {
 function recipe_summary(entity: LuaEntity) {
   const get_recipe = (entity as any).get_recipe
   if (typeof get_recipe !== 'function') return undefined
-  const recipe = get_recipe.call(entity)
+  const recipe = get_recipe(entity)
   if (!recipe) return undefined
   const ingredients: Array<{ type: string, name: string, amount?: number }> = []
   for (const ingredient of recipe.ingredients ?? []) {
-    if (typeof ingredient?.name !== 'string') continue
-    ingredients.push({ type: ingredient.type ?? 'item', name: ingredient.name, amount: ingredient.amount })
+    if (typeof ingredient?.name === 'string') ingredients.push({ type: ingredient.type ?? 'item', name: ingredient.name, amount: ingredient.amount })
   }
   const products: Array<{ type: string, name: string, amount?: number }> = []
   for (const product of recipe.products ?? []) {
-    if (typeof product?.name !== 'string') continue
-    products.push({ type: product.type ?? 'item', name: product.name, amount: product.amount })
+    if (typeof product?.name === 'string') products.push({ type: product.type ?? 'item', name: product.name, amount: product.amount })
   }
   return { name: recipe.name, ingredients, products }
 }
 
 function inventory_items(inventory: any) {
   if (!inventory || inventory.valid === false || typeof inventory.get_contents !== 'function') return []
-  const contents = inventory.get_contents()
+  const contents: any = inventory.get_contents()
   const result: Array<{ name: string, count: number }> = []
-  for (const [key, value] of pairs(contents as any)) {
+  for (const key in contents) {
     if (result.length >= MAX_INVENTORY_ITEMS) break
-    if (typeof value === 'number' && value > 0) result.push({ name: String(key), count: value })
-    else if (value && typeof value === 'object' && typeof (value as any).name === 'string' && typeof (value as any).count === 'number' && (value as any).count > 0) {
-      result.push({ name: (value as any).name, count: (value as any).count })
-    }
+    const value = contents[key]
+    if (typeof value === 'number' && value > 0) result.push({ name: key, count: value })
+    else if (value && typeof value === 'object' && typeof value.name === 'string' && typeof value.count === 'number' && value.count > 0) result.push({ name: value.name, count: value.count })
   }
   return result
 }
@@ -311,9 +275,7 @@ function inventory_snapshots(entity: LuaEntity) {
   if (typeof get_inventory !== 'function') return []
   const slots: Array<{ role: string, id: any }> = []
   const inventory_defines = (defines.inventory as any)
-  function add(role: string, id: any) {
-    if (id !== undefined) slots.push({ role, id })
-  }
+  function add(role: string, id: any) { if (id !== undefined) slots.push({ role, id }) }
   if (entity.type === 'assembling-machine' || entity.type === 'rocket-silo') {
     add('input', inventory_defines.crafter_input)
     add('output', inventory_defines.crafter_output)
@@ -323,38 +285,28 @@ function inventory_snapshots(entity: LuaEntity) {
     add('output', inventory_defines.furnace_result)
   }
   else if (entity.type === 'container' || entity.type === 'logistic-container' || entity.type === 'infinity-container') add('storage', inventory_defines.chest)
-
   const result: FactoryInventorySnapshot[] = []
   for (const slot of slots) {
-    const items = inventory_items(get_inventory.call(entity, slot.id))
+    const items = inventory_items(get_inventory(entity, slot.id))
     if (items.length > 0) result.push({ role: slot.role, items })
   }
   return result
 }
 
 function belt_connectable(entity: LuaEntity) {
-  return entity.type === 'transport-belt'
-    || entity.type === 'underground-belt'
-    || entity.type === 'splitter'
-    || entity.type === 'loader'
-    || entity.type === 'loader-1x1'
-    || entity.type === 'linked-belt'
+  return entity.type === 'transport-belt' || entity.type === 'underground-belt' || entity.type === 'splitter'
+    || entity.type === 'loader' || entity.type === 'loader-1x1' || entity.type === 'linked-belt'
 }
 
 function target_id(entity: LuaEntity | undefined) {
-  if (!entity || !entity.valid) return undefined
-  return entity_id(entity)
+  return entity?.valid ? entity_id(entity) : undefined
 }
 
 function mining_resources(entity: LuaEntity) {
   if (entity.type !== 'mining-drill') return []
   const matches = entity.surface.find_entities_filtered({ area: entity.bounding_box, type: 'resource', limit: MAX_RESOURCE_MATCHES })
   const names: string[] = []
-  for (const resource of matches) {
-    let seen = false
-    for (const name of names) if (name === resource.name) seen = true
-    if (!seen) names.push(resource.name)
-  }
+  for (const resource of matches) if (!names.includes(resource.name)) names.push(resource.name)
   names.sort()
   return names
 }
@@ -367,12 +319,7 @@ function fluid_connections(entity: LuaEntity) {
     const connections = fluidbox.get_pipe_connections(index) ?? []
     for (const connection of connections) {
       if (result.length >= MAX_FLUID_CONNECTIONS) break
-      result.push({
-        fluidbox_index: index,
-        target: target_id(connection.target?.owner),
-        flow_direction: connection.flow_direction,
-        connection_type: connection.connection_type,
-      })
+      result.push({ fluidbox_index: index, target: target_id(connection.target?.owner), flow_direction: connection.flow_direction, connection_type: connection.connection_type })
     }
   }
   return result
@@ -381,18 +328,10 @@ function fluid_connections(entity: LuaEntity) {
 function observation(entity: LuaEntity): FactoryEntityObservation {
   const recipe = recipe_summary(entity)
   const belt = belt_connectable(entity)
-    ? {
-        inputs: (entity.belt_neighbours?.inputs ?? []).map(target => entity_id(target)),
-        outputs: (entity.belt_neighbours?.outputs ?? []).map(target => entity_id(target)),
-      }
+    ? { inputs: (entity.belt_neighbours?.inputs ?? []).map(target => entity_id(target)), outputs: (entity.belt_neighbours?.outputs ?? []).map(target => entity_id(target)) }
     : undefined
   const inserter = entity.type === 'inserter'
-    ? {
-        pickup_position: entity.pickup_position,
-        drop_position: entity.drop_position,
-        pickup_target: target_id(entity.pickup_target),
-        drop_target: target_id(entity.drop_target),
-      }
+    ? { pickup_position: entity.pickup_position, drop_position: entity.drop_position, pickup_target: target_id(entity.pickup_target), drop_target: target_id(entity.drop_target) }
     : undefined
   const resources = mining_resources(entity)
   const mining = entity.type === 'mining-drill'
@@ -402,23 +341,10 @@ function observation(entity: LuaEntity): FactoryEntityObservation {
   const power = entity.type === 'electric-pole' || entity.type === 'assembling-machine' || entity.type === 'furnace' || entity.type === 'mining-drill'
     ? { status: raw.status, energy: typeof raw.energy === 'number' ? raw.energy : undefined, electric_network_id: typeof raw.electric_network_id === 'number' ? raw.electric_network_id : undefined }
     : undefined
-
   return {
-    id: entity_id(entity),
-    name: entity.name,
-    type: entity.type,
-    category: entity_category(entity),
-    unit_number: entity.unit_number,
-    position: { x: entity.position.x, y: entity.position.y },
-    direction: entity.direction as number,
-    footprint: entity.bounding_box,
-    recipe,
-    inventories: inventory_snapshots(entity),
-    belt,
-    inserter,
-    power,
-    mining,
-    fluid_connections: fluid_connections(entity),
+    id: entity_id(entity), name: entity.name, type: entity.type, category: entity_category(entity), unit_number: entity.unit_number,
+    position: { x: entity.position.x, y: entity.position.y }, direction: entity.direction as number, footprint: entity.bounding_box,
+    recipe, inventories: inventory_snapshots(entity), belt, inserter, power, mining, fluid_connections: fluid_connections(entity),
   }
 }
 
@@ -442,15 +368,7 @@ function material_intersection(from: FactoryEntityObservation | undefined, to: F
   const outputs = recipe_outputs(from)
   const inputs = recipe_inputs(to)
   const result: string[] = []
-  for (const output of outputs) {
-    for (const input of inputs) {
-      if (output === input) {
-        let seen = false
-        for (const existing of result) if (existing === output) seen = true
-        if (!seen) result.push(output)
-      }
-    }
-  }
+  for (const output of outputs) for (const input of inputs) if (output === input && !result.includes(output)) result.push(output)
   result.sort()
   return result
 }
@@ -463,30 +381,16 @@ function build_relations(live_entities: LuaEntity[], entities: FactoryEntityObse
   const result: FactoryGraphRelation[] = []
   const seen: Record<string, boolean> = {}
   let truncated = false
-
   function add(kind: FactoryRelationKind, from: string | undefined, to: string | undefined, via: string | undefined, description: string, forced_items?: string[]) {
-    const probe = { kind, from, to, via }
-    const key = relation_key(probe)
+    const key = relation_key({ kind, from, to, via })
     if (seen[key]) return
     seen[key] = true
-    if (result.length >= MAX_RELATIONS) {
-      truncated = true
-      return
-    }
-    const from_entity = find_observation(entities, from)
-    const to_entity = find_observation(entities, to)
-    const items = forced_items ?? material_intersection(from_entity, to_entity)
+    if (result.length >= MAX_RELATIONS) { truncated = true; return }
+    const items = forced_items ?? material_intersection(find_observation(entities, from), find_observation(entities, to))
     result.push({
-      id: `relation-${result.length + 1}`,
-      kind,
-      from,
-      to,
-      via,
-      item_names: items,
-      confidence: 'engine_exact',
+      id: `relation-${result.length + 1}`, kind, from, to, via, item_names: items, confidence: 'engine_exact',
       item_confidence: items.length > 0 ? 'recipe_inferred' : kind === 'fluid_connection' ? 'not_applicable' : 'ambiguous',
-      evidence_refs: [`engine:${kind}:${from ?? 'outside'}:${via ?? 'none'}:${to ?? 'outside'}`],
-      description,
+      evidence_refs: [`engine:${kind}:${from ?? 'outside'}:${via ?? 'none'}:${to ?? 'outside'}`], description,
     })
   }
 
@@ -505,7 +409,6 @@ function build_relations(live_entities: LuaEntity[], entities: FactoryEntityObse
         else add('boundary_output', id, output_id, undefined, 'Belt leaves the selected area toward an external neighbour.')
       }
     }
-
     if (entity.type === 'inserter') {
       const pickup = entity.pickup_target
       const drop = entity.drop_target
@@ -520,27 +423,21 @@ function build_relations(live_entities: LuaEntity[], entities: FactoryEntityObse
       else if (!pickup_inside && drop_inside) add('boundary_input', pickup_id, drop_id, id, 'Inserter picks up outside the selected area and drops into the block.')
       else if (pickup_inside && !drop_inside) add('boundary_output', pickup_id, drop_id, id, 'Inserter picks up inside the selected area and drops outside it.')
     }
-
     if (entity.type === 'mining-drill' && entity.drop_target?.valid) {
       const drop_id = entity_id(entity.drop_target)
       if (point_in_area(entity.drop_target.position, area) && find_observation(entities, drop_id)) add('direct_item_output', id, drop_id, undefined, 'Mining drill engine drop target is inside the selected area.', mining_resources(entity))
       else add('boundary_output', id, drop_id, undefined, 'Mining drill engine drop target is outside the selected area.', mining_resources(entity))
     }
-
     const fluidbox: any = (entity as any).fluidbox
     if (fluidbox && typeof fluidbox.length === 'number' && typeof fluidbox.get_pipe_connections === 'function') {
       for (let index = 1; index <= fluidbox.length; index++) {
-        const connections = fluidbox.get_pipe_connections(index) ?? []
-        for (const connection of connections) {
+        for (const connection of fluidbox.get_pipe_connections(index) ?? []) {
           const target = connection.target?.owner as LuaEntity | undefined
-          if (!target?.valid) continue
-          const target_key = entity_id(target)
-          if (point_in_area(target.position, area) && find_observation(entities, target_key)) add('fluid_connection', id, target_key, undefined, 'Engine-confirmed fluidbox connection.')
+          if (target?.valid && point_in_area(target.position, area) && find_observation(entities, entity_id(target))) add('fluid_connection', id, entity_id(target), undefined, 'Engine-confirmed fluidbox connection.')
         }
       }
     }
   }
-
   return { relations: result, truncated }
 }
 
@@ -574,11 +471,7 @@ function build_blocks(entities: FactoryEntityObservation[], relations: FactoryGr
   for (const relation of relations) {
     if (!is_internal_relation(relation)) continue
     const nodes = relation_nodes(relation).filter(id => find_observation(entities, id) !== undefined)
-    for (const a of nodes) {
-      for (const b of nodes) {
-        if (a !== b && !contains(adjacency[a], b)) adjacency[a].push(b)
-      }
-    }
+    for (const a of nodes) for (const b of nodes) if (a !== b && !contains(adjacency[a], b)) adjacency[a].push(b)
   }
 
   const visited: Record<string, boolean> = {}
@@ -592,35 +485,23 @@ function build_blocks(entities: FactoryEntityObservation[], relations: FactoryGr
     while (queue.length > 0) {
       const current = queue.shift()!
       component.push(current)
-      for (const neighbour of adjacency[current] ?? []) {
-        if (!visited[neighbour]) {
-          visited[neighbour] = true
-          queue.push(neighbour)
-        }
-      }
+      for (const neighbour of adjacency[current] ?? []) if (!visited[neighbour]) { visited[neighbour] = true; queue.push(neighbour) }
     }
-
     const component_entities = component.map(id => find_observation(entities, id)!).filter(value => value !== undefined)
     const machines = component_entities.filter(entity => entity.category === 'machine' && (entity.recipe !== undefined || entity.mining !== undefined))
     if (machines.length === 0) continue
-    if (blocks.length >= MAX_BLOCKS) {
-      truncated = true
-      break
-    }
+    if (blocks.length >= MAX_BLOCKS) { truncated = true; break }
 
     const relation_ids: string[] = []
     const boundary_inputs: string[] = []
     const boundary_outputs: string[] = []
     const ambiguities: string[] = []
     for (const relation of relations) {
-      const touches = (relation.from !== undefined && contains(component, relation.from))
-        || (relation.to !== undefined && contains(component, relation.to))
-        || (relation.via !== undefined && contains(component, relation.via))
+      const touches = (relation.from !== undefined && contains(component, relation.from)) || (relation.to !== undefined && contains(component, relation.to)) || (relation.via !== undefined && contains(component, relation.via))
       if (!touches) continue
       if (is_internal_relation(relation)) {
-        const nodes = relation_nodes(relation)
         let all_inside = true
-        for (const node of nodes) if (find_observation(entities, node) !== undefined && !contains(component, node)) all_inside = false
+        for (const node of relation_nodes(relation)) if (find_observation(entities, node) !== undefined && !contains(component, node)) all_inside = false
         if (all_inside) relation_ids.push(relation.id)
       }
       else if (relation.kind === 'boundary_input') {
@@ -653,30 +534,17 @@ function build_blocks(entities: FactoryEntityObservation[], relations: FactoryGr
       if (contains(produced, item)) intermediates.push(item)
       else inputs.push(item)
     }
-    for (const item of unique_sorted(produced)) {
-      if (!contains(consumed, item)) outputs.push(item)
-    }
+    for (const item of unique_sorted(produced)) if (!contains(consumed, item)) outputs.push(item)
     for (const item of unique_sorted(boundary_inputs)) if (!contains(inputs, item) && !contains(intermediates, item)) inputs.push(item)
     for (const item of unique_sorted(boundary_outputs)) if (!contains(outputs, item) && !contains(intermediates, item)) outputs.push(item)
-    inputs.sort()
-    intermediates.sort()
-    outputs.sort()
-
+    inputs.sort(); intermediates.sort(); outputs.sort()
     const title_items = outputs.length > 0 ? outputs : recipe_ids
-    const title = title_items.length > 0 ? `${title_items.join(' + ')} production` : `Observed production block ${blocks.length + 1}`
     blocks.push({
       id: `block-${blocks.length + 1}`,
-      title,
-      entity_ids: component,
-      relation_ids: unique_sorted(relation_ids),
-      recipe_ids: unique_sorted(recipe_ids),
-      inputs: unique_sorted(inputs),
-      intermediates: unique_sorted(intermediates),
-      outputs: unique_sorted(outputs),
-      machine_ids: machines.map(machine => machine.id),
-      boundary_inputs: unique_sorted(boundary_inputs),
-      boundary_outputs: unique_sorted(boundary_outputs),
-      ambiguities: unique_sorted(ambiguities),
+      title: title_items.length > 0 ? `${title_items.join(' + ')} production` : `Observed production block ${blocks.length + 1}`,
+      entity_ids: component, relation_ids: unique_sorted(relation_ids), recipe_ids: unique_sorted(recipe_ids), inputs: unique_sorted(inputs),
+      intermediates: unique_sorted(intermediates), outputs: unique_sorted(outputs), machine_ids: machines.map(machine => machine.id),
+      boundary_inputs: unique_sorted(boundary_inputs), boundary_outputs: unique_sorted(boundary_outputs), ambiguities: unique_sorted(ambiguities),
     })
   }
   return { blocks, truncated }
@@ -693,14 +561,11 @@ function store_analysis(analysis: FactoryAreaAnalysis) {
   }
 }
 
-export function get_factory_area_analysis(id: string) {
-  return analyses()[id]
-}
+export function get_factory_area_analysis(id: string) { return analyses()[id] }
 
 export function latest_factory_area_analysis() {
   const order = analysis_order()
-  if (order.length === 0) return undefined
-  return analyses()[order[order.length - 1]]
+  return order.length > 0 ? analyses()[order[order.length - 1]] : undefined
 }
 
 function block_summary(analysis: FactoryAreaAnalysis, block: FactoryProductionBlock): FactoryBlockSummary {
@@ -710,30 +575,20 @@ function block_summary(analysis: FactoryAreaAnalysis, block: FactoryProductionBl
     if (entity) machines.push(entity.recipe ? `${entity.name}:${entity.recipe.name}` : entity.name)
   }
   return {
-    analysis_id: analysis.id,
-    block_id: block.id,
-    title: block.title,
-    inputs: block.inputs,
-    intermediates: block.intermediates,
-    outputs: block.outputs,
-    recipes: block.recipe_ids,
-    machines,
-    relation_count: block.relation_ids.length,
-    ambiguities: block.ambiguities,
+    analysis_id: analysis.id, block_id: block.id, title: block.title, inputs: block.inputs, intermediates: block.intermediates,
+    outputs: block.outputs, recipes: block.recipe_ids, machines, relation_count: block.relation_ids.length, ambiguities: block.ambiguities,
   }
 }
 
 export function list_analyzed_blocks(analysis_id?: string) {
   const analysis = analysis_id ? get_factory_area_analysis(analysis_id) : latest_factory_area_analysis()
-  if (!analysis) return []
-  return analysis.blocks.map(block => block_summary(analysis, block))
+  return analysis ? analysis.blocks.map(block => block_summary(analysis, block)) : []
 }
 
 export function analyze_factory_area(actor: ControlledActor, request: FactoryAreaLearningRequest = {}) {
   if (!actor || !actor.is_valid) return { ok: false as const, error: 'controlled actor is unavailable' }
   const resolved = resolve_area(actor, request)
   if ('error' in resolved) return { ok: false as const, error: resolved.error }
-
   const spatial: any = local_spatial_observation(actor, { position: resolved.center, half_size: resolved.half_size })
   if (!spatial?.ok) return { ok: false as const, error: spatial?.error ?? 'local spatial observation failed' }
   const matches = actor.surface.find_entities_filtered({ area: resolved.area })
@@ -747,65 +602,47 @@ export function analyze_factory_area(actor: ControlledActor, request: FactoryAre
   const graph = build_relations(relevant, entities, resolved.area)
   const grouped = build_blocks(entities, graph.relations)
   const analysis: FactoryAreaAnalysis = {
-    schema_version: 1,
-    id: next_analysis_id(),
-    tick: game.tick,
-    surface_index: actor.surface.index,
-    surface_name: actor.surface.name,
-    area: resolved.area,
-    spatial_source: 'local_spatial_observation',
-    spatial: {
-      center: spatial.center,
-      bounds: spatial.bounds,
-      blocking_terrain: spatial.blocking_terrain,
-      entities_truncated: spatial.entities_truncated === true || matches.length > MAX_ENTITIES,
-    },
-    entities,
-    relations: graph.relations,
-    blocks: grouped.blocks,
-    entity_count: entities.length,
-    relations_truncated: graph.truncated,
-    blocks_truncated: grouped.truncated,
+    schema_version: 1, id: next_analysis_id(), tick: game.tick, surface_index: actor.surface.index, surface_name: actor.surface.name,
+    area: resolved.area, spatial_source: 'local_spatial_observation',
+    spatial: { center: spatial.center, bounds: spatial.bounds, blocking_terrain: spatial.blocking_terrain, entities_truncated: spatial.entities_truncated === true || matches.length > MAX_ENTITIES },
+    entities, relations: graph.relations, blocks: grouped.blocks, entity_count: entities.length, relations_truncated: graph.truncated, blocks_truncated: grouped.truncated,
   }
   store_analysis(analysis)
   return {
-    ok: true as const,
-    analysis_id: analysis.id,
-    tick: analysis.tick,
-    surface_index: analysis.surface_index,
-    area: analysis.area,
-    spatial_source: analysis.spatial_source,
-    entity_count: analysis.entity_count,
-    relation_count: analysis.relations.length,
-    blocks: analysis.blocks.map(block => block_summary(analysis, block)),
-    entities_truncated: analysis.spatial.entities_truncated,
-    relations_truncated: analysis.relations_truncated,
-    blocks_truncated: analysis.blocks_truncated,
+    ok: true as const, analysis_id: analysis.id, tick: analysis.tick, surface_index: analysis.surface_index, area: analysis.area,
+    spatial_source: analysis.spatial_source, entity_count: analysis.entity_count, relation_count: analysis.relations.length,
+    blocks: analysis.blocks.map(block => block_summary(analysis, block)), entities_truncated: analysis.spatial.entities_truncated,
+    relations_truncated: analysis.relations_truncated, blocks_truncated: analysis.blocks_truncated,
   }
+}
+
+function ascii_lower(value: string) {
+  const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  const lower = 'abcdefghijklmnopqrstuvwxyz'
+  let result = ''
+  for (const character of value.split('')) {
+    const index = upper.indexOf(character)
+    result += index >= 0 ? lower[index] : character
+  }
+  return result
 }
 
 function slug(value: string) {
   let result = ''
   let previous_dash = false
-  for (const raw of value.toLocaleLowerCase().split('')) {
+  for (const raw of ascii_lower(value).split('')) {
     const allowed = 'abcdefghijklmnopqrstuvwxyz0123456789'.includes(raw)
-    if (allowed) {
-      result += raw
-      previous_dash = false
-    }
-    else if (!previous_dash && result.length > 0) {
-      result += '-'
-      previous_dash = true
-    }
+    if (allowed) { result += raw; previous_dash = false }
+    else if (!previous_dash && result.length > 0) { result += '-'; previous_dash = true }
+    if (result.length >= 60) break
   }
   while (result.endsWith('-')) result = result.slice(0, -1)
   return result || 'observed-factory-block'
 }
 
 function human_name(value: string) {
-  const words = value.split('-')
   const result: string[] = []
-  for (const word of words) result.push(word.length > 0 ? `${word.slice(0, 1).toUpperCase()}${word.slice(1)}` : word)
+  for (const word of value.split('-')) result.push(word.length > 0 ? `${word.slice(0, 1).toUpperCase()}${word.slice(1)}` : word)
   return result.join(' ')
 }
 
@@ -828,25 +665,18 @@ function abstract_topology(analysis: FactoryAreaAnalysis, block: FactoryProducti
     ids[entity.id] = id
     const role = entity.recipe
       ? `Produce ${entity.recipe.products.map(product => product.name).join(', ') || entity.recipe.name}`
-      : entity.category === 'inserter'
-        ? 'Transfer items between connected entities'
-        : entity.category === 'belt' || entity.category === 'loader'
-          ? 'Transport items through the production block'
-          : entity.category === 'storage'
-            ? 'Buffer or collect items'
-            : entity.category === 'machine' && entity.mining
-              ? `Mine ${entity.mining.resources.join(', ') || 'resource'}`
-              : `Observed ${entity.category}`
+      : entity.category === 'inserter' ? 'Transfer items between connected entities'
+        : entity.category === 'belt' || entity.category === 'loader' ? 'Transport items through the production block'
+          : entity.category === 'storage' ? 'Buffer or collect items'
+            : entity.category === 'machine' && entity.mining ? `Mine ${entity.mining.resources.join(', ') || 'resource'}` : `Observed ${entity.category}`
     nodes.push({ id, role, entity_name: entity.name, recipe: entity.recipe?.name })
   }
-
   for (const relation_id of block.relation_ids) {
     let relation: FactoryGraphRelation | undefined
     for (const candidate of analysis.relations) if (candidate.id === relation_id) relation = candidate
     if (!relation || relation.kind === 'boundary_input' || relation.kind === 'boundary_output') continue
-    const kind = relation.kind
     relations.push({
-      kind,
+      kind: relation.kind,
       from: relation.from ? ids[relation.from] : undefined,
       to: relation.to ? ids[relation.to] : undefined,
       via: relation.via ? ids[relation.via] : undefined,
@@ -862,82 +692,42 @@ export function skill_candidate_definition_from_block(analysis_id: string, block
   const block = find_block(analysis, block_id)
   if (!block) throw new Error(`unknown factory block: ${block_id}`)
   if (revision < 1 || math.floor(revision) !== revision) throw new Error('revision must be a positive integer')
-
   const primary = block.outputs[0] ?? block.recipe_ids[block.recipe_ids.length - 1] ?? `${analysis.id}-${block.id}`
-  const skill_id = `${slug(primary)}-production`
   const topology = abstract_topology(analysis, block)
   const evidence_refs: string[] = [`factory-analysis:${analysis.id}`, `factory-block:${analysis.id}:${block.id}`]
-  for (const relation_id of block.relation_ids) {
-    for (const relation of analysis.relations) {
-      if (relation.id === relation_id) evidence_refs.push(...relation.evidence_refs)
-    }
-  }
-
+  for (const relation_id of block.relation_ids) for (const relation of analysis.relations) if (relation.id === relation_id) evidence_refs.push(...relation.evidence_refs)
   const unit_numbers: number[] = []
   for (const entity_id_value of block.entity_ids) {
     const entity = find_observation(analysis.entities, entity_id_value)
     if (entity?.unit_number !== undefined) unit_numbers.push(entity.unit_number)
   }
-  const preconditions = block.inputs.map(item => ({
-    kind: 'item_available' as const,
-    subject: item,
-    description: `${item} must be available as an external input to the observed production relationship.`,
-  }))
   const ambiguity_failure = block.ambiguities.length > 0
     ? ['Some selected-area boundary transport has proven direction but ambiguous item identity; re-observe before assuming those boundary items elsewhere.']
     : []
-
   return {
-    schema_version: 1,
-    revision,
-    id: skill_id,
-    name: `${human_name(primary)} Production`,
-    kind: 'production',
-    stage: 'executable_candidate',
-    status: 'candidate',
+    schema_version: 1, revision, id: `${slug(primary)}-production`, name: `${human_name(primary)} Production`, kind: 'production',
+    stage: 'executable_candidate', status: 'candidate',
     summary: `Candidate production relationship reverse-engineered deterministically from an observed factory block with ${block.recipe_ids.length} recipe(s).`,
     source: {
-      kind: 'observed_factory',
-      observed_tick: analysis.tick,
-      area: {
-        surface_index: analysis.surface_index,
-        left_top: analysis.area.left_top,
-        right_bottom: analysis.area.right_bottom,
-      },
-      entity_unit_numbers: unit_numbers.slice(0, 64),
-      recipe_ids: block.recipe_ids,
-      evidence_refs: unique_sorted(evidence_refs).slice(0, 64),
+      kind: 'observed_factory', observed_tick: analysis.tick,
+      area: { surface_index: analysis.surface_index, left_top: analysis.area.left_top, right_bottom: analysis.area.right_bottom },
+      entity_unit_numbers: unit_numbers.slice(0, 64), recipe_ids: block.recipe_ids, evidence_refs: unique_sorted(evidence_refs).slice(0, 64),
     },
-    preconditions,
+    preconditions: block.inputs.map(item => ({ kind: 'item_available' as const, subject: item, description: `${item} must be available as an external input to the observed production relationship.` })),
     inputs: block.inputs.map(item => ({ item, role: 'external input inferred from observed recipe scope' })),
     outputs: block.outputs.map(item => ({ item, role: 'finished output inferred from observed recipe scope' })),
     topology,
     constraints: [
-      {
-        kind: 'placement',
-        description: 'Absolute observed coordinates are provenance only; this V1 candidate has not been rebuilt at a new location.',
-        validation: 'unvalidated',
-        evidence_refs: [`factory-analysis:${analysis.id}`],
-      },
-      {
-        kind: 'capacity',
-        description: 'Inserter sustained throughput was not measured by Factory Area Learning V1.',
-        validation: 'unvalidated',
-        evidence_refs: [],
-      },
+      { kind: 'placement', description: 'Absolute observed coordinates are provenance only; this V1 candidate has not been rebuilt at a new location.', validation: 'unvalidated', evidence_refs: [`factory-analysis:${analysis.id}`] },
+      { kind: 'capacity', description: 'Inserter sustained throughput was not measured by Factory Area Learning V1.', validation: 'unvalidated', evidence_refs: [] },
     ],
     parameters: [
       { name: 'input_routing', description: 'Provide the required external inputs while preserving the learned material-flow relationships.', required: true },
       { name: 'output_routing', description: 'Route the learned output away from the final producer or output transport.', required: false },
     ],
     verification: {
-      structural: 'passed',
-      recipe_flow: block.recipe_ids.length > 0 ? 'passed' : 'not_tested',
-      placement_rebuild: 'not_tested',
-      production_output: 'not_tested',
-      belt_capacity: 'not_tested',
-      inserter_sustained_throughput: 'unvalidated',
-      acceptance_conditions: [],
+      structural: 'passed', recipe_flow: block.recipe_ids.length > 0 ? 'passed' : 'not_tested', placement_rebuild: 'not_tested',
+      production_output: 'not_tested', belt_capacity: 'not_tested', inserter_sustained_throughput: 'unvalidated', acceptance_conditions: [],
     },
     known_failure_modes: [
       'Observed connectivity does not prove spare throughput or sustained rate under a different layout.',
