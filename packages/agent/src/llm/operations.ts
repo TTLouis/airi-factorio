@@ -108,6 +108,12 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     }).strict(),
   }).strict(),
   z.object({
+    name: z.literal('clear_enemy_area'),
+    args: z.object({
+      search_radius: combatSearchRadius.default(96),
+    }).strict(),
+  }).strict(),
+  z.object({
     name: z.literal('research_technology'),
     args: z.object({
       technology_name: factorioNameSchema,
@@ -146,6 +152,7 @@ const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]move_items_with_player['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]craft_item['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]attack_nearest_enemy['"](?:${separator}${positiveInteger})?${callEnd}`),
+  new RegExp(`${callStart}['"]clear_enemy_area['"](?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]research_technology['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]wait['"]${separator}${positiveInteger}${callEnd}`),
 ]
@@ -200,6 +207,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'craft_item', ${renderLuaString(operation.args.item_name)}, ${operation.args.count})`
     case 'attack_nearest_enemy':
       return `remote.call('autorio_operations', 'attack_nearest_enemy', ${operation.args.search_radius})`
+    case 'clear_enemy_area':
+      return `remote.call('autorio_operations', 'clear_enemy_area', ${operation.args.search_radius})`
     case 'research_technology':
       return `remote.call('autorio_operations', 'research_technology', ${renderLuaString(operation.args.technology_name)})`
     case 'wait':
