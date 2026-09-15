@@ -16,6 +16,7 @@ const WAYPOINT_REACHED_DISTANCE = 0.5
 const TARGET_REACHED_DISTANCE = 2.5
 const TARGET_REPATH_DISTANCE = 4
 const PROGRESS_DISTANCE = 0.25
+const MAX_PLAYER_REACH_DISTANCE = 64
 
 type NavigationCode = 'started' | 'reached' | 'no_actor' | 'invalid_radius' | 'invalid_entity_name'
   | 'no_target' | 'actor_changed' | 'target_gone' | 'path_start_unavailable'
@@ -140,12 +141,13 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     return { actor, identity }
   }
 
-  function make_task(actor: ControlledActor, identity: ReturnType<ControlledActor['status_snapshot']>, entity_name: string, search_radius: number, target_player_name?: string): PlayerParametersWalkToEntity {
+  function make_task(actor: ControlledActor, identity: ReturnType<ControlledActor['status_snapshot']>, entity_name: string, search_radius: number, target_player_name?: string, reach_distance?: number): PlayerParametersWalkToEntity {
     return {
       type: TaskStates.WALKING_TO_ENTITY,
       entity_name,
       search_radius,
       target_player_name,
+      reach_distance,
       path: null,
       path_drawn: false,
       path_index: 1,
@@ -175,9 +177,12 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     return true
   }
 
-  function submit_player(player_name: string): [boolean, string] {
+  function submit_player(player_name: string, reach_distance: number = TARGET_REACHED_DISTANCE): [boolean, string] {
     if (typeof player_name !== 'string' || player_name.length === 0) {
       return [false, 'player_name is required']
+    }
+    if (typeof reach_distance !== 'number' || reach_distance !== reach_distance || reach_distance < 1 || reach_distance > MAX_PLAYER_REACH_DISTANCE) {
+      return [false, 'reach_distance must be from 1 to 64']
     }
     const resolved = actor_for_submission()
     if (!resolved || resolved.identity.actor_id === undefined) return [false, 'No controlled actor']
@@ -190,7 +195,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       record(resolved.actor, undefined, false, false, 'different_surface')
       return [false, 'Player is on a different surface']
     }
-    manager.add_task(make_task(resolved.actor, resolved.identity, player.character.name, MAX_SEARCH_RADIUS, player_name))
+    manager.add_task(make_task(resolved.actor, resolved.identity, player.character.name, MAX_SEARCH_RADIUS, player_name, reach_distance))
     return [true, 'Task started']
   }
 
@@ -425,7 +430,8 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return
     }
 
-    if (distance(actor.position, target.position) <= TARGET_REACHED_DISTANCE) {
+    const reach_distance = task.reach_distance ?? TARGET_REACHED_DISTANCE
+    if (distance(actor.position, target.position) <= reach_distance) {
       complete(actor, task)
       return
     }
@@ -462,6 +468,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       task_active: manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY,
       actor: actor?.status_snapshot(),
       player_name: task?.target_player_name,
+      reach_distance: task?.reach_distance,
       target: target && target.valid
         ? {
             name: target.name,
