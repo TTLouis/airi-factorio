@@ -38,6 +38,12 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     args: z.object({}).strict(),
   }).strict(),
   z.object({
+    name: z.literal('set_auto_defense'),
+    args: z.object({
+      enabled: z.boolean(),
+    }).strict(),
+  }).strict(),
+  z.object({
     name: z.literal('equip_weapon'),
     args: z.object({
       item_name: factorioNameSchema,
@@ -142,6 +148,7 @@ const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]walk_to_player['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]follow_player['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]stop_follow_player['"]${callEnd}`),
+  new RegExp(`${callStart}['"]set_auto_defense['"]${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]equip_weapon['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]equip_ammo['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]equip_armor['"]${separator}${quotedSafeName}${callEnd}`),
@@ -187,6 +194,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'follow_player', ${renderLuaString(operation.args.player_name)}, ${operation.args.follow_distance})`
     case 'stop_follow_player':
       return `remote.call('autorio_operations', 'stop_follow_player')`
+    case 'set_auto_defense':
+      return `remote.call('autorio_operations', 'set_auto_defense', ${operation.args.enabled})`
     case 'equip_weapon':
       return `remote.call('autorio_operations', 'equip_weapon', ${renderLuaString(operation.args.item_name)}, ${operation.args.slot})`
     case 'equip_ammo':
