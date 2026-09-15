@@ -9,20 +9,27 @@ import type {
 
 import type { ControlledActor } from './actors/types'
 import { get_controlled_actor } from './actors/actor_controller'
+import { new_awareness_controller } from './awareness'
 import { new_basic_operation_runtime } from './basic_operation_runtime'
 import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
 import { new_crafting_controller } from './crafting'
+import { new_defense_controller } from './defense'
 import { create_discovery_remote_interface } from './discovery'
+import { new_equipment_controller } from './equipment'
+import { new_follow_controller } from './follow'
+import { new_interaction_recovery } from './interaction_recovery'
 import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
 import { new_navigation_obstacle_recovery } from './navigation_obstacle_recovery'
+import { create_production_planning_remote_interface } from './production_planning_remote'
 import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
+import { new_recipe_configuration_runtime } from './recipe_configuration'
 import { new_research_controller } from './research'
 import { with_research_trigger } from './research_trigger'
 import { new_swarm_runtime_service } from './swarm/runtime_service'
-import { create_task_board_ui_remote_interface } from './task_board_ui'
 import { new_task_manager } from './task_manager'
+import { create_task_board_ui_remote_interface } from './task_board_ui'
 import { create_tools_remote_interface } from './tools'
 import { TaskStates } from './types'
 import { direction_towards } from './utils/direction'
@@ -32,18 +39,28 @@ create_tools_remote_interface()
 create_discovery_remote_interface(get_controlled_actor)
 create_knowledge_remote_interface(get_controlled_actor)
 create_prototype_knowledge_remote_interface()
+create_production_planning_remote_interface(get_controlled_actor)
 create_task_board_ui_remote_interface()
 
 let setup_complete = false
 
 export const task_manager = new_task_manager(get_controlled_actor)
+const awareness_controller = new_awareness_controller()
 const basic_operation_controller = new_basic_operation_controller(get_controlled_actor, task_manager)
 const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_operation_controller)
+const recipe_configuration_runtime = new_recipe_configuration_runtime(task_manager, basic_operation_controller)
+const interaction_recovery = new_interaction_recovery(task_manager)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
 const navigation_obstacle_recovery = new_navigation_obstacle_recovery()
 const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
+const equipment_controller = new_equipment_controller(get_controlled_actor)
+const follow_controller = new_follow_controller(
+  get_controlled_actor,
+  (player_name, follow_distance) => navigation_controller.submit_player(player_name, follow_distance),
+)
+const defense_controller = new_defense_controller(get_controlled_actor)
 
 let swarm_runtime: ReturnType<typeof new_swarm_runtime_service> | undefined
 
@@ -58,6 +75,18 @@ remote.add_interface('autorio_navigation', {
     obstacle_recovery: navigation_obstacle_recovery.status(),
   }),
   set_clear_obstacles: (enabled: boolean) => navigation_obstacle_recovery.set_enabled(enabled),
+})
+
+remote.add_interface('autorio_follow', {
+  status: () => follow_controller.status(),
+})
+
+remote.add_interface('autorio_defense', {
+  status: () => defense_controller.status(),
+})
+
+remote.add_interface('autorio_equipment', {
+  status: () => equipment_controller.status(),
 })
 
 remote.add_interface('autorio_crafting', {
@@ -82,8 +111,7 @@ remote.add_interface('autorio_swarm', {
     get_swarm_runtime().create_survey_work(x, y, radius, priority, surface_index),
   work_status: (work_id?: string) => get_swarm_runtime().work_status(work_id),
   wait: (actor_id: string, ticks: number) => get_swarm_runtime().wait(actor_id, ticks),
-  walk_to_position: (actor_id: string, x: number, y: number) =>
-    get_swarm_runtime().walk_to_position(actor_id, x, y),
+  walk_to_position: (actor_id: string, x: number, y: number) => get_swarm_runtime().walk_to_position(actor_id, x, y),
   cancel: (actor_id: string) => get_swarm_runtime().cancel(actor_id),
   destroy_body: (actor_id: string) => get_swarm_runtime().destroy_body(actor_id),
   replace_body: (actor_id: string, x?: number, y?: number, surface_index: number = 1, force_name: string = 'player') =>
@@ -112,6 +140,7 @@ function log_actor_info() {
     actor: actor.status_snapshot(),
     force: actor.force.name,
     inventory: get_actor_inventory_items(actor),
+    equipment: equipment_controller.status(),
     nearby_entities,
     map_info: {
       surface_name: actor.surface.name,
@@ -143,19 +172,54 @@ remote.add_interface('autorio_operations', {
     log(`[AUTORIO] New walk_to_entity task: ${entity_name}, radius: ${search_radius}`)
     return navigation_controller.submit(entity_name, search_radius)
   },
+  walk_to_player: (player_name: string): [boolean, string] => {
+    const result = navigation_controller.submit_player(player_name)
+    if (result[0]) log(`[AUTORIO] New walk_to_player task: ${player_name}`)
+    return result
+  },
+  follow_player: (player_name: string, follow_distance: number = 4): [boolean, string] => {
+    const result = follow_controller.submit(player_name, follow_distance, navigation_obstacle_recovery.enabled())
+    if (result[0]) log(`[AUTORIO] Follow mode enabled for ${player_name} at distance ${follow_distance}`)
+    return result
+  },
+  stop_follow_player: (): [boolean, string] => follow_controller.stop(),
+  set_auto_defense: (enabled: boolean): [boolean, string] => defense_controller.set_enabled(enabled),
+  equip_weapon: (item_name: string, slot: number = 1): [boolean, string] => equipment_controller.equip_weapon(item_name, slot),
+  equip_ammo: (item_name: string, slot: number = 1): [boolean, string] => equipment_controller.equip_ammo(item_name, slot),
+  equip_armor: (item_name: string): [boolean, string] => equipment_controller.equip_armor(item_name),
+  select_weapon_slot: (slot: number): [boolean, string] => equipment_controller.select_weapon_slot(slot),
   mine_entity: (entity_name: string, count: number = 1) => {
     const accepted = basic_operation_controller.submit_mining(entity_name, count)
     if (accepted) log(`[AUTORIO] New mine_entity task: ${entity_name} x${count}`)
     return accepted
   },
-  place_entity: (entity_name: string) => {
-    const accepted = basic_operation_controller.submit_placement(entity_name)
-    if (accepted) log(`[AUTORIO] New place_entity task: ${entity_name}`)
+  place_entity: (entity_name: string, x?: number, y?: number, direction?: number) => {
+    const accepted = basic_operation_controller.submit_placement(entity_name, x, y, direction)
+    if (accepted) {
+      const position = x !== undefined && y !== undefined ? ` at (${x}, ${y})` : ''
+      const facing = direction !== undefined ? ` direction=${direction}` : ''
+      log(`[AUTORIO] New place_entity task: ${entity_name}${position}${facing}`)
+    }
     return accepted
   },
   move_items: (item_name: string, entity_name: string, max_count: number, to_entity: boolean): [boolean, string] => {
     const result = basic_operation_controller.submit_move(item_name, entity_name, max_count, to_entity)
     if (result[0]) log(`[AUTORIO] New move_items task for ${item_name} ${to_entity ? 'to' : 'from'} ${entity_name}`)
+    return result
+  },
+  move_items_exact: (item_name: string, unit_number: number, max_count: number, to_entity: boolean): [boolean, string] => {
+    const result = basic_operation_controller.submit_move_exact(item_name, unit_number, max_count, to_entity)
+    if (result[0]) log(`[AUTORIO] New exact move_items task for ${item_name} ${to_entity ? 'to' : 'from'} entity unit ${unit_number}`)
+    return result
+  },
+  set_machine_recipe: (unit_number: number, recipe_name: string): [boolean, string] => {
+    const result = basic_operation_controller.submit_set_recipe_exact(unit_number, recipe_name)
+    if (result[0]) log(`[AUTORIO] New set_machine_recipe task for entity unit ${unit_number}: ${recipe_name}`)
+    return result
+  },
+  move_items_with_player: (item_name: string, player_name: string, max_count: number, to_player: boolean): [boolean, string] => {
+    const result = basic_operation_controller.submit_player_move(item_name, player_name, max_count, to_player)
+    if (result[0]) log(`[AUTORIO] New player item transfer for ${item_name} ${to_player ? 'to' : 'from'} ${player_name}`)
     return result
   },
   wait: (ticks: number): [boolean, string] => {
@@ -165,6 +229,7 @@ remote.add_interface('autorio_operations', {
   },
   craft_item: (item_name: string, count: number = 1): [boolean, string] => crafting_controller.submit(item_name, count),
   attack_nearest_enemy: (search_radius: number = 50): [boolean, string] => combat_controller.submit(search_radius),
+  clear_enemy_area: (search_radius: number = 96): [boolean, string] => combat_controller.submit_clear(search_radius),
   research_technology: (name: string): [boolean, string, number] => research_controller.submit(name),
   cancel_all_tasks: () => {
     task_manager.cancel_all_tasks()
@@ -176,6 +241,8 @@ remote.add_interface('autorio_operations', {
       ...task_manager.get_status_snapshot(),
       actor: actor?.status_snapshot(),
       basic_operation: basic_operation_controller.status(),
+      follow: follow_controller.status(),
+      defense: defense_controller.status(),
     }
   },
   log_actor_info: () => log_actor_info(),
@@ -191,9 +258,9 @@ export function get_nearest_entity(actor: ControlledActor, entities: LuaEntity[]
   let nearest_entity: LuaEntity | null = null
   if (entities.length === 0) return null
   for (const entity of entities) {
-    const candidate = (entity.position.x - actor.position.x) ** 2 + (entity.position.y - actor.position.y) ** 2
-    if (candidate < min_distance) {
-      min_distance = candidate
+    const distance = (entity.position.x - actor.position.x) ** 2 + (entity.position.y - actor.position.y) ** 2
+    if (distance < min_distance) {
+      min_distance = distance
       nearest_entity = entity
     }
   }
@@ -230,7 +297,10 @@ script.on_event(defines.events.on_selected_entity_changed, (unused_event: OnSele
 
 script.on_event(defines.events.on_script_path_request_finished, (event: OnScriptPathRequestFinishedEvent) => {
   const routed = get_swarm_runtime().on_path_finished(event)
-  if ('code' in routed && routed.code === 'not_owned') navigation_controller.on_path_finished(event)
+  if ('code' in routed && routed.code === 'not_owned') {
+    navigation_controller.on_path_finished(event)
+    combat_controller.on_path_finished(event)
+  }
 })
 
 script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEntityEvent) => {
@@ -261,11 +331,24 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     return
   }
   no_actor_found = false
+  awareness_controller.tick(actor)
 
   if (task_manager.player_state.task_state === TaskStates.IDLE) {
     navigation_obstacle_recovery.suspend(actor)
+    follow_controller.tick(actor)
+    if (task_manager.player_state.task_state !== TaskStates.IDLE) {
+      defense_controller.suspend(actor)
+      return
+    }
+    if (follow_controller.status().active) defense_controller.tick(actor)
+    else defense_controller.suspend(actor)
     return
   }
+
+  follow_controller.suspend(actor)
+  defense_controller.suspend(actor)
+
+  if (interaction_recovery.tick(actor)) return
 
   if (task_manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
     const handled = navigation_obstacle_recovery.tick(actor, task_manager.player_state.parameters_walk_to_entity)
@@ -276,6 +359,7 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     if (task_manager.player_state.task_state === TaskStates.MINING) basic_operation_runtime.state_mining(actor)
     else if (task_manager.player_state.task_state === TaskStates.PLACING) basic_operation_runtime.state_placing(actor)
     else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) basic_operation_runtime.state_moving_items(actor)
+    else if (task_manager.player_state.task_state === TaskStates.SETTING_RECIPE) recipe_configuration_runtime.state_setting_recipe(actor)
     else if (task_manager.player_state.task_state === TaskStates.CRAFTING) crafting_controller.tick(actor)
     else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) research_controller.tick(actor)
     else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) state_walking_direct(actor)
