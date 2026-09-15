@@ -20,6 +20,7 @@ import { new_equipment_controller } from './equipment'
 import { new_follow_controller } from './follow'
 import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
+import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
 import { new_research_controller } from './research'
 import { new_task_manager } from './task_manager'
 import { create_tools_remote_interface } from './tools'
@@ -30,6 +31,7 @@ import { get_actor_inventory_items } from './utils/inventory'
 create_tools_remote_interface()
 create_discovery_remote_interface(get_controlled_actor)
 create_knowledge_remote_interface(get_controlled_actor)
+create_prototype_knowledge_remote_interface()
 
 let setup_complete = false
 
