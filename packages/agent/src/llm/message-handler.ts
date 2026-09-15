@@ -6,14 +6,15 @@ import { assistant, composeAgent, defineToolFunction, system, toolFunction, user
 import { openaiConfig } from '../config'
 import { parseLLMMessage } from '../parser'
 import prompt from './prompt.md?raw'
-import { tools } from './tools'
+import productionPlanningPrompt from './production-planning-prompt.md?raw'
+import { agentTools } from './tool-set'
 
 const logger = createLogg('agent').useGlobalConfig()
 
 export async function createMessageHandler() {
   const toolFunctions: DefinedTool<any, any>[] = []
 
-  for (const tool of tools) {
+  for (const tool of agentTools) {
     toolFunctions.push(defineToolFunction(await toolFunction(tool.name, tool.description, tool.schema), tool.fn))
   }
 
@@ -25,7 +26,7 @@ export async function createMessageHandler() {
     tools: toolFunctions,
   })
 
-  const messages: Message[] = [system(prompt)]
+  const messages: Message[] = [system(`${prompt}\n\n${productionPlanningPrompt}`)]
 
   async function handleMessage(message: StdoutMessage) {
     logger.withFields({ message }).debug('Handling message')
