@@ -1,6 +1,7 @@
 import type { LuaPlayer } from 'factorio:runtime'
 
-const ROOT_NAME = 'airi_task_board'
+const BUTTON_NAME = 'airi_task_board_button'
+const ROOT_NAME = 'airi_task_board_panel'
 const MAX_STEPS = 16
 const MAX_TEXT = 500
 
@@ -24,6 +25,7 @@ export interface TaskBoardUiSnapshot {
 
 declare const storage: {
   airi_task_board_ui?: TaskBoardUiSnapshot
+  airi_task_board_ui_open?: Record<number, boolean>
 }
 
 function text(value: unknown, max = MAX_TEXT) {
@@ -67,7 +69,33 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
   }
 }
 
-function destroy_existing(player: LuaPlayer) {
+function open_state() {
+  if (storage.airi_task_board_ui_open === undefined) storage.airi_task_board_ui_open = {}
+  return storage.airi_task_board_ui_open
+}
+
+export function task_board_ui_is_open(player_index: number) {
+  return open_state()[player_index] === true
+}
+
+export function toggle_task_board_ui_open(player_index: number) {
+  const next = !task_board_ui_is_open(player_index)
+  open_state()[player_index] = next
+  return next
+}
+
+function ensure_button(player: LuaPlayer) {
+  const existing = player.gui.top[BUTTON_NAME]
+  if (existing?.valid) return existing
+  return player.gui.top.add({
+    type: 'button',
+    name: BUTTON_NAME,
+    caption: 'AIRI',
+    tooltip: 'Open or close the AIRI Task Board',
+  })
+}
+
+function destroy_panel(player: LuaPlayer) {
   const existing = player.gui.left[ROOT_NAME]
   if (existing?.valid) existing.destroy()
 }
@@ -80,10 +108,9 @@ function step_prefix(step: TaskBoardUiStep) {
   return '[ ]'
 }
 
-function render(player: LuaPlayer) {
-  destroy_existing(player)
-  const board = storage.airi_task_board_ui
-  if (board === undefined) return
+function render_panel(player: LuaPlayer) {
+  destroy_panel(player)
+  if (!task_board_ui_is_open(player.index)) return
 
   const root: any = player.gui.left.add({
     type: 'frame',
@@ -91,6 +118,13 @@ function render(player: LuaPlayer) {
     direction: 'vertical',
     caption: 'AIRI Task Board',
   })
+  const board = storage.airi_task_board_ui
+  if (board === undefined) {
+    root.add({ type: 'label', caption: 'Status: IDLE' })
+    root.add({ type: 'label', caption: 'No active AIRI task.' })
+    return
+  }
+
   const goal = board.objective.length > 0
     ? board.objective
     : board.goal_id.length > 0
@@ -113,6 +147,11 @@ function render(player: LuaPlayer) {
   if (board.pause_reason.length > 0) root.add({ type: 'label', caption: `Paused: ${board.pause_reason}` })
 }
 
+function render(player: LuaPlayer) {
+  ensure_button(player)
+  render_panel(player)
+}
+
 function render_all() {
   for (const player of game.connected_players) render(player)
 }
@@ -128,7 +167,7 @@ export function create_task_board_ui_remote_interface() {
     },
     clear: () => {
       storage.airi_task_board_ui = undefined
-      for (const player of game.connected_players) destroy_existing(player)
+      render_all()
       return true
     },
     status: () => storage.airi_task_board_ui,
@@ -137,5 +176,14 @@ export function create_task_board_ui_remote_interface() {
   script.on_event(defines.events.on_player_joined_game, (event) => {
     const player = game.get_player(event.player_index)
     if (player?.valid) render(player)
+  })
+
+  script.on_event(defines.events.on_gui_click, (event: any) => {
+    const element = event.element
+    if (!element?.valid || element.name !== BUTTON_NAME) return
+    const player = game.get_player(event.player_index)
+    if (!player?.valid) return
+    toggle_task_board_ui_open(player.index)
+    render_panel(player)
   })
 }
