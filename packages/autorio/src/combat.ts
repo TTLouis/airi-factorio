@@ -565,6 +565,12 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       && typeof surface.get_tile === 'function'
   }
 
+  function supports_mobile_combat_path(actor: ControlledActor, task: CombatTask) {
+    return task.last_turret_position
+      ? supports_combat_path_runtime(actor)
+      : supports_spatial_recovery(actor)
+  }
+
   function path_goal_changed(task: CombatTask, goal: { x: number, y: number }, mode: CombatPathMode) {
     if (task.combat_recovery_position) return task.combat_path_mode !== mode
     return task.combat_path_mode !== mode
@@ -765,7 +771,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     actor.update_selected_entity(target.position)
     actor.set_shooting_state({ state: defines.shooting.shooting_selected, position: target.position })
     const retreat_goal = stable_retreat_goal(actor, task, target)
-    if (supports_combat_path_runtime(actor)) follow_combat_path(actor, task, retreat_goal, 'retreat')
+    if (supports_mobile_combat_path(actor, task)) follow_combat_path(actor, task, retreat_goal, 'retreat')
     else walk_toward(actor, retreat_goal)
     task.last_progress_tick = game.tick
   }
@@ -831,13 +837,15 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
         actor.set_walking_state({ walking: false, direction: defines.direction.north })
       }
       else {
-        follow_combat_path(actor, task, stable_retreat_goal(actor, task, target), 'retreat')
+        const retreat_goal = stable_retreat_goal(actor, task, target)
+        if (supports_mobile_combat_path(actor, task)) follow_combat_path(actor, task, retreat_goal, 'retreat')
+        else walk_toward(actor, retreat_goal)
       }
       return
     }
 
     stop_actor_combat(actor)
-    if (target.type === 'unit' && !supports_combat_path_runtime(actor)) {
+    if (target.type === 'unit' && !supports_mobile_combat_path(actor, task)) {
       clear_combat_path(task, true)
       if (game.tick - (task.last_progress_tick ?? started_tick) > LEGACY_DIRECT_STUCK_TICKS) {
         fail(actor, task, 'stuck')
