@@ -263,10 +263,7 @@ export class Session {
         model: this.config.model,
         timeoutMs: this.config.providerTimeoutMs,
       }, messages, context),
-      reserve: async () => {
-        await this.ensureAuthorization()
-        return reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget)
-      },
+      reserve: async () => reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget),
       log: message => this.log(`[AIRI agent] ${redact(secrets, message)}`),
     })
 
