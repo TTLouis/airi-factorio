@@ -227,6 +227,15 @@ export const toolDefinitions = [
     required: ['unit_number'],
     additionalProperties: false,
   }),
+  functionTool('getLogisticsTopology', 'Inspect a bounded semantic logistics graph centered on one exact same-surface entity: belt inputs/outputs, actual inserter routes touching the center, direct mining output, and connected fluid neighbours.', {
+    type: 'object',
+    properties: {
+      unit_number: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+      radius: { type: 'integer', minimum: 1, maximum: 16, default: 8 },
+    },
+    required: ['unit_number'],
+    additionalProperties: false,
+  }),
   functionTool('getNavigationStatus', 'Read bounded navigation target and last result.', emptyObjectSchema),
   functionTool('getFollowStatus', 'Read persistent player-follow state, target player, configured distance, and current distance.', emptyObjectSchema),
   functionTool('getDefenseStatus', 'Read persistent follow auto-defense policy, defensive radius, and current nearby hostile target.', emptyObjectSchema),
@@ -306,6 +315,12 @@ export function toolCommand(name, rawArgs = {}) {
       noExtra(args, ['unit_number'])
       const unitNumber = integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER)
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","entity_geometry",${unitNumber})))`
+    }
+    case 'getLogisticsTopology': {
+      noExtra(args, ['unit_number', 'radius'])
+      const unitNumber = integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER)
+      const radius = integer(args.radius ?? 8, 'radius', 1, 16)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","logistics_topology",${unitNumber},${radius})))`
     }
     case 'getNavigationStatus':
       noExtra(args, [])
