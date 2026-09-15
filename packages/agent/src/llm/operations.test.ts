@@ -9,6 +9,7 @@ describe('structured Autorio operations', () => {
       { name: 'attack_nearest_enemy', args: {} },
       { name: 'clear_enemy_area', args: {} },
       { name: 'follow_player', args: { player_name: 'Louis' } },
+      { name: 'set_auto_defense', args: { enabled: false } },
       { name: 'walk_to_player', args: { player_name: 'Louis' } },
       { name: 'equip_weapon', args: { item_name: 'rocket-launcher' } },
       { name: 'equip_ammo', args: { item_name: 'atomic-bomb' } },
@@ -21,6 +22,7 @@ describe('structured Autorio operations', () => {
       { name: 'attack_nearest_enemy', args: { search_radius: 50 } },
       { name: 'clear_enemy_area', args: { search_radius: 96 } },
       { name: 'follow_player', args: { player_name: 'Louis', follow_distance: 4 } },
+      { name: 'set_auto_defense', args: { enabled: false } },
       { name: 'walk_to_player', args: { player_name: 'Louis' } },
       { name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 1 } },
       { name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 1 } },
@@ -31,6 +33,7 @@ describe('structured Autorio operations', () => {
   it('rejects unknown operations and unexpected arguments', () => {
     expect(() => parseStructuredOperations([{ name: 'game.clear', args: {} }])).toThrow()
     expect(() => parseStructuredOperations([{ name: 'wait', args: { ticks: 60, arbitrary_lua: 'game.clear()' } }])).toThrow()
+    expect(() => parseStructuredOperations([{ name: 'set_auto_defense', args: { enabled: 'yes' } }])).toThrow()
   })
 
   it('bounds operation batches, task counts, transfers, navigation, equipment, follow, crafting, and combat', () => {
@@ -70,6 +73,7 @@ describe('structured Autorio operations', () => {
       { name: 'walk_to_player', args: { player_name: 'Louis' } },
       { name: 'follow_player', args: { player_name: 'Louis', follow_distance: 5 } },
       { name: 'stop_follow_player', args: {} },
+      { name: 'set_auto_defense', args: { enabled: false } },
       { name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 2 } },
       { name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 2 } },
       { name: 'equip_armor', args: { item_name: 'modular-armor' } },
@@ -82,6 +86,7 @@ describe('structured Autorio operations', () => {
       "remote.call('autorio_operations', 'walk_to_player', 'Louis')",
       "remote.call('autorio_operations', 'follow_player', 'Louis', 5)",
       "remote.call('autorio_operations', 'stop_follow_player')",
+      "remote.call('autorio_operations', 'set_auto_defense', false)",
       "remote.call('autorio_operations', 'equip_weapon', 'rocket-launcher', 2)",
       "remote.call('autorio_operations', 'equip_ammo', 'atomic-bomb', 2)",
       "remote.call('autorio_operations', 'equip_armor', 'modular-armor')",
