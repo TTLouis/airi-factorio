@@ -63,7 +63,7 @@ function valid_coordinate(value: number) {
 }
 
 function valid_name(value: string) {
-  return typeof value === 'string' && value.length >= 1 && value.length <= 200 && !/[\x00-\x1f\x7f]/.test(value)
+  return typeof value === 'string' && value.length >= 1 && value.length <= 200
 }
 
 function next_operation_id() {
