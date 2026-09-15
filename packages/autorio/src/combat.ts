@@ -2,6 +2,7 @@ import type { LuaEntity, LuaInventory, LuaItemStack, OnScriptPathRequestFinished
 import type { ControlledActor } from './actors/types'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersAttackNearestEnemy } from './types'
+import { plan_placement, select_navigation_escape_point } from './construction_planning'
 import { TaskStates } from './types'
 import { direction_towards } from './utils/direction'
 import { distance } from './utils/math'
@@ -9,7 +10,10 @@ import { distance } from './utils/math'
 const MAX_SEARCH_RADIUS = 256
 const MAX_SINGLE_COMBAT_TICKS = 60 * 60
 const MAX_CLEAR_AREA_TICKS = 10 * 60 * 60
-const STUCK_TICKS = 10 * 60
+const COMBAT_PATH_STUCK_TICKS = 3 * 60
+const COMBAT_PHYSICAL_STUCK_TICKS = 90
+const COMBAT_PHYSICAL_SAMPLE_TICKS = 30
+const COMBAT_PHYSICAL_PROGRESS_DISTANCE = 0.12
 const DISTANCE_PROGRESS_EPSILON = 0.25
 const MOBILE_THREAT_PRIORITY_RADIUS = 28
 const KITE_DISTANCE = 12
@@ -21,6 +25,9 @@ const TURRET_MIN_ADVANCE_DISTANCE = 6
 const TURRET_BEHIND_ACTOR_DISTANCE = 3.5
 const TURRET_LATERAL_SPACING = 2.5
 const TURRET_ACTOR_CLEARANCE = 2.5
+const TURRET_TARGET_SAFETY_MARGIN = 0.5
+const TURRET_PLACEMENT_SEARCH_RADIUS = 3
+const TURRET_PLACEMENT_CANDIDATES = 6
 const TURRET_LOAD_COUNT = 20
 const MAX_SUPPORT_TURRETS = 4
 const TURRET_AMMO_PRIORITY = ['uranium-rounds-magazine', 'piercing-rounds-magazine', 'firearm-magazine']
@@ -28,15 +35,29 @@ const COMBAT_PATH_MAX_ATTEMPTS = 4
 const COMBAT_PATH_REQUEST_TIMEOUT_TICKS = 15 * 60
 const COMBAT_PATH_RETRY_DELAY_TICKS = 30
 const COMBAT_PATH_APPROACH_GOAL_RADIUS = 8
+const COMBAT_PATH_CHASE_GOAL_RADIUS = 2.5
 const COMBAT_PATH_RETREAT_GOAL_RADIUS = 1.5
+const COMBAT_PATH_RECOVERY_GOAL_RADIUS = 0.5
 const COMBAT_PATH_WAYPOINT_DISTANCE = 0.5
 const COMBAT_PATH_PROGRESS_DISTANCE = 0.25
 const COMBAT_PATH_TARGET_REPATH_DISTANCE = 2
+const COMBAT_RECOVERY_REACHED_DISTANCE = 0.75
 
 type CombatPathMode = 'approach' | 'retreat'
 type CombatCode = 'started' | 'target_destroyed' | 'area_cleared' | 'no_actor' | 'invalid_radius'
   | 'no_target' | 'no_weapon_or_ammo' | 'actor_changed' | 'low_health' | 'stuck' | 'timeout'
   | 'path_unreachable' | 'path_timeout'
+
+type CombatTask = PlayerParametersAttackNearestEnemy & {
+  combat_recovery_position?: { x: number, y: number }
+  combat_recovery_stage?: 'escape' | 'repath'
+  combat_last_recovery_reason?: string
+  combat_last_spatial_observation?: unknown
+  combat_physical_sample_position?: { x: number, y: number }
+  combat_physical_sample_tick?: number
+  combat_last_physical_progress_tick?: number
+  last_turret_placement_plan?: unknown
+}
 
 interface CombatResult {
   accepted: boolean
@@ -63,6 +84,8 @@ interface CombatResult {
   path_request_id?: number
   path_attempts?: number
   path_waypoints_remaining?: number
+  recovery_stage?: string
+  spatial_observation?: unknown
 }
 
 declare const storage: {
@@ -156,7 +179,8 @@ function selected_support_ammo(inventory: LuaInventory): { name: string, stack: 
   return undefined
 }
 
-function record(actor: ControlledActor | undefined, task: PlayerParametersAttackNearestEnemy | undefined, accepted: boolean, completed: boolean, code: CombatCode): CombatResult {
+function record(actor: ControlledActor | undefined, raw_task: PlayerParametersAttackNearestEnemy | undefined, accepted: boolean, completed: boolean, code: CombatCode): CombatResult {
+  const task = raw_task as CombatTask | undefined
   const identity = actor?.is_valid ? actor.status_snapshot() : undefined
   const result: CombatResult = {
     accepted,
@@ -183,6 +207,8 @@ function record(actor: ControlledActor | undefined, task: PlayerParametersAttack
     path_request_id: task?.combat_path_request_id,
     path_attempts: task?.combat_path_attempts,
     path_waypoints_remaining: task?.combat_path?.length,
+    recovery_stage: task?.combat_recovery_stage,
+    spatial_observation: task?.combat_last_spatial_observation,
   }
   storage.airi_last_combat_result = result
   return result
@@ -230,7 +256,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
   }
 
-  function clear_combat_path(task: PlayerParametersAttackNearestEnemy, reset_attempts = false) {
+  function clear_combat_path(task: CombatTask, reset_attempts = false) {
     task.combat_path_mode = undefined
     task.combat_path = null
     task.combat_path_request_id = undefined
@@ -239,10 +265,37 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.combat_path_target_position = undefined
     task.combat_path_last_progress_tick = undefined
     task.combat_path_last_waypoint_distance = undefined
+    task.combat_recovery_position = undefined
+    task.combat_recovery_stage = undefined
+    task.combat_last_recovery_reason = undefined
+    task.combat_physical_sample_position = undefined
+    task.combat_physical_sample_tick = undefined
+    task.combat_last_physical_progress_tick = undefined
     if (reset_attempts) task.combat_path_attempts = 0
   }
 
-  function fail(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, code: CombatCode) {
+  function reset_combat_physical_progress(actor: ControlledActor, task: CombatTask) {
+    task.combat_physical_sample_position = copy_position(actor.position)
+    task.combat_physical_sample_tick = game.tick
+    task.combat_last_physical_progress_tick = game.tick
+  }
+
+  function physical_path_stuck(actor: ControlledActor, task: CombatTask) {
+    if (!task.combat_physical_sample_position || task.combat_physical_sample_tick === undefined || task.combat_last_physical_progress_tick === undefined) {
+      reset_combat_physical_progress(actor, task)
+      return false
+    }
+    if (game.tick - task.combat_physical_sample_tick >= COMBAT_PHYSICAL_SAMPLE_TICKS) {
+      if (distance(actor.position, task.combat_physical_sample_position) >= COMBAT_PHYSICAL_PROGRESS_DISTANCE) {
+        task.combat_last_physical_progress_tick = game.tick
+      }
+      task.combat_physical_sample_position = copy_position(actor.position)
+      task.combat_physical_sample_tick = game.tick
+    }
+    return game.tick - task.combat_last_physical_progress_tick > COMBAT_PHYSICAL_STUCK_TICKS
+  }
+
+  function fail(actor: ControlledActor, task: CombatTask, code: CombatCode) {
     stop_actor_combat(actor)
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
     record(actor, task, false, false, code)
@@ -250,7 +303,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     log(`[AUTORIO] [ERROR] Combat task failed: ${code}; queued operations cancelled`)
   }
 
-  function complete_single(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+  function complete_single(actor: ControlledActor, task: CombatTask) {
     stop_actor_combat(actor)
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
     record(actor, task, true, true, 'target_destroyed')
@@ -259,7 +312,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     log('[AUTORIO] Combat task complete: target destroyed')
   }
 
-  function complete_area(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+  function complete_area(actor: ControlledActor, task: CombatTask) {
     stop_actor_combat(actor)
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
     record(actor, task, true, true, 'area_cleared')
@@ -268,12 +321,12 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     log(`[AUTORIO] Combat area clear: destroyed ${task.targets_destroyed ?? 0} targets, placed ${task.turrets_placed ?? 0}/${task.support_turret_budget ?? 0} support turrets`)
   }
 
-  function area_enemies(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+  function area_enemies(actor: ControlledActor, task: CombatTask) {
     const origin = task.origin_position ?? actor.position
     return actor.surface.find_entities_filtered({ position: origin, radius: task.search_radius, force: 'enemy' })
   }
 
-  function initialize_support_plan(task: PlayerParametersAttackNearestEnemy, enemies: LuaEntity[]) {
+  function initialize_support_plan(task: CombatTask, enemies: LuaEntity[]) {
     if (task.combat_mode !== 'clear_area' || task.support_turret_budget !== undefined) return
     let static_threats = 0
     for (const entity of enemies) if (is_alive(entity) && is_static_enemy(entity)) static_threats++
@@ -282,7 +335,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     log(`[AUTORIO] Combat support plan: static_threats=${static_threats}, turret_budget=${task.support_turret_budget}`)
   }
 
-  function bind_target(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, target: LuaEntity, reason: 'acquired' | 'preempted') {
+  function bind_target(actor: ControlledActor, task: CombatTask, target: LuaEntity, reason: 'acquired' | 'preempted') {
     if (task.target !== target) clear_combat_path(task, true)
     task.target = target
     task.target_name = target.name
@@ -294,7 +347,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     log(`[AUTORIO] Combat target ${reason}: ${result.target_name} unit=${result.target_unit_number ?? 'n/a'} mode=${task.combat_mode ?? 'single'}`)
   }
 
-  function acquire(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+  function acquire(actor: ControlledActor, task: CombatTask) {
     const enemies = area_enemies(actor, task)
     initialize_support_plan(task, enemies)
     const target = preferred_target(actor, enemies)
@@ -322,7 +375,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return threat
   }
 
-  function preempt_static_target_for_mobile_threat(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+  function preempt_static_target_for_mobile_threat(actor: ControlledActor, task: CombatTask) {
     const target = task.target
     if (task.combat_mode !== 'clear_area' || !target || !is_alive(target) || !is_static_enemy(target)) return false
     const threat = nearby_mobile_threat(actor)
@@ -332,7 +385,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return true
   }
 
-  function clear_bound_target(task: PlayerParametersAttackNearestEnemy) {
+  function clear_bound_target(task: CombatTask) {
     task.target = null
     task.target_name = undefined
     task.target_unit_number = undefined
@@ -342,7 +395,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     clear_combat_path(task, true)
   }
 
-  function target_destroyed(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+  function target_destroyed(actor: ControlledActor, task: CombatTask) {
     task.targets_destroyed = (task.targets_destroyed ?? 0) + 1
     if (task.combat_mode !== 'clear_area') {
       complete_single(actor, task)
@@ -364,7 +417,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return result
   }
 
-  function should_place_support(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, target: LuaEntity) {
+  function should_place_support(actor: ControlledActor, task: CombatTask, target: LuaEntity) {
     if (task.combat_mode !== 'clear_area' || !is_static_enemy(target)) return false
     const budget = task.support_turret_budget ?? 0
     if ((task.turrets_placed ?? 0) >= budget) return false
@@ -406,7 +459,32 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     }
   }
 
-  function place_support_turret(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, target: LuaEntity) {
+  function planned_support_position(actor: ControlledActor, task: CombatTask, target: LuaEntity, anchor: { x: number, y: number }) {
+    // Factorio surfaces always expose can_place_entity. The fallback keeps older
+    // lightweight test doubles usable while production uses the shared planner.
+    if (!actor.surface.can_place_entity) {
+      return actor.surface.find_non_colliding_position('gun-turret', anchor, 2, 0.25, false)
+    }
+    const placement = plan_placement(actor, {
+      entity_name: 'gun-turret',
+      position: anchor,
+      side: 'any',
+      search_radius: TURRET_PLACEMENT_SEARCH_RADIUS,
+      max_candidates: TURRET_PLACEMENT_CANDIDATES,
+    })
+    task.last_turret_placement_plan = placement
+    if (!placement.ok || !('candidates' in placement)) return undefined
+    const actor_target_distance = distance(actor.position, target.position)
+    for (const candidate of placement.candidates ?? []) {
+      const position = candidate.position as { x: number, y: number }
+      if (distance(position, actor.position) < TURRET_ACTOR_CLEARANCE) continue
+      if (distance(position, target.position) + TURRET_TARGET_SAFETY_MARGIN < actor_target_distance) continue
+      return position
+    }
+    return undefined
+  }
+
+  function place_support_turret(actor: ControlledActor, task: CombatTask, target: LuaEntity) {
     if (!should_place_support(actor, task, target)) return false
     const inventory = actor.get_main_inventory()
     if (!inventory) return false
@@ -416,8 +494,11 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     if (!ammo) return false
     const turret_index = task.turrets_placed ?? 0
     const anchor = support_anchor(actor, target, turret_index)
-    const position = actor.surface.find_non_colliding_position('gun-turret', anchor, 2, 0.25, false)
-    if (!position) return false
+    const position = planned_support_position(actor, task, target, anchor)
+    if (!position) {
+      log(`[AUTORIO] No safe shared-planner support turret position near ${serpent.line(anchor)}`)
+      return false
+    }
     if (distance(position, actor.position) < TURRET_ACTOR_CLEARANCE) {
       log(`[AUTORIO] Refusing support turret position ${serpent.line(position)} inside actor clearance ${TURRET_ACTOR_CLEARANCE}`)
       return false
@@ -466,20 +547,41 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     actor.set_walking_state({ walking: true, direction: direction_towards(actor.position, position) })
   }
 
-  function path_goal_changed(task: PlayerParametersAttackNearestEnemy, goal: { x: number, y: number }, mode: CombatPathMode) {
+  function path_goal_changed(task: CombatTask, goal: { x: number, y: number }, mode: CombatPathMode) {
+    if (task.combat_recovery_position) return task.combat_path_mode !== mode
     return task.combat_path_mode !== mode
       || !task.combat_path_target_position
       || distance(task.combat_path_target_position, goal) >= COMBAT_PATH_TARGET_REPATH_DISTANCE
   }
 
-  function request_combat_path(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, goal: { x: number, y: number }, mode: CombatPathMode) {
+  function path_goal_radius(task: CombatTask, mode: CombatPathMode) {
+    if (task.combat_recovery_position) return COMBAT_PATH_RECOVERY_GOAL_RADIUS
+    if (mode === 'retreat') return COMBAT_PATH_RETREAT_GOAL_RADIUS
+    return task.target && is_alive(task.target) && is_static_enemy(task.target)
+      ? COMBAT_PATH_APPROACH_GOAL_RADIUS
+      : COMBAT_PATH_CHASE_GOAL_RADIUS
+  }
+
+  function maybe_prepare_combat_escape(actor: ControlledActor, task: CombatTask, goal: { x: number, y: number }, reason: string) {
+    if ((task.combat_path_attempts ?? 0) < 2 || task.combat_recovery_position) return false
+    const recovery = select_navigation_escape_point(actor, goal, (task.combat_path_attempts ?? 0) >= 3 ? 8 : 6)
+    task.combat_last_spatial_observation = recovery.spatial_observation
+    task.combat_last_recovery_reason = reason
+    if (!recovery.ok || !recovery.best?.position) return false
+    task.combat_recovery_position = copy_position(recovery.best.position)
+    task.combat_recovery_stage = 'escape'
+    log(`[AUTORIO] Combat recovery selected escape point ${serpent.line(task.combat_recovery_position)} after ${reason}`)
+    return true
+  }
+
+  function request_combat_path(actor: ControlledActor, task: CombatTask, goal: { x: number, y: number }, mode: CombatPathMode) {
     const character = actor.character
     if (!character) {
       fail(actor, task, 'no_actor')
       return false
     }
     if ((task.combat_path_attempts ?? 0) >= COMBAT_PATH_MAX_ATTEMPTS) {
-      fail(actor, task, 'path_timeout')
+      fail(actor, task, task.combat_last_recovery_reason === 'physical_stuck' ? 'stuck' : 'path_timeout')
       return false
     }
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
@@ -487,12 +589,13 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.combat_path_attempts = (task.combat_path_attempts ?? 0) + 1
     task.combat_path = null
     task.combat_path_target_position = copy_position(goal)
+    const request_goal = task.combat_recovery_position ? copy_position(task.combat_recovery_position) : copy_position(goal)
     task.combat_path_request_id = actor.surface.request_path({
       bounding_box: character.prototype.collision_box,
       collision_mask: character.prototype.collision_mask,
-      radius: mode === 'approach' ? COMBAT_PATH_APPROACH_GOAL_RADIUS : COMBAT_PATH_RETREAT_GOAL_RADIUS,
+      radius: path_goal_radius(task, mode),
       start: copy_position(character.position),
-      goal: task.combat_path_target_position,
+      goal: request_goal,
       force: actor.force,
       entity_to_ignore: character,
       pathfind_flags: { cache: false, no_break: true, prefer_straight_paths: false, allow_paths_through_own_entities: false },
@@ -501,11 +604,12 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.combat_path_next_retry_tick = undefined
     task.combat_path_last_progress_tick = game.tick
     task.combat_path_last_waypoint_distance = undefined
-    log(`[AUTORIO] Combat ${mode} path requested id=${task.combat_path_request_id} attempt=${task.combat_path_attempts} from ${serpent.line(character.position)} toward ${serpent.line(goal)}`)
+    reset_combat_physical_progress(actor, task)
+    log(`[AUTORIO] Combat ${mode} path requested id=${task.combat_path_request_id} attempt=${task.combat_path_attempts} from ${serpent.line(character.position)} toward ${serpent.line(request_goal)}${task.combat_recovery_position ? ' (recovery)' : ''}`)
     return true
   }
 
-  function retry_combat_path(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, goal: { x: number, y: number }, mode: CombatPathMode, exhausted_code: CombatCode) {
+  function retry_combat_path(actor: ControlledActor, task: CombatTask, goal: { x: number, y: number }, mode: CombatPathMode, exhausted_code: CombatCode, reason: string) {
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
     task.combat_path = null
     task.combat_path_request_id = undefined
@@ -513,24 +617,40 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.combat_path_next_retry_tick = undefined
     task.combat_path_last_waypoint_distance = undefined
     task.combat_path_last_progress_tick = game.tick
+    task.combat_last_recovery_reason = reason
     if ((task.combat_path_attempts ?? 0) >= COMBAT_PATH_MAX_ATTEMPTS) {
+      if (!task.combat_last_spatial_observation) maybe_prepare_combat_escape(actor, task, goal, reason)
       fail(actor, task, exhausted_code)
       return false
     }
+    maybe_prepare_combat_escape(actor, task, goal, reason)
     return request_combat_path(actor, task, goal, mode)
   }
 
-  function active_path_goal(task: PlayerParametersAttackNearestEnemy) {
+  function active_path_goal(task: CombatTask) {
     if (task.combat_path_mode === 'approach') {
       const target = task.target
-      return target && is_alive(target) && is_static_enemy(target) ? target.position : undefined
+      return target && is_alive(target) ? target.position : undefined
     }
-    if (task.combat_path_mode === 'retreat') return task.last_turret_position
+    if (task.combat_path_mode === 'retreat') return task.last_turret_position ?? task.combat_path_target_position
     return undefined
   }
 
+  function finish_escape_and_repath(actor: ControlledActor, task: CombatTask, goal: { x: number, y: number }, mode: CombatPathMode) {
+    task.combat_recovery_position = undefined
+    task.combat_recovery_stage = 'repath'
+    task.combat_path = null
+    task.combat_path_request_id = undefined
+    task.combat_path_requested_tick = undefined
+    task.combat_path_next_retry_tick = undefined
+    task.combat_path_last_waypoint_distance = undefined
+    task.combat_path_last_progress_tick = game.tick
+    reset_combat_physical_progress(actor, task)
+    return request_combat_path(actor, task, goal, mode)
+  }
+
   function on_path_finished(event: OnScriptPathRequestFinishedEvent) {
-    const task = manager.player_state.parameters_attack_nearest_enemy
+    const task = manager.player_state.parameters_attack_nearest_enemy as CombatTask | undefined
     if (!task || manager.player_state.task_state !== TaskStates.ATTACKING) return
     if (task.combat_path_request_id === undefined || event.id !== task.combat_path_request_id) return
     const actor = get_actor()
@@ -543,10 +663,13 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.combat_path_request_id = undefined
     task.combat_path_requested_tick = undefined
     if (event.try_again_later || !event.path || event.path.length === 0) {
+      task.combat_last_recovery_reason = event.try_again_later ? 'path_busy' : 'unreachable'
       if ((task.combat_path_attempts ?? 0) >= COMBAT_PATH_MAX_ATTEMPTS) {
+        if (!task.combat_last_spatial_observation) maybe_prepare_combat_escape(actor, task, goal, task.combat_last_recovery_reason)
         fail(actor, task, 'path_unreachable')
         return
       }
+      maybe_prepare_combat_escape(actor, task, goal, task.combat_last_recovery_reason)
       task.combat_path_next_retry_tick = game.tick + COMBAT_PATH_RETRY_DELAY_TICKS
       log(`[AUTORIO] Combat ${task.combat_path_mode} path unavailable on attempt ${task.combat_path_attempts ?? 0}; retry scheduled`)
       return
@@ -554,18 +677,22 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.combat_path = event.path
     task.combat_path_last_progress_tick = game.tick
     task.combat_path_last_waypoint_distance = distance(actor.position, event.path[0].position)
+    reset_combat_physical_progress(actor, task)
   }
 
-  function follow_combat_path(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, goal: { x: number, y: number }, mode: CombatPathMode) {
+  function follow_combat_path(actor: ControlledActor, task: CombatTask, goal: { x: number, y: number }, mode: CombatPathMode) {
     if (path_goal_changed(task, goal, mode)) clear_combat_path(task, true)
     if (mode === 'retreat' && distance(actor.position, goal) <= COMBAT_PATH_RETREAT_GOAL_RADIUS) {
       actor.set_walking_state({ walking: false, direction: defines.direction.north })
       clear_combat_path(task, true)
       return true
     }
+    if (task.combat_recovery_position && distance(actor.position, task.combat_recovery_position) <= COMBAT_RECOVERY_REACHED_DISTANCE) {
+      return finish_escape_and_repath(actor, task, goal, mode)
+    }
     if (task.combat_path_request_id !== undefined) {
       const requested_tick = task.combat_path_requested_tick ?? game.tick
-      if (game.tick - requested_tick > COMBAT_PATH_REQUEST_TIMEOUT_TICKS) retry_combat_path(actor, task, goal, mode, 'path_timeout')
+      if (game.tick - requested_tick > COMBAT_PATH_REQUEST_TIMEOUT_TICKS) retry_combat_path(actor, task, goal, mode, 'path_timeout', 'request_timeout')
       return true
     }
     if (task.combat_path_next_retry_tick !== undefined) {
@@ -580,7 +707,11 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       path.shift()
       task.combat_path_last_progress_tick = game.tick
       task.combat_path_last_waypoint_distance = path.length > 0 ? distance(actor.position, path[0].position) : undefined
-      if (path.length === 0) return request_combat_path(actor, task, goal, mode)
+      reset_combat_physical_progress(actor, task)
+      if (path.length === 0) {
+        if (task.combat_recovery_position) return finish_escape_and_repath(actor, task, goal, mode)
+        return request_combat_path(actor, task, goal, mode)
+      }
       return true
     }
     const best = task.combat_path_last_waypoint_distance
@@ -588,24 +719,33 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       task.combat_path_last_waypoint_distance = waypoint_distance
       task.combat_path_last_progress_tick = game.tick
     }
-    if (game.tick - (task.combat_path_last_progress_tick ?? game.tick) > STUCK_TICKS) {
-      retry_combat_path(actor, task, goal, mode, 'stuck')
+    if (physical_path_stuck(actor, task)) {
+      retry_combat_path(actor, task, goal, mode, 'stuck', 'physical_stuck')
+      return true
+    }
+    if (game.tick - (task.combat_path_last_progress_tick ?? game.tick) > COMBAT_PATH_STUCK_TICKS) {
+      retry_combat_path(actor, task, goal, mode, 'stuck', 'waypoint_stuck')
       return true
     }
     walk_toward(actor, next_position)
     return true
   }
 
-  function shoot_while_retreating(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, target: LuaEntity) {
+  function stable_retreat_goal(actor: ControlledActor, task: CombatTask, target: LuaEntity) {
+    if (task.last_turret_position) return task.last_turret_position
+    if (task.combat_path_mode === 'retreat' && task.combat_path_target_position) return task.combat_path_target_position
+    return retreat_position(actor, target)
+  }
+
+  function shoot_while_retreating(actor: ControlledActor, task: CombatTask, target: LuaEntity) {
     actor.update_selected_entity(target.position)
     actor.set_shooting_state({ state: defines.shooting.shooting_selected, position: target.position })
-    if (task.last_turret_position) follow_combat_path(actor, task, task.last_turret_position, 'retreat')
-    else walk_toward(actor, retreat_position(actor, target))
+    follow_combat_path(actor, task, stable_retreat_goal(actor, task, target), 'retreat')
     task.last_progress_tick = game.tick
   }
 
   function tick(actor: ControlledActor) {
-    const task = manager.player_state.parameters_attack_nearest_enemy
+    const task = manager.player_state.parameters_attack_nearest_enemy as CombatTask | undefined
     if (!task || manager.player_state.task_state !== TaskStates.ATTACKING) return
     if (!identity_matches(actor, task)) {
       fail(actor, task, 'actor_changed')
@@ -665,33 +805,22 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
         actor.set_walking_state({ walking: false, direction: defines.direction.north })
       }
       else {
-        clear_combat_path(task, true)
-        walk_toward(actor, retreat_position(actor, target))
+        follow_combat_path(actor, task, stable_retreat_goal(actor, task, target), 'retreat')
       }
       return
     }
 
     stop_actor_combat(actor)
     if (target.type === 'unit' && current_distance <= PANIC_DISTANCE) {
-      if (task.last_turret_position) follow_combat_path(actor, task, task.last_turret_position, 'retreat')
-      else walk_toward(actor, retreat_position(actor, target))
+      follow_combat_path(actor, task, stable_retreat_goal(actor, task, target), 'retreat')
       return
     }
-    if (is_static_enemy(target)) {
-      follow_combat_path(actor, task, target.position, 'approach')
-      return
-    }
-    clear_combat_path(task, true)
-    if (game.tick - (task.last_progress_tick ?? started_tick) > STUCK_TICKS) {
-      fail(actor, task, 'stuck')
-      return
-    }
-    walk_toward(actor, target.position)
+    follow_combat_path(actor, task, target.position, 'approach')
   }
 
   function status() {
     const actor = get_actor()
-    const task = manager.player_state.parameters_attack_nearest_enemy
+    const task = manager.player_state.parameters_attack_nearest_enemy as CombatTask | undefined
     const target = task?.target
     return {
       task_active: manager.player_state.task_state === TaskStates.ATTACKING,
@@ -707,6 +836,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       last_turret_unit_number: task?.last_turret_unit_number,
       turret_ammo_name: task?.turret_ammo_name,
       last_turret_ammo_loaded: task?.last_turret_ammo_loaded,
+      last_turret_placement_plan: task?.last_turret_placement_plan,
       path: task
         ? {
             mode: task.combat_path_mode,
@@ -716,6 +846,11 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
             retry_at_tick: task.combat_path_next_retry_tick,
             target_position: task.combat_path_target_position,
             last_progress_tick: task.combat_path_last_progress_tick,
+            last_physical_progress_tick: task.combat_last_physical_progress_tick,
+            recovery_position: task.combat_recovery_position,
+            recovery_stage: task.combat_recovery_stage,
+            last_recovery_reason: task.combat_last_recovery_reason,
+            spatial_observation: task.combat_last_spatial_observation,
           }
         : undefined,
       target: target && target.valid
