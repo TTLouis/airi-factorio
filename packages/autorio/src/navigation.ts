@@ -205,17 +205,11 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return false
     }
 
-    const start = actor.surface.find_non_colliding_position(
-      character.name,
-      character.position,
-      2,
-      0.25,
-      false,
-    )
-    if (!start) {
-      fail(actor, task, 'path_start_unavailable')
-      return false
-    }
+    // The path must start at the actor's real position. A nearby
+    // find_non_colliding_position() can land on the opposite side of a cliff,
+    // water edge, wall, or other collision boundary and produce a path that is
+    // valid only for a virtual start the NPC can never physically reach.
+    const start = copy_position(character.position)
 
     const target = task.target
     if (!target || !target.valid) {
@@ -248,7 +242,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     task.path_drawn = false
     task.last_waypoint_distance = undefined
     task.next_retry_tick = undefined
-    log(`[AUTORIO] Requested path id=${task.path_request_id} attempt=${task.path_attempts} to ${serpent.line(task.target_position)}`)
+    log(`[AUTORIO] Requested path id=${task.path_request_id} attempt=${task.path_attempts} from ${serpent.line(start)} to ${serpent.line(task.target_position)}`)
     return true
   }
 
@@ -332,7 +326,16 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     }
 
     if (!event.path || event.path.length === 0) {
-      fail(actor, task, 'unreachable')
+      // Dynamic entities can transiently invalidate an otherwise reachable
+      // route. Retry from the actor's current physical position, but keep the
+      // attempt count bounded so cliffs/water with no route become an explicit
+      // unreachable receipt instead of an endless walking/stuck loop.
+      if ((task.path_attempts ?? 0) >= MAX_PATH_ATTEMPTS) {
+        fail(actor, task, 'unreachable')
+        return
+      }
+      task.next_retry_tick = game.tick + PATH_RETRY_DELAY_TICKS
+      log(`[AUTORIO] No path found on attempt ${task.path_attempts ?? 0}; retrying from the current actor position`)
       return
     }
 
@@ -475,6 +478,8 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
             waypoints_remaining: task.path?.length ?? 0,
             best_waypoint_distance: task.last_waypoint_distance,
             last_progress_tick: task.last_progress_tick,
+            stuck_for_ticks: task.last_progress_tick === undefined ? undefined : game.tick - task.last_progress_tick,
+            retry_at_tick: task.next_retry_tick,
           }
         : undefined,
       last_result: storage.airi_last_navigation_result,
