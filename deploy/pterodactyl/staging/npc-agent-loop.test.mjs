@@ -100,6 +100,26 @@ test('scripted provider can observe actor then submit an epoch-authorized struct
   assert.ok(agent.messages.some(message => message.role === 'tool'))
 })
 
+test('default observation budget allows nine tool rounds before the final plan', async () => {
+  const rcon = new FakeRcon()
+  let calls = 0
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      calls++
+      if (calls < 10) return toolMessage(`tool-${calls}`, 'getActorStatus')
+      return planMessage([{ name: 'wait', args: { ticks: 1 } }])
+    },
+    systemPrompt: 'NPC test prompt',
+  })
+
+  const result = await agent.request('observe before acting')
+
+  assert.equal(calls, 10)
+  assert.equal(result.operations[0].name, 'wait')
+  assert.equal(rcon.mutations.length, 1)
+})
+
 test('actor replacement during tool observation cancels the stale model turn before mutation', async () => {
   const rcon = new FakeRcon()
   rcon.onCommand = async (text, transport) => {

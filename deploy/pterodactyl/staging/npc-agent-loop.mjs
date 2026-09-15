@@ -13,7 +13,7 @@ function strictJson(value, label) {
 }
 
 export class NpcAgentLoop {
-  constructor({ rcon, provider, systemPrompt, reserve = async () => {}, log = () => {}, maxToolRounds = 6, maxContinuations = 10 }) {
+  constructor({ rcon, provider, systemPrompt, reserve = async () => {}, log = () => {}, maxToolRounds = 10, maxContinuations = 10 }) {
     check(rcon && typeof rcon.command === 'function', 'RCON transport required')
     check(typeof provider === 'function', 'Provider adapter required')
     check(typeof systemPrompt === 'string' && systemPrompt.length > 0, 'System prompt required')
