@@ -4,6 +4,14 @@ import { register_actor_mode_transition_handler, register_npc_recovery_handler }
 import type { PlayerParameters, PlayerState } from './types'
 import { TaskStates } from './types'
 
+interface TaskBatchReceipt {
+  batch_id: number
+  task_count: number
+  task_types: TaskStates[]
+  tick: number
+  reason?: string
+}
+
 export interface TaskManagerOptions {
   /** Legacy singleton compatibility. Multi-actor contexts must set this false
    * and route lifecycle events explicitly to the owning context. */
@@ -17,10 +25,53 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
 
   const task_queue: PlayerParameters[] = []
   const cancel_handlers: Partial<Record<TaskStates, () => void>> = {}
+  let batch_sequence = 0
+  let active_batch_id: number | undefined
+  let active_batch_task_types: TaskStates[] = []
+  let last_completed_batch: TaskBatchReceipt | undefined
+  let last_cancelled_batch: TaskBatchReceipt | undefined
+
+  function begin_or_extend_batch(task: PlayerParameters) {
+    const created = active_batch_id === undefined
+    if (created) {
+      batch_sequence += 1
+      active_batch_id = batch_sequence
+      active_batch_task_types = []
+    }
+    active_batch_task_types.push(task.type)
+    return created
+  }
+
+  function close_batch(kind: 'completed' | 'cancelled', reason?: string) {
+    if (active_batch_id === undefined) return undefined
+    const receipt: TaskBatchReceipt = {
+      batch_id: active_batch_id,
+      task_count: active_batch_task_types.length,
+      task_types: [...active_batch_task_types],
+      tick: game.tick,
+      reason,
+    }
+    if (kind === 'completed') last_completed_batch = receipt
+    else last_cancelled_batch = receipt
+    active_batch_id = undefined
+    active_batch_task_types = []
+    return receipt
+  }
+
+  function receipt_details(receipt: TaskBatchReceipt) {
+    const reason = receipt.reason ? `, reason=${receipt.reason}` : ''
+    return `batch=${receipt.batch_id}, task_count=${receipt.task_count}, tasks=${receipt.task_types.join(',') || 'none'}, tick=${receipt.tick}${reason}`
+  }
 
   function add_task(task: PlayerParameters) {
+    const new_batch = begin_or_extend_batch(task)
     task_queue.push(task)
-    log(`[AUTORIO] Task added: ${task.type}, task queue length: ${task_queue.length}`)
+    log(`[AUTORIO] Task added: ${task.type}, batch=${active_batch_id}, task queue length: ${task_queue.length}`)
+    if (new_batch) {
+      const details = `batch=${active_batch_id}, first_task=${task.type}, tick=${game.tick}`
+      game.print(`[AUTORIO] Operation batch started: ${details}`)
+      log(`[AUTORIO] Operation batch started: ${details}`)
+    }
 
     if (task_queue.length === 1) {
       next_task()
@@ -33,40 +84,24 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
 
   function run_cancel_cleanup() {
     const handler = cancel_handlers[player_state.task_state]
-    if (handler) {
-      handler()
-    }
+    if (handler) handler()
   }
 
   function stop_task_controls() {
-    // Clearing our task record does not clear a standalone character's engine
-    // inputs. Stop the outgoing task's controls before a queued task can start.
-    // Do not stop unrelated controls (e.g. a human walking while hand-crafting),
-    // and do not resolve/spawn an actor for an already-idle reset.
     const state = player_state.task_state
     const stop_walking = state === TaskStates.WALKING_TO_ENTITY
       || state === TaskStates.WALKING_DIRECT
       || state === TaskStates.ATTACKING
     const stop_mining = state === TaskStates.MINING
     const stop_shooting = state === TaskStates.ATTACKING
-    if (!stop_walking && !stop_mining && !stop_shooting) {
-      return
-    }
+    if (!stop_walking && !stop_mining && !stop_shooting) return
 
     const actor = get_controlled_actor()
-    if (!actor || !actor.is_valid || !actor.character) {
-      return
-    }
+    if (!actor || !actor.is_valid || !actor.character) return
 
-    if (stop_walking) {
-      actor.set_walking_state({ walking: false, direction: defines.direction.north })
-    }
-    if (stop_mining) {
-      actor.set_mining_state({ mining: false })
-    }
-    if (stop_shooting) {
-      actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
-    }
+    if (stop_walking) actor.set_walking_state({ walking: false, direction: defines.direction.north })
+    if (stop_mining) actor.set_mining_state({ mining: false })
+    if (stop_shooting) actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
   }
 
   function clear_task_state_without_controls() {
@@ -76,6 +111,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     player_state.parameters_mine_entity = undefined
     player_state.parameters_place_entity = undefined
     player_state.parameters_move_items = undefined
+    player_state.parameters_set_recipe = undefined
     player_state.parameters_craft_item = undefined
     player_state.parameters_attack_nearest_enemy = undefined
     player_state.parameters_research_technology = undefined
@@ -96,12 +132,16 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     const task = task_queue.shift()
     if (!task) {
       player_state.task_state = TaskStates.IDLE
-      game.print('[AUTORIO] All operations completed')
-      log('[AUTORIO] All operations completed')
+      const receipt = close_batch('completed')
+      const details = receipt
+        ? receipt_details(receipt)
+        : `batch=none, task_count=0, tasks=none, tick=${game.tick}`
+      game.print(`[AUTORIO] All operations completed: ${details}`)
+      log(`[AUTORIO] All operations completed: ${details}`)
       return
     }
 
-    log(`[AUTORIO] Next task: ${task.type}, task queue length: ${task_queue.length}`)
+    log(`[AUTORIO] Next task: ${task.type}, batch=${active_batch_id}, task queue length: ${task_queue.length}`)
     player_state.task_state = task.type
     switch (task.type) {
       case TaskStates.WALKING_TO_ENTITY:
@@ -119,10 +159,10 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       case TaskStates.MOVING_ITEMS:
         player_state.parameters_move_items = task
         break
+      case TaskStates.SETTING_RECIPE:
+        player_state.parameters_set_recipe = task
+        break
       case TaskStates.CRAFTING:
-        // Native queue admission/start belongs to the crafting controller so it
-        // can bind actor identity, reject an already-busy native queue, verify
-        // output, and clean up only task-owned native work on cancellation.
         player_state.parameters_craft_item = task
         break
       case TaskStates.ATTACKING:
@@ -135,6 +175,18 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
         player_state.parameters_waiting = task
         break
     }
+  }
+
+  function interrupt_current_with(recovery_task: PlayerParameters, resume_task: PlayerParameters) {
+    if (player_state.task_state === TaskStates.IDLE) return false
+    const interrupted_type = player_state.task_state
+    stop_task_controls()
+    clear_task_state_without_controls()
+    task_queue.unshift(resume_task)
+    task_queue.unshift(recovery_task)
+    log(`[AUTORIO] Temporarily interrupted ${interrupted_type} with ${recovery_task.type}; original task will resume afterward`)
+    next_task()
+    return true
   }
 
   function is_task_queue_empty() {
@@ -151,6 +203,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
           ? {
               type: task.type,
               entity_name: task.entity_name,
+              player_name: task.target_player_name,
               search_radius: task.search_radius,
               path_index: task.path_index,
               calculating_path: task.calculating_path,
@@ -185,16 +238,27 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
               type: task.type,
               item_name: task.item_name,
               entity_name: task.entity_name,
+              player_name: task.player_name,
+              target_unit_number: task.target_unit_number,
               max_count: task.max_count,
               to_entity: task.to_entity,
+              to_player: task.to_player,
+            }
+          : { type: player_state.task_state }
+      }
+      case TaskStates.SETTING_RECIPE: {
+        const task = player_state.parameters_set_recipe
+        return task
+          ? {
+              type: task.type,
+              target_unit_number: task.target_unit_number,
+              recipe_name: task.recipe_name,
             }
           : { type: player_state.task_state }
       }
       case TaskStates.CRAFTING: {
         const task = player_state.parameters_craft_item
-        if (!task) {
-          return { type: player_state.task_state }
-        }
+        if (!task) return { type: player_state.task_state }
         const actor = get_controlled_actor()
         return {
           type: task.type,
@@ -239,6 +303,15 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       queue_length: task_queue.length,
       queued_task_types: task_queue.map(task => task.type),
       current_task: get_current_task_snapshot(),
+      active_batch: active_batch_id === undefined
+        ? undefined
+        : {
+            batch_id: active_batch_id,
+            task_count: active_batch_task_types.length,
+            task_types: [...active_batch_task_types],
+          },
+      last_completed_batch,
+      last_cancelled_batch,
     }
   }
 
@@ -247,18 +320,27 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     reset_task_state()
   }
 
-  function cancel_all_tasks() {
+  function cancel_all_tasks(reason = 'cancelled') {
     run_cancel_cleanup()
     reset_task_state()
-    task_queue.length = 0 // can use this to clear the array in lua
+    task_queue.length = 0
+    const receipt = close_batch('cancelled', reason)
+    if (receipt) {
+      const details = receipt_details(receipt)
+      game.print(`[AUTORIO] Operation batch cancelled: ${details}`)
+      log(`[AUTORIO] Operation batch cancelled: ${details}`)
+    }
   }
 
   function discard_all_tasks_after_actor_loss() {
-    // The previous actor is already invalid. Do not call task cleanup or
-    // stop_task_controls(), because resolving an actor here would enter
-    // replacement creation again. Native state on the dead body is gone with it.
     clear_task_state_without_controls()
     task_queue.length = 0
+    const receipt = close_batch('cancelled', 'actor_loss')
+    if (receipt) {
+      const details = receipt_details(receipt)
+      game.print(`[AUTORIO] Operation batch cancelled: ${details}`)
+      log(`[AUTORIO] Operation batch cancelled: ${details}`)
+    }
   }
 
   function handle_actor_loss(previous_actor_id: number) {
@@ -267,13 +349,8 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
   }
 
   function handle_actor_mode_transition(previous_mode: ActorMode, next_mode: ActorMode) {
-    if (player_state.task_state === TaskStates.IDLE && task_queue.length === 0) {
-      return
-    }
-    // The actor controller invokes this before changing storage.airi_actor_mode,
-    // so cancellation resolves the previous actor and stops/cancels only work
-    // that belonged to that actor (including an owned native crafting queue).
-    cancel_all_tasks()
+    if (player_state.task_state === TaskStates.IDLE && task_queue.length === 0) return
+    cancel_all_tasks('actor_mode_change')
     log(`[AUTORIO] Cancelled active and queued work before actor mode change ${previous_mode} -> ${next_mode}`)
   }
 
@@ -286,6 +363,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     player_state,
     add_task,
     next_task,
+    interrupt_current_with,
     is_task_queue_empty,
     get_status_snapshot,
     reset_task_state,
