@@ -4,6 +4,8 @@ import { toolDefinitions } from './structured-policy.mjs'
 const COMPLETION_MARKER = '[MOD] Autorio operation batch completed.'
 const COMPLETION_MAX_TOKENS = 1000
 const DEFAULT_MAX_TOKENS = 2000
+const PLAN_STATE_MARKER = '[PLAN_STATE]'
+const MEMORY_MARKER = '[MEMORY]'
 
 const COMPACT_CONTINUATION_PROMPT = `You are AIRI, an autonomous standalone Factorio NPC. This request is a successful Autorio batch-completion continuation for an existing user goal, not a new goal.
 
@@ -31,12 +33,110 @@ function isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAtte
   return typeof lastUser?.content === 'string' && lastUser.content.startsWith(COMPLETION_MARKER)
 }
 
+function leanTaskBoard(board) {
+  if (!board || typeof board !== 'object' || Array.isArray(board)) return undefined
+  return {
+    kind: board.kind,
+    goal_id: board.goal_id,
+    status: board.status,
+    blocker: board.blocker,
+    pause_reason: board.pause_reason,
+    revision: board.revision,
+    completed_count: board.completed_count,
+    total_steps: board.total_steps,
+    active_index: board.active_index,
+    active_step_id: board.active_step_id,
+    steps: Array.isArray(board.steps)
+      ? board.steps.slice(0, 30).map(step => ({
+          id: step?.id,
+          description: step?.description,
+          status: step?.status,
+        }))
+      : undefined,
+    evidence: Array.isArray(board.evidence) ? board.evidence.slice(-4) : undefined,
+  }
+}
+
+export function compactPlanStateContent(content) {
+  const text = String(content ?? '')
+  const markerAt = text.lastIndexOf(PLAN_STATE_MARKER)
+  if (markerAt < 0) {
+    if (text.startsWith(MEMORY_MARKER)) {
+      return '[MEMORY COMPACTED] Prior dialogue is omitted for this successful deterministic continuation; use the original current chat request, previous assistant plan, and live tools when needed.'
+    }
+    return text
+  }
+
+  const planText = text.slice(markerAt)
+  const newlineAt = planText.indexOf('\n')
+  if (newlineAt < 0) return planText
+  try {
+    const state = JSON.parse(planText.slice(newlineAt + 1))
+    if (!state || typeof state !== 'object' || Array.isArray(state)) return planText
+    const lean = {
+      goal_id: state.goal_id,
+      owner: state.owner,
+      objective: state.objective,
+      status: state.status,
+      blocker: state.blocker,
+      pause_reason: state.pause_reason,
+      persistent_runtime: state.persistent_runtime,
+      task_board: leanTaskBoard(state.task_board),
+      plan: Array.isArray(state.plan) ? state.plan.slice(0, 30) : undefined,
+      current_step: state.current_step,
+      current_step_text: state.current_step_text,
+      revision: state.revision,
+      last_operations: Array.isArray(state.last_operations) ? state.last_operations.slice(-16) : undefined,
+    }
+    return `${PLAN_STATE_MARKER} Compact harness-owned durable goal/plan state for this successful continuation.\n${JSON.stringify(lean)}`
+  }
+  catch {
+    // Even if the state cannot be parsed, discard older dialogue before the
+    // marker. Recovery attempts use the original unmodified messages.
+    return planText
+  }
+}
+
+export function compactCompletionReceipt(content) {
+  const text = String(content ?? '')
+  if (!text.startsWith(COMPLETION_MARKER)) return text
+  const receiptAt = text.indexOf('Detailed task receipt:')
+  if (receiptAt < 0) return text
+  const raw = text.slice(receiptAt + 'Detailed task receipt:'.length).trim()
+  try {
+    const status = JSON.parse(raw)
+    if (!status || typeof status !== 'object' || Array.isArray(status)) return text
+    const lean = {
+      task_state: status.task_state,
+      queue_empty: status.queue_empty,
+      queue_length: status.queue_length,
+      last_completed_batch: status.last_completed_batch,
+      last_cancelled_batch: status.last_cancelled_batch,
+      basic_operation: status.basic_operation?.last_result
+        ? { last_result: status.basic_operation.last_result }
+        : undefined,
+    }
+    return `${COMPLETION_MARKER} Compact task receipt: ${JSON.stringify(lean)}`
+  }
+  catch {
+    return text
+  }
+}
+
 export function compactCompletionMessages(messages) {
-  let replaced = false
+  let replacedSystem = false
   return messages.map((message) => {
-    if (!replaced && message?.role === 'system') {
-      replaced = true
+    if (!replacedSystem && message?.role === 'system') {
+      replacedSystem = true
       return { ...message, content: COMPACT_CONTINUATION_PROMPT }
+    }
+    if (message?.role === 'user' && typeof message.content === 'string') {
+      if (message.content.startsWith(COMPLETION_MARKER)) {
+        return { ...message, content: compactCompletionReceipt(message.content) }
+      }
+      if (message.content.startsWith(MEMORY_MARKER) || message.content.includes(PLAN_STATE_MARKER)) {
+        return { ...message, content: compactPlanStateContent(message.content) }
+      }
     }
     return { ...message }
   })
