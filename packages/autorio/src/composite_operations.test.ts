@@ -34,6 +34,7 @@ beforeEach(() => {
   ;(globalThis as any).storage = {}
   ;(globalThis as any).game.tick = 100
   ;(globalThis as any).prototypes.entity['iron-ore'] = { type: 'resource' }
+  ;(globalThis as any).prototypes.entity.coal = { type: 'resource' }
   ;(globalThis as any).prototypes.entity['tree-01'] = { type: 'tree' }
 })
 
@@ -54,6 +55,28 @@ describe('composite resource gathering', () => {
       active_batch: {
         task_count: 2,
         task_types: [TaskStates.WALKING_TO_ENTITY, TaskStates.MINING],
+      },
+    })
+  })
+
+  it('keeps multiple known resource gathers in one batch so they need one completion continuation', () => {
+    const f = fixture()
+
+    expect(f.composite.gather_resource('iron-ore', 20, 512)[0]).toBe(true)
+    expect(f.composite.gather_resource('coal', 10, 512)[0]).toBe(true)
+
+    expect(f.manager.get_status_snapshot()).toMatchObject({
+      task_state: TaskStates.WALKING_TO_ENTITY,
+      queue_length: 3,
+      queued_task_types: [TaskStates.MINING, TaskStates.WALKING_TO_ENTITY, TaskStates.MINING],
+      active_batch: {
+        task_count: 4,
+        task_types: [
+          TaskStates.WALKING_TO_ENTITY,
+          TaskStates.MINING,
+          TaskStates.WALKING_TO_ENTITY,
+          TaskStates.MINING,
+        ],
       },
     })
   })
