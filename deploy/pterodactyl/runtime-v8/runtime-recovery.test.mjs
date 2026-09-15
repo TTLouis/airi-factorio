@@ -92,12 +92,16 @@ test('!airi stop cancels an in-flight model turn immediately and reports that th
   assert.ok(commands.some(command => command.includes('Paused the current AIRI plan')))
 })
 
-test('only active or system-interrupted plans are eligible for automatic recovery', () => {
+test('only active or infrastructure-interrupted plans are eligible for automatic recovery', () => {
   assert.equal(shouldRecoverInterruptedPlan({ status: 'active' }), true)
   assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'npc_identity_or_session_changed' }), true)
   assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'actor_replaced' }), true)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'server_stop_signal' }), true)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'server_stop_requested' }), true)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'server_stop_console' }), true)
   assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'user_stop' }), false)
   assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'ui_pause' }), false)
+  assert.equal(shouldRecoverInterruptedPlan({ status: 'paused', pause_reason: 'ui_follow' }), false)
   assert.equal(shouldRecoverInterruptedPlan({ status: 'blocked' }), false)
   assert.equal(shouldRecoverInterruptedPlan({ status: 'completed' }), false)
 })
