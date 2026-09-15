@@ -38,6 +38,10 @@ const playerStatusSchema = z.object({
   player_name: factorioNameSchema,
 }).strict()
 
+const recipeDetailsSchema = z.object({
+  item_or_recipe: factorioNameSchema,
+}).strict()
+
 async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow' | 'autorio_defense' | 'autorio_equipment') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
@@ -99,6 +103,18 @@ export const tools: ToolFunction[] = [
         },
       })
       logger.withFields({ response: response.data.output }).debug('Recipe')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getRecipeDetails',
+    description: 'Get bounded deterministic recipe knowledge for an item/fluid or recipe name, including categories, craft time, ingredients/products, hand-crafting category compatibility, and compatible crafting-machine prototypes.',
+    schema: recipeDetailsSchema,
+    fn: async ({ parameters }) => {
+      const parsed = recipeDetailsSchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "recipe_details", ${renderLuaString(parsed.item_or_recipe)})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Detailed recipe knowledge')
       return response.data.output
     },
   },
