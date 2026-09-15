@@ -47,7 +47,7 @@ build/Release
 node_modules/
 jspm_packages/
 
-# Snowpack dependency directory (https://snowpack.dev/)
+# Snowpack dependency directory
 web_modules/
 
 # TypeScript cache
@@ -84,7 +84,7 @@ web_modules/
 .env.production.local
 .env.local
 
-# parcel-bundler cache (https://parceljs.org/)
+# parcel-bundler cache
 .cache
 .parcel-cache
 
@@ -99,7 +99,7 @@ dist
 # Gatsby files
 .cache/
 # Comment in the public line in if your project uses Gatsby and not Next.js
-# https://nextjs.org/blog/next-9-1#public-directory-support
+# https://nextjs.org/blog/next-9-1#public-directory
 # public
 
 # vuepress build output
@@ -141,3 +141,6 @@ dist
 .pnp.*
 
 .pnpm-store/
+
+# Docker Compose server state
+/data/
