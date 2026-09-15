@@ -148,6 +148,14 @@ export interface PlayerParametersAttackNearestEnemy {
   last_distance?: number
   targets_destroyed?: number
   turrets_placed?: number
+  /** Number of hostile spawners/worm turrets observed when an area-clear task
+   * first acquires its bounded combat area. */
+  initial_static_threats?: number
+  /** Deterministic maximum support-turret count derived from initial_static_threats. */
+  support_turret_budget?: number
+  /** Becomes true only after the NPC has advanced to a safe staging distance;
+   * prevents dropping a turret immediately at the task origin. */
+  support_stage_started?: boolean
   last_turret_position?: MapPositionStruct
   last_turret_unit_number?: number
   turret_ammo_name?: string
