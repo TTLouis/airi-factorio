@@ -4,16 +4,18 @@ import type {
   PlayerParametersMineEntity,
   PlayerParametersMoveItems,
   PlayerParametersPlaceEntity,
+  PlayerParametersSetRecipe,
   PlayerParametersWaiting,
 } from './types'
 import { TaskStates } from './types'
 
-type BasicTask = PlayerParametersMineEntity | PlayerParametersPlaceEntity | PlayerParametersMoveItems | PlayerParametersWaiting
+type BasicTask = PlayerParametersMineEntity | PlayerParametersPlaceEntity | PlayerParametersMoveItems | PlayerParametersSetRecipe | PlayerParametersWaiting
 type BasicOperationCode = 'queued' | 'completed' | 'cancelled'
-  | 'no_actor' | 'invalid_count' | 'invalid_ticks' | 'invalid_max_count' | 'invalid_position' | 'invalid_direction' | 'invalid_unit_number'
+  | 'no_actor' | 'invalid_count' | 'invalid_ticks' | 'invalid_max_count' | 'invalid_position' | 'invalid_direction' | 'invalid_unit_number' | 'invalid_recipe'
   | 'actor_changed' | 'no_target' | 'target_gone' | 'no_inventory' | 'wrong_force'
   | 'invalid_entity' | 'item_missing' | 'no_position' | 'create_failed'
   | 'nothing_moved' | 'player_unavailable' | 'different_surface' | 'too_far'
+  | 'not_recipe_machine' | 'recipe_disabled' | 'incompatible_recipe' | 'set_recipe_failed'
 
 export interface BasicOperationResult {
   operation_id?: number
@@ -27,6 +29,7 @@ export interface BasicOperationResult {
   force_index?: number
   entity_name?: string
   target_unit_number?: number
+  recipe_name?: string
   player_name?: string
   item_name?: string
   requested_count?: number
@@ -57,6 +60,10 @@ function valid_integer(value: number, min: number, max: number) {
 
 function valid_coordinate(value: number) {
   return typeof value === 'number' && value === value && value >= -1000000 && value <= 1000000
+}
+
+function valid_name(value: string) {
+  return typeof value === 'string' && value.length >= 1 && value.length <= 200 && !/[\x00-\x1f\x7f]/.test(value)
 }
 
 function next_operation_id() {
@@ -101,7 +108,8 @@ function result_for(actor: ControlledActor | undefined, task: BasicTask | undefi
     actor_kind: bound?.actor_kind ?? identity?.kind,
     force_index: bound?.force_index ?? (actor?.is_valid ? actor.force.index : undefined),
     entity_name: task && 'entity_name' in task ? task.entity_name : undefined,
-    target_unit_number: task?.type === TaskStates.MOVING_ITEMS ? task.target_unit_number : undefined,
+    target_unit_number: task?.type === TaskStates.MOVING_ITEMS || task?.type === TaskStates.SETTING_RECIPE ? task.target_unit_number : undefined,
+    recipe_name: task?.type === TaskStates.SETTING_RECIPE ? task.recipe_name : undefined,
     player_name: task?.type === TaskStates.MOVING_ITEMS ? task.player_name : undefined,
     item_name: task && 'item_name' in task ? task.item_name : undefined,
     requested_count: task?.type === TaskStates.MINING ? (task.requested_count ?? task.count) : undefined,
@@ -218,6 +226,26 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
     return [true, 'Task started']
   }
 
+  function submit_set_recipe_exact(target_unit_number: number, recipe_name: string): [boolean, string] {
+    if (!valid_integer(target_unit_number, 1, 9007199254740991)) {
+      result_for(get_actor(), undefined, false, false, 'invalid_unit_number')
+      return [false, 'unit_number must be a positive safe integer']
+    }
+    if (!valid_name(recipe_name)) {
+      result_for(get_actor(), undefined, false, false, 'invalid_recipe')
+      return [false, 'recipe_name must be a valid Factorio recipe name']
+    }
+    const actor = actor_for_submission()
+    if (!actor) return [false, 'No controlled actor']
+    const task: PlayerParametersSetRecipe = {
+      type: TaskStates.SETTING_RECIPE,
+      target_unit_number,
+      recipe_name,
+    }
+    if (!queue(task, actor)) return [false, 'No controlled actor']
+    return [true, 'Task started']
+  }
+
   function submit_player_move(item_name: string, player_name: string, max_count: number, to_player: boolean): [boolean, string] {
     if (!valid_integer(max_count, 1, 100000)) {
       result_for(get_actor(), undefined, false, false, 'invalid_max_count')
@@ -270,7 +298,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
     log(`[AUTORIO] [ERROR] ${task.type} failed: ${code}; dependent operations cancelled`)
   }
 
-  function register_cancel(state: TaskStates.MINING | TaskStates.PLACING | TaskStates.MOVING_ITEMS | TaskStates.WAITING, get_task: () => BasicTask | undefined) {
+  function register_cancel(state: TaskStates.MINING | TaskStates.PLACING | TaskStates.MOVING_ITEMS | TaskStates.SETTING_RECIPE | TaskStates.WAITING, get_task: () => BasicTask | undefined) {
     manager.register_cancel_handler(state, () => {
       if (suppress_cancel_receipt) return
       const task = get_task()
@@ -283,6 +311,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
   register_cancel(TaskStates.MINING, () => manager.player_state.parameters_mine_entity)
   register_cancel(TaskStates.PLACING, () => manager.player_state.parameters_place_entity)
   register_cancel(TaskStates.MOVING_ITEMS, () => manager.player_state.parameters_move_items)
+  register_cancel(TaskStates.SETTING_RECIPE, () => manager.player_state.parameters_set_recipe)
   register_cancel(TaskStates.WAITING, () => manager.player_state.parameters_waiting)
 
   function status() {
@@ -297,6 +326,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
     submit_placement,
     submit_move,
     submit_move_exact,
+    submit_set_recipe_exact,
     submit_player_move,
     submit_wait,
     complete,
