@@ -69,7 +69,7 @@ describe('actual prompt/message harness', () => {
     expect(result?.operationCommands).toEqual(["remote.call('autorio_operations', 'wait', 3)"])
   })
 
-  it('keeps the structured model response in history and appends completion events', async () => {
+  it('keeps the structured model response in history and appends detailed completion receipts', async () => {
     const handler = await createMessageHandler()
 
     const firstResponse = JSON.stringify(modelPlan())
@@ -92,13 +92,17 @@ describe('actual prompt/message harness', () => {
     await handler.handleMessage({
       type: 'operationsCompleted',
       serverTimestamp: '10.000',
+      details: 'batch=4, task_count=1, tasks=waiting, tick=123',
     })
 
     expect(mocks.call).toHaveBeenCalledTimes(2)
     const [messages] = mocks.call.mock.calls[1]
     expect(messages[0]).toEqual({ role: 'system', content: systemPrompt })
     expect(messages).toContainEqual({ role: 'assistant', content: firstResponse })
-    expect(messages).toContainEqual({ role: 'user', content: '[MOD] All operations completed' })
+    expect(messages).toContainEqual({
+      role: 'user',
+      content: '[MOD] All operations completed. Batch receipt: batch=4, task_count=1, tasks=waiting, tick=123',
+    })
     expect(messages.filter((message: { role: string }) => message.role === 'system')).toHaveLength(1)
   })
 
