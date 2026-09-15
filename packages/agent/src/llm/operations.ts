@@ -6,6 +6,7 @@ export const factorioNameSchema = z.string()
   .regex(/^[^\u0000-\u001f\u007f]+$/, 'Factorio names cannot contain control characters')
 
 const transferCount = z.number().int().min(1).max(100000)
+const unitNumber = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
 const boundedTaskCount = z.number().int().min(1).max(1000)
 const searchRadius = z.number().int().min(1).max(4096)
 const combatSearchRadius = z.number().int().min(1).max(256)
@@ -102,6 +103,15 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     }).strict(),
   }).strict(),
   z.object({
+    name: z.literal('move_items_exact'),
+    args: z.object({
+      item_name: factorioNameSchema,
+      unit_number: unitNumber,
+      max_count: transferCount,
+      to_entity: z.boolean(),
+    }).strict(),
+  }).strict(),
+  z.object({
     name: z.literal('move_items_with_player'),
     args: z.object({
       item_name: factorioNameSchema,
@@ -166,6 +176,7 @@ const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]mine_entity['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]place_entity['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]move_items['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
+  new RegExp(`${callStart}['"]move_items_exact['"]${separator}${quotedSafeName}${separator}${positiveInteger}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]move_items_with_player['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]craft_item['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]attack_nearest_enemy['"](?:${separator}${positiveInteger})?${callEnd}`),
@@ -229,6 +240,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
     }
     case 'move_items':
       return `remote.call('autorio_operations', 'move_items', ${renderLuaString(operation.args.item_name)}, ${renderLuaString(operation.args.entity_name)}, ${operation.args.max_count}, ${operation.args.to_entity})`
+    case 'move_items_exact':
+      return `remote.call('autorio_operations', 'move_items_exact', ${renderLuaString(operation.args.item_name)}, ${operation.args.unit_number}, ${operation.args.max_count}, ${operation.args.to_entity})`
     case 'move_items_with_player':
       return `remote.call('autorio_operations', 'move_items_with_player', ${renderLuaString(operation.args.item_name)}, ${renderLuaString(operation.args.player_name)}, ${operation.args.max_count}, ${operation.args.to_player})`
     case 'craft_item':
