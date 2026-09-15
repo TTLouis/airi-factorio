@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   sanitize_task_board_ui_snapshot,
@@ -52,5 +53,11 @@ describe('in-game task board UI projection', () => {
 
     expect(toggle_task_board_ui_open(1)).toBe(false)
     expect(task_board_ui_is_open(1)).toBe(false)
+  })
+
+  it('does not erase Factorio GUI element types before chained add calls', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).not.toMatch(/const\s+\w+\s*:\s*any\s*=\s*player\.gui/)
+    expect(source).not.toContain('const root: any')
   })
 })
