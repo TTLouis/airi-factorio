@@ -30,6 +30,26 @@ describe('structured Autorio operations', () => {
     ])
   })
 
+  it('validates and renders bounded precise placement', () => {
+    const [precise] = parseStructuredOperations([
+      { name: 'place_entity', args: { entity_name: 'assembling-machine-1', x: 12.5, y: -4, direction: 6 } },
+    ])
+    expect(precise).toEqual({
+      name: 'place_entity',
+      args: { entity_name: 'assembling-machine-1', x: 12.5, y: -4, direction: 6 },
+    })
+    expect(renderStructuredOperation(precise)).toBe("remote.call('autorio_operations', 'place_entity', 'assembling-machine-1', 12.5, -4, 6)")
+
+    const [directionOnly] = parseStructuredOperations([
+      { name: 'place_entity', args: { entity_name: 'transport-belt', direction: 4 } },
+    ])
+    expect(renderStructuredOperation(directionOnly)).toBe("remote.call('autorio_operations', 'place_entity', 'transport-belt', nil, nil, 4)")
+
+    expect(() => parseStructuredOperations([{ name: 'place_entity', args: { entity_name: 'steel-chest', x: 1 } }])).toThrow()
+    expect(() => parseStructuredOperations([{ name: 'place_entity', args: { entity_name: 'steel-chest', y: 1 } }])).toThrow()
+    expect(() => parseStructuredOperations([{ name: 'place_entity', args: { entity_name: 'steel-chest', x: 1, y: 1, direction: 16 } }])).toThrow()
+  })
+
   it('rejects unknown operations and unexpected arguments', () => {
     expect(() => parseStructuredOperations([{ name: 'game.clear', args: {} }])).toThrow()
     expect(() => parseStructuredOperations([{ name: 'wait', args: { ticks: 60, arbitrary_lua: 'game.clear()' } }])).toThrow()
