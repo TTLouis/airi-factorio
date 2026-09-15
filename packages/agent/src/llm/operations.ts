@@ -11,6 +11,18 @@ const searchRadius = z.number().int().min(1).max(4096)
 const combatSearchRadius = z.number().int().min(1).max(256)
 const followDistance = z.number().min(1).max(64).default(4)
 const equipmentSlot = z.number().int().min(1).max(64)
+const placementCoordinate = z.number().min(-1000000).max(1000000)
+const placementDirection = z.number().int().min(0).max(15)
+const placementArgs = z.object({
+  entity_name: factorioNameSchema,
+  x: placementCoordinate.optional(),
+  y: placementCoordinate.optional(),
+  direction: placementDirection.optional(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.x === undefined) !== (value.y === undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'x and y must be provided together' })
+  }
+})
 
 export const structuredOperationSchema = z.discriminatedUnion('name', [
   z.object({
@@ -78,9 +90,7 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
   }).strict(),
   z.object({
     name: z.literal('place_entity'),
-    args: z.object({
-      entity_name: factorioNameSchema,
-    }).strict(),
+    args: placementArgs,
   }).strict(),
   z.object({
     name: z.literal('move_items'),
@@ -206,8 +216,17 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'select_weapon_slot', ${operation.args.slot})`
     case 'mine_entity':
       return `remote.call('autorio_operations', 'mine_entity', ${renderLuaString(operation.args.entity_name)}, ${operation.args.count})`
-    case 'place_entity':
-      return `remote.call('autorio_operations', 'place_entity', ${renderLuaString(operation.args.entity_name)})`
+    case 'place_entity': {
+      const name = renderLuaString(operation.args.entity_name)
+      if (operation.args.x !== undefined && operation.args.y !== undefined) {
+        const direction = operation.args.direction === undefined ? 'nil' : String(operation.args.direction)
+        return `remote.call('autorio_operations', 'place_entity', ${name}, ${operation.args.x}, ${operation.args.y}, ${direction})`
+      }
+      if (operation.args.direction !== undefined) {
+        return `remote.call('autorio_operations', 'place_entity', ${name}, nil, nil, ${operation.args.direction})`
+      }
+      return `remote.call('autorio_operations', 'place_entity', ${name})`
+    }
     case 'move_items':
       return `remote.call('autorio_operations', 'move_items', ${renderLuaString(operation.args.item_name)}, ${renderLuaString(operation.args.entity_name)}, ${operation.args.max_count}, ${operation.args.to_entity})`
     case 'move_items_with_player':
