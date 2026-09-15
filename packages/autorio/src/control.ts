@@ -167,6 +167,7 @@ remote.add_interface('autorio_operations', {
   },
   craft_item: (item_name: string, count: number = 1): [boolean, string] => crafting_controller.submit(item_name, count),
   attack_nearest_enemy: (search_radius: number = 50): [boolean, string] => combat_controller.submit(search_radius),
+  clear_enemy_area: (search_radius: number = 96): [boolean, string] => combat_controller.submit_clear(search_radius),
   research_technology: (name: string): [boolean, string, number] => research_controller.submit(name),
   cancel_all_tasks: () => {
     task_manager.cancel_all_tasks()
