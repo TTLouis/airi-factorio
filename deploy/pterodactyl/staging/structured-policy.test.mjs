@@ -122,6 +122,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'getEntityStatus',
     'getEntityGeometry',
     'getLogisticsTopology',
+    'measureTransportThroughput',
     'getNavigationStatus',
     'getFollowStatus',
     'getDefenseStatus',
