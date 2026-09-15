@@ -43,6 +43,7 @@ const operationKeys = {
   mine_entity: ['entity_name', 'count'],
   place_entity: ['entity_name', 'x', 'y', 'direction'],
   move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
+  move_items_exact: ['item_name', 'unit_number', 'max_count', 'to_entity'],
   move_items_with_player: ['item_name', 'player_name', 'max_count', 'to_player'],
   craft_item: ['item_name', 'count'],
   attack_nearest_enemy: ['search_radius'],
@@ -96,6 +97,9 @@ export function parseOperation(value) {
     case 'move_items':
       check(typeof args.to_entity === 'boolean', 'to_entity must be boolean')
       return { name, args: { item_name: factorioName(args.item_name), entity_name: factorioName(args.entity_name), max_count: integer(args.max_count, 'max_count', 1, 100000), to_entity: args.to_entity } }
+    case 'move_items_exact':
+      check(typeof args.to_entity === 'boolean', 'to_entity must be boolean')
+      return { name, args: { item_name: factorioName(args.item_name), unit_number: integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER), max_count: integer(args.max_count, 'max_count', 1, 100000), to_entity: args.to_entity } }
     case 'move_items_with_player':
       check(typeof args.to_player === 'boolean', 'to_player must be boolean')
       return { name, args: { item_name: factorioName(args.item_name), player_name: factorioName(args.player_name), max_count: integer(args.max_count, 'max_count', 1, 100000), to_player: args.to_player } }
@@ -137,6 +141,7 @@ export function renderOperation(value) {
       return `remote.call('autorio_operations','place_entity',${name})`
     }
     case 'move_items': return `remote.call('autorio_operations','move_items',${luaString(operation.args.item_name)},${luaString(operation.args.entity_name)},${operation.args.max_count},${operation.args.to_entity})`
+    case 'move_items_exact': return `remote.call('autorio_operations','move_items_exact',${luaString(operation.args.item_name)},${operation.args.unit_number},${operation.args.max_count},${operation.args.to_entity})`
     case 'move_items_with_player': return `remote.call('autorio_operations','move_items_with_player',${luaString(operation.args.item_name)},${luaString(operation.args.player_name)},${operation.args.max_count},${operation.args.to_player})`
     case 'craft_item': return `remote.call('autorio_operations','craft_item',${luaString(operation.args.item_name)},${operation.args.count})`
     case 'attack_nearest_enemy': return `remote.call('autorio_operations','attack_nearest_enemy',${operation.args.search_radius})`
