@@ -98,6 +98,16 @@ export function installedAppRoot(moduleUrl = import.meta.url) {
   return path.resolve(path.dirname(fileURLToPath(moduleUrl)), '..', '..')
 }
 
+export function routeNpcRequest(text, npcName = '') {
+  const trimmed = String(text ?? '').trim()
+  if (!trimmed || !npcName) return trimmed
+  const separator = trimmed.indexOf(' ')
+  if (separator < 0) return trimmed
+  const candidate = trimmed.slice(0, separator)
+  if (candidate.localeCompare(npcName, undefined, { sensitivity: 'accent' }) !== 0) return trimmed
+  return trimmed.slice(separator + 1).trim()
+}
+
 function parseStatus(text) {
   let value
   try { value = JSON.parse(String(text).trim()) }
@@ -129,6 +139,17 @@ export class Session {
     this.lastCompletionAt = 0
     this.lastStatus = null
     this.authorizationPromise = null
+    this.npcName = 'AIRI'
+    this.npcId = 'airi'
+  }
+
+  updateNpcIdentity(status) {
+    if (typeof status?.actor_name === 'string' && status.actor_name.length > 0 && status.actor_name.length <= 200) {
+      this.npcName = status.actor_name
+    }
+    if (typeof status?.npc_id === 'string' && status.npc_id.length > 0 && status.npc_id.length <= 200) {
+      this.npcId = status.npc_id
+    }
   }
 
   cleanEnv() {
@@ -158,6 +179,7 @@ export class Session {
 
   async bindNpc() {
     const status = await configureNpcSession(this.rcon, this.session)
+    this.updateNpcIdentity(status)
     this.lastStatus = status
     return status
   }
@@ -176,6 +198,7 @@ export class Session {
         && Number.isSafeInteger(current.epoch)
         && current.epoch > 0
       if (stable) {
+        this.updateNpcIdentity(current)
         this.lastStatus = current
         return current
       }
@@ -233,6 +256,7 @@ export class Session {
     this.agent = new NpcAgentLoop({
       rcon: this.rcon,
       systemPrompt: prompt,
+      npcId: this.npcId,
       provider: (messages, context) => this.provider({
         base: this.config.base,
         key: this.config.key,
@@ -250,7 +274,7 @@ export class Session {
     this.poll = setInterval(() => {
       if (!this.stopping) this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
     }, 2000)
-    this.log(`AIRI Factorio ready; standalone NPC actor_id=${this.lastStatus.actor_id}, chat=${describeChatPlayers(this.config.chatPlayers)}`)
+    this.log(`AIRI Factorio ready; npc=${this.npcName} (${this.npcId}), actor_id=${this.lastStatus.actor_id}, chat=${describeChatPlayers(this.config.chatPlayers)}`)
     return this.lastStatus
   }
 
@@ -269,14 +293,16 @@ export class Session {
   async printChat(message) {
     if (!message || !this.rcon || this.stopping) return
     const clean = String(message).replace(/[\r\n]+/g, ' ').slice(0, 2000)
-    await this.rcon.command(`/silent-command game.print(${luaString(`[AIRI] ${clean}`)})`)
+    const label = this.npcName && this.npcName !== 'AIRI' ? `[AIRI/${this.npcName}]` : '[AIRI]'
+    await this.rcon.command(`/silent-command game.print(${luaString(`${label} ${clean}`)})`)
   }
 
   onGameLine(line) {
     if (!this.ready || this.stopping || !this.agent) return
     const chat = line.match(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[CHAT\] ([^:\r\n]+): !airi (.{1,4000})$/)
     if (chat && chatAuthorized(this.config.chatPlayers, chat[1])) {
-      const text = chat[2].trim()
+      const text = routeNpcRequest(chat[2], this.npcName)
+      if (!text) return
       const stop = text.toLowerCase() === 'stop'
       if (stop) this.agent.cancel()
       this.queueEvent(async () => {
@@ -364,14 +390,16 @@ async function main() {
   check(os.arch() === 'x64', 'AIRI Pterodactyl v8 requires amd64')
   const root = path.resolve(process.env.CONTAINER_ROOT || '/home/container')
   const app = installedAppRoot()
-  const manifest = await verifyManifest(app)
-  await directory(path.join(root, '.airi'))
-  await directory(path.join(root, '.airi', 'tmp'))
+  const manifest = await readJson(path.join(app, 'manifest.json'))
+  check(manifest?.revision === 'airi-pterodactyl-v8', 'Missing v8 release manifest')
+  await verifyManifest(app)
+  await directory(root)
+  await directory(path.join(root, 'data'))
   const raw = await migrateConfigFile(path.join(root, 'airi-config.json'))
   const config = configuration(raw)
   const game = path.join(app, 'factorio')
   await regularFile(path.join(game, 'bin', 'x64', 'factorio'))
-  const work = await fsp.mkdtemp(path.join(root, '.airi', 'run-'))
+  const work = await fsp.mkdtemp(path.join(root, '.airi-run-'))
   let session
   let requestedStop = false
   const log = message => console.log(`[${new Date().toISOString()}] [AIRI Factorio] ${message}`)
