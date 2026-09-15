@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { buildArtifacts, channelInstaller, installerLoader, verifyGeneratedArtifacts } from './build-payload.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const PAYLOAD_REF = 'a16cc6d1201ae529813a4530a51125ba2654a144'
-const PAYLOAD_SHA256 = '47c6c03953e49d4791f1ba7d5bf7b0189a903585a7082f894350df4eef2dbc83'
+const PAYLOAD_REF = '9ef5bc6cdfb8fbf3c5a2e52b82bc3ad41c856f3e'
+const PAYLOAD_SHA256 = '40537a476eb189a613a7d0ed6cd8ffb1fee36a1c34aa6dcb136172659edd0fbf'
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
 REVISION="test"
@@ -99,4 +99,8 @@ test('committed Pterodactyl artifacts are internally valid and reinstall stays d
   assert.match(sourceText, /pnpm --filter autorio\.ts run typecheck/)
   assert.match(sourceText, /pnpm --filter autorio\.ts run build/)
   assert.match(sourceText, /packages\/autorio\/dist\/data\.lua/)
+  assert.match(sourceText, /canonical-task-board-memory\.mjs/)
+  assert.match(sourceText, /AIRI_SUPERVISOR_VERIFY=/)
+  assert.match(sourceText, /await import\(pathToFileURL\(process\.env\.AIRI_SUPERVISOR_VERIFY\)\.href\)/)
+  assert.match(sourceText, /src\/runtime-v8\/canonical-task-board-memory\.mjs/)
 })
