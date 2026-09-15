@@ -185,6 +185,9 @@ export const toolDefinitions = [
   functionTool('getRecipeDetails', 'Read bounded deterministic recipe knowledge, including categories, ingredients/products and compatible crafting-machine prototypes.', {
     type: 'object', properties: { item_or_recipe: nameStringSchema }, required: ['item_or_recipe'], additionalProperties: false,
   }),
+  functionTool('getPrototypeDetails', 'Read bounded static prototype/build knowledge for an item, fluid, or entity: stack/place result, footprint, crafting/mining capability, belt speed, inserter offsets, fluidbox roles, and selected energy metadata.', {
+    type: 'object', properties: { name: nameStringSchema }, required: ['name'], additionalProperties: false,
+  }),
   functionTool('getPlayerStatus', 'Read one exact human player by name, including availability, surface, position, and distance from AIRI when comparable.', {
     type: 'object', properties: { player_name: nameStringSchema }, required: ['player_name'], additionalProperties: false,
   }),
@@ -283,6 +286,9 @@ export function toolCommand(name, rawArgs = {}) {
     case 'getRecipeDetails':
       noExtra(args, ['item_or_recipe'])
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","recipe_details",${luaString(factorioName(args.item_or_recipe))})))`
+    case 'getPrototypeDetails':
+      noExtra(args, ['name'])
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_prototypes","details",${luaString(factorioName(args.name))})))`
     case 'getPlayerStatus':
       noExtra(args, ['player_name'])
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_player_status",${luaString(factorioName(args.player_name))})))`
