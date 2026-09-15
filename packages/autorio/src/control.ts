@@ -20,6 +20,7 @@ import { new_equipment_controller } from './equipment'
 import { new_follow_controller } from './follow'
 import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
+import { create_production_planning_remote_interface } from './production_planning_remote'
 import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
 import { new_recipe_configuration_runtime } from './recipe_configuration'
 import { new_research_controller } from './research'
@@ -33,6 +34,7 @@ create_tools_remote_interface()
 create_discovery_remote_interface(get_controlled_actor)
 create_knowledge_remote_interface(get_controlled_actor)
 create_prototype_knowledge_remote_interface()
+create_production_planning_remote_interface(get_controlled_actor)
 
 let setup_complete = false
 
