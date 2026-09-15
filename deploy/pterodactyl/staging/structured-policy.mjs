@@ -14,6 +14,11 @@ function integer(value, label, min, max) {
   return value
 }
 
+function finiteNumber(value, label, min, max) {
+  check(typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max, `${label} must be a number from ${min} to ${max}`)
+  return value
+}
+
 export function luaString(value) {
   check(typeof value === 'string' && Buffer.byteLength(value) <= 16384, 'Invalid Lua string')
   return `'${value.replaceAll('\\', '\\\\').replaceAll("'", "\\'").replaceAll('\n', '\\n').replaceAll('\r', '\\r')}'`
@@ -27,6 +32,8 @@ function exactKeys(value, allowed) {
 
 const operationKeys = {
   walk_to_entity: ['entity_name', 'search_radius'],
+  follow_player: ['player_name', 'follow_distance'],
+  stop_follow_player: [],
   mine_entity: ['entity_name', 'count'],
   place_entity: ['entity_name'],
   move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
@@ -46,7 +53,11 @@ export function parseOperation(value) {
 
   switch (name) {
     case 'walk_to_entity':
-      return { name, args: { entity_name: factorioName(args.entity_name), search_radius: integer(args.search_radius, 'search_radius', 1, 256) } }
+      return { name, args: { entity_name: factorioName(args.entity_name), search_radius: integer(args.search_radius, 'search_radius', 1, 4096) } }
+    case 'follow_player':
+      return { name, args: { player_name: factorioName(args.player_name), follow_distance: finiteNumber(args.follow_distance ?? 4, 'follow_distance', 1, 64) } }
+    case 'stop_follow_player':
+      return { name, args: {} }
     case 'mine_entity':
       return { name, args: { entity_name: factorioName(args.entity_name), count: integer(args.count ?? 1, 'count', 1, 1000) } }
     case 'place_entity':
@@ -71,6 +82,8 @@ export function renderOperation(value) {
   const operation = parseOperation(value)
   switch (operation.name) {
     case 'walk_to_entity': return `remote.call('autorio_operations','walk_to_entity',${luaString(operation.args.entity_name)},${operation.args.search_radius})`
+    case 'follow_player': return `remote.call('autorio_operations','follow_player',${luaString(operation.args.player_name)},${operation.args.follow_distance})`
+    case 'stop_follow_player': return `remote.call('autorio_operations','stop_follow_player')`
     case 'mine_entity': return `remote.call('autorio_operations','mine_entity',${luaString(operation.args.entity_name)},${operation.args.count})`
     case 'place_entity': return `remote.call('autorio_operations','place_entity',${luaString(operation.args.entity_name)})`
     case 'move_items': return `remote.call('autorio_operations','move_items',${luaString(operation.args.item_name)},${luaString(operation.args.entity_name)},${operation.args.max_count},${operation.args.to_entity})`
@@ -121,6 +134,16 @@ export const toolDefinitions = [
     },
     additionalProperties: false,
   }),
+  functionTool('findLongRangeEntities', 'Search outward for an exact Factorio prototype name, up to 4096 tiles, returning a bounded number of distant targets.', {
+    type: 'object',
+    properties: {
+      name: nameStringSchema,
+      max_radius: { type: 'integer', minimum: 64, maximum: 4096, default: 1024 },
+      limit: { type: 'integer', minimum: 1, maximum: 16, default: 8 },
+    },
+    required: ['name'],
+    additionalProperties: false,
+  }),
   functionTool('getEntityStatus', 'Inspect one nearest exact-name local entity.', {
     type: 'object',
     properties: { name: nameStringSchema, radius: { type: 'integer', minimum: 1, maximum: 32, default: 8 } },
@@ -128,6 +151,7 @@ export const toolDefinitions = [
     additionalProperties: false,
   }),
   functionTool('getNavigationStatus', 'Read bounded navigation target and last result.', emptyObjectSchema),
+  functionTool('getFollowStatus', 'Read persistent player-follow state, target player, configured distance, and current distance.', emptyObjectSchema),
   functionTool('getCraftingStatus', 'Read bounded native crafting ownership and last result.', emptyObjectSchema),
   functionTool('getResearchStatus', 'Read force research and latest request/follow-through state.', emptyObjectSchema),
   functionTool('getResearchRequest', 'Read one exact correlated research request and follow-through record by request ID.', {
@@ -174,6 +198,13 @@ export function toolCommand(name, rawArgs = {}) {
       const entityType = args.type === undefined ? 'nil' : luaString(factorioName(args.type))
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_nearby_entities",${radius},${entityName},${entityType},${limit})))`
     }
+    case 'findLongRangeEntities': {
+      noExtra(args, ['name', 'max_radius', 'limit'])
+      const entityName = factorioName(args.name)
+      const maxRadius = integer(args.max_radius ?? 1024, 'max_radius', 64, 4096)
+      const limit = integer(args.limit ?? 8, 'limit', 1, 16)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",${luaString(entityName)},${maxRadius},${limit})))`
+    }
     case 'getEntityStatus': {
       noExtra(args, ['name', 'radius'])
       const radius = integer(args.radius ?? 8, 'radius', 1, 32)
@@ -182,6 +213,9 @@ export function toolCommand(name, rawArgs = {}) {
     case 'getNavigationStatus':
       noExtra(args, [])
       return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_navigation","status")))'
+    case 'getFollowStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_follow","status")))'
     case 'getCraftingStatus':
       noExtra(args, [])
       return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting","status")))'

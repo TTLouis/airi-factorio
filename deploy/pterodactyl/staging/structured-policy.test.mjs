@@ -9,8 +9,16 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.deepEqual(parseOperation({ name: 'attack_nearest_enemy', args: {} }), {
     name: 'attack_nearest_enemy', args: { search_radius: 50 },
   })
+  assert.deepEqual(parseOperation({ name: 'follow_player', args: { player_name: 'TTLouis' } }), {
+    name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 4 },
+  })
+  assert.deepEqual(parseOperation({ name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 4096 } }), {
+    name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 4096 },
+  })
   assert.equal(renderOperation({ name: 'wait', args: { ticks: 60 } }), "remote.call('autorio_operations','wait',60)")
   assert.equal(renderOperation({ name: 'place_entity', args: { entity_name: "mod's-chest" } }), "remote.call('autorio_operations','place_entity','mod\\'s-chest')")
+  assert.equal(renderOperation({ name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 3.5 } }), "remote.call('autorio_operations','follow_player','TTLouis',3.5)")
+  assert.equal(renderOperation({ name: 'stop_follow_player', args: {} }), "remote.call('autorio_operations','stop_follow_player')")
 })
 
 test('operation policy rejects arbitrary code, extra args, and oversized bounded values', () => {
@@ -18,7 +26,10 @@ test('operation policy rejects arbitrary code, extra args, and oversized bounded
     { name: 'game.clear', args: {} },
     { name: 'wait', args: { ticks: 60, lua: 'game.clear()' } },
     { name: 'wait', args: { ticks: 360001 } },
-    { name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 257 } },
+    { name: 'walk_to_entity', args: { entity_name: 'iron-ore', search_radius: 4097 } },
+    { name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 65 } },
+    { name: 'follow_player', args: { player_name: 'TTLouis\n/c game.clear()' } },
+    { name: 'stop_follow_player', args: { player_name: 'TTLouis' } },
     { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } },
     { name: 'mine_entity', args: { entity_name: 'iron-ore\n/c game.clear()', count: 1 } },
   ]) assert.throws(() => parseOperation(operation))
@@ -43,8 +54,10 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'getInventoryItems',
     'getRecipe',
     'getNearbyEntities',
+    'findLongRangeEntities',
     'getEntityStatus',
     'getNavigationStatus',
+    'getFollowStatus',
     'getCraftingStatus',
     'getResearchStatus',
     'getResearchRequest',
@@ -53,15 +66,19 @@ test('tool surface matches current NPC observation contract and uses strict sche
   ])
   for (const tool of toolDefinitions) assert.equal(tool.function.parameters.additionalProperties, false)
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getRecipe').function.parameters.required, ['item'])
+  assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'findLongRangeEntities').function.parameters.required, ['name'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getResearchRequest').function.parameters.required, ['request_id'])
 })
 
 test('read-only tool renderer targets native actor-aware interfaces without player indexes', () => {
   assert.equal(toolCommand('getActorStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor","status")))')
+  assert.equal(toolCommand('getFollowStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_follow","status")))')
   assert.equal(toolCommand('getCraftingStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting","status")))')
   assert.equal(toolCommand('getResearchRequest', { request_id: 42 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","request_result",42)))')
   assert.equal(toolCommand('getRecipe', { item: 'iron-gear-wheel' }), '/silent-command remote.call("autorio_tools","get_recipe",\'iron-gear-wheel\')')
   assert.equal(toolCommand('getNearbyEntities', { radius: 32, name: 'iron-ore', type: 'resource', limit: 25 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_nearby_entities",32,\'iron-ore\',\'resource\',25)))')
+  assert.equal(toolCommand('findLongRangeEntities', { name: 'iron-ore', max_radius: 2048, limit: 4 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",\'iron-ore\',2048,4)))')
+  assert.equal(toolCommand('findLongRangeEntities', { name: 'copper-ore' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",\'copper-ore\',1024,8)))')
   assert.equal(toolCommand('getEntityStatus', { name: 'steel-chest' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_entity_status",\'steel-chest\',8)))')
 })
 
@@ -70,6 +87,11 @@ test('tool calls reject unknown names, unsafe names, extras, and out-of-bound sc
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate', force: 'enemy' }))
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate\n/c game.clear()' }))
   assert.throws(() => toolCommand('getNearbyEntities', { radius: 65 }))
+  assert.throws(() => toolCommand('findLongRangeEntities', { name: 'iron-ore', max_radius: 4097 }))
+  assert.throws(() => toolCommand('findLongRangeEntities', { name: 'iron-ore', limit: 17 }))
+  assert.throws(() => toolCommand('findLongRangeEntities', { name: 'iron-ore', force: 'enemy' }))
+  assert.throws(() => toolCommand('findLongRangeEntities', { name: 'iron-ore\n/c game.clear()' }))
+  assert.throws(() => toolCommand('getFollowStatus', { player_name: 'TTLouis' }))
   assert.throws(() => toolCommand('getEntityStatus', { name: 'steel-chest', radius: 33 }))
   assert.throws(() => toolCommand('getResearchRequest', { request_id: 0 }))
   assert.throws(() => toolCommand('getResearchRequest', { request_id: 1.5 }))
