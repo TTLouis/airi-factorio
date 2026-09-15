@@ -9,6 +9,7 @@ import type {
 
 import type { ControlledActor } from './actors/types'
 import { get_controlled_actor } from './actors/actor_controller'
+import { new_awareness_controller } from './awareness'
 import { new_basic_operation_runtime } from './basic_operation_runtime'
 import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
@@ -29,6 +30,7 @@ create_discovery_remote_interface(get_controlled_actor)
 let setup_complete = false
 
 export const task_manager = new_task_manager(get_controlled_actor)
+const awareness_controller = new_awareness_controller()
 const basic_operation_controller = new_basic_operation_controller(get_controlled_actor, task_manager)
 const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_operation_controller)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
@@ -249,6 +251,7 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     return
   }
   no_actor_found = false
+  awareness_controller.tick(actor)
 
   if (task_manager.player_state.task_state === TaskStates.IDLE) {
     follow_controller.tick(actor)
