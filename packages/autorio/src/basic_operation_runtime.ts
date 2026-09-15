@@ -2,6 +2,7 @@ import type { LuaEntity, LuaInventory, SurfaceCreateEntity, UnitNumber } from 'f
 import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
 import type { new_task_manager } from './task_manager'
+import type { PlayerParametersMineEntity, PlayerParametersWalkToEntity } from './types'
 import { TaskStates } from './types'
 
 type Manager = ReturnType<typeof new_task_manager>
@@ -10,6 +11,8 @@ type BasicController = ReturnType<typeof new_basic_operation_controller>
 const PLAYER_TRANSFER_DISTANCE = 8
 const ENTITY_TRANSFER_DISTANCE = 8
 const MAX_PLACEMENT_DISTANCE = 10
+const MINING_TARGET_SEARCH_RADIUS = 5
+const MINING_REACH_MARGIN = 0.25
 
 function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
   let min_distance = math.huge
@@ -26,6 +29,45 @@ function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
 
 function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
+}
+
+function mining_reach_distance(actor: ControlledActor, entity: LuaEntity) {
+  const character = actor.character
+  if (!character) return 0.5
+  const raw = entity.type === 'resource'
+    ? character.resource_reach_distance
+    : character.reach_distance
+  const reach = typeof raw === 'number' && raw === raw && raw > 0 && raw < math.huge ? raw : 2.5
+  return math.max(0.5, reach - MINING_REACH_MARGIN)
+}
+
+function within_mining_reach(actor: ControlledActor, entity: LuaEntity) {
+  const reach = mining_reach_distance(actor, entity)
+  return squared_distance(actor.position, entity.position) <= reach ** 2
+}
+
+function mining_reposition_task(actor: ControlledActor, entity: LuaEntity): PlayerParametersWalkToEntity | undefined {
+  const identity = actor.status_snapshot()
+  if (identity.actor_id === undefined) return undefined
+  return {
+    type: TaskStates.WALKING_TO_ENTITY,
+    entity_name: entity.name,
+    search_radius: MINING_TARGET_SEARCH_RADIUS,
+    reach_distance: mining_reach_distance(actor, entity),
+    path: null,
+    path_drawn: false,
+    path_index: 1,
+    calculating_path: false,
+    target_position: { x: entity.position.x, y: entity.position.y },
+    target: entity,
+    target_unit_number: entity.unit_number,
+    owner_actor_id: identity.actor_id,
+    owner_actor_kind: identity.kind,
+    owner_force_index: actor.force.index,
+    path_attempts: 0,
+    started_tick: game.tick,
+    last_progress_tick: game.tick,
+  }
 }
 
 function entity_inventories(entity: LuaEntity, item_name: string, require_insert: boolean) {
@@ -59,6 +101,26 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       radius: 0.25,
       name: task.entity_name,
     })[0]
+  }
+
+  function reposition_for_mining(actor: ControlledActor, entity: LuaEntity, task: PlayerParametersMineEntity) {
+    const navigation = mining_reposition_task(actor, entity)
+    if (!navigation) {
+      controller.fail(actor, task, 'actor_changed')
+      return false
+    }
+
+    const reach = navigation.reach_distance ?? 0
+    const target_position = { x: entity.position.x, y: entity.position.y }
+    actor.set_mining_state({ mining: false })
+    task.position = undefined
+    task.last_target_amount = undefined
+    if (!manager.interrupt_current_with(navigation, task)) {
+      controller.fail(actor, task, 'too_far')
+      return false
+    }
+    log(`[AUTORIO] Mining target ${entity.name} at ${serpent.line(target_position)} is outside reach; repositioning to <=${reach} tiles before resuming the same mining operation`)
+    return true
   }
 
   function finish_mining(actor: ControlledActor) {
@@ -118,6 +180,15 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     }
 
     if (poll_standalone_mining(actor)) return
+
+    if (task.position) {
+      const existing = current_mining_target(actor)
+      if (existing && !within_mining_reach(actor, existing)) {
+        reposition_for_mining(actor, existing, task)
+        return
+      }
+    }
+
     if (actor.get_mining_state().mining) return
 
     if (task.position) {
@@ -132,7 +203,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
 
     const entities = actor.surface.find_entities_filtered({
       position: actor.position,
-      radius: 5,
+      radius: MINING_TARGET_SEARCH_RADIUS,
       name: task.entity_name,
     })
     if (entities.length === 0) {
@@ -142,6 +213,10 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     const nearest = nearest_entity(actor, entities)
     if (!nearest) {
       controller.fail(actor, task, 'no_target')
+      return
+    }
+    if (!within_mining_reach(actor, nearest)) {
+      reposition_for_mining(actor, nearest, task)
       return
     }
     start_mining(actor, nearest)
