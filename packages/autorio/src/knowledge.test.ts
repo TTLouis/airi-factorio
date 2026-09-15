@@ -185,6 +185,7 @@ describe('entity geometry knowledge', () => {
       force: { name: 'player' },
       surface: { index: 1 },
       fluids_count: 0,
+      fluidbox: { length: 0 },
       pickup_position: { x: 1, y: 0 },
       drop_position: { x: 3, y: 0 },
       pickup_target: source,
@@ -217,6 +218,7 @@ describe('entity geometry knowledge', () => {
       force: { name: 'player' },
       surface: { index: 1 },
       fluids_count: 0,
+      fluidbox: { length: 0 },
       drop_position: { x: 10, y: 7 },
       drop_target: undefined,
     }
@@ -240,22 +242,13 @@ describe('entity geometry knowledge', () => {
       direction: 0,
       force: { name: 'player' },
     }
-    const chemicalPlant = {
-      valid: true,
-      name: 'chemical-plant',
-      type: 'assembling-machine',
-      unit_number: 77,
-      position: { x: 20, y: 20 },
-      direction: 2,
-      force: { name: 'player' },
-      surface: { index: 1 },
-      fluids_count: 2,
-      get_fluid_capacity: (index: number) => index === 1 ? 100 : 200,
-      get_fluid: (index: number) => index === 1 ? { name: 'water', amount: 40, temperature: 15 } : undefined,
-      get_fluid_box_prototype: (index: number) => index === 1
+    const fluidbox = {
+      length: 2,
+      get_capacity: (index: number) => index === 1 ? 100 : 200,
+      get_prototype: (index: number) => index === 1
         ? { index: 1, production_type: 'input', filter: undefined }
         : { index: 2, production_type: 'output', filter: { name: 'sulfuric-acid' } },
-      get_fluid_box_pipe_connections: (index: number) => index === 1
+      get_pipe_connections: (index: number) => index === 1
         ? [{
             flow_direction: 'input',
             connection_type: 'normal',
@@ -272,9 +265,27 @@ describe('entity geometry knowledge', () => {
             target_pipe_connection_index: 1,
           }],
     }
+    const chemicalPlant = {
+      valid: true,
+      name: 'chemical-plant',
+      type: 'assembling-machine',
+      unit_number: 77,
+      position: { x: 20, y: 20 },
+      direction: 2,
+      force: { name: 'player' },
+      surface: { index: 1 },
+      fluids_count: 2,
+      fluidbox,
+      get_fluid: (index: number) => index === 1 ? { name: 'water', amount: 40, temperature: 15 } : undefined,
+    }
     ;(globalThis as any).game.get_entity_by_unit_number = () => chemicalPlant
 
     const result = entity_geometry_for_actor(actor, 77) as any
+    expect(result).toMatchObject({
+      fluid_storage_count: 2,
+      fluid_box_count: 2,
+      non_fluidbox_storage_count: 0,
+    })
     expect(result.fluid_storages).toHaveLength(2)
     expect(result.fluid_storages[0]).toMatchObject({
       index: 1,
@@ -294,6 +305,30 @@ describe('entity geometry knowledge', () => {
         position: { x: 21, y: 20 },
         target: { name: 'pipe', unit_number: 90 },
       }],
+    })
+  })
+
+  it('reports fluid storage that is not exposed through LuaFluidBox without probing an invalid port', () => {
+    const entity = {
+      valid: true,
+      name: 'fluid-wagon',
+      type: 'fluid-wagon',
+      unit_number: 81,
+      position: { x: 4, y: 4 },
+      direction: 0,
+      force: { name: 'player' },
+      surface: { index: 1 },
+      fluids_count: 1,
+      fluidbox: { length: 0 },
+    }
+    ;(globalThis as any).game.get_entity_by_unit_number = () => entity
+
+    expect(entity_geometry_for_actor(actor, 81)).toMatchObject({
+      found: true,
+      fluid_storage_count: 1,
+      fluid_box_count: 0,
+      non_fluidbox_storage_count: 1,
+      fluid_storages: [],
     })
   })
 
