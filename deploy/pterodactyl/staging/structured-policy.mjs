@@ -35,6 +35,7 @@ const operationKeys = {
   walk_to_player: ['player_name'],
   follow_player: ['player_name', 'follow_distance'],
   stop_follow_player: [],
+  set_auto_defense: ['enabled'],
   equip_weapon: ['item_name', 'slot'],
   equip_ammo: ['item_name', 'slot'],
   equip_armor: ['item_name'],
@@ -67,6 +68,9 @@ export function parseOperation(value) {
       return { name, args: { player_name: factorioName(args.player_name), follow_distance: finiteNumber(args.follow_distance ?? 4, 'follow_distance', 1, 64) } }
     case 'stop_follow_player':
       return { name, args: {} }
+    case 'set_auto_defense':
+      check(typeof args.enabled === 'boolean', 'enabled must be boolean')
+      return { name, args: { enabled: args.enabled } }
     case 'equip_weapon':
       return { name, args: { item_name: factorioName(args.item_name), slot: integer(args.slot ?? 1, 'slot', 1, 64) } }
     case 'equip_ammo':
@@ -107,6 +111,7 @@ export function renderOperation(value) {
     case 'walk_to_player': return `remote.call('autorio_operations','walk_to_player',${luaString(operation.args.player_name)})`
     case 'follow_player': return `remote.call('autorio_operations','follow_player',${luaString(operation.args.player_name)},${operation.args.follow_distance})`
     case 'stop_follow_player': return `remote.call('autorio_operations','stop_follow_player')`
+    case 'set_auto_defense': return `remote.call('autorio_operations','set_auto_defense',${operation.args.enabled})`
     case 'equip_weapon': return `remote.call('autorio_operations','equip_weapon',${luaString(operation.args.item_name)},${operation.args.slot})`
     case 'equip_ammo': return `remote.call('autorio_operations','equip_ammo',${luaString(operation.args.item_name)},${operation.args.slot})`
     case 'equip_armor': return `remote.call('autorio_operations','equip_armor',${luaString(operation.args.item_name)})`
@@ -185,6 +190,7 @@ export const toolDefinitions = [
   }),
   functionTool('getNavigationStatus', 'Read bounded navigation target and last result.', emptyObjectSchema),
   functionTool('getFollowStatus', 'Read persistent player-follow state, target player, configured distance, and current distance.', emptyObjectSchema),
+  functionTool('getDefenseStatus', 'Read persistent follow auto-defense policy, defensive radius, and current nearby hostile target.', emptyObjectSchema),
   functionTool('getCraftingStatus', 'Read bounded native crafting ownership and last result.', emptyObjectSchema),
   functionTool('getResearchStatus', 'Read force research and latest request/follow-through state.', emptyObjectSchema),
   functionTool('getResearchRequest', 'Read one exact correlated research request and follow-through record by request ID.', {
@@ -255,6 +261,9 @@ export function toolCommand(name, rawArgs = {}) {
     case 'getFollowStatus':
       noExtra(args, [])
       return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_follow","status")))'
+    case 'getDefenseStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_defense","status")))'
     case 'getCraftingStatus':
       noExtra(args, [])
       return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting","status")))'
