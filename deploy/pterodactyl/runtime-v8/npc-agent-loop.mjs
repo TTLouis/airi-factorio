@@ -1,15 +1,35 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
-import { AgentLoopError, NpcAgentLoop as BaseNpcAgentLoop, NpcDialogueMemory } from '../staging/npc-agent-loop.mjs'
+import { AgentLoopError, NpcAgentLoop as BaseNpcAgentLoop, NpcDialogueMemory as BaseNpcDialogueMemory } from '../staging/npc-agent-loop.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
 import { renderOperation, toolCommand } from './structured-policy.mjs'
 
-export { AgentLoopError, NpcDialogueMemory }
+export { AgentLoopError }
 
 const TRACE_MAX_BYTES = 5 * 1024 * 1024
 const TRACE_FILES = 5
 const SENSITIVE_TRACE_KEY = /(?:authorization|api.?key|token|password|secret|cookie|session)/i
+const STATE_SCHEMA = 1
+const PLAN_HISTORY_LIMIT = 24
+
+const DURABLE_PLAN_PROMPT = `
+## Durable goal and plan state
+
+The Pterodactyl harness may provide a [PLAN_STATE] message. It is harness-owned durable goal/plan context for this logical NPC and survives ordinary model turns and server restarts. Use it to resume a prior task, answer what you were doing, or continue after a pause. It is not authoritative live Factorio state: re-observe mutable world state before depending on it.
+
+For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
+
+An empty operations array means no Autorio world action will happen after your reply. Never say that you are now continuing, going to mine, walking somewhere, placing something, loading something, attacking something, or otherwise executing a next step while returning operations: []. If work remains, submit the concrete next operation(s), or clearly report the blocker/pause. When the whole requested goal is actually verified complete, return plan: [], currentStep: 0, operations: [], and say it is complete.
+
+Before a non-empty operation batch, chatMessage should tell the human what concrete current plan step AIRI is about to attempt. [MOD] completion/error messages may include a detailed getTaskStatus snapshot. Use that receipt plus any needed read-only verification to advance, replan, complete, or report a blocker.
+`.trim()
+
+function cleanMemoryText(value, max) {
+  const text = String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (text.length <= max) return text
+  return `${text.slice(0, Math.max(0, max - 1))}…`
+}
 
 function sanitizeTraceValue(value, key = '') {
   if (SENSITIVE_TRACE_KEY.test(key)) return '[REDACTED]'
@@ -22,6 +42,222 @@ function sanitizeTraceValue(value, key = '') {
   if (Array.isArray(value)) return value.map(item => sanitizeTraceValue(item))
   if (!value || typeof value !== 'object') return value
   return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, sanitizeTraceValue(childValue, childKey)]))
+}
+
+function safePlan(plan) {
+  return Array.isArray(plan) ? plan.slice(0, 30).map(step => cleanMemoryText(step, 500)) : []
+}
+
+function currentPlanStep(plan, currentStep) {
+  if (!Array.isArray(plan) || plan.length === 0) return ''
+  return plan[Math.min(Math.max(currentStep, 0), plan.length - 1)] ?? ''
+}
+
+export class NpcDialogueMemory extends BaseNpcDialogueMemory {
+  constructor(options = {}) {
+    super(options)
+    this.planByNpc = new Map()
+  }
+
+  planContext(key) {
+    const state = this.planByNpc.get(key)
+    if (!state) return ''
+    const visible = {
+      goal_id: state.goal_id,
+      owner: state.owner,
+      objective: state.objective,
+      status: state.status,
+      blocker: state.blocker,
+      pause_reason: state.pause_reason,
+      plan: state.plan,
+      current_step: state.current_step,
+      current_step_text: currentPlanStep(state.plan, state.current_step),
+      revision: state.revision,
+      last_chat_message: state.last_chat_message,
+      last_operations: state.last_operations,
+      history: state.history.slice(-8),
+    }
+    return `[PLAN_STATE] Harness-owned durable goal/plan state. Continue from this state when the human asks to continue/resume, but re-observe mutable Factorio state before acting.\n${JSON.stringify(visible)}`
+  }
+
+  context(key) {
+    return [super.context(key), this.planContext(key)].filter(Boolean).join('\n')
+  }
+
+  currentPlan(key) {
+    return key ? this.planByNpc.get(key) : undefined
+  }
+
+  recordPlan(key, requestInfo, plan, { continuation = false } = {}) {
+    const previous = this.planByNpc.get(key)
+    const hasOperations = plan.operations.length > 0
+    const incomingPlan = safePlan(plan.plan)
+    const incomingStep = Number.isSafeInteger(plan.currentStep) ? plan.currentStep : 0
+    const now = Date.now()
+
+    if (!hasOperations && !continuation) {
+      return { state: previous, blockedByHarness: false, changed: false }
+    }
+
+    const history = previous
+      ? [...previous.history, {
+          revision: previous.revision,
+          status: previous.status,
+          current_step: previous.current_step,
+          step: currentPlanStep(previous.plan, previous.current_step),
+          chat: previous.last_chat_message,
+        }].slice(-PLAN_HISTORY_LIMIT)
+      : []
+
+    if (hasOperations) {
+      const state = {
+        goal_id: previous?.goal_id ?? `goal_${now.toString(36)}`,
+        owner: cleanMemoryText(requestInfo?.sender ?? previous?.owner ?? 'unknown', 128),
+        objective: cleanMemoryText(previous?.objective ?? requestInfo?.text ?? '', 1000),
+        status: 'active',
+        blocker: '',
+        pause_reason: '',
+        plan: incomingPlan,
+        current_step: incomingStep,
+        revision: (previous?.revision ?? 0) + 1,
+        last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
+        last_operations: plan.operations.slice(0, 16).map(operation => cleanMemoryText(`${operation.name} ${JSON.stringify(operation.args ?? {})}`, 800)),
+        updated_at: now,
+        history,
+      }
+      this.planByNpc.set(key, state)
+      return { state, blockedByHarness: false, changed: true }
+    }
+
+    if (!previous) return { state: undefined, blockedByHarness: false, changed: false }
+
+    if (incomingPlan.length > 0) {
+      const state = {
+        ...previous,
+        status: 'blocked',
+        blocker: 'no_autorio_operation_for_remaining_plan',
+        pause_reason: '',
+        plan: incomingPlan,
+        current_step: incomingStep,
+        revision: previous.revision + 1,
+        last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
+        last_operations: [],
+        updated_at: now,
+        history,
+      }
+      this.planByNpc.set(key, state)
+      return { state, blockedByHarness: true, changed: true }
+    }
+
+    const state = {
+      ...previous,
+      status: 'completed',
+      blocker: '',
+      pause_reason: '',
+      plan: [],
+      current_step: 0,
+      revision: previous.revision + 1,
+      last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
+      last_operations: [],
+      updated_at: now,
+      history,
+    }
+    this.planByNpc.set(key, state)
+    return { state, blockedByHarness: false, changed: true }
+  }
+
+  pausePlan(key, reason = 'cancelled') {
+    const previous = key ? this.planByNpc.get(key) : undefined
+    if (!previous || previous.status === 'completed') return previous
+    const state = {
+      ...previous,
+      status: 'paused',
+      blocker: '',
+      pause_reason: cleanMemoryText(reason, 300),
+      revision: previous.revision + 1,
+      updated_at: Date.now(),
+      history: [...previous.history, {
+        revision: previous.revision,
+        status: previous.status,
+        current_step: previous.current_step,
+        step: currentPlanStep(previous.plan, previous.current_step),
+        chat: previous.last_chat_message,
+      }].slice(-PLAN_HISTORY_LIMIT),
+    }
+    this.planByNpc.set(key, state)
+    return state
+  }
+
+  maxTurnId() {
+    let max = 0
+    for (const bucket of this.byNpc.values()) {
+      for (const turn of bucket.recent ?? []) if (Number.isSafeInteger(turn.id)) max = Math.max(max, turn.id)
+    }
+    return max
+  }
+
+  snapshot() {
+    return {
+      version: STATE_SCHEMA,
+      dialogue: [...this.byNpc.entries()].map(([key, bucket]) => ({ key, summary: bucket.summary, recent: bucket.recent })),
+      plans: [...this.planByNpc.entries()].map(([key, state]) => ({ key, state })),
+    }
+  }
+
+  restore(snapshot) {
+    if (!snapshot || snapshot.version !== STATE_SCHEMA || !Array.isArray(snapshot.dialogue) || !Array.isArray(snapshot.plans)) {
+      throw new AgentLoopError('Invalid persisted NPC state')
+    }
+    this.byNpc.clear()
+    this.planByNpc.clear()
+
+    for (const item of snapshot.dialogue.slice(0, 128)) {
+      if (!item || typeof item.key !== 'string' || item.key.length < 1 || item.key.length > 200) continue
+      const bucket = this.bucket(item.key)
+      bucket.summary = cleanMemoryText(item.summary, this.maxSummaryChars)
+      bucket.recent = []
+      const recent = Array.isArray(item.recent) ? item.recent.slice(-this.maxRecentTurns * 2) : []
+      for (const turn of recent) {
+        if (!turn || !Number.isSafeInteger(turn.id) || turn.id < 1) continue
+        bucket.recent.push({
+          id: turn.id,
+          sender: cleanMemoryText(turn.sender, 128),
+          user: cleanMemoryText(turn.user, this.maxFieldChars),
+          assistant: cleanMemoryText(turn.assistant, this.maxFieldChars),
+          actions: cleanMemoryText(turn.actions, this.maxFieldChars),
+        })
+      }
+      this.compact(bucket)
+    }
+
+    for (const item of snapshot.plans.slice(0, 128)) {
+      if (!item || typeof item.key !== 'string' || item.key.length < 1 || item.key.length > 200) continue
+      const value = item.state
+      if (!value || typeof value !== 'object' || typeof value.goal_id !== 'string') continue
+      if (!['active', 'blocked', 'paused', 'completed'].includes(value.status)) continue
+      this.planByNpc.set(item.key, {
+        goal_id: cleanMemoryText(value.goal_id, 100),
+        owner: cleanMemoryText(value.owner, 128),
+        objective: cleanMemoryText(value.objective, 1000),
+        status: value.status,
+        blocker: cleanMemoryText(value.blocker, 500),
+        pause_reason: cleanMemoryText(value.pause_reason, 300),
+        plan: safePlan(value.plan),
+        current_step: Number.isSafeInteger(value.current_step) && value.current_step >= 0 ? value.current_step : 0,
+        revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : 1,
+        last_chat_message: cleanMemoryText(value.last_chat_message, 2000),
+        last_operations: (Array.isArray(value.last_operations) ? value.last_operations : []).slice(-16).map(operation => cleanMemoryText(operation, 800)),
+        updated_at: Number.isFinite(value.updated_at) ? value.updated_at : Date.now(),
+        history: (Array.isArray(value.history) ? value.history : []).slice(-PLAN_HISTORY_LIMIT).map(entry => ({
+          revision: Number.isSafeInteger(entry?.revision) ? entry.revision : 0,
+          status: cleanMemoryText(entry?.status, 32),
+          current_step: Number.isSafeInteger(entry?.current_step) ? entry.current_step : 0,
+          step: cleanMemoryText(entry?.step, 500),
+          chat: cleanMemoryText(entry?.chat, 2000),
+        })),
+      })
+    }
+  }
 }
 
 class BehaviorTraceWriter {
@@ -89,14 +325,113 @@ function messageChars(message) {
   return String(message?.content ?? '').length + JSON.stringify(message?.tool_calls ?? '').length
 }
 
+function stateFileFromOptions(options) {
+  if (options.stateFile === null) return null
+  if (typeof options.stateFile === 'string' && options.stateFile.length > 0) return path.resolve(options.stateFile)
+  if (typeof process.env.AIRI_NPC_STATE_FILE === 'string' && process.env.AIRI_NPC_STATE_FILE.trim()) return path.resolve(process.env.AIRI_NPC_STATE_FILE)
+  if (process.env.NODE_TEST_CONTEXT) return null
+  return path.join(path.resolve(process.env.CONTAINER_ROOT || '/home/container'), '.airi', 'npc-state.json')
+}
+
+function planProgress(plan, stateResult) {
+  if (stateResult?.blockedByHarness) {
+    const state = stateResult.state
+    const step = currentPlanStep(state?.plan ?? plan.plan, state?.current_step ?? plan.currentStep)
+    return `[Plan paused] ${step || 'Remaining work'}: no Autorio operation was submitted, so AIRI did not pretend that execution continued.`
+  }
+  if (plan.operations.length > 0 && plan.plan.length > 0) {
+    const index = Math.min(plan.currentStep + 1, plan.plan.length)
+    const step = currentPlanStep(plan.plan, plan.currentStep)
+    return `[Plan ${index}/${plan.plan.length}] ${step}${plan.chatMessage ? ` — ${plan.chatMessage}` : ''}`
+  }
+  if (stateResult?.state?.status === 'completed') {
+    return plan.chatMessage ? `[Plan complete] ${plan.chatMessage}` : '[Plan complete] Goal verified complete.'
+  }
+  return plan.chatMessage
+}
+
 export class NpcAgentLoop extends BaseNpcAgentLoop {
   constructor(options) {
-    super(options)
+    const memory = options.memory ?? new NpcDialogueMemory()
+    super({
+      ...options,
+      memory,
+      systemPrompt: `${options.systemPrompt}\n\n${DURABLE_PLAN_PROMPT}`,
+    })
+    this.stateFile = stateFileFromOptions(options)
+    this.stateLoaded = false
+    this.persistQueue = Promise.resolve()
+    this.traceRequest = null
+    this.traceRequestSequence = 0
+    this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
       ?? (process.env.NODE_TEST_CONTEXT ? null : path.resolve(process.cwd(), 'logs', 'airi-behavior.jsonl'))
     this.behaviorTrace = traceFile ? new BehaviorTraceWriter(traceFile, message => this.log(`[trace] ${message}`)) : null
-    this.traceRequest = null
-    this.traceRequestSequence = 0
+  }
+
+  async loadPersistentState() {
+    if (this.stateLoaded) return
+    this.stateLoaded = true
+    if (!this.stateFile || typeof this.memory.restore !== 'function') return
+    try {
+      const parsed = JSON.parse(await fsp.readFile(this.stateFile, 'utf8'))
+      this.memory.restore(parsed)
+      this.turnSequence = Math.max(this.turnSequence, this.memory.maxTurnId?.() ?? 0)
+      this.log(`[memory] restored durable NPC state from ${this.stateFile}`)
+    }
+    catch (error) {
+      if (error?.code === 'ENOENT') return
+      this.log(`[memory] ignored unreadable durable NPC state: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async persistState() {
+    if (!this.stateFile || typeof this.memory.snapshot !== 'function') return
+    const filename = this.stateFile
+    const snapshot = this.memory.snapshot()
+    this.persistQueue = this.persistQueue.then(async () => {
+      await fsp.mkdir(path.dirname(filename), { recursive: true })
+      const temp = `${filename}.${process.pid}.tmp`
+      await fsp.writeFile(temp, `${JSON.stringify(snapshot, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+      await fsp.rename(temp, filename)
+    }).catch(error => this.log(`[memory] durable NPC state write failed: ${error instanceof Error ? error.message : String(error)}`))
+    return this.persistQueue
+  }
+
+  activePlanKey() {
+    return this.requestInfo?.memoryKey ?? this.lastMemoryKey ?? `npc:${this.npcId}`
+  }
+
+  async request(text, options = {}) {
+    await this.loadPersistentState()
+    this.lastMemoryKey = `npc:${this.npcId}`
+    if (this.traceRequest) await this.traceEvent('request.superseded')
+    this.traceRequest = {
+      id: `req_${Date.now().toString(36)}_${(++this.traceRequestSequence).toString(36)}`,
+      seq: 0,
+    }
+    await this.traceEvent('request.received', { sender: options.sender ?? 'unknown', text })
+    try {
+      const result = await super.request(text, options)
+      if (this.requestInfo?.memoryKey) this.lastMemoryKey = this.requestInfo.memoryKey
+      return result
+    }
+    catch (error) {
+      if (this.traceRequest) {
+        await this.traceEvent('request.failed', { stage: 'bind', message: error instanceof Error ? error.message : String(error) })
+        this.traceRequest = null
+      }
+      throw error
+    }
+  }
+
+  async pausePersistentPlan(reason = 'user_stop') {
+    await this.loadPersistentState()
+    const key = this.activePlanKey()
+    const state = this.memory.pausePlan?.(key, reason)
+    await this.persistState()
+    super.cancel()
+    return state
   }
 
   traceEvent(event, data = {}) {
@@ -118,25 +453,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     })
   }
 
-  async request(text, options = {}) {
-    if (this.traceRequest) await this.traceEvent('request.superseded')
-    this.traceRequest = {
-      id: `req_${Date.now().toString(36)}_${(++this.traceRequestSequence).toString(36)}`,
-      seq: 0,
-    }
-    await this.traceEvent('request.received', { sender: options.sender ?? 'unknown', text })
-    try {
-      return await super.request(text, options)
-    }
-    catch (error) {
-      if (this.traceRequest) {
-        await this.traceEvent('request.failed', { stage: 'bind', message: error instanceof Error ? error.message : String(error) })
-        this.traceRequest = null
-      }
-      throw error
-    }
-  }
-
   async runGuarded() {
     try {
       return await super.runGuarded()
@@ -156,16 +472,55 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     return status
   }
 
-  async completed() {
-    await this.traceEvent('factorio.completed_signal')
+  async taskStatusReceipt() {
     try {
       const taskStatus = String(await this.rcon.command(toolCommand('getTaskStatus', {}))).slice(0, 16000)
       await this.traceEvent('factorio.status', { task_status: taskStatus })
+      return taskStatus
     }
     catch (error) {
       await this.traceEvent('factorio.status_error', { message: error instanceof Error ? error.message : String(error) })
+      return JSON.stringify({ status_error: error instanceof Error ? error.message : String(error) })
     }
-    return super.completed()
+  }
+
+  async continueFromModMessage(modMessage, traceEventName) {
+    if (!this.active || !this.epoch) return null
+    const currentPlan = this.memory.currentPlan?.(this.activePlanKey())
+    const continuationLimit = currentPlan?.status === 'active' ? 64 : this.maxContinuations
+    if (this.continuations >= continuationLimit) {
+      await this.pausePersistentPlan(`continuation_limit_${continuationLimit}`)
+      throw new AgentLoopError(`Continuation limit reached (${continuationLimit}); durable plan paused`)
+    }
+    await this.assertCurrent()
+    this.continuations++
+    this.prepareContinuationContext()
+    this.toolCache.clear()
+    this.duplicateToolRounds = 0
+    this.toolValidationRetries = 0
+    this.messages.push({ role: 'user', content: cleanMemoryText(modMessage, 18000) })
+    await this.traceEvent(traceEventName)
+    return this.runGuarded()
+  }
+
+  async completed() {
+    await this.loadPersistentState()
+    await this.traceEvent('factorio.completed_signal')
+    const taskStatus = await this.taskStatusReceipt()
+    return this.continueFromModMessage(
+      `[MOD] Autorio operation batch completed. Detailed task receipt: ${taskStatus}`,
+      'factorio.completion_continuation',
+    )
+  }
+
+  async failed(errorText) {
+    await this.loadPersistentState()
+    if (!this.active) return null
+    const taskStatus = await this.taskStatusReceipt()
+    return this.continueFromModMessage(
+      `[MOD] Autorio operation error: ${cleanMemoryText(errorText, 4000)}. Dependent queued operations may have been cancelled. Detailed task receipt: ${taskStatus}`,
+      'factorio.error_continuation',
+    )
   }
 
   cancel(reason = 'cancelled') {
@@ -299,29 +654,42 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
 
     this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
+    let stateResult
     if (this.requestInfo) {
+      this.lastMemoryKey = this.requestInfo.memoryKey
       this.memory.remember(this.requestInfo.memoryKey, this.requestInfo.turnId, {
         sender: this.requestInfo.sender,
         user: this.requestInfo.text,
         assistant: plan.chatMessage,
         operations: plan.operations,
       })
+      stateResult = this.memory.recordPlan?.(this.requestInfo.memoryKey, this.requestInfo, plan, {
+        continuation: this.continuations > 0,
+      })
+      await this.persistState()
     }
+
     if (commands.length === 0) {
       this.active = false
-      await this.traceEvent('request.completed', { chat_message: plan.chatMessage, outcome: 'no_operations' })
+      await this.traceEvent('request.completed', {
+        chat_message: plan.chatMessage,
+        outcome: stateResult?.blockedByHarness ? 'blocked_no_operation' : 'no_operations',
+      })
       this.traceRequest = null
     }
     else {
       await this.traceEvent('request.waiting', { operation_count: commands.length })
     }
+
     return {
-      chatMessage: plan.chatMessage,
+      chatMessage: planProgress(plan, stateResult),
       plan: plan.plan,
       currentStep: plan.currentStep,
       operations: plan.operations,
       epoch: before.epoch,
       actorId: before.actor_id,
+      goalId: stateResult?.state?.goal_id,
+      goalStatus: stateResult?.state?.status,
     }
   }
 
