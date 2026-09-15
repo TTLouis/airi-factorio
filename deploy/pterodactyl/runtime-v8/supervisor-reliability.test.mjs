@@ -69,5 +69,7 @@ test('in-game task board snapshot is a projection of canonical durable state', (
     total_steps: 5,
     active_index: 2,
     steps: state.task_board.steps,
+    activity: [],
+    wanted_items: [],
   })
 })

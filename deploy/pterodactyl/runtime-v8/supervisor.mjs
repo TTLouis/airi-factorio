@@ -33,6 +33,9 @@ import { providerEndpoint, providerRequest } from './provider.mjs'
 import { configureNpcSession } from './supervisor-adapter.mjs'
 import { luaString } from './structured-policy.mjs'
 
+const UI_CONTROL_MARKER = '[AIRI_UI_CONTROL]'
+const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow'])
+
 const RUNTIME_RELIABILITY_GUIDANCE = `
 ## Runtime reliability additions
 
@@ -172,6 +175,112 @@ export function navigationObstaclePolicy(text) {
   return { shouldUpdate: true, clearObstacles: true }
 }
 
+function uiText(value, max = 500) {
+  const text = String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
+}
+
+function exactUiObjectKeys(value, allowed) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every(key => allowed.includes(key))
+}
+
+export function parseUiControlLine(line) {
+  const input = String(line ?? '')
+  if (!input.includes(UI_CONTROL_MARKER) || input.includes('[CHAT]')) return undefined
+  const marker = input.lastIndexOf(UI_CONTROL_MARKER)
+  const raw = input.slice(marker + UI_CONTROL_MARKER.length).trim()
+  if (!raw || raw.length > 1024) return undefined
+  let value
+  try { value = JSON.parse(raw) }
+  catch { return undefined }
+  if (!exactUiObjectKeys(value, ['version', 'action', 'player_index', 'player_name', 'tick'])) return undefined
+  if (value.version !== 1 || !UI_CONTROL_ACTIONS.has(value.action)) return undefined
+  if (!Number.isSafeInteger(value.player_index) || value.player_index < 1 || value.player_index > 1_000_000) return undefined
+  if (!Number.isSafeInteger(value.tick) || value.tick < 0) return undefined
+  if (typeof value.player_name !== 'string' || value.player_name.length < 1 || value.player_name.length > 128 || /[\x00-\x1f\x7f]/.test(value.player_name)) return undefined
+  return {
+    version: 1,
+    action: value.action,
+    player_index: value.player_index,
+    player_name: value.player_name,
+    tick: value.tick,
+  }
+}
+
+function parseStoredOperation(value) {
+  if (typeof value !== 'string') return undefined
+  const separator = value.indexOf(' ')
+  if (separator < 1) return undefined
+  const name = value.slice(0, separator)
+  let args
+  try { args = JSON.parse(value.slice(separator + 1)) }
+  catch { return undefined }
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return undefined
+  return { name, args }
+}
+
+function wantedCandidate(operation) {
+  const { name, args } = operation
+  if (name === 'place_entity' && typeof args.entity_name === 'string') {
+    return { name: args.entity_name, count: 1, reason: 'planned placement' }
+  }
+  if (name === 'craft_item' && typeof args.item_name === 'string') {
+    return { name: args.item_name, count: Number.isSafeInteger(args.count) && args.count > 0 ? args.count : 1, reason: 'planned craft' }
+  }
+  if (['equip_weapon', 'equip_ammo', 'equip_armor'].includes(name) && typeof args.item_name === 'string') {
+    return { name: args.item_name, count: 1, reason: 'planned equipment' }
+  }
+  if ((name === 'move_items' || name === 'move_items_exact') && args.to_entity === false && typeof args.item_name === 'string') {
+    return { name: args.item_name, count: Number.isSafeInteger(args.max_count) && args.max_count > 0 ? args.max_count : 1, reason: 'planned pickup' }
+  }
+  if (name === 'move_items_with_player' && args.to_player === false && typeof args.item_name === 'string') {
+    return { name: args.item_name, count: Number.isSafeInteger(args.max_count) && args.max_count > 0 ? args.max_count : 1, reason: 'requested from player' }
+  }
+  return undefined
+}
+
+export function deriveWantedItems(state) {
+  const byName = new Map()
+  for (const raw of Array.isArray(state?.last_operations) ? state.last_operations.slice(-16) : []) {
+    const operation = parseStoredOperation(raw)
+    const candidate = operation ? wantedCandidate(operation) : undefined
+    if (!candidate) continue
+    candidate.name = uiText(candidate.name, 200)
+    if (!candidate.name) continue
+    const previous = byName.get(candidate.name)
+    if (!previous || candidate.count > previous.count) byName.set(candidate.name, candidate)
+  }
+  return [...byName.values()].slice(0, 16)
+}
+
+function activityKindFromEvidence(kind) {
+  if (/error|failed|blocked/i.test(kind)) return 'blocker'
+  if (/receipt|result|completed/i.test(kind)) return 'result'
+  return 'observation'
+}
+
+export function deriveActivity(state) {
+  if (!state || typeof state !== 'object') return []
+  const entries = []
+  const evidence = Array.isArray(state.task_board?.evidence) ? state.task_board.evidence.slice(-4) : []
+  for (const item of evidence) {
+    const summary = uiText(item?.summary, 1000)
+    if (summary) entries.push({ kind: activityKindFromEvidence(uiText(item?.kind, 64)), text: summary })
+  }
+  const chat = uiText(state.last_chat_message, 1000)
+  if (chat) entries.push({ kind: 'decision', text: chat })
+  for (const operation of Array.isArray(state.last_operations) ? state.last_operations.slice(-6) : []) {
+    const text = uiText(operation, 1000)
+    if (text) entries.push({ kind: 'action', text })
+  }
+  const blocker = uiText(state.blocker, 500)
+  if (blocker) entries.push({ kind: 'blocker', text: blocker })
+  const pauseReason = uiText(state.pause_reason, 300)
+  if (pauseReason) entries.push({ kind: 'system', text: `Paused: ${pauseReason}` })
+  return entries.slice(-12)
+}
+
 export function taskBoardUiSnapshot(state) {
   const board = state?.task_board
   if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps)) return undefined
@@ -189,7 +298,75 @@ export function taskBoardUiSnapshot(state) {
       description: String(step?.description ?? '').slice(0, 500),
       status: step?.status,
     })),
+    activity: deriveActivity(state),
+    wanted_items: deriveWantedItems(state),
   }
+}
+
+async function stopWorldWork(session) {
+  await session.ensureAuthorization()
+  await session.rcon.command('/silent-command remote.call("autorio_operations","stop_follow_player")')
+  await session.rcon.command('/silent-command remote.call("airi_deployment","cancel")')
+}
+
+async function pausePlanIfPresent(session, reason) {
+  const state = session.currentPlanState?.()
+  if (!state || state.status === 'completed' || state.status === 'paused') return state
+  if (typeof session.agent?.pausePersistentPlan !== 'function') {
+    session.agent?.cancel?.(reason)
+    return state
+  }
+  return session.agent.pausePersistentPlan(reason)
+}
+
+async function terminatePlan(session, reason) {
+  const agent = session.agent
+  if (!agent) return undefined
+  await agent.loadPersistentState?.()
+  const key = typeof agent.activePlanKey === 'function' ? agent.activePlanKey() : `npc:${session.npcId ?? 'airi'}`
+  const previous = agent.memory?.terminatePlan?.(key, reason)
+  agent.cancel?.(reason)
+  await agent.persistState?.()
+  return previous
+}
+
+export async function executeUiControl(session, event) {
+  if (!session?.rcon || !session?.agent) return false
+
+  if (event.action === 'pause') {
+    const state = await pausePlanIfPresent(session, 'ui_pause')
+    await stopWorldWork(session)
+    if (state) await session.syncTaskBoardUi(state)
+    await session.printChat('Paused the current AIRI plan and stopped active work. Use continue/resume when you want it to continue.')
+    return true
+  }
+
+  if (event.action === 'terminate') {
+    await terminatePlan(session, 'ui_terminate')
+    await stopWorldWork(session)
+    await session.clearTaskBoardUi()
+    await session.printChat('Terminated the current AIRI goal. Its durable plan was discarded and will not resume.')
+    return true
+  }
+
+  if (event.action === 'follow') {
+    const state = await pausePlanIfPresent(session, 'ui_follow')
+    await stopWorldWork(session)
+    await session.ensureAuthorization()
+    const response = await session.rcon.command(`/silent-command local ok,msg=remote.call("autorio_operations","follow_player",${luaString(event.player_name)},4); rcon.print(tostring(ok).."|"..tostring(msg))`)
+    if (state) await session.syncTaskBoardUi(state)
+    await session.printChat(`Follow mode requested for ${event.player_name} at about 4 tiles.${response ? ` ${String(response).slice(0, 240)}` : ''}`)
+    return true
+  }
+
+  if (event.action === 'stop_follow') {
+    await session.ensureAuthorization()
+    await session.rcon.command('/silent-command remote.call("autorio_operations","stop_follow_player")')
+    await session.printChat('Stopped following. Any previously paused plan remains paused until you explicitly continue/resume it.')
+    return true
+  }
+
+  return false
 }
 
 function parseStatus(text) {
@@ -317,10 +494,22 @@ export class Session {
     return this.agent.memory.currentPlan(key)
   }
 
+  async clearTaskBoardUi() {
+    if (!this.rcon) return false
+    try {
+      await this.rcon.command('/silent-command remote.call("autorio_task_board","clear")')
+      return true
+    }
+    catch (error) {
+      this.log(`Task Board UI clear failed: ${error instanceof Error ? error.message : error}`)
+      return false
+    }
+  }
+
   async syncTaskBoardUi(state = this.currentPlanState()) {
     if (!this.rcon) return false
     const snapshot = taskBoardUiSnapshot(state)
-    if (!snapshot) return false
+    if (!snapshot) return this.clearTaskBoardUi()
     try {
       const json = JSON.stringify(snapshot)
       await this.rcon.command(`/silent-command remote.call("autorio_task_board","set_snapshot",helpers.json_to_table(${luaString(json)}))`)
@@ -437,6 +626,19 @@ export class Session {
 
   onGameLine(line) {
     if (!this.ready || this.stopping || !this.agent) return
+
+    const uiControl = parseUiControlLine(line)
+    if (uiControl) {
+      if (!chatAuthorized(this.config.chatPlayers, uiControl.player_name)) {
+        this.log(`[AIRI UI] Ignored unauthorized control action=${uiControl.action} player=${uiControl.player_name}`)
+        return
+      }
+      this.queueEvent(async () => {
+        await executeUiControl(this, uiControl)
+      }, { reportError: true })
+      return
+    }
+
     const chat = line.match(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[CHAT\] ([^:\r\n]+): !airi (.{1,4000})$/)
     if (chat && chatAuthorized(this.config.chatPlayers, chat[1])) {
       const text = routeNpcRequest(chat[2], this.npcName)
