@@ -20,11 +20,14 @@ import { new_equipment_controller } from './equipment'
 import { new_follow_controller } from './follow'
 import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
+import { new_navigation_obstacle_recovery } from './navigation_obstacle_recovery'
 import { create_production_planning_remote_interface } from './production_planning_remote'
 import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
 import { new_recipe_configuration_runtime } from './recipe_configuration'
 import { new_research_controller } from './research'
+import { with_research_trigger } from './research_trigger'
 import { new_task_manager } from './task_manager'
+import { create_task_board_ui_remote_interface } from './task_board_ui'
 import { create_tools_remote_interface } from './tools'
 import { TaskStates } from './types'
 import { direction_towards } from './utils/direction'
@@ -35,6 +38,7 @@ create_discovery_remote_interface(get_controlled_actor)
 create_knowledge_remote_interface(get_controlled_actor)
 create_prototype_knowledge_remote_interface()
 create_production_planning_remote_interface(get_controlled_actor)
+create_task_board_ui_remote_interface()
 
 let setup_complete = false
 
@@ -44,6 +48,7 @@ const basic_operation_controller = new_basic_operation_controller(get_controlled
 const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_operation_controller)
 const recipe_configuration_runtime = new_recipe_configuration_runtime(task_manager, basic_operation_controller)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
+const navigation_obstacle_recovery = new_navigation_obstacle_recovery()
 const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
@@ -55,7 +60,11 @@ const follow_controller = new_follow_controller(
 const defense_controller = new_defense_controller(get_controlled_actor)
 
 remote.add_interface('autorio_navigation', {
-  status: () => navigation_controller.status(),
+  status: () => ({
+    ...navigation_controller.status(),
+    obstacle_recovery: navigation_obstacle_recovery.status(),
+  }),
+  set_clear_obstacles: (enabled: boolean) => navigation_obstacle_recovery.set_enabled(enabled),
 })
 
 remote.add_interface('autorio_follow', {
@@ -76,7 +85,7 @@ remote.add_interface('autorio_crafting', {
 
 remote.add_interface('autorio_research', {
   status: () => research_controller.status(),
-  technology: (name: string) => research_controller.technology(name),
+  technology: (name: string) => with_research_trigger(name, research_controller.technology(name) as Record<string, unknown>),
   request_result: (request_id: number) => research_controller.request_result(request_id),
 })
 
@@ -144,7 +153,7 @@ remote.add_interface('autorio_operations', {
     return result
   },
   follow_player: (player_name: string, follow_distance: number = 4): [boolean, string] => {
-    const result = follow_controller.submit(player_name, follow_distance)
+    const result = follow_controller.submit(player_name, follow_distance, navigation_obstacle_recovery.enabled())
     if (result[0]) log(`[AUTORIO] Follow mode enabled for ${player_name} at distance ${follow_distance}`)
     return result
   },
@@ -302,6 +311,7 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   awareness_controller.tick(actor)
 
   if (task_manager.player_state.task_state === TaskStates.IDLE) {
+    navigation_obstacle_recovery.suspend(actor)
     follow_controller.tick(actor)
     if (task_manager.player_state.task_state !== TaskStates.IDLE) {
       defense_controller.suspend(actor)
@@ -316,34 +326,38 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   defense_controller.suspend(actor)
 
   if (task_manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
-    navigation_controller.tick(actor)
+    const handled = navigation_obstacle_recovery.tick(actor, task_manager.player_state.parameters_walk_to_entity)
+    if (!handled) navigation_controller.tick(actor)
   }
-  else if (task_manager.player_state.task_state === TaskStates.MINING) {
-    basic_operation_runtime.state_mining(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.PLACING) {
-    basic_operation_runtime.state_placing(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) {
-    basic_operation_runtime.state_moving_items(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.SETTING_RECIPE) {
-    recipe_configuration_runtime.state_setting_recipe(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.CRAFTING) {
-    crafting_controller.tick(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) {
-    research_controller.tick(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) {
-    state_walking_direct(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.ATTACKING) {
-    combat_controller.tick(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.WAITING) {
-    basic_operation_runtime.state_waiting(actor)
+  else {
+    navigation_obstacle_recovery.suspend(actor)
+    if (task_manager.player_state.task_state === TaskStates.MINING) {
+      basic_operation_runtime.state_mining(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.PLACING) {
+      basic_operation_runtime.state_placing(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) {
+      basic_operation_runtime.state_moving_items(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.SETTING_RECIPE) {
+      recipe_configuration_runtime.state_setting_recipe(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.CRAFTING) {
+      crafting_controller.tick(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) {
+      research_controller.tick(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) {
+      state_walking_direct(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.ATTACKING) {
+      combat_controller.tick(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.WAITING) {
+      basic_operation_runtime.state_waiting(actor)
+    }
   }
 })
 
