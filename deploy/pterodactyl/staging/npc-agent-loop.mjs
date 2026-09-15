@@ -119,7 +119,7 @@ export class NpcDialogueMemory {
     }
     const text = lines.join('\n')
     if (text.length <= this.maxContextChars) return text
-    const prefix = `${lines[0]}\n[older memory compacted]\n`
+    const prefix = `${lines[0]}\nCompacted earlier dialogue:\n[older memory compacted]\n`
     return `${prefix}${text.slice(-Math.max(0, this.maxContextChars - prefix.length))}`
   }
 }
@@ -138,13 +138,15 @@ export class NpcAgentLoop {
     maxWorkingMessages = 36,
     maxWorkingChars = 60000,
     memory = new NpcDialogueMemory(),
-    memoryKeyForStatus = status => `actor:${status.actor_id}`,
+    npcId = 'airi',
+    memoryKeyForStatus,
   }) {
     check(rcon && typeof rcon.command === 'function', 'RCON transport required')
     check(typeof provider === 'function', 'Provider adapter required')
     check(typeof systemPrompt === 'string' && systemPrompt.length > 0, 'System prompt required')
     check(memory && typeof memory.context === 'function' && typeof memory.remember === 'function', 'NPC dialogue memory required')
-    check(typeof memoryKeyForStatus === 'function', 'NPC memory key resolver required')
+    check(typeof npcId === 'string' && npcId.length > 0 && npcId.length <= 128 && !/[\x00-\x1f\x7f]/.test(npcId), 'Invalid NPC memory identity')
+    check(memoryKeyForStatus === undefined || typeof memoryKeyForStatus === 'function', 'NPC memory key resolver must be a function')
     this.rcon = rcon
     this.provider = provider
     this.systemPrompt = systemPrompt
@@ -157,7 +159,8 @@ export class NpcAgentLoop {
     this.maxWorkingMessages = maxWorkingMessages
     this.maxWorkingChars = maxWorkingChars
     this.memory = memory
-    this.memoryKeyForStatus = memoryKeyForStatus
+    this.npcId = npcId
+    this.memoryKeyForStatus = memoryKeyForStatus ?? (() => `npc:${npcId}`)
     this.providerAbort = null
     this.turnSequence = 0
     this.reset()
@@ -178,8 +181,7 @@ export class NpcAgentLoop {
   }
 
   async captureEpoch() {
-    const status = await deploymentStatus(this.rcon)
-    return status
+    return deploymentStatus(this.rcon)
   }
 
   async assertCurrent() {

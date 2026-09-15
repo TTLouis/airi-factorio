@@ -166,11 +166,12 @@ test('duplicate observation loops reuse cached output and fail after three retri
   assert.equal(calls, 5)
 })
 
-test('dialogue memory keeps sender context per actor and excludes another NPC history', async () => {
+test('dialogue memory belongs to the logical NPC and survives body replacement', async () => {
   const rcon = new FakeRcon()
   const observed = []
   const agent = new NpcAgentLoop({
     rcon,
+    npcId: 'airi-primary',
     provider: async messages => {
       observed.push(messages)
       return planMessage([], 'Acknowledged.')
@@ -179,17 +180,44 @@ test('dialogue memory keeps sender context per actor and excludes another NPC hi
   })
 
   await agent.request('remember the copper patch', { sender: 'TTLouis' })
+  rcon.status = deployment(42, 4)
   await agent.request('what did I mention?', { sender: 'TTLouis' })
   const second = observed[1].map(message => message.content ?? '').join('\n')
   assert.match(second, /\[MEMORY\]/)
   assert.match(second, /TTLouis: remember the copper patch/)
   assert.match(second, /\[CHAT\] TTLouis: what did I mention\?/)
+})
 
-  rcon.status = deployment(42, 4)
-  await agent.request('hello from another NPC context', { sender: 'Alice' })
-  const third = observed[2].map(message => message.content ?? '').join('\n')
-  assert.doesNotMatch(third, /remember the copper patch/)
-  assert.match(third, /\[CHAT\] Alice: hello from another NPC context/)
+test('shared dialogue memory remains isolated by logical NPC id', async () => {
+  const memory = new NpcDialogueMemory()
+  const firstObserved = []
+  const secondObserved = []
+  const first = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    memory,
+    npcId: 'airi-one',
+    provider: async messages => {
+      firstObserved.push(messages)
+      return planMessage([], 'First NPC.')
+    },
+    systemPrompt: 'NPC test prompt',
+  })
+  const second = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    memory,
+    npcId: 'airi-two',
+    provider: async messages => {
+      secondObserved.push(messages)
+      return planMessage([], 'Second NPC.')
+    },
+    systemPrompt: 'NPC test prompt',
+  })
+
+  await first.request('private fact for NPC one', { sender: 'TTLouis' })
+  await second.request('hello NPC two', { sender: 'Alice' })
+  const secondContext = secondObserved[0].map(message => message.content ?? '').join('\n')
+  assert.doesNotMatch(secondContext, /private fact for NPC one/)
+  assert.match(secondContext, /\[CHAT\] Alice: hello NPC two/)
 })
 
 test('dialogue memory compacts old turns within a bounded context', () => {
