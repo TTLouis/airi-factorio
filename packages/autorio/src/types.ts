@@ -111,6 +111,10 @@ export interface PlayerParametersCraftItem {
 export interface PlayerParametersAttackNearestEnemy {
   type: TaskStates.ATTACKING
   search_radius: number
+  /** One-shot preserves the original behavior; clear_area keeps reacquiring
+   * enemies until the bounded origin area is clear. */
+  combat_mode?: 'single' | 'clear_area'
+  origin_position?: MapPositionStruct
   target: LuaEntity | null
   owner_actor_id?: number
   owner_actor_kind?: string
@@ -121,6 +125,10 @@ export interface PlayerParametersAttackNearestEnemy {
   started_tick?: number
   last_progress_tick?: number
   last_distance?: number
+  targets_destroyed?: number
+  turrets_placed?: number
+  last_turret_position?: MapPositionStruct
+  turret_ammo_name?: string
 }
 
 export interface PlayerParametersResearchTechnology {
