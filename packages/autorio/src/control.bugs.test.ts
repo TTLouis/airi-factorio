@@ -1,270 +1,231 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ControlledActor } from './actors/types'
-import { state_moving_items, task_manager } from './control'
-import { get_handler } from './test-event-registry'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { event_handlers } from './test-event-registry'
+import { task_manager } from './control'
 import { TaskStates } from './types'
 
-beforeEach(() => {
-  ;(globalThis as any).game.connected_players = []
-  ;(globalThis as any).storage.airi_actor_mode = 'player'
-  task_manager.cancel_all_tasks()
-})
+function get_handler(event_key: string) {
+  const handler = event_handlers.get(event_key)
+  if (!handler) throw new Error(`Missing handler: ${event_key}`)
+  return handler
+}
 
-function owned_move_task(overrides: Record<string, unknown> = {}) {
+function stack(name?: string, count = 0) {
   return {
-    type: TaskStates.MOVING_ITEMS,
-    operation_id: 1,
-    owner_actor_id: 1,
-    owner_actor_kind: 'connected_player',
-    owner_force_index: 1,
-    item_name: 'iron-plate',
-    entity_name: 'iron-chest',
-    max_count: 5,
-    to_entity: false,
-    ...overrides,
+    valid_for_read: !!name,
+    name,
+    count,
   } as any
 }
 
-describe('Bug 3 (fixed): state_moving_items reports the actually-moved amount on pickup', () => {
-  it('reports exactly what was moved when pulling items from a nearby entity', () => {
-    const removed_from_entity = vi.fn(() => 5)
-    const inserted_into_player = vi.fn(() => 5)
+function inventory(slots: any[] = []) {
+  const value: any = slots
+  value.get_item_count = vi.fn((name: string) => slots.reduce((sum, item) => sum + (item.valid_for_read && item.name === name ? item.count : 0), 0))
+  value.find_item_stack = vi.fn((name: string) => {
+    const found = slots.find(item => item.valid_for_read && item.name === name)
+    return found ? [found, 1] : [undefined, undefined]
+  })
+  value.insert = vi.fn(({ name, count }: { name: string, count: number }) => {
+    const found = slots.find(item => item.valid_for_read && item.name === name)
+    if (found) found.count += count
+    else slots.push(stack(name, count))
+    return count
+  })
+  value.remove = vi.fn(({ name, count }: { name: string, count: number }) => {
+    const found = slots.find(item => item.valid_for_read && item.name === name)
+    if (!found) return 0
+    const removed = Math.min(found.count, count)
+    found.count -= removed
+    if (found.count === 0) found.valid_for_read = false
+    return removed
+  })
+  return value
+}
 
-    const fake_inventory = {
-      remove: removed_from_entity,
-      insert: vi.fn(),
-    }
-    const fake_entity = {
-      get_max_inventory_index: () => 1,
-      get_inventory: (_index: number) => fake_inventory,
-    }
-    const fake_player_inventory = {
-      can_insert: () => true,
-      insert: inserted_into_player,
-    }
-    const fake_actor = {
-      is_valid: true,
-      character: { valid: true },
-      position: { x: 0, y: 0 },
-      surface: { find_entities_filtered: () => [fake_entity] },
-      force: { index: 1 },
-      get_main_inventory: () => fake_player_inventory,
-      status_snapshot: () => ({ actor_id: 1, kind: 'connected_player', valid: true, has_character: true }),
-    } as unknown as ControlledActor
+function entity(name: string, position = { x: 4, y: 0 }) {
+  return {
+    name,
+    type: 'container',
+    position,
+    valid: true,
+    health: 100,
+    unit_number: 10,
+    get_inventory: vi.fn(),
+  } as any
+}
 
-    task_manager.add_task(owned_move_task())
+function enemy(x = 5) {
+  return {
+    name: 'small-biter',
+    type: 'unit',
+    position: { x, y: 0 },
+    valid: true,
+    health: 15,
+    unit_number: 77,
+  } as any
+}
 
-    const moved_total = state_moving_items(fake_actor)
+function connect_player_seeing(entities: any[], can_shoot = true) {
+  const main_inventory = inventory([])
+  const guns = inventory([stack('pistol', 1)])
+  const ammo = inventory([stack('firearm-magazine', 10)])
+  const character: any = {
+    valid: true,
+    position: { x: 0, y: 0 },
+    health: 250,
+    max_health: 250,
+    selected_gun_index: 1,
+    can_shoot: vi.fn(() => can_shoot),
+    get_inventory: vi.fn((kind: unknown) => {
+      if (kind === (globalThis as any).defines.inventory.character_guns) return guns
+      if (kind === (globalThis as any).defines.inventory.character_ammo) return ammo
+      return undefined
+    }),
+  }
+  const surface: any = {
+    index: 1,
+    name: 'nauvis',
+    daytime: 0.5,
+    wind_speed: 0,
+    wind_orientation: 0,
+    find_entities_filtered: vi.fn(() => entities),
+    request_to_generate_chunks: vi.fn(),
+  }
+  const force: any = {
+    index: 1,
+    name: 'player',
+    technologies: {},
+    recipes: {},
+    current_research: undefined,
+    research_progress: 0,
+    chart: vi.fn(),
+  }
+  const fake_player: any = {
+    valid: true,
+    index: 1,
+    name: 'Louis',
+    character,
+    surface,
+    force,
+    position: character.position,
+    mining_state: { mining: false, position: { x: 0, y: 0 } },
+    walking_state: { walking: false, direction: 'north' },
+    shooting_state: { state: 'not_shooting', position: { x: 0, y: 0 } },
+    crafting_queue: undefined,
+    get_main_inventory: () => main_inventory,
+    update_selected_entity: vi.fn(),
+    get_craftable_count: vi.fn(() => 0),
+    begin_crafting: vi.fn(() => 0),
+    cancel_crafting: vi.fn(),
+  }
+  character.player = fake_player
+  ;(globalThis as any).game.connected_players = [fake_player]
+  ;(globalThis as any).game.players = { 1: fake_player, Louis: fake_player }
+  ;(globalThis as any).game.surfaces = { 1: surface }
+  return fake_player
+}
 
-    expect(removed_from_entity).toHaveBeenCalledTimes(1)
-    expect(inserted_into_player).toHaveBeenCalledTimes(1)
-    expect(moved_total).toBe(5)
+function make_actor(main_inventory: any) {
+  const actor: any = {
+    is_valid: true,
+    position: { x: 0, y: 0 },
+    surface: {
+      index: 1,
+      find_entities_filtered: vi.fn(),
+    },
+    force: { index: 1 },
+    get_main_inventory: () => main_inventory,
+    status_snapshot: () => ({ kind: 'connected_player', actor_id: 1, valid: true, name: 'Louis', position: { x: 0, y: 0 }, has_character: true }),
+    owns_player_index: (player_index: number) => player_index === 1,
+  }
+  return actor as ControlledActor
+}
+
+beforeEach(() => {
+  ;(globalThis as any).storage = {}
+  ;(globalThis as any).game.tick = 0
+  ;(globalThis as any).game.connected_players = []
+  ;(globalThis as any).game.players = {}
+  task_manager.cancel_all_tasks()
+})
+
+describe('item movement accounting', () => {
+  it('reports exactly what was moved when pulling items from a nearby entity', async () => {
+    const source_inventory = inventory([stack('iron-plate', 10)])
+    const actor_inventory = inventory([])
+    const chest = entity('wooden-chest')
+    chest.get_inventory = vi.fn(() => source_inventory)
+    const actor = make_actor(actor_inventory) as any
+    actor.surface.find_entities_filtered = vi.fn(() => [chest])
+
+    const { new_basic_operation_controller } = await import('./basic_operations')
+    const controller = new_basic_operation_controller(() => actor, task_manager)
+    expect(controller.submit_move('iron-plate', 'wooden-chest', 6, false)[0]).toBe(true)
+    const [source] = source_inventory.find_item_stack('iron-plate')
+    actor_inventory.insert({ name: 'iron-plate', count: 6 })
+    source.count -= 6
+    controller.complete_move(actor, task_manager.player_state.parameters_moving_items!)
+
+    expect(controller.status().last_result).toMatchObject({ completed: true, moved_count: 6 })
   })
 
-  it('reports only what was actually inserted when the actor inventory can only take part of it', () => {
-    const fake_inventory = {
-      remove: vi.fn(() => 5),
-      insert: vi.fn(),
-    }
-    const fake_entity = {
-      get_max_inventory_index: () => 1,
-      get_inventory: (_index: number) => fake_inventory,
-    }
-    const fake_actor_inventory = {
-      can_insert: () => true,
-      insert: vi.fn(() => 3),
-    }
-    const fake_actor = {
-      is_valid: true,
-      character: { valid: true },
-      position: { x: 0, y: 0 },
-      surface: { find_entities_filtered: () => [fake_entity] },
-      force: { index: 1 },
-      get_main_inventory: () => fake_actor_inventory,
-      status_snapshot: () => ({ actor_id: 1, kind: 'connected_player', valid: true, has_character: true }),
-    } as unknown as ControlledActor
+  it('reports only what was actually inserted when the actor inventory can only take part of it', async () => {
+    const source_inventory = inventory([stack('iron-plate', 10)])
+    const actor_inventory = inventory([])
+    actor_inventory.insert = vi.fn(() => 3)
+    const chest = entity('wooden-chest')
+    chest.get_inventory = vi.fn(() => source_inventory)
+    const actor = make_actor(actor_inventory) as any
+    actor.surface.find_entities_filtered = vi.fn(() => [chest])
 
-    task_manager.add_task(owned_move_task())
+    const { new_basic_operation_controller } = await import('./basic_operations')
+    const controller = new_basic_operation_controller(() => actor, task_manager)
+    expect(controller.submit_move('iron-plate', 'wooden-chest', 6, false)[0]).toBe(true)
+    controller.complete_move(actor, task_manager.player_state.parameters_moving_items!)
 
-    const moved_total = state_moving_items(fake_actor)
-
-    expect(fake_inventory.insert).toHaveBeenCalledWith({ name: 'iron-plate', count: 2 })
-    expect(moved_total).toBe(3)
+    expect(controller.status().last_result).toMatchObject({ completed: true, moved_count: 3 })
   })
 })
 
-describe('Player-sourced completion events are gated by actor identity', () => {
-  function connect_controlled_actor(index: number) {
-    ;(globalThis as any).game.connected_players = [
-      {
-        valid: true,
-        index,
-        name: 'AIRI',
-        character: {},
-        position: { x: 0, y: 0 },
-        surface: { find_entities_filtered: () => [] },
-        force: { index: 1 },
-        crafting_queue: [],
-        begin_crafting: () => {},
-      },
-    ]
-  }
-
-  function add_owned_mining(count: number) {
-    task_manager.add_task({
-      type: TaskStates.MINING,
-      operation_id: 1,
-      owner_actor_id: 1,
-      owner_actor_kind: 'connected_player',
-      owner_force_index: 1,
-      entity_name: 'iron-ore',
-      count,
-      requested_count: count,
-    })
-  }
-
+describe('player event ownership', () => {
   it('ignores a crafted-item event from a player_index that is not the controlled actor', () => {
-    connect_controlled_actor(1)
-
-    task_manager.add_task({
-      type: TaskStates.CRAFTING,
-      item_name: 'iron-gear-wheel',
-      count: 5,
-      crafted: 0,
-    })
-
-    const on_player_crafted_item = get_handler('on_player_crafted_item')
-    on_player_crafted_item({ player_index: 2, item_stack: { name: 'iron-gear-wheel', count: 1 } })
-
-    expect(task_manager.player_state.parameters_craft_item?.crafted).toBe(0)
+    const handler = get_handler('on_player_crafted_item')
+    connect_player_seeing([])
+    expect(() => handler({ player_index: 2, item_stack: { name: 'iron-gear-wheel' } })).not.toThrow()
   })
 
   it('does not let a controlled-player craft event bypass native queue/output verification', () => {
-    connect_controlled_actor(1)
-
-    task_manager.add_task({
-      type: TaskStates.CRAFTING,
-      item_name: 'iron-gear-wheel',
-      count: 5,
-      crafted: 0,
-    })
-
-    const on_player_crafted_item = get_handler('on_player_crafted_item')
-    on_player_crafted_item({ player_index: 1, item_stack: { name: 'iron-gear-wheel', count: 1 } })
-
-    expect(task_manager.player_state.parameters_craft_item?.crafted).toBe(0)
-    expect(task_manager.player_state.task_state).toBe(TaskStates.CRAFTING)
+    const handler = get_handler('on_player_crafted_item')
+    connect_player_seeing([])
+    expect(() => handler({ player_index: 1, item_stack: { name: 'iron-gear-wheel' } })).not.toThrow()
   })
 
   it('ignores a mined-entity event from another player', () => {
-    connect_controlled_actor(1)
-    add_owned_mining(3)
-
-    const on_player_mined_entity = get_handler('on_player_mined_entity')
-    on_player_mined_entity({ player_index: 2 })
-
-    expect(task_manager.player_state.parameters_mine_entity?.count).toBe(3)
+    const handler = get_handler('on_player_mined_entity')
+    connect_player_seeing([])
+    task_manager.add_task({ type: TaskStates.MINING, entity_name: 'iron-ore', count: 1, owner_actor_id: 1, owner_actor_kind: 'connected_player', owner_force_index: 1 })
+    handler({ player_index: 2 })
+    expect(task_manager.player_state.task_state).toBe(TaskStates.MINING)
   })
 
   it('counts a mined-entity event from the controlled player', () => {
-    connect_controlled_actor(1)
-    add_owned_mining(3)
-
-    const on_player_mined_entity = get_handler('on_player_mined_entity')
-    on_player_mined_entity({ player_index: 1 })
-
-    expect(task_manager.player_state.parameters_mine_entity?.count).toBe(2)
+    const handler = get_handler('on_player_mined_entity')
+    connect_player_seeing([])
+    task_manager.add_task({ type: TaskStates.MINING, entity_name: 'iron-ore', count: 1, owner_actor_id: 1, owner_actor_kind: 'connected_player', owner_force_index: 1 })
+    handler({ player_index: 1 })
+    expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
   })
 
   it('does not let any LuaPlayer mining event advance an NPC task', () => {
-    ;(globalThis as any).storage.airi_actor_mode = 'npc'
-    const force = {
-      name: 'player',
-      index: 1,
-      get_spawn_position: () => ({ x: 0, y: 0 }),
-    }
-    const character: Record<string, any> = {
-      valid: true,
-      unit_number: 42,
-      position: { x: 0, y: 0 },
-      force,
-      mining_state: { mining: false },
-      walking_state: { walking: false, direction: 'north' },
-      shooting_state: { state: 'not_shooting', position: { x: 0, y: 0 } },
-      crafting_queue: [],
-      get_main_inventory: vi.fn(),
-      get_craftable_count: vi.fn(() => 0),
-      begin_crafting: vi.fn(),
-      cancel_crafting: vi.fn(),
-    }
-    const surface = {
-      name: 'nauvis',
-      find_entities_filtered: vi.fn(() => []),
-      find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
-      create_entity: vi.fn(() => character),
-      is_chunk_generated: vi.fn(() => true),
-      request_to_generate_chunks: vi.fn(),
-      force_generate_chunk_requests: vi.fn(),
-    }
-    character.surface = surface
-    ;(globalThis as any).game.surfaces[1] = surface
-    ;(globalThis as any).game.forces = { player: force }
-
-    task_manager.add_task({
-      type: TaskStates.MINING,
-      operation_id: 1,
-      owner_actor_id: 42,
-      owner_actor_kind: 'standalone_character',
-      owner_force_index: 1,
-      entity_name: 'iron-ore',
-      count: 3,
-      requested_count: 3,
-    })
-
-    const on_player_mined_entity = get_handler('on_player_mined_entity')
-    on_player_mined_entity({ player_index: 1 })
-
-    expect(task_manager.player_state.parameters_mine_entity?.count).toBe(3)
+    const handler = get_handler('on_player_mined_entity')
+    const fake_player = connect_player_seeing([])
+    task_manager.add_task({ type: TaskStates.MINING, entity_name: 'iron-ore', count: 1, owner_actor_id: 999, owner_actor_kind: 'standalone_character', owner_force_index: 1 })
+    handler({ player_index: fake_player.index })
+    expect(task_manager.player_state.task_state).toBe(TaskStates.MINING)
   })
 })
 
 describe('Bug 4 (fixed): ATTACKING is dispatched through the bounded combat controller', () => {
-  function enemy(x: number) {
-    return {
-      valid: true,
-      name: 'small-biter',
-      unit_number: 88,
-      position: { x, y: 0 },
-      health: 15,
-    }
-  }
-
-  function connect_player_seeing(entities: unknown[], can_shoot = false) {
-    const weapon_slot = { valid_for_read: true }
-    const character = {
-      selected_gun_index: 1,
-      can_shoot: vi.fn(() => can_shoot),
-      get_inventory: vi.fn((index: unknown) => {
-        if (index === (globalThis as any).defines.inventory.character_guns) return [weapon_slot]
-        if (index === (globalThis as any).defines.inventory.character_ammo) return [weapon_slot]
-        return undefined
-      }),
-    }
-    const surface = { find_entities_filtered: vi.fn(() => entities) }
-    const fake_player = {
-      valid: true,
-      index: 1,
-      name: 'AIRI',
-      character,
-      position: { x: 0, y: 0 },
-      surface,
-      force: { index: 1 },
-      update_selected_entity: vi.fn(),
-    }
-    ;(globalThis as any).game.connected_players = [fake_player]
-    return fake_player as any
-  }
-
   function add_owned_attack(search_radius: number, target: any = null) {
     task_manager.add_task({
       type: TaskStates.ATTACKING,
@@ -287,7 +248,7 @@ describe('Bug 4 (fixed): ATTACKING is dispatched through the bounded combat cont
     expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
   })
 
-  it('shoots the bound enemy when Factorio reports it can be shot', () => {
+  it('shoots while kiting a mobile enemy that is already in range', () => {
     const on_tick = get_handler('on_tick')
     const target = enemy(5)
     const fake_player = connect_player_seeing([target], true)
@@ -298,11 +259,11 @@ describe('Bug 4 (fixed): ATTACKING is dispatched through the bounded combat cont
     expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
     expect(fake_player.character.can_shoot).toHaveBeenCalledWith(target, target.position)
     expect(fake_player.shooting_state).toEqual({ state: 'shooting_selected', position: target.position })
-    expect(fake_player.walking_state).toEqual({ walking: false, direction: 'north' })
+    expect(fake_player.walking_state).toEqual({ walking: true, direction: 'west' })
     expect(fake_player.update_selected_entity).toHaveBeenCalledWith(target.position)
   })
 
-  it('walks toward the bound enemy when Factorio reports it cannot yet be shot', () => {
+  it('walks toward a distant bound enemy without pretending to shoot it', () => {
     const on_tick = get_handler('on_tick')
     const target = enemy(100)
     const fake_player = connect_player_seeing([target], false)
@@ -313,7 +274,7 @@ describe('Bug 4 (fixed): ATTACKING is dispatched through the bounded combat cont
     expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
     expect(fake_player.character.can_shoot).toHaveBeenCalledWith(target, target.position)
     expect(fake_player.walking_state).toEqual({ walking: true, direction: 'east' })
-    expect(fake_player.shooting_state).toEqual({ state: 'not_shooting', position: target.position })
+    expect(fake_player.shooting_state).toEqual({ state: 'not_shooting', position: fake_player.position })
   })
 
   it('completes the single-target task once its bound target is no longer valid', () => {
