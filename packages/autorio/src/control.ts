@@ -14,6 +14,7 @@ import { new_basic_operation_runtime } from './basic_operation_runtime'
 import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
 import { new_crafting_controller } from './crafting'
+import { new_defense_controller } from './defense'
 import { create_discovery_remote_interface } from './discovery'
 import { new_equipment_controller } from './equipment'
 import { new_follow_controller } from './follow'
@@ -40,6 +41,7 @@ const research_controller = new_research_controller(get_controlled_actor, task_m
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
 const equipment_controller = new_equipment_controller(get_controlled_actor)
 const follow_controller = new_follow_controller(get_controlled_actor)
+const defense_controller = new_defense_controller(get_controlled_actor)
 
 remote.add_interface('autorio_navigation', {
   status: () => navigation_controller.status(),
@@ -47,6 +49,10 @@ remote.add_interface('autorio_navigation', {
 
 remote.add_interface('autorio_follow', {
   status: () => follow_controller.status(),
+})
+
+remote.add_interface('autorio_defense', {
+  status: () => defense_controller.status(),
 })
 
 remote.add_interface('autorio_equipment', {
@@ -132,6 +138,7 @@ remote.add_interface('autorio_operations', {
     return result
   },
   stop_follow_player: (): [boolean, string] => follow_controller.stop(),
+  set_auto_defense: (enabled: boolean): [boolean, string] => defense_controller.set_enabled(enabled),
   equip_weapon: (item_name: string, slot: number = 1): [boolean, string] => equipment_controller.equip_weapon(item_name, slot),
   equip_ammo: (item_name: string, slot: number = 1): [boolean, string] => equipment_controller.equip_ammo(item_name, slot),
   equip_armor: (item_name: string): [boolean, string] => equipment_controller.equip_armor(item_name),
@@ -180,6 +187,7 @@ remote.add_interface('autorio_operations', {
       actor: actor?.status_snapshot(),
       basic_operation: basic_operation_controller.status(),
       follow: follow_controller.status(),
+      defense: defense_controller.status(),
     }
   },
   log_actor_info: () => log_actor_info(),
@@ -267,10 +275,13 @@ script.on_event(defines.events.on_tick, (unused_event) => {
 
   if (task_manager.player_state.task_state === TaskStates.IDLE) {
     follow_controller.tick(actor)
+    if (follow_controller.status().active) defense_controller.tick(actor)
+    else defense_controller.suspend(actor)
     return
   }
 
   follow_controller.suspend(actor)
+  defense_controller.suspend(actor)
 
   if (task_manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
     navigation_controller.tick(actor)
