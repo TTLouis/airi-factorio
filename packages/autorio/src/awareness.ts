@@ -1,6 +1,7 @@
+import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 
-const CHUNK_SIZE = 32
+const RADAR_NAME = 'airi-npc-awareness-radar'
 const RADAR_CHUNK_RADIUS = 1
 
 interface AwarenessChunkState {
@@ -11,16 +12,54 @@ interface AwarenessChunkState {
 
 declare const storage: {
   airi_awareness_chunk?: AwarenessChunkState
+  airi_awareness_radar?: LuaEntity
 }
 
 function chunk_coordinate(value: number) {
-  return math.floor(value / CHUNK_SIZE)
+  return math.floor(value / 32)
+}
+
+function destroy_radar() {
+  const radar = storage.airi_awareness_radar
+  if (radar?.valid) radar.destroy()
+  storage.airi_awareness_radar = undefined
+}
+
+function ensure_radar(actor: ControlledActor) {
+  let radar = storage.airi_awareness_radar
+  if (radar?.valid && radar.surface.index !== actor.surface.index) {
+    radar.destroy()
+    radar = undefined
+  }
+
+  if (!radar?.valid) {
+    radar = actor.surface.create_entity({
+      name: RADAR_NAME,
+      position: actor.position,
+      force: actor.force,
+    })
+    if (!radar) return undefined
+    radar.destructible = false
+    radar.minable_flag = false
+    radar.operable = false
+    storage.airi_awareness_radar = radar
+    return radar
+  }
+
+  radar.teleport(actor.position)
+  return radar
 }
 
 export function new_awareness_controller() {
   function tick(actor: ControlledActor) {
     const identity = actor.status_snapshot()
-    if (identity.kind !== 'standalone_character') return false
+    if (identity.kind !== 'standalone_character') {
+      destroy_radar()
+      storage.airi_awareness_chunk = undefined
+      return false
+    }
+
+    ensure_radar(actor)
 
     const chunk_x = chunk_coordinate(actor.position.x)
     const chunk_y = chunk_coordinate(actor.position.y)
@@ -32,25 +71,12 @@ export function new_awareness_controller() {
       return false
     }
 
-    // A standalone character does not get the normal player exploration bubble.
-    // Keep a 3x3 chunk generation/chart window centered on AIRI's current chunk
-    // so the pathfinder always has real terrain ahead and humans can see where
-    // AIRI has travelled. Generation requests are normally asynchronous; force
-    // the small pending window to finish here so entering unexplored terrain
-    // cannot leave pathfinding waiting on chunks that have only been requested.
-    // This runs only when AIRI crosses a chunk boundary, never every tick.
+    // The hidden RadarPrototype handles the actual 3x3 fog-of-war visibility.
+    // Chunk generation remains an explicit bounded safety net because a radar
+    // cannot reveal terrain that does not exist yet, and standalone characters
+    // do not get the normal LuaPlayer exploration/generation bubble.
     actor.surface.request_to_generate_chunks(actor.position, RADAR_CHUNK_RADIUS)
     actor.surface.force_generate_chunk_requests()
-    actor.force.chart(actor.surface, {
-      left_top: {
-        x: (chunk_x - RADAR_CHUNK_RADIUS) * CHUNK_SIZE,
-        y: (chunk_y - RADAR_CHUNK_RADIUS) * CHUNK_SIZE,
-      },
-      right_bottom: {
-        x: (chunk_x + RADAR_CHUNK_RADIUS + 1) * CHUNK_SIZE,
-        y: (chunk_y + RADAR_CHUNK_RADIUS + 1) * CHUNK_SIZE,
-      },
-    })
 
     storage.airi_awareness_chunk = {
       surface_index: actor.surface.index,
