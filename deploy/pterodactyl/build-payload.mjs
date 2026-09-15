@@ -68,7 +68,7 @@ export function channelInstaller(source) {
   assertNpcV8Source(source)
   const sourceHash = sha256(source)
   return `#!/usr/bin/env bash
-# Generated ARII Factorio channel installer: ${CHANNEL.release}
+# Generated AIRI Factorio channel installer: ${CHANNEL.release}
 # Reinstall follows ${CHANNEL.sourceRef}; restart keeps the installed exact SHA.
 set -Eeuo pipefail
 umask 077
