@@ -26,11 +26,20 @@ import {
   safeInteger,
   withTimeout,
 } from './common.mjs'
+import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 import { createSave, prepareGameConfig, prepareMods, prepareServerSettings, selectSave } from './game-files.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
 import { providerEndpoint, providerRequest } from './provider.mjs'
 import { configureNpcSession } from './supervisor-adapter.mjs'
 import { luaString } from './structured-policy.mjs'
+
+const RUNTIME_RELIABILITY_GUIDANCE = `
+## Runtime reliability additions
+
+getTechnology returns an exact research_trigger object for gameplay-trigger technologies when Factorio exposes one. Use the returned trigger fields such as item/count, entity, or fluid/amount; do not guess a trigger from remembered Factorio knowledge. After performing an exact gameplay trigger, re-read getTechnology. If it is still incomplete, re-observe the trigger/state or report a blocker instead of repeatedly waiting and hoping the trigger registers.
+
+Natural navigation obstacle clearing is controlled deterministically by the runtime. It is enabled by default for trees and natural rocks only, and is disabled for a request when the human explicitly asks AIRI not to cut trees, mine rocks, or auto-clear obstacles. Never reinterpret this as permission to remove player-built structures.
+`.trim()
 
 export function configuration(raw = {}, env = process.env) {
   check(raw && typeof raw === 'object' && !Array.isArray(raw), 'airi-config.json must be an object')
@@ -145,6 +154,44 @@ export function routeNpcRequest(text, npcName = '') {
   return trimmed.slice(separator + 1).trim()
 }
 
+export function navigationObstaclePolicy(text) {
+  const normalized = String(text ?? '').trim().toLocaleLowerCase()
+  const denyPhrases = [
+    '不要自动清障', '不要清障', '别清障', '不要砍树', '别砍树', '不要自动砍树', '不要挖树',
+    '不要挖石头', '别挖石头', '不要挖岩石', '不要破坏树', '不要破坏树木',
+    "don't clear obstacles", 'do not clear obstacles', 'no automatic obstacle clearing',
+    "don't cut trees", 'do not cut trees', "don't mine rocks", 'do not mine rocks',
+    'preserve trees', 'leave the trees alone',
+  ]
+  const denied = denyPhrases.some(phrase => normalized.includes(phrase))
+  if (denied) return { shouldUpdate: true, clearObstacles: false }
+
+  const continuation = ['continue', 'resume', '继续', '继续吧', '继续做', '接着', '接着做']
+    .some(prefix => normalized === prefix || normalized.startsWith(`${prefix} `) || normalized.startsWith(`${prefix}，`) || normalized.startsWith(`${prefix},`))
+  if (continuation) return { shouldUpdate: false, clearObstacles: true }
+  return { shouldUpdate: true, clearObstacles: true }
+}
+
+export function taskBoardUiSnapshot(state) {
+  const board = state?.task_board
+  if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps)) return undefined
+  return {
+    goal_id: String(board.goal_id ?? state.goal_id ?? '').slice(0, 100),
+    objective: String(state.objective ?? '').slice(0, 500),
+    status: board.status,
+    blocker: String(board.blocker ?? '').slice(0, 500),
+    pause_reason: String(board.pause_reason ?? '').slice(0, 300),
+    completed_count: board.completed_count,
+    total_steps: board.total_steps,
+    active_index: board.active_index,
+    steps: board.steps.slice(0, 30).map(step => ({
+      id: String(step?.id ?? '').slice(0, 80),
+      description: String(step?.description ?? '').slice(0, 500),
+      status: step?.status,
+    })),
+  }
+}
+
 function parseStatus(text) {
   let value
   try { value = JSON.parse(String(text).trim()) }
@@ -158,6 +205,10 @@ function expectedCancellation(error) {
   return message === 'Provider request cancelled'
     || message === 'Model turn was cancelled or superseded'
     || message === 'NPC actor epoch changed; stale model turn cancelled'
+}
+
+function providerRecoveryExhausted(message) {
+  return /^Provider response recovery exhausted after \d+ attempts:/.test(String(message))
 }
 
 export class Session {
@@ -242,7 +293,10 @@ export class Session {
       }
 
       if (this.agent?.active) {
-        if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan('npc_identity_or_session_changed')
+        if (typeof this.agent.pausePersistentPlan === 'function') {
+          const state = await this.agent.pausePersistentPlan('npc_identity_or_session_changed')
+          await this.syncTaskBoardUi(state)
+        }
         else this.agent.cancel()
         this.log('NPC identity/session changed; active model turn paused before rebind')
       }
@@ -254,6 +308,40 @@ export class Session {
     }
     finally {
       this.authorizationPromise = null
+    }
+  }
+
+  currentPlanState() {
+    if (!this.agent?.memory?.currentPlan) return undefined
+    const key = typeof this.agent.activePlanKey === 'function' ? this.agent.activePlanKey() : `npc:${this.npcId}`
+    return this.agent.memory.currentPlan(key)
+  }
+
+  async syncTaskBoardUi(state = this.currentPlanState()) {
+    if (!this.rcon) return false
+    const snapshot = taskBoardUiSnapshot(state)
+    if (!snapshot) return false
+    try {
+      const json = JSON.stringify(snapshot)
+      await this.rcon.command(`/silent-command remote.call("autorio_task_board","set_snapshot",helpers.json_to_table(${luaString(json)}))`)
+      return true
+    }
+    catch (error) {
+      this.log(`Task Board UI sync failed: ${error instanceof Error ? error.message : error}`)
+      return false
+    }
+  }
+
+  async applyNavigationObstaclePolicy(text) {
+    if (!this.rcon) return
+    const policy = navigationObstaclePolicy(text)
+    if (!policy.shouldUpdate) return
+    try {
+      await this.rcon.command(`/silent-command remote.call("autorio_navigation","set_clear_obstacles",${policy.clearObstacles ? 'true' : 'false'})`)
+      if (!policy.clearObstacles) this.log('Natural navigation obstacle clearing disabled by explicit user request')
+    }
+    catch (error) {
+      this.log(`Navigation obstacle policy update failed: ${error instanceof Error ? error.message : error}`)
     }
   }
 
@@ -294,8 +382,9 @@ export class Session {
     const prompt = await fsp.readFile(path.join(this.app, 'src', 'prompt.md'), 'utf8')
     this.agent = new NpcAgentLoop({
       rcon: this.rcon,
-      systemPrompt: prompt,
+      systemPrompt: `${prompt}\n\n${RUNTIME_RELIABILITY_GUIDANCE}`,
       npcId: this.npcId,
+      memory: new CanonicalTaskBoardMemory(),
       stateFile: path.join(this.root, '.airi', 'npc-state.json'),
       provider: (messages, context) => this.provider({
         base: this.config.base,
@@ -307,6 +396,7 @@ export class Session {
       log: message => this.log(`[AIRI agent] ${redact(secrets, message)}`),
     })
     await this.agent.loadPersistentState()
+    await this.syncTaskBoardUi()
 
     this.ready = true
     this.poll = setInterval(() => {
@@ -320,6 +410,16 @@ export class Session {
     this.eventQueue = this.eventQueue.then(fn).catch(async error => {
       const message = error instanceof Error ? error.message : String(error)
       this.log(message)
+      if (reportError && providerRecoveryExhausted(message) && this.agent) {
+        try {
+          const state = await this.agent.pausePersistentPlan(`provider_recovery_exhausted: ${message.slice(0, 240)}`)
+          await this.syncTaskBoardUi(state)
+          if (state) this.log('Canonical Task Board paused after provider response recovery exhaustion')
+        }
+        catch (pauseError) {
+          this.log(`Unable to pause Task Board after provider recovery exhaustion: ${pauseError instanceof Error ? pauseError.message : pauseError}`)
+        }
+      }
       if (reportError && !expectedCancellation(error)) {
         try { await this.printChat(`Request failed: ${message}`) }
         catch (printError) { this.log(`Unable to report AIRI error in chat: ${printError instanceof Error ? printError.message : printError}`) }
@@ -345,14 +445,19 @@ export class Session {
       if (stop) this.agent.cancel('user_stop_immediate')
       this.queueEvent(async () => {
         if (stop) {
-          if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan('user_stop')
+          const state = typeof this.agent.pausePersistentPlan === 'function'
+            ? await this.agent.pausePersistentPlan('user_stop')
+            : undefined
+          if (state) await this.syncTaskBoardUi(state)
           await this.ensureAuthorization()
           await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")')
           await this.printChat('Paused the current AIRI plan and cancelled active Autorio work. Say continue/resume when you want me to pick it back up.')
           return
         }
         await this.ensureAuthorization()
+        await this.applyNavigationObstaclePolicy(text)
         const result = await this.agent.request(text, { sender: chat[1] })
+        await this.syncTaskBoardUi()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
       return
@@ -361,7 +466,10 @@ export class Session {
     const recovery = line.match(/\[AUTORIO\] Recovered standalone NPC actor_id=(\d+) -> (\d+) without inventory transfer/)
     if (recovery) {
       this.queueEvent(async () => {
-        if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan('actor_replaced')
+        if (typeof this.agent.pausePersistentPlan === 'function') {
+          const state = await this.agent.pausePersistentPlan('actor_replaced')
+          await this.syncTaskBoardUi(state)
+        }
         else this.agent.cancel()
         await this.ensureAuthorization()
         await this.printChat(`I was killed or lost my body and respawned. Previous actor ${recovery[1]}, replacement actor ${recovery[2]}. The interrupted plan was paused and can be resumed after I re-observe the world.`)
@@ -376,6 +484,7 @@ export class Session {
         await this.ensureAuthorization()
         if (!this.agent.active) return
         const result = await this.agent.completed()
+        await this.syncTaskBoardUi()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
       return
@@ -392,6 +501,7 @@ export class Session {
         await this.ensureAuthorization()
         if (!this.agent.active) return
         const result = typeof this.agent.failed === 'function' ? await this.agent.failed(autorioError[1]) : null
+        await this.syncTaskBoardUi()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
     }
@@ -408,7 +518,10 @@ export class Session {
       let gracefulResult
       if (this.agent?.active) {
         try {
-          if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan(`server_stop_${reason}`)
+          if (typeof this.agent.pausePersistentPlan === 'function') {
+            const state = await this.agent.pausePersistentPlan(`server_stop_${reason}`)
+            await this.syncTaskBoardUi(state)
+          }
           else this.agent.cancel()
         }
         catch (error) {
