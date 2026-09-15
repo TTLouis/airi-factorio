@@ -8,6 +8,7 @@ type Manager = ReturnType<typeof new_task_manager>
 type BasicController = ReturnType<typeof new_basic_operation_controller>
 
 const PLAYER_TRANSFER_DISTANCE = 8
+const ENTITY_TRANSFER_DISTANCE = 8
 const MAX_PLACEMENT_DISTANCE = 10
 
 function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
@@ -25,6 +26,18 @@ function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
 
 function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
+}
+
+function entity_inventories(entity: LuaEntity, item_name: string, require_insert: boolean) {
+  const inventories: LuaInventory[] = []
+  const max_index = entity.get_max_inventory_index()
+  for (let i = 1; i <= max_index; i++) {
+    const inventory = entity.get_inventory(i)
+    if (!inventory) continue
+    if (require_insert && !inventory.can_insert({ name: item_name })) continue
+    inventories.push(inventory)
+  }
+  return inventories
 }
 
 export function new_basic_operation_runtime(manager: Manager, controller: BasicController) {
@@ -272,6 +285,49 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     return moved
   }
 
+  function entity_targets(actor: ControlledActor) {
+    const task = manager.player_state.parameters_move_items
+    if (!task) return undefined
+
+    if (task.target_unit_number !== undefined) {
+      const target = game.get_entity_by_unit_number(task.target_unit_number)
+      if (!target || !target.valid) {
+        controller.fail(actor, task, 'target_gone')
+        return undefined
+      }
+      if (target.surface.index !== actor.surface.index) {
+        controller.fail(actor, task, 'different_surface')
+        return undefined
+      }
+      if (target.force.index !== actor.force.index) {
+        controller.fail(actor, task, 'wrong_force')
+        return undefined
+      }
+      if (squared_distance(actor.position, target.position) > ENTITY_TRANSFER_DISTANCE ** 2) {
+        controller.fail(actor, task, 'too_far')
+        return undefined
+      }
+      return [target]
+    }
+
+    if (!task.entity_name || !prototypes.entity[task.entity_name]) {
+      controller.fail(actor, task, 'invalid_entity')
+      return undefined
+    }
+
+    const nearby = actor.surface.find_entities_filtered({
+      position: actor.position,
+      radius: ENTITY_TRANSFER_DISTANCE,
+      name: task.entity_name,
+      force: actor.force,
+    })
+    if (nearby.length === 0) {
+      controller.fail(actor, task, 'no_target')
+      return undefined
+    }
+    return nearby
+  }
+
   function state_moving_items(actor: ControlledActor) {
     const task = manager.player_state.parameters_move_items
     if (!task) {
@@ -285,21 +341,8 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
 
     if (task.player_name) return move_items_with_player(actor)
 
-    if (!task.entity_name || !prototypes.entity[task.entity_name]) {
-      controller.fail(actor, task, 'invalid_entity')
-      return 0
-    }
-
-    const nearby_entities = actor.surface.find_entities_filtered({
-      position: actor.position,
-      radius: 8,
-      name: task.entity_name,
-      force: actor.force,
-    })
-    if (nearby_entities.length === 0) {
-      controller.fail(actor, task, 'no_target')
-      return 0
-    }
+    const targets = entity_targets(actor)
+    if (!targets) return 0
 
     const actor_inventory = actor.get_main_inventory()
     if (!actor_inventory) {
@@ -315,16 +358,8 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
         return 0
       }
 
-      nearby_entities
-        .map((entity) => {
-          const inventories: LuaInventory[] = []
-          const max_index = entity.get_max_inventory_index()
-          for (let i = 1; i <= max_index; i++) {
-            const inventory = entity.get_inventory(i)
-            if (inventory && inventory.can_insert({ name: task.item_name })) inventories.push(inventory)
-          }
-          return inventories
-        })
+      targets
+        .map(entity => entity_inventories(entity, task.item_name, true))
         .flat()
         .forEach((inventory) => {
           if (moved_total >= task.max_count) return
@@ -338,16 +373,8 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
         })
     }
     else {
-      nearby_entities
-        .map((entity) => {
-          const inventories: LuaInventory[] = []
-          const max_index = entity.get_max_inventory_index()
-          for (let i = 1; i <= max_index; i++) {
-            const inventory = entity.get_inventory(i)
-            if (inventory) inventories.push(inventory)
-          }
-          return inventories
-        })
+      targets
+        .map(entity => entity_inventories(entity, task.item_name, false))
         .flat()
         .forEach((inventory) => {
           if (moved_total >= task.max_count) return
@@ -364,7 +391,8 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       controller.fail(actor, task, 'nothing_moved', { moved_count: 0 })
       return 0
     }
-    log(`[AUTORIO] Moved a total of ${moved_total} ${task.item_name}`)
+    const target_label = task.target_unit_number !== undefined ? ` entity unit ${task.target_unit_number}` : ''
+    log(`[AUTORIO] Moved a total of ${moved_total} ${task.item_name}${target_label}`)
     controller.complete(actor, task, { moved_count: moved_total })
     return moved_total
   }
