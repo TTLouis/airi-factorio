@@ -114,7 +114,7 @@ cp "$WORK/source/packages/autorio/info.json" "$WORK/source/packages/autorio/dist
 cp -a "$WORK/source/packages/autorio/dist/." "$APP/autorio/"
 
 log 'Copying v8 supervisor, shared policy, and prompt'
-for file in common.mjs game-files.mjs provider.mjs supervisor.mjs structured-policy.mjs supervisor-adapter.mjs npc-agent-loop.mjs; do
+for file in common.mjs canonical-task-board-memory.mjs game-files.mjs provider.mjs supervisor.mjs structured-policy.mjs supervisor-adapter.mjs npc-agent-loop.mjs; do
   cp "$WORK/source/deploy/pterodactyl/runtime-v8/$file" "$APP/src/runtime-v8/$file"
 done
 for file in structured-policy.mjs supervisor-adapter.mjs npc-agent-loop.mjs; do
@@ -123,6 +123,10 @@ done
 cp "$WORK/source/packages/agent/src/llm/prompt.md" "$APP/src/prompt.md"
 cp "$WORK/source/LICENSE" "$APP/UPSTREAM-LICENSE"
 for file in "$APP/src/runtime-v8/"*.mjs "$APP/src/staging/"*.mjs; do node --check "$file"; done
+AIRI_SUPERVISOR_VERIFY="$APP/src/runtime-v8/supervisor.mjs" node --input-type=module <<'VERIFY_RUNTIME_IMPORTS'
+import { pathToFileURL } from 'node:url'
+await import(pathToFileURL(process.env.AIRI_SUPERVISOR_VERIFY).href)
+VERIFY_RUNTIME_IMPORTS
 
 FACTORIO_REQUEST="${FACTORIO_VERSION:-latest}"
 if [[ "$FACTORIO_REQUEST" == latest || "$FACTORIO_REQUEST" == experimental ]]; then
@@ -195,6 +199,7 @@ const names = [
   'start-airi.sh',
   'src/prompt.md',
   'src/runtime-v8/common.mjs',
+  'src/runtime-v8/canonical-task-board-memory.mjs',
   'src/runtime-v8/game-files.mjs',
   'src/runtime-v8/provider.mjs',
   'src/runtime-v8/supervisor.mjs',
