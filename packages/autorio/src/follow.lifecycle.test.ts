@@ -22,8 +22,9 @@ function context() {
     position: { x: 20, y: 0 },
   }
   ;(globalThis as any).game.get_player = vi.fn((name: string) => name === 'TTLouis' ? player : undefined)
-  const controller = new_follow_controller(() => actor)
-  return { actor, player, firstCharacter, controller }
+  const navigate_to_player = vi.fn((_name: string, _reach_distance: number): [boolean, string] => [true, 'Task started'])
+  const controller = new_follow_controller(() => actor, navigate_to_player)
+  return { actor, player, firstCharacter, navigate_to_player, controller }
 }
 
 beforeEach(() => {
@@ -32,11 +33,23 @@ beforeEach(() => {
 })
 
 describe('persistent follow player lifecycle', () => {
-  it('keeps follow armed across disconnect and resumes after reconnect', () => {
+  it('routes follow movement through shared navigation instead of direct collision-blind walking', () => {
+    const c = context()
+    expect(c.controller.submit('TTLouis', 4)[0]).toBe(true)
+
+    c.controller.tick(c.actor)
+
+    expect(c.navigate_to_player).toHaveBeenCalledWith('TTLouis', 4)
+    expect(c.controller.status()).toMatchObject({ active: true, code: 'following', last_navigation_tick: 0 })
+    expect(c.actor.set_walking_state).not.toHaveBeenCalledWith(expect.objectContaining({ walking: true }))
+  })
+
+  it('keeps follow armed across disconnect and resumes path navigation after reconnect', () => {
     const c = context()
     expect(c.controller.submit('TTLouis', 4)[0]).toBe(true)
     c.controller.tick(c.actor)
     expect(c.controller.status()).toMatchObject({ active: true, code: 'following' })
+    expect(c.navigate_to_player).toHaveBeenCalledTimes(1)
 
     c.player.connected = false
     ;(globalThis as any).game.tick = 10
@@ -45,10 +58,10 @@ describe('persistent follow player lifecycle', () => {
 
     c.player.connected = true
     c.player.position.x = 30
-    ;(globalThis as any).game.tick = 20
+    ;(globalThis as any).game.tick = 200
     c.controller.tick(c.actor)
     expect(c.controller.status()).toMatchObject({ active: true, code: 'following' })
-    expect(c.actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
+    expect(c.navigate_to_player).toHaveBeenCalledTimes(2)
   })
 
   it('keeps follow armed while the player is dead and reacquires the respawned character', () => {
@@ -72,6 +85,7 @@ describe('persistent follow player lifecycle', () => {
       player: { connected: true, has_character: true, position: { x: 12, y: 3 } },
     })
     expect(c.player.character).not.toBe(c.firstCharacter)
+    expect(c.navigate_to_player).toHaveBeenCalledWith('TTLouis', 4)
   })
 
   it('pauses on another surface without cancelling the persistent follow intent', () => {
@@ -89,6 +103,7 @@ describe('persistent follow player lifecycle', () => {
     ;(globalThis as any).game.tick = 30
     c.controller.tick(c.actor)
     expect(c.controller.status()).toMatchObject({ active: true, code: 'following' })
+    expect(c.navigate_to_player).toHaveBeenCalledWith('TTLouis', 4)
   })
 
   it('can arm follow while an existing player is temporarily offline', () => {
@@ -99,5 +114,22 @@ describe('persistent follow player lifecycle', () => {
     const result = c.controller.submit('TTLouis', 4)
     expect(result[0]).toBe(true)
     expect(c.controller.status()).toMatchObject({ active: true, code: 'player_unavailable' })
+    expect(c.navigate_to_player).not.toHaveBeenCalled()
+  })
+
+  it('backs off repeated navigation admission so an unreachable player does not thrash every idle tick', () => {
+    const c = context()
+    c.controller.submit('TTLouis', 4)
+
+    c.controller.tick(c.actor)
+    expect(c.navigate_to_player).toHaveBeenCalledTimes(1)
+
+    ;(globalThis as any).game.tick = 30
+    c.controller.tick(c.actor)
+    expect(c.navigate_to_player).toHaveBeenCalledTimes(1)
+
+    ;(globalThis as any).game.tick = 120
+    c.controller.tick(c.actor)
+    expect(c.navigate_to_player).toHaveBeenCalledTimes(2)
   })
 })
