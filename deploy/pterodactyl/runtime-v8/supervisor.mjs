@@ -422,7 +422,9 @@ function providerRecoveryExhausted(message) {
 export function shouldRecoverInterruptedPlan(state) {
   if (!state || state.status === 'completed' || state.status === 'blocked') return false
   if (state.status === 'active') return true
-  return state.status === 'paused' && SYSTEM_RECOVERY_PAUSE_REASONS.has(state.pause_reason)
+  if (state.status !== 'paused') return false
+  const pauseReason = String(state.pause_reason ?? '')
+  return SYSTEM_RECOVERY_PAUSE_REASONS.has(pauseReason) || pauseReason.startsWith('server_stop_')
 }
 
 export async function recoverInterruptedAgentPlan(agent, reason, details = {}) {
@@ -691,7 +693,7 @@ export class Session {
     this.poll = setInterval(() => {
       if (!this.stopping) this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
     }, 2000)
-    if (shouldRecoverInterruptedPlan(this.currentPlanState()) && this.currentPlanState()?.status === 'active') {
+    if (shouldRecoverInterruptedPlan(this.currentPlanState())) {
       this.queueEvent(async () => {
         await this.recoverInterruptedPlan('runtime_restart', { actor_id: this.lastStatus?.actor_id, epoch: this.lastStatus?.epoch })
       })
