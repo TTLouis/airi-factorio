@@ -28,6 +28,7 @@ import { create_prototype_knowledge_remote_interface } from './prototype_knowled
 import { new_recipe_configuration_runtime } from './recipe_configuration'
 import { new_research_controller } from './research'
 import { with_research_trigger } from './research_trigger'
+import { create_swarm_factory_learning_remote_interface } from './swarm/factory_learning'
 import { new_swarm_runtime_service } from './swarm/runtime_service'
 import { create_swarm_task_board_ui_remote_interface } from './swarm/task_board_ui'
 import { new_task_manager } from './task_manager'
@@ -44,6 +45,7 @@ create_prototype_knowledge_remote_interface()
 create_production_planning_remote_interface(get_controlled_actor)
 create_task_board_ui_remote_interface()
 create_swarm_task_board_ui_remote_interface()
+create_swarm_factory_learning_remote_interface()
 
 let setup_complete = false
 
