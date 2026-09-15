@@ -15,6 +15,7 @@ import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
 import { new_crafting_controller } from './crafting'
 import { create_discovery_remote_interface } from './discovery'
+import { new_equipment_controller } from './equipment'
 import { new_follow_controller } from './follow'
 import { new_navigation_controller } from './navigation'
 import { new_research_controller } from './research'
@@ -37,6 +38,7 @@ const navigation_controller = new_navigation_controller(get_controlled_actor, ta
 const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
+const equipment_controller = new_equipment_controller(get_controlled_actor)
 const follow_controller = new_follow_controller(get_controlled_actor)
 
 remote.add_interface('autorio_navigation', {
@@ -45,6 +47,10 @@ remote.add_interface('autorio_navigation', {
 
 remote.add_interface('autorio_follow', {
   status: () => follow_controller.status(),
+})
+
+remote.add_interface('autorio_equipment', {
+  status: () => equipment_controller.status(),
 })
 
 remote.add_interface('autorio_crafting', {
@@ -83,6 +89,7 @@ function log_actor_info() {
     actor: actor.status_snapshot(),
     force: actor.force.name,
     inventory: get_actor_inventory_items(actor),
+    equipment: equipment_controller.status(),
     nearby_entities,
     map_info: {
       surface_name: actor.surface.name,
@@ -125,6 +132,10 @@ remote.add_interface('autorio_operations', {
     return result
   },
   stop_follow_player: (): [boolean, string] => follow_controller.stop(),
+  equip_weapon: (item_name: string, slot: number = 1): [boolean, string] => equipment_controller.equip_weapon(item_name, slot),
+  equip_ammo: (item_name: string, slot: number = 1): [boolean, string] => equipment_controller.equip_ammo(item_name, slot),
+  equip_armor: (item_name: string): [boolean, string] => equipment_controller.equip_armor(item_name),
+  select_weapon_slot: (slot: number): [boolean, string] => equipment_controller.select_weapon_slot(slot),
   mine_entity: (entity_name: string, count: number = 1) => {
     const accepted = basic_operation_controller.submit_mining(entity_name, count)
     if (accepted) log(`[AUTORIO] New mine_entity task: ${entity_name} x${count}`)

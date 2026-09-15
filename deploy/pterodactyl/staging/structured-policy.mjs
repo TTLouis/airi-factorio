@@ -35,6 +35,10 @@ const operationKeys = {
   walk_to_player: ['player_name'],
   follow_player: ['player_name', 'follow_distance'],
   stop_follow_player: [],
+  equip_weapon: ['item_name', 'slot'],
+  equip_ammo: ['item_name', 'slot'],
+  equip_armor: ['item_name'],
+  select_weapon_slot: ['slot'],
   mine_entity: ['entity_name', 'count'],
   place_entity: ['entity_name'],
   move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
@@ -62,6 +66,14 @@ export function parseOperation(value) {
       return { name, args: { player_name: factorioName(args.player_name), follow_distance: finiteNumber(args.follow_distance ?? 4, 'follow_distance', 1, 64) } }
     case 'stop_follow_player':
       return { name, args: {} }
+    case 'equip_weapon':
+      return { name, args: { item_name: factorioName(args.item_name), slot: integer(args.slot ?? 1, 'slot', 1, 64) } }
+    case 'equip_ammo':
+      return { name, args: { item_name: factorioName(args.item_name), slot: integer(args.slot ?? 1, 'slot', 1, 64) } }
+    case 'equip_armor':
+      return { name, args: { item_name: factorioName(args.item_name) } }
+    case 'select_weapon_slot':
+      return { name, args: { slot: integer(args.slot, 'slot', 1, 64) } }
     case 'mine_entity':
       return { name, args: { entity_name: factorioName(args.entity_name), count: integer(args.count ?? 1, 'count', 1, 1000) } }
     case 'place_entity':
@@ -92,6 +104,10 @@ export function renderOperation(value) {
     case 'walk_to_player': return `remote.call('autorio_operations','walk_to_player',${luaString(operation.args.player_name)})`
     case 'follow_player': return `remote.call('autorio_operations','follow_player',${luaString(operation.args.player_name)},${operation.args.follow_distance})`
     case 'stop_follow_player': return `remote.call('autorio_operations','stop_follow_player')`
+    case 'equip_weapon': return `remote.call('autorio_operations','equip_weapon',${luaString(operation.args.item_name)},${operation.args.slot})`
+    case 'equip_ammo': return `remote.call('autorio_operations','equip_ammo',${luaString(operation.args.item_name)},${operation.args.slot})`
+    case 'equip_armor': return `remote.call('autorio_operations','equip_armor',${luaString(operation.args.item_name)})`
+    case 'select_weapon_slot': return `remote.call('autorio_operations','select_weapon_slot',${operation.args.slot})`
     case 'mine_entity': return `remote.call('autorio_operations','mine_entity',${luaString(operation.args.entity_name)},${operation.args.count})`
     case 'place_entity': return `remote.call('autorio_operations','place_entity',${luaString(operation.args.entity_name)})`
     case 'move_items': return `remote.call('autorio_operations','move_items',${luaString(operation.args.item_name)},${luaString(operation.args.entity_name)},${operation.args.max_count},${operation.args.to_entity})`
@@ -129,7 +145,8 @@ function functionTool(name, description, parameters) {
 export const toolDefinitions = [
   functionTool('getActorStatus', 'Read AIRI actor mode, identity, validity, position and connected-human count.', emptyObjectSchema),
   functionTool('getTaskStatus', 'Read current Autorio task and bounded queue state.', emptyObjectSchema),
-  functionTool('getInventoryItems', 'Read AIRI standalone actor inventory.', emptyObjectSchema),
+  functionTool('getInventoryItems', 'Read AIRI standalone actor main inventory; equipment slots are separate.', emptyObjectSchema),
+  functionTool('getEquipmentStatus', 'Read AIRI health, selected gun slot, equipped guns/ammo/armor, and cursor stack.', emptyObjectSchema),
   functionTool('getRecipe', 'Read one exact recipe for AIRI force.', {
     type: 'object', properties: { item: nameStringSchema }, required: ['item'], additionalProperties: false,
   }),
@@ -199,6 +216,9 @@ export function toolCommand(name, rawArgs = {}) {
     case 'getInventoryItems':
       noExtra(args, [])
       return '/silent-command remote.call("autorio_tools","get_inventory_items")'
+    case 'getEquipmentStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_equipment","status")))'
     case 'getRecipe':
       noExtra(args, ['item'])
       return `/silent-command remote.call("autorio_tools","get_recipe",${luaString(factorioName(args.item))})`

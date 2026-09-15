@@ -28,6 +28,7 @@ describe('agent observation tools', () => {
       'getActorStatus',
       'getTaskStatus',
       'getInventoryItems',
+      'getEquipmentStatus',
       'getRecipe',
       'getPlayerStatus',
       'getNearbyEntities',
@@ -42,12 +43,18 @@ describe('agent observation tools', () => {
     ])
   })
 
-  it('reads actor status through the read-only actor interface', async () => {
+  it('reads actor and equipment status through read-only interfaces', async () => {
     const result = await getTool('getActorStatus').fn({ parameters: {} })
     expect(mocks.raw).toHaveBeenCalledWith({ body: {
       input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor", "status")))',
     } })
     expect(result).toBe('{"ok":true}')
+
+    mocks.raw.mockClear()
+    await getTool('getEquipmentStatus').fn({ parameters: {} })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_equipment", "status")))',
+    } })
   })
 
   it('reads task status through the existing Autorio status operation', async () => {
@@ -164,12 +171,12 @@ describe('crafting, research, and combat observation tools', () => {
 })
 
 describe('prompt contract', () => {
-  it('documents discovery, player interaction, follow, navigation, crafting, research, and combat tools', () => {
-    for (const name of ['getPlayerStatus', 'findLongRangeEntities', 'getFollowStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+  it('documents equipment, discovery, player interaction, follow, navigation, crafting, research, and combat tools', () => {
+    for (const name of ['getEquipmentStatus', 'getPlayerStatus', 'findLongRangeEntities', 'getFollowStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
-    for (const operation of ['walk_to_player', 'move_items_with_player', 'follow_player', 'stop_follow_player']) {
+    for (const operation of ['walk_to_player', 'move_items_with_player', 'follow_player', 'stop_follow_player', 'equip_weapon', 'equip_ammo', 'equip_armor', 'select_weapon_slot']) {
       expect(prompt).toContain(operation)
     }
     expect(prompt).toContain('4096')

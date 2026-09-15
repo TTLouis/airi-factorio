@@ -34,7 +34,7 @@ const playerStatusSchema = z.object({
   player_name: factorioNameSchema,
 }).strict()
 
-async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow') {
+async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow' | 'autorio_equipment') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
   return response.data.output
@@ -65,13 +65,19 @@ export const tools: ToolFunction[] = [
   },
   {
     name: 'getInventoryItems',
-    description: 'Get the items in AIRI\'s controlled actor inventory',
+    description: 'Get the items in AIRI\'s controlled actor main inventory. Equipment slots are separate; use getEquipmentStatus for guns, ammo, armor, selected gun slot, health, and cursor stack.',
     schema: z.object({}),
     fn: async () => {
       const response = await v2FactorioConsoleCommandRawPost({ body: { input: '/c remote.call("autorio_tools", "get_inventory_items")' } })
       logger.withFields({ response: response.data.output }).debug('Inventory items')
       return response.data.output
     },
+  },
+  {
+    name: 'getEquipmentStatus',
+    description: 'Inspect AIRI health and equipment state: selected gun slot, equipped guns, matching ammo slots, armor, and cursor stack. Use this before combat instead of inferring equipment from the main inventory.',
+    schema: z.object({}).strict(),
+    fn: async () => readRemoteStatus('autorio_equipment'),
   },
   {
     name: 'getRecipe',

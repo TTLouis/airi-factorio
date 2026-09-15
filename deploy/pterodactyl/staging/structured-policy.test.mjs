@@ -15,6 +15,18 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.deepEqual(parseOperation({ name: 'walk_to_player', args: { player_name: 'TTLouis' } }), {
     name: 'walk_to_player', args: { player_name: 'TTLouis' },
   })
+  assert.deepEqual(parseOperation({ name: 'equip_weapon', args: { item_name: 'rocket-launcher' } }), {
+    name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 1 },
+  })
+  assert.deepEqual(parseOperation({ name: 'equip_ammo', args: { item_name: 'atomic-bomb' } }), {
+    name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 1 },
+  })
+  assert.deepEqual(parseOperation({ name: 'equip_armor', args: { item_name: 'modular-armor' } }), {
+    name: 'equip_armor', args: { item_name: 'modular-armor' },
+  })
+  assert.deepEqual(parseOperation({ name: 'select_weapon_slot', args: { slot: 2 } }), {
+    name: 'select_weapon_slot', args: { slot: 2 },
+  })
   assert.deepEqual(parseOperation({ name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: true } }), {
     name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: true },
   })
@@ -25,6 +37,10 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.equal(renderOperation({ name: 'place_entity', args: { entity_name: "mod's-chest" } }), "remote.call('autorio_operations','place_entity','mod\\'s-chest')")
   assert.equal(renderOperation({ name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 3.5 } }), "remote.call('autorio_operations','follow_player','TTLouis',3.5)")
   assert.equal(renderOperation({ name: 'walk_to_player', args: { player_name: 'TTLouis' } }), "remote.call('autorio_operations','walk_to_player','TTLouis')")
+  assert.equal(renderOperation({ name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 2 } }), "remote.call('autorio_operations','equip_weapon','rocket-launcher',2)")
+  assert.equal(renderOperation({ name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 2 } }), "remote.call('autorio_operations','equip_ammo','atomic-bomb',2)")
+  assert.equal(renderOperation({ name: 'equip_armor', args: { item_name: 'modular-armor' } }), "remote.call('autorio_operations','equip_armor','modular-armor')")
+  assert.equal(renderOperation({ name: 'select_weapon_slot', args: { slot: 2 } }), "remote.call('autorio_operations','select_weapon_slot',2)")
   assert.equal(renderOperation({ name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: true } }), "remote.call('autorio_operations','move_items_with_player','stone','TTLouis',10,true)")
   assert.equal(renderOperation({ name: 'stop_follow_player', args: {} }), "remote.call('autorio_operations','stop_follow_player')")
 })
@@ -38,6 +54,10 @@ test('operation policy rejects arbitrary code, extra args, and oversized bounded
     { name: 'walk_to_player', args: { player_name: 'TTLouis', search_radius: 10 } },
     { name: 'follow_player', args: { player_name: 'TTLouis', follow_distance: 65 } },
     { name: 'follow_player', args: { player_name: 'TTLouis\n/c game.clear()' } },
+    { name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 65 } },
+    { name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 0 } },
+    { name: 'equip_armor', args: { item_name: 'modular-armor', slot: 1 } },
+    { name: 'select_weapon_slot', args: { slot: 0 } },
     { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: 'yes' } },
     { name: 'stop_follow_player', args: { player_name: 'TTLouis' } },
     { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } },
@@ -62,6 +82,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'getActorStatus',
     'getTaskStatus',
     'getInventoryItems',
+    'getEquipmentStatus',
     'getRecipe',
     'getPlayerStatus',
     'getNearbyEntities',
@@ -84,6 +105,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
 
 test('read-only tool renderer targets native actor-aware interfaces without player indexes', () => {
   assert.equal(toolCommand('getActorStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor","status")))')
+  assert.equal(toolCommand('getEquipmentStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_equipment","status")))')
   assert.equal(toolCommand('getFollowStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_follow","status")))')
   assert.equal(toolCommand('getCraftingStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting","status")))')
   assert.equal(toolCommand('getResearchRequest', { request_id: 42 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","request_result",42)))')
@@ -97,6 +119,7 @@ test('read-only tool renderer targets native actor-aware interfaces without play
 
 test('tool calls reject unknown names, unsafe names, extras, and out-of-bound scans', () => {
   assert.throws(() => toolCommand('shell', {}))
+  assert.throws(() => toolCommand('getEquipmentStatus', { slot: 1 }))
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate', force: 'enemy' }))
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate\n/c game.clear()' }))
   assert.throws(() => toolCommand('getPlayerStatus', { player_name: 'TTLouis', force: 'enemy' }))

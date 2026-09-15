@@ -10,6 +10,7 @@ const boundedTaskCount = z.number().int().min(1).max(1000)
 const searchRadius = z.number().int().min(1).max(4096)
 const combatSearchRadius = z.number().int().min(1).max(256)
 const followDistance = z.number().min(1).max(64).default(4)
+const equipmentSlot = z.number().int().min(1).max(64)
 
 export const structuredOperationSchema = z.discriminatedUnion('name', [
   z.object({
@@ -35,6 +36,32 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
   z.object({
     name: z.literal('stop_follow_player'),
     args: z.object({}).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('equip_weapon'),
+    args: z.object({
+      item_name: factorioNameSchema,
+      slot: equipmentSlot.default(1),
+    }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('equip_ammo'),
+    args: z.object({
+      item_name: factorioNameSchema,
+      slot: equipmentSlot.default(1),
+    }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('equip_armor'),
+    args: z.object({
+      item_name: factorioNameSchema,
+    }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('select_weapon_slot'),
+    args: z.object({
+      slot: equipmentSlot,
+    }).strict(),
   }).strict(),
   z.object({
     name: z.literal('mine_entity'),
@@ -109,6 +136,10 @@ const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]walk_to_player['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]follow_player['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]stop_follow_player['"]${callEnd}`),
+  new RegExp(`${callStart}['"]equip_weapon['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
+  new RegExp(`${callStart}['"]equip_ammo['"]${separator}${quotedSafeName}${separator}${positiveInteger}${callEnd}`),
+  new RegExp(`${callStart}['"]equip_armor['"]${separator}${quotedSafeName}${callEnd}`),
+  new RegExp(`${callStart}['"]select_weapon_slot['"]${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]mine_entity['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]place_entity['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]move_items['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
@@ -149,6 +180,14 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'follow_player', ${renderLuaString(operation.args.player_name)}, ${operation.args.follow_distance})`
     case 'stop_follow_player':
       return `remote.call('autorio_operations', 'stop_follow_player')`
+    case 'equip_weapon':
+      return `remote.call('autorio_operations', 'equip_weapon', ${renderLuaString(operation.args.item_name)}, ${operation.args.slot})`
+    case 'equip_ammo':
+      return `remote.call('autorio_operations', 'equip_ammo', ${renderLuaString(operation.args.item_name)}, ${operation.args.slot})`
+    case 'equip_armor':
+      return `remote.call('autorio_operations', 'equip_armor', ${renderLuaString(operation.args.item_name)})`
+    case 'select_weapon_slot':
+      return `remote.call('autorio_operations', 'select_weapon_slot', ${operation.args.slot})`
     case 'mine_entity':
       return `remote.call('autorio_operations', 'mine_entity', ${renderLuaString(operation.args.entity_name)}, ${operation.args.count})`
     case 'place_entity':

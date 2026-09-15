@@ -6,6 +6,10 @@ const documentedOperations = [
   'walk_to_player',
   'follow_player',
   'stop_follow_player',
+  'equip_weapon',
+  'equip_ammo',
+  'equip_armor',
+  'select_weapon_slot',
   'mine_entity',
   'place_entity',
   'move_items',
@@ -29,6 +33,7 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('getActorStatus()')
     expect(prompt).toContain('getTaskStatus()')
     expect(prompt).toContain('getInventoryItems()')
+    expect(prompt).toContain('getEquipmentStatus()')
     expect(prompt).toContain('getRecipe(item)')
     expect(prompt).toContain('getPlayerStatus({ player_name })')
     expect(prompt).toContain('getNearbyEntities({ radius?, name?, type?, limit? })')
@@ -39,7 +44,8 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('getCombatStatus()')
     expect(prompt).toContain('Radius is limited to 64 tiles')
     expect(prompt).toContain('Radius is limited to 32 tiles')
-    expect(prompt).toContain("AIRI's controlled actor inventory")
+    expect(prompt).toContain("AIRI's controlled actor main inventory")
+    expect(prompt).toContain('Equipped guns, ammo and armor are separate from the main inventory')
   })
 
   it('teaches verification-first planning', () => {
@@ -74,6 +80,12 @@ describe('production Factorio prompt contract', () => {
     for (const operation of documentedOperations) {
       expect(prompt).toContain(operation)
     }
+  })
+
+  it('documents equipment as separate state and requires combat readiness checks', () => {
+    expect(prompt).toContain('Equipment slots are not the main inventory')
+    expect(prompt).toContain('verify the selected gun and the matching ammo slot')
+    expect(prompt).toContain('If a weapon or ammo is only in the main inventory, equip it before attacking')
   })
 
   it('documents persistent follow recovery across player lifecycle changes', () => {

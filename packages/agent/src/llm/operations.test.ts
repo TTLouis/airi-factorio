@@ -9,6 +9,8 @@ describe('structured Autorio operations', () => {
       { name: 'attack_nearest_enemy', args: {} },
       { name: 'follow_player', args: { player_name: 'Louis' } },
       { name: 'walk_to_player', args: { player_name: 'Louis' } },
+      { name: 'equip_weapon', args: { item_name: 'rocket-launcher' } },
+      { name: 'equip_ammo', args: { item_name: 'atomic-bomb' } },
       { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
     ])
 
@@ -18,6 +20,8 @@ describe('structured Autorio operations', () => {
       { name: 'attack_nearest_enemy', args: { search_radius: 50 } },
       { name: 'follow_player', args: { player_name: 'Louis', follow_distance: 4 } },
       { name: 'walk_to_player', args: { player_name: 'Louis' } },
+      { name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 1 } },
+      { name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 1 } },
       { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
     ])
   })
@@ -32,7 +36,7 @@ describe('structured Autorio operations', () => {
     ])).toThrow()
   })
 
-  it('bounds operation batches, task counts, transfers, navigation, follow, crafting, and combat', () => {
+  it('bounds operation batches, task counts, transfers, navigation, equipment, follow, crafting, and combat', () => {
     const operations = Array.from({ length: 17 }, () => ({
       name: 'wait',
       args: { ticks: 1 },
@@ -54,6 +58,19 @@ describe('structured Autorio operations', () => {
     ])).toEqual([
       { name: 'follow_player', args: { player_name: 'Louis', follow_distance: 6 } },
       { name: 'stop_follow_player', args: {} },
+    ])
+    expect(() => parseStructuredOperations([
+      { name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 65 } },
+    ])).toThrow()
+    expect(() => parseStructuredOperations([
+      { name: 'select_weapon_slot', args: { slot: 0 } },
+    ])).toThrow()
+    expect(parseStructuredOperations([
+      { name: 'equip_armor', args: { item_name: 'modular-armor' } },
+      { name: 'select_weapon_slot', args: { slot: 3 } },
+    ])).toEqual([
+      { name: 'equip_armor', args: { item_name: 'modular-armor' } },
+      { name: 'select_weapon_slot', args: { slot: 3 } },
     ])
     expect(() => parseStructuredOperations([
       { name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1001 } },
@@ -84,6 +101,10 @@ describe('structured Autorio operations', () => {
       { name: 'walk_to_player', args: { player_name: 'Louis' } },
       { name: 'follow_player', args: { player_name: 'Louis', follow_distance: 5 } },
       { name: 'stop_follow_player', args: {} },
+      { name: 'equip_weapon', args: { item_name: 'rocket-launcher', slot: 2 } },
+      { name: 'equip_ammo', args: { item_name: 'atomic-bomb', slot: 2 } },
+      { name: 'equip_armor', args: { item_name: 'modular-armor' } },
+      { name: 'select_weapon_slot', args: { slot: 2 } },
       { name: 'mine_entity', args: { entity_name: 'iron-ore', count: 8 } },
       { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
     ])).toEqual([
@@ -91,6 +112,10 @@ describe('structured Autorio operations', () => {
       "remote.call('autorio_operations', 'walk_to_player', 'Louis')",
       "remote.call('autorio_operations', 'follow_player', 'Louis', 5)",
       "remote.call('autorio_operations', 'stop_follow_player')",
+      "remote.call('autorio_operations', 'equip_weapon', 'rocket-launcher', 2)",
+      "remote.call('autorio_operations', 'equip_ammo', 'atomic-bomb', 2)",
+      "remote.call('autorio_operations', 'equip_armor', 'modular-armor')",
+      "remote.call('autorio_operations', 'select_weapon_slot', 2)",
       "remote.call('autorio_operations', 'mine_entity', 'iron-ore', 8)",
       "remote.call('autorio_operations', 'move_items_with_player', 'stone', 'Louis', 10, true)",
     ])
