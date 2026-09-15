@@ -37,9 +37,12 @@ const UI_CONTROL_MARKER = '[AIRI_UI_CONTROL]'
 const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow'])
 const UI_PROMPT_MARKER = '[AIRI_UI_PROMPT]'
 const UI_PROMPT_MAX_CHARS = 4000
+const SYSTEM_RECOVERY_PAUSE_REASONS = new Set(['npc_identity_or_session_changed', 'actor_replaced'])
 
 const RUNTIME_RELIABILITY_GUIDANCE = `
 ## Runtime reliability additions
+
+For a multi-technology goal, use getResearchPath on the exact target instead of reconstructing the prerequisite graph from remembered Factorio knowledge. Follow its dependency-first pending_path and next_actionable entry. Trigger technologies require the exact returned research_trigger; science technologies use research_technology and still require verification after submission.
 
 getTechnology returns an exact research_trigger object for gameplay-trigger technologies when Factorio exposes one. Use the returned trigger fields such as item/count, entity, or fluid/amount; do not guess a trigger from remembered Factorio knowledge. After performing an exact gameplay trigger, re-read getTechnology. If it is still incomplete, re-observe the trigger/state or report a blocker instead of repeatedly waiting and hoping the trigger registers.
 
@@ -416,6 +419,53 @@ function providerRecoveryExhausted(message) {
   return /^Provider response recovery exhausted after \d+ attempts:/.test(String(message))
 }
 
+export function shouldRecoverInterruptedPlan(state) {
+  if (!state || state.status === 'completed' || state.status === 'blocked') return false
+  if (state.status === 'active') return true
+  return state.status === 'paused' && SYSTEM_RECOVERY_PAUSE_REASONS.has(state.pause_reason)
+}
+
+export async function recoverInterruptedAgentPlan(agent, reason, details = {}) {
+  if (!agent) return { recovered: false, reason: 'agent_unavailable' }
+  await agent.loadPersistentState?.()
+  const key = `npc:${agent.npcId ?? 'airi'}`
+  const state = agent.memory?.currentPlan?.(key)
+  if (!shouldRecoverInterruptedPlan(state)) return { recovered: false, reason: 'plan_not_recoverable', state }
+
+  agent.cancel?.(`runtime_recovery_prepare:${reason}`)
+  const epoch = await agent.captureEpoch()
+  const memoryContext = agent.memory?.context?.(key) ?? ''
+  const recoveryDetails = JSON.stringify(details ?? {}).slice(0, 2000)
+  const recoveryMessage = `[HARNESS] Runtime recovery after ${uiText(reason, 120)}. The previous finite Autorio task queue was discarded and its last operation MUST NOT be assumed complete. Re-observe the mutable Factorio state required for the canonical current Task Board step before choosing any world mutation. Preserve the existing goal and completed Task Board prefix. If the current step is already satisfied, verify it and advance; if work remains, submit only the minimum deterministic operations needed to continue. Never blindly replay last_operations. Recovery details: ${recoveryDetails}`
+
+  agent.epoch = epoch
+  agent.lastMemoryKey = key
+  agent.planUpdateReason = 'recovery'
+  agent.baseMessages = [
+    { role: 'system', content: agent.systemPrompt },
+    ...(memoryContext ? [{ role: 'user', content: memoryContext }] : []),
+    { role: 'user', content: recoveryMessage },
+  ]
+  agent.messages = agent.baseMessages.map(message => ({ ...message }))
+  agent.requestInfo = {
+    memoryKey: key,
+    turnId: ++agent.turnSequence,
+    sender: uiText(state.owner || 'runtime-recovery', 128),
+    text: uiText(state.objective || 'Resume interrupted AIRI goal', 4000),
+  }
+  agent.active = true
+  // Recovery is semantically a continuation of the durable goal. This matters
+  // because an empty operation batch must either complete/block the existing
+  // plan, never leave an "active" Task Board with no live runtime work.
+  agent.continuations = 1
+  if (typeof agent.traceEvent === 'function') {
+    agent.traceRequest = { id: `recovery_${Date.now().toString(36)}`, seq: 0 }
+    await agent.traceEvent('runtime.recovery_started', { reason, details })
+  }
+  const result = await agent.runGuarded()
+  return { recovered: true, result, state: agent.memory?.currentPlan?.(key) }
+}
+
 export class Session {
   constructor({ root, app, game, config, save, settingsFile, modDir, ini, log = console.log, provider = providerRequest, startupMs = 120000 }) {
     Object.assign(this, { root, app, game, config, save, settingsFile, modDir, ini, log, provider, startupMs })
@@ -522,6 +572,28 @@ export class Session {
     return this.agent.memory.currentPlan(key)
   }
 
+  async recoverInterruptedPlan(reason, details = {}) {
+    if (!this.agent || !shouldRecoverInterruptedPlan(this.currentPlanState())) return null
+    this.log(`Recovering interrupted AIRI plan after ${reason}; mutable world state will be re-observed before resuming`)
+    try {
+      const recovery = await recoverInterruptedAgentPlan(this.agent, reason, details)
+      if (!recovery.recovered) return null
+      await this.syncTaskBoardUi(recovery.state)
+      if (recovery.result?.chatMessage) await this.printChat(recovery.result.chatMessage)
+      return recovery.result
+    }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.log(`Interrupted plan recovery failed after ${reason}: ${message}`)
+      const paused = typeof this.agent.pausePersistentPlan === 'function'
+        ? await this.agent.pausePersistentPlan(`runtime_recovery_failed:${uiText(reason, 80)}:${uiText(message, 180)}`)
+        : undefined
+      if (paused) await this.syncTaskBoardUi(paused)
+      await this.printChat(`I could not safely recover the interrupted plan after ${reason}; it has been paused instead of guessing. ${message}`)
+      return null
+    }
+  }
+
   async clearTaskBoardUi() {
     if (!this.rcon) return false
     try {
@@ -619,6 +691,11 @@ export class Session {
     this.poll = setInterval(() => {
       if (!this.stopping) this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
     }, 2000)
+    if (shouldRecoverInterruptedPlan(this.currentPlanState()) && this.currentPlanState()?.status === 'active') {
+      this.queueEvent(async () => {
+        await this.recoverInterruptedPlan('runtime_restart', { actor_id: this.lastStatus?.actor_id, epoch: this.lastStatus?.epoch })
+      })
+    }
     this.log(`AIRI Factorio ready; npc=${this.npcName} (${this.npcId}), actor_id=${this.lastStatus.actor_id}, chat=${describeChatPlayers(this.config.chatPlayers)}`)
     return this.lastStatus
   }
@@ -711,13 +788,18 @@ export class Session {
     const recovery = line.match(/\[AUTORIO\] Recovered standalone NPC actor_id=(\d+) -> (\d+) without inventory transfer/)
     if (recovery) {
       this.queueEvent(async () => {
-        if (typeof this.agent.pausePersistentPlan === 'function') {
-          const state = await this.agent.pausePersistentPlan('actor_replaced')
-          await this.syncTaskBoardUi(state)
-        }
-        else this.agent.cancel()
+        const planBeforeRecovery = this.currentPlanState()
+        this.agent.cancel?.('actor_replaced_stale_turn')
         await this.ensureAuthorization()
-        await this.printChat(`I was killed or lost my body and respawned. Previous actor ${recovery[1]}, replacement actor ${recovery[2]}. The interrupted plan was paused and can be resumed after I re-observe the world.`)
+        if (shouldRecoverInterruptedPlan(planBeforeRecovery)) {
+          const result = await this.recoverInterruptedPlan('actor_replaced', {
+            previous_actor_id: Number(recovery[1]),
+            replacement_actor_id: Number(recovery[2]),
+            inventory_policy: 'no_transfer',
+          })
+          if (result) return
+        }
+        await this.printChat(`I was killed or lost my body and respawned. Previous actor ${recovery[1]}, replacement actor ${recovery[2]}. There is no active recoverable plan, so I will wait for a new instruction.`)
       })
       return
     }
