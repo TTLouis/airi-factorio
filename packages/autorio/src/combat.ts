@@ -250,13 +250,19 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return true
   }
 
-  function nearby_mobile_threat(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+  function nearby_mobile_threat(actor: ControlledActor) {
     let threat: LuaEntity | undefined
     let best = math.huge
-    for (const entity of area_enemies(actor, task)) {
-      if (entity.type !== 'unit' || !is_alive(entity)) continue
+    const local_units = actor.surface.find_entities_filtered({
+      position: actor.position,
+      radius: MOBILE_THREAT_PRIORITY_RADIUS,
+      force: 'enemy',
+      type: 'unit',
+    })
+    for (const entity of local_units) {
+      if (!is_alive(entity)) continue
       const candidate = distance(actor.position, entity.position)
-      if (candidate <= MOBILE_THREAT_PRIORITY_RADIUS && candidate < best) {
+      if (candidate < best) {
         threat = entity
         best = candidate
       }
@@ -267,7 +273,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   function preempt_static_target_for_mobile_threat(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
     const target = task.target
     if (task.combat_mode !== 'clear_area' || !target || !is_alive(target) || !is_static_enemy(target)) return false
-    const threat = nearby_mobile_threat(actor, task)
+    const threat = nearby_mobile_threat(actor)
     if (!threat || threat === target) return false
     bind_target(actor, task, threat, 'preempted')
     stop_actor_combat(actor)
@@ -294,10 +300,16 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     acquire(actor, task)
   }
 
-  function nearest_mobile_enemy_distance(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+  function nearest_mobile_enemy_distance(actor: ControlledActor) {
     let result = math.huge
-    for (const entity of area_enemies(actor, task)) {
-      if (entity.type !== 'unit' || !is_alive(entity)) continue
+    const local_units = actor.surface.find_entities_filtered({
+      position: actor.position,
+      radius: TURRET_DANGER_DISTANCE,
+      force: 'enemy',
+      type: 'unit',
+    })
+    for (const entity of local_units) {
+      if (!is_alive(entity)) continue
       const candidate = distance(actor.position, entity.position)
       if (candidate < result) result = candidate
     }
@@ -306,7 +318,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
 
   function should_place_support(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
     if (task.combat_mode !== 'clear_area') return false
-    if (nearest_mobile_enemy_distance(actor, task) <= TURRET_DANGER_DISTANCE) return false
+    if (nearest_mobile_enemy_distance(actor) <= TURRET_DANGER_DISTANCE) return false
     if (!task.last_turret_position) return (task.turrets_placed ?? 0) === 0
     return distance(actor.position, task.last_turret_position) >= TURRET_ADVANCE_DISTANCE
   }
@@ -336,9 +348,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       return false
     }
 
-    // create_entity does not consume AIRI's inventory. Provision this support
-    // turret transactionally: if AIRI cannot actually pay the turret/ammo cost,
-    // or the turret cannot receive ammunition, roll the physical entity back.
     const removed_turret = inventory.remove({ name: 'gun-turret', count: 1 })
     if (removed_turret !== 1) {
       turret.destroy()
