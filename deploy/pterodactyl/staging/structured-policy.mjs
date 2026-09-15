@@ -47,6 +47,7 @@ const operationKeys = {
   select_weapon_slot: ['slot'],
   mine_entity: ['entity_name', 'count'],
   gather_resource: ['resource_name', 'count', 'search_radius'],
+  supply_entity: ['unit_number', 'items'],
   place_entity: ['entity_name', 'x', 'y', 'direction'],
   move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
   move_items_exact: ['item_name', 'unit_number', 'max_count', 'to_entity'],
@@ -98,6 +99,24 @@ export function parseOperation(value) {
           search_radius: integer(args.search_radius ?? 256, 'search_radius', 1, 4096),
         },
       }
+    case 'supply_entity': {
+      check(Array.isArray(args.items) && args.items.length >= 1 && args.items.length <= 8, 'items must contain between 1 and 8 entries')
+      const seen = new Set()
+      const items = args.items.map((item, index) => {
+        exactKeys(item, ['item_name', 'count'])
+        const itemName = factorioName(item.item_name)
+        check(!seen.has(itemName), `duplicate supply item at index ${index}`)
+        seen.add(itemName)
+        return { item_name: itemName, count: integer(item.count, `items[${index}].count`, 1, 100000) }
+      })
+      return {
+        name,
+        args: {
+          unit_number: integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER),
+          items,
+        },
+      }
+    }
     case 'place_entity': {
       const hasX = args.x !== undefined
       const hasY = args.y !== undefined
@@ -150,6 +169,10 @@ export function renderOperation(value) {
     case 'select_weapon_slot': return `remote.call('autorio_operations','select_weapon_slot',${operation.args.slot})`
     case 'mine_entity': return `remote.call('autorio_operations','mine_entity',${luaString(operation.args.entity_name)},${operation.args.count})`
     case 'gather_resource': return `remote.call('autorio_operations','gather_resource',${luaString(operation.args.resource_name)},${operation.args.count},${operation.args.search_radius})`
+    case 'supply_entity': {
+      const items = operation.args.items.map(item => `{item_name=${luaString(item.item_name)},count=${item.count}}`).join(',')
+      return `remote.call('autorio_operations','supply_entity',${operation.args.unit_number},{${items}})`
+    }
     case 'place_entity': {
       const name = luaString(operation.args.entity_name)
       if (operation.args.x !== undefined && operation.args.y !== undefined) {
