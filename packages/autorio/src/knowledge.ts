@@ -68,7 +68,7 @@ function machine_summaries(categories: string[]) {
       { filter: 'crafting-category', crafting_category: category },
     ])
     for (const [name, prototype] of pairs(matches)) {
-      if (seen[name]) continue
+      if (seen[name] === true) continue
       seen[name] = true
       candidates.push({ name, prototype })
     }
@@ -153,13 +153,14 @@ function fluidbox_prototype_summary(value: any) {
 }
 
 function fluid_storage_summary(entity: LuaEntity, index: number) {
-  const prototypes_for_storage = fluidbox_prototype_summary(entity.get_fluid_box_prototype(index))
-  const connections = entity.get_fluid_box_pipe_connections(index) ?? []
+  const fluidbox = entity.fluidbox
+  const prototypes_for_storage = fluidbox_prototype_summary(fluidbox.get_prototype(index))
+  const connections = fluidbox.get_pipe_connections(index) ?? []
   const current_fluid = entity.get_fluid(index)
 
   return {
     index,
-    capacity: entity.get_fluid_capacity(index),
+    capacity: fluidbox.get_capacity(index),
     current_fluid: current_fluid
       ? {
           name: current_fluid.name,
@@ -240,8 +241,10 @@ export function entity_geometry_for_actor(actor: ControlledActor, unit_number: n
     }
   }
 
-  const fluid_storage_count = entity.fluids_count
-  const returned_fluid_storages = math.min(fluid_storage_count, MAX_FLUID_STORAGES)
+  // Factorio 2.0 exposes connection geometry through LuaFluidBox. LuaFluidBox is
+  // array-like in typed-factorio, so .length maps to the Lua length operator.
+  const fluid_box_count = entity.fluidbox.length
+  const returned_fluid_storages = math.min(fluid_box_count, MAX_FLUID_STORAGES)
   const fluid_storages: Array<Record<string, unknown>> = []
   for (let index = 1; index <= returned_fluid_storages; index++) {
     fluid_storages.push(fluid_storage_summary(entity, index))
@@ -267,7 +270,10 @@ export function entity_geometry_for_actor(actor: ControlledActor, unit_number: n
             drop_target: entity_summary(entity.drop_target),
           }
         : undefined,
-    fluid_storages_truncated: fluid_storage_count > MAX_FLUID_STORAGES,
+    fluid_storage_count: entity.fluids_count,
+    fluid_box_count,
+    non_fluidbox_storage_count: math.max(0, entity.fluids_count - fluid_box_count),
+    fluid_storages_truncated: fluid_box_count > MAX_FLUID_STORAGES,
     fluid_storages,
   }
 }
