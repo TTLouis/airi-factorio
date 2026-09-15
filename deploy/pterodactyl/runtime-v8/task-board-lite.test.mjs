@@ -8,7 +8,7 @@ import {
   sanitizeTaskBoard,
   setTaskBoardStatus,
   taskBoardProgress,
-} from './task-board-lite.mjs'
+} from './common.mjs'
 
 test('creates a bounded canonical board with stable step ids', () => {
   const board = createTaskBoard(['observe', 'build', 'verify'], 0, { goalId: 'goal_1', now: 100 })
