@@ -60,6 +60,36 @@ test('configure handshake selects npc and verifies the native deployment status'
   assert.match(rcon.commands[1], /"airi_deployment","status"/)
 })
 
+test('configure handshake rebinds once when the actor changes immediately after configure', async () => {
+  const rcon = new FakeRcon([
+    configureAck(),
+    JSON.stringify(readyStatus({ allowed: false, actor_id: 42, epoch: 4 })),
+    configureAck(),
+    JSON.stringify(readyStatus({ allowed: true, actor_id: 42, epoch: 5 })),
+  ])
+
+  const status = await configureNpcSession(rcon, SESSION, CONFIG_MARKER)
+  assert.equal(status.allowed, true)
+  assert.equal(status.actor_id, 42)
+  assert.equal(status.epoch, 5)
+  assert.equal(rcon.commands.length, 4)
+  assert.equal(rcon.commands[0], rcon.commands[2])
+  assert.match(rcon.commands[1], /"airi_deployment","status"/)
+  assert.match(rcon.commands[3], /"airi_deployment","status"/)
+})
+
+test('configure handshake bounds repeated unauthorized rebinds and still fails closed', async () => {
+  const rcon = new FakeRcon([
+    configureAck(),
+    JSON.stringify(readyStatus({ allowed: false, actor_id: 42, epoch: 4 })),
+    configureAck(),
+    JSON.stringify(readyStatus({ allowed: false, actor_id: 43, epoch: 5 })),
+  ])
+
+  await assert.rejects(() => configureNpcSession(rcon, SESSION, CONFIG_MARKER), /not authorized/)
+  assert.equal(rcon.commands.length, 4)
+})
+
 test('configure handshake repeats the exact command when Factorio echoes the blocked command including the marker', async () => {
   const rcon = new FakeRcon([
     text => `Player <server> tried using the command ${text}. Lua console commands will disable achievements. Please repeat the command to proceed.`,
