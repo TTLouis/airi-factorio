@@ -407,8 +407,7 @@ export class NpcAgentLoop {
     })
   }
 
-  async handleToolBatch(message) {
-    const prepared = this.prepareToolBatch(message)
+  async handleToolBatch(message, prepared = this.prepareToolBatch(message)) {
     this.messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls })
     let duplicateThisRound = false
 
@@ -446,15 +445,12 @@ export class NpcAgentLoop {
       const message = await this.callProvider(current, generation, { round })
 
       if (message.tool_calls !== undefined) {
+        let prepared
         try {
-          await this.handleToolBatch(message)
-          this.toolValidationRetries = 0
+          prepared = this.prepareToolBatch(message)
         }
         catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
-          if (reason.startsWith('Repeated tool observation loop after')) {
-            return this.recoverPlan(generation, error, round + 1)
-          }
           this.toolValidationRetries++
           if (this.toolValidationRetries > this.maxToolValidationRetries) {
             return this.recoverPlan(generation, error, round + 1)
@@ -463,7 +459,10 @@ export class NpcAgentLoop {
             role: 'user',
             content: `[HARNESS] Tool call rejected (${this.toolValidationRetries}/${this.maxToolValidationRetries}): ${reason}. Retry using only an approved tool name and strict JSON arguments matching its schema. Do not repeat the rejected payload.`,
           })
+          continue
         }
+        this.toolValidationRetries = 0
+        await this.handleToolBatch(message, prepared)
         continue
       }
 
