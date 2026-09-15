@@ -160,8 +160,9 @@ export interface PlayerParametersAttackNearestEnemy {
   last_turret_unit_number?: number
   turret_ammo_name?: string
   last_turret_ammo_loaded?: number
-  /** Static-target combat approach path. This is independent of ordinary
-   * WALKING_TO_ENTITY task state so combat can remain the task owner. */
+  /** Combat-owned path state. Approach paths target static nests; retreat paths
+   * return to the latest known support-turret position. */
+  combat_path_mode?: 'approach' | 'retreat'
   combat_path?: PathfinderWaypoint[] | null
   combat_path_request_id?: number
   combat_path_requested_tick?: number
