@@ -45,8 +45,6 @@ function world() {
   const enemies: any[] = [target]
   const gun = { valid_for_read: true }
   const ammo = { valid_for_read: true }
-  // typed-factorio exposes LuaInventory with normal TypeScript array semantics:
-  // Factorio slot 1 is TypeScript index 0.
   const guns: any = [gun]
   const magazines: any = [ammo]
   const main = inventory([])
@@ -238,6 +236,33 @@ describe('bounded area-clearing combat', () => {
     controller.tick(actor)
     expect(controller.status()).toMatchObject({ last_result: { code: 'area_cleared', completed: true, targets_destroyed: 2 } })
     expect(manager.player_state.task_state).toBe(TaskStates.IDLE)
+  })
+
+  it('preempts a locked nest when a nearby mobile threat appears', () => {
+    const { actor, target, enemies, controller } = world()
+    target.type = 'unit-spawner'
+    target.name = 'biter-spawner'
+    target.unit_number = 90
+    target.position = { x: 30, y: 0 }
+
+    controller.submit_clear(80)
+    controller.tick(actor)
+    expect(controller.status()).toMatchObject({ target: { name: 'biter-spawner', unit_number: 90 } })
+
+    const spawned: any = {
+      valid: true,
+      name: 'small-biter',
+      type: 'unit',
+      unit_number: 91,
+      position: { x: 8, y: 0 },
+      health: 15,
+    }
+    enemies.push(spawned)
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+
+    expect(controller.status()).toMatchObject({ target: { name: 'small-biter', unit_number: 91 } })
+    expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
   })
 
   it('places and loads a paid gun turret before advancing when support equipment is available', () => {
