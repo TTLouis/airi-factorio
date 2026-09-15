@@ -180,7 +180,12 @@ function evaluate_plan(actor: ControlledActor, placements: ConstructionExecution
     }
   }
 
-  for (const [name, needed] of pairs(required)) {
+  const checked: Record<string, boolean> = {}
+  for (const placement of placements) {
+    const name = placement.entity_name
+    if (checked[name]) continue
+    checked[name] = true
+    const needed = required[name] ?? 0
     if ((counts[name] ?? 0) < needed) {
       return {
         ok: false,
