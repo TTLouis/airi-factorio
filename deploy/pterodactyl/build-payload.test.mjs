@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { buildArtifacts, channelInstaller, installerLoader, verifyGeneratedArtifacts } from './build-payload.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const PAYLOAD_REF = '92afd659485f5cb47a912615e669332c85ef9d12'
+const PAYLOAD_REF = 'b73d12101bad1b4515b75818474985a95e933ef4'
+const PAYLOAD_SHA256 = '49ed4cc39c6f19cab40c7cf3cb15a06ef823ef3b4036c84edcbfd6a16e85bb39'
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
 REVISION="test"
@@ -83,13 +84,19 @@ test('generated artifact verifier rejects source or channel drift', () => {
   )
 })
 
-test('committed Pterodactyl artifacts are internally valid', () => {
+test('committed Pterodactyl artifacts are internally valid and reinstall stays deployment-only', () => {
   const committedSource = readFileSync(join(here, 'payload-src', 'installer.sh'))
   const committedInstall = readFileSync(join(here, 'install.sh'), 'utf8')
   const committedMainEgg = readFileSync(join(here, 'egg-airi-factorio-server.json'), 'utf8')
   const committedE2eEgg = readFileSync(join(here, 'egg-airi-factorio-npc-e2e.json'), 'utf8')
+  const sourceText = committedSource.toString('utf8')
 
   assert.equal(verifyGeneratedArtifacts(committedSource, committedInstall, committedMainEgg, committedE2eEgg), true)
   assert.match(committedInstall, new RegExp(PAYLOAD_REF))
-  assert.match(committedInstall, /EXPECTED_SOURCE_SHA256="7bcddbab0e959d505a156269340fa2de2fe4c837bc83b0fc9d9f7b6df58dfff1"/)
+  assert.match(committedInstall, new RegExp(`EXPECTED_SOURCE_SHA256="${PAYLOAD_SHA256}"`))
+  assert.doesNotMatch(sourceText, /node --test deploy\/pterodactyl\/staging/)
+  assert.doesNotMatch(sourceText, /pnpm --filter autorio\.ts run test/)
+  assert.match(sourceText, /pnpm --filter autorio\.ts run typecheck/)
+  assert.match(sourceText, /pnpm --filter autorio\.ts run build/)
+  assert.match(sourceText, /packages\/autorio\/dist\/data\.lua/)
 })
