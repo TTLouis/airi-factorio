@@ -228,13 +228,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     })
   }
 
-  function acquire(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
-    const target = preferred_target(actor, area_enemies(actor, task))
-    if (!target) {
-      if (task.combat_mode === 'clear_area') complete_area(actor, task)
-      else fail(actor, task, 'no_target')
-      return false
-    }
+  function bind_target(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy, target: LuaEntity, reason: 'acquired' | 'preempted') {
     task.target = target
     task.target_name = target.name
     task.target_unit_number = target.unit_number
@@ -242,7 +236,41 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.last_progress_tick = game.tick
     task.last_distance = distance(actor.position, target.position)
     const result = record(actor, task, true, false, 'started')
-    log(`[AUTORIO] Combat target acquired: ${result.target_name} unit=${result.target_unit_number ?? 'n/a'} mode=${task.combat_mode ?? 'single'}`)
+    log(`[AUTORIO] Combat target ${reason}: ${result.target_name} unit=${result.target_unit_number ?? 'n/a'} mode=${task.combat_mode ?? 'single'}`)
+  }
+
+  function acquire(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+    const target = preferred_target(actor, area_enemies(actor, task))
+    if (!target) {
+      if (task.combat_mode === 'clear_area') complete_area(actor, task)
+      else fail(actor, task, 'no_target')
+      return false
+    }
+    bind_target(actor, task, target, 'acquired')
+    return true
+  }
+
+  function nearby_mobile_threat(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+    let threat: LuaEntity | undefined
+    let best = math.huge
+    for (const entity of area_enemies(actor, task)) {
+      if (entity.type !== 'unit' || !is_alive(entity)) continue
+      const candidate = distance(actor.position, entity.position)
+      if (candidate <= MOBILE_THREAT_PRIORITY_RADIUS && candidate < best) {
+        threat = entity
+        best = candidate
+      }
+    }
+    return threat
+  }
+
+  function preempt_static_target_for_mobile_threat(actor: ControlledActor, task: PlayerParametersAttackNearestEnemy) {
+    const target = task.target
+    if (task.combat_mode !== 'clear_area' || !target || !is_alive(target) || !is_static_enemy(target)) return false
+    const threat = nearby_mobile_threat(actor, task)
+    if (!threat || threat === target) return false
+    bind_target(actor, task, threat, 'preempted')
+    stop_actor_combat(actor)
     return true
   }
 
@@ -371,6 +399,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       return
     }
     if (!task.target && !acquire(actor, task)) return
+    if (is_alive(task.target)) preempt_static_target_for_mobile_threat(actor, task)
     const target = task.target
     if (!is_alive(target)) {
       target_destroyed(actor, task)
