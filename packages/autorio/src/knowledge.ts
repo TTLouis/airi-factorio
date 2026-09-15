@@ -5,6 +5,9 @@ const MAX_RECIPE_MATCHES = 8
 const MAX_MACHINE_MATCHES = 32
 const MAX_FLUID_STORAGES = 16
 const MAX_PIPE_CONNECTIONS = 16
+const MAX_TOPOLOGY_RADIUS = 16
+const MAX_TOPOLOGY_INSERTERS = 64
+const MAX_TOPOLOGY_RELATIONS = 64
 
 interface RecipeCandidate {
   name: string
@@ -136,6 +139,12 @@ function entity_summary(entity: LuaEntity | undefined) {
   }
 }
 
+function same_entity(a: LuaEntity | undefined, b: LuaEntity) {
+  if (!a || !a.valid) return false
+  if (a.unit_number !== undefined && b.unit_number !== undefined) return a.unit_number === b.unit_number
+  return a === b
+}
+
 function fluidbox_prototype_summary(value: any) {
   if (!value) return []
   const values: any[] = value.production_type ? [value] : value
@@ -180,6 +189,50 @@ function fluid_storage_summary(entity: LuaEntity, index: number) {
       target_pipe_connection_index: connection.target_pipe_connection_index,
     })),
   }
+}
+
+function belt_connectable(entity: LuaEntity) {
+  return entity.type === 'transport-belt'
+    || entity.type === 'underground-belt'
+    || entity.type === 'splitter'
+    || entity.type === 'loader'
+    || entity.type === 'loader-1x1'
+    || entity.type === 'linked-belt'
+}
+
+function relation_sort_key(relation: any) {
+  const from = relation.from?.unit_number ?? 0
+  const via = relation.via?.unit_number ?? 0
+  const to = relation.to?.unit_number ?? relation.neighbour?.unit_number ?? 0
+  const storage = relation.fluidbox_index ?? 0
+  return `${relation.kind}:${from}:${via}:${to}:${storage}`
+}
+
+function sort_relations(relations: Array<Record<string, unknown>>) {
+  for (let i = 0; i < relations.length; i++) {
+    for (let j = i + 1; j < relations.length; j++) {
+      if (relation_sort_key(relations[j]) < relation_sort_key(relations[i])) {
+        const tmp = relations[i]
+        relations[i] = relations[j]
+        relations[j] = tmp
+      }
+    }
+  }
+}
+
+function push_relation(relations: Array<Record<string, unknown>>, relation: Record<string, unknown>) {
+  if (relations.length < MAX_TOPOLOGY_RELATIONS) relations.push(relation)
+}
+
+function add_inserter_route(relations: Array<Record<string, unknown>>, inserter: LuaEntity) {
+  push_relation(relations, {
+    kind: 'item_transfer',
+    from: entity_summary(inserter.pickup_target),
+    via: entity_summary(inserter),
+    to: entity_summary(inserter.drop_target),
+    pickup_position: inserter.pickup_position,
+    drop_position: inserter.drop_position,
+  })
 }
 
 export function recipe_details_for_actor(actor: ControlledActor, item_or_recipe: string) {
@@ -278,6 +331,89 @@ export function entity_geometry_for_actor(actor: ControlledActor, unit_number: n
   }
 }
 
+export function logistics_topology_for_actor(actor: ControlledActor, unit_number: number, radius: number = 8) {
+  if (unit_number < 1 || math.floor(unit_number) !== unit_number) {
+    return { found: false, unit_number, error: 'invalid unit_number' }
+  }
+  if (radius < 1 || radius > MAX_TOPOLOGY_RADIUS || math.floor(radius) !== radius) {
+    return { found: false, unit_number, radius, error: `radius must be an integer from 1 to ${MAX_TOPOLOGY_RADIUS}` }
+  }
+
+  const center = game.get_entity_by_unit_number(unit_number as UnitNumber)
+  if (!center || !center.valid) return { found: false, unit_number, error: 'entity not found' }
+  if (center.surface.index !== actor.surface.index) return { found: false, unit_number, error: 'entity is on another surface' }
+
+  const relations: Array<Record<string, unknown>> = []
+
+  if (belt_connectable(center)) {
+    const neighbours = center.belt_neighbours
+    for (const input of neighbours.inputs) {
+      push_relation(relations, { kind: 'belt_input', from: entity_summary(input), to: entity_summary(center) })
+    }
+    for (const output of neighbours.outputs) {
+      push_relation(relations, { kind: 'belt_output', from: entity_summary(center), to: entity_summary(output) })
+    }
+  }
+
+  if (center.type === 'inserter') add_inserter_route(relations, center)
+
+  if (center.type === 'mining-drill' && center.drop_target?.valid) {
+    push_relation(relations, {
+      kind: 'direct_item_output',
+      from: entity_summary(center),
+      to: entity_summary(center.drop_target),
+      drop_position: center.drop_position,
+    })
+  }
+
+  const nearby_inserters = center.surface.find_entities_filtered({
+    position: center.position,
+    radius,
+    type: 'inserter',
+    force: center.force,
+    limit: MAX_TOPOLOGY_INSERTERS,
+  })
+  for (const inserter of nearby_inserters) {
+    if (same_entity(inserter, center)) continue
+    if (same_entity(inserter.pickup_target, center) || same_entity(inserter.drop_target, center)) {
+      add_inserter_route(relations, inserter)
+    }
+  }
+
+  const fluid_box_count = math.min(center.fluidbox.length, MAX_FLUID_STORAGES)
+  for (let index = 1; index <= fluid_box_count; index++) {
+    const prototypes_for_storage = fluidbox_prototype_summary(center.fluidbox.get_prototype(index))
+    const connections = center.fluidbox.get_pipe_connections(index) ?? []
+    for (const connection of connections.slice(0, MAX_PIPE_CONNECTIONS)) {
+      if (connection.target?.owner?.valid) {
+        push_relation(relations, {
+          kind: 'fluid_connection',
+          center: entity_summary(center),
+          neighbour: entity_summary(connection.target.owner),
+          fluidbox_index: index,
+          production_types: prototypes_for_storage.map(prototype => prototype.production_type),
+          flow_direction: connection.flow_direction,
+          connection_type: connection.connection_type,
+          position: connection.position,
+          target_position: connection.target_position,
+          target_fluidbox_index: connection.target_fluidbox_index,
+        })
+      }
+    }
+  }
+
+  sort_relations(relations)
+  return {
+    found: true,
+    center: entity_summary(center),
+    radius,
+    relation_limit: MAX_TOPOLOGY_RELATIONS,
+    inserter_scan_limit: MAX_TOPOLOGY_INSERTERS,
+    relations_truncated: relations.length >= MAX_TOPOLOGY_RELATIONS,
+    relations,
+  }
+}
+
 export function create_knowledge_remote_interface(get_actor: () => ControlledActor | undefined) {
   remote.add_interface('autorio_knowledge', {
     recipe_details: (item_or_recipe: string) => {
@@ -301,6 +437,13 @@ export function create_knowledge_remote_interface(get_actor: () => ControlledAct
         }
       }
       return entity_geometry_for_actor(actor, unit_number)
+    },
+    logistics_topology: (unit_number: number, radius: number = 8) => {
+      const actor = get_actor()
+      if (!actor || !actor.is_valid) {
+        return { found: false, unit_number, radius, error: 'no controlled actor' }
+      }
+      return logistics_topology_for_actor(actor, unit_number, radius)
     },
   })
 }
