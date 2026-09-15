@@ -88,18 +88,13 @@ tar -xzf "$WORK/airi-source.tar.gz" --strip-components=1 --no-same-owner -C "$WO
 [[ -f "$WORK/source/deploy/pterodactyl/staging/guard.ts" ]] || fail 'Pinned source lacks the v8 NPC guard'
 [[ -f "$WORK/source/deploy/pterodactyl/runtime-v8/supervisor.mjs" ]] || fail 'Pinned source lacks the v8 runtime supervisor'
 
-log 'Running v8 deployment/runtime protocol tests'
-(
-  cd "$WORK/source"
-  node --test deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
-)
-
-log 'Installing the Autorio build graph and testing the native NPC source'
+# Full staging/runtime and Autorio test suites run in GitHub CI. Reinstall should
+# remain a bounded deployment path, not a second CI runner inside Pterodactyl.
+log 'Installing the Autorio build graph for deployment'
 (
   cd "$WORK/source"
   NODE_ENV=development pnpm install --filter 'autorio.ts...' --frozen-lockfile --ignore-scripts --store-dir "$WORK/pnpm-store" --package-import-method=copy
   pnpm --filter @proj-airi/tstl-plugin-reload-factorio-mod run build
-  pnpm --filter autorio.ts run test
 )
 
 log 'Preparing native actor-aware Autorio source and compiling the deployment guard'
@@ -114,6 +109,7 @@ grep -q 'native-actor-aware-autorio' "$WORK/source-preparation.json" || fail 'Na
   pnpm --filter autorio.ts run build
 )
 [[ -s "$WORK/source/packages/autorio/dist/control.lua" ]] || fail 'Lua compilation did not emit control.lua'
+[[ -s "$WORK/source/packages/autorio/dist/data.lua" ]] || fail 'Lua packaging did not emit data.lua'
 cp "$WORK/source/packages/autorio/info.json" "$WORK/source/packages/autorio/dist/info.json"
 cp -a "$WORK/source/packages/autorio/dist/." "$APP/autorio/"
 
@@ -209,6 +205,7 @@ const names = [
   'src/staging/supervisor-adapter.mjs',
   'src/staging/npc-agent-loop.mjs',
   'autorio/control.lua',
+  'autorio/data.lua',
   'autorio/info.json',
   'factorio/bin/x64/factorio',
 ]
