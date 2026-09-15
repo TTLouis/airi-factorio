@@ -48,6 +48,7 @@ const operationKeys = {
   mine_entity: ['entity_name', 'count'],
   gather_resource: ['resource_name', 'count', 'search_radius'],
   supply_entity: ['unit_number', 'items'],
+  execute_construction_plan: ['validation_id', 'placement_count'],
   place_entity: ['entity_name', 'x', 'y', 'direction'],
   move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
   move_items_exact: ['item_name', 'unit_number', 'max_count', 'to_entity'],
@@ -117,6 +118,14 @@ export function parseOperation(value) {
         },
       }
     }
+    case 'execute_construction_plan':
+      return {
+        name,
+        args: {
+          validation_id: integer(args.validation_id, 'validation_id', 1, Number.MAX_SAFE_INTEGER),
+          placement_count: integer(args.placement_count, 'placement_count', 1, 16),
+        },
+      }
     case 'place_entity': {
       const hasX = args.x !== undefined
       const hasY = args.y !== undefined
@@ -173,6 +182,7 @@ export function renderOperation(value) {
       const items = operation.args.items.map(item => `{item_name=${luaString(item.item_name)},count=${item.count}}`).join(',')
       return `remote.call('autorio_operations','supply_entity',${operation.args.unit_number},{${items}})`
     }
+    case 'execute_construction_plan': return `remote.call('autorio_operations','execute_construction_plan',${operation.args.validation_id},${operation.args.placement_count})`
     case 'place_entity': {
       const name = luaString(operation.args.entity_name)
       if (operation.args.x !== undefined && operation.args.y !== undefined) {
