@@ -31,7 +31,7 @@ function sort_named<T extends { name: string }>(values: T[]) {
 
 function recipe_candidates(actor: ControlledActor, item_or_recipe: string) {
   const direct = actor.force.recipes[item_or_recipe]
-  if (direct) {
+  if (direct !== undefined) {
     return { candidates: [{ name: direct.name, recipe: direct }], truncated: false }
   }
 
@@ -175,7 +175,7 @@ function fluid_storage_summary(entity: LuaEntity, index: number) {
       connection_type: connection.connection_type,
       position: connection.position,
       target_position: connection.target_position,
-      target: entity_summary(connection.target),
+      target: entity_summary(connection.target?.owner),
       target_fluidbox_index: connection.target_fluidbox_index,
       target_pipe_connection_index: connection.target_pipe_connection_index,
     })),
