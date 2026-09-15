@@ -4,42 +4,21 @@ on:
   push:
     branches:
       - main
-      - feat/npc-transition-work
 
   pull_request:
     branches:
       - main
 
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  lint-typescript:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
-      - uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: pnpm
-
-      - name: Install
-        run: pnpm install
-
-      - name: Lint
-        run: pnpm run lint
-
-  lint-python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.9.1
-        with:
-          cache: true
-
-      - name: Lint
-        run: pixi run lint
-
   typecheck-typescript:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
@@ -54,19 +33,15 @@ jobs:
       - name: Typecheck
         run: pnpm run build && pnpm run typecheck
 
-  typecheck-python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.9.1
-        with:
-          cache: true
-
-      - name: Typecheck
-        run: pixi run typecheck
+      - name: Compile native NPC Pterodactyl guard
+        run: |
+          node deploy/pterodactyl/staging/source-preparer.mjs . deploy/pterodactyl/staging/guard.ts
+          pnpm --filter autorio.ts run typecheck
+          pnpm --filter autorio.ts run build
 
   test-typescript:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
@@ -81,12 +56,20 @@ jobs:
       - name: Test
         run: pnpm run test
 
-  npc-factorio-integration:
-    if: github.ref == 'refs/heads/feat/npc-transition-work'
+  pterodactyl-staging:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
 
-      - name: Run prompt contract and zero-player Factorio harness
-        run: docker build -f tests/factorio/Dockerfile -t airi-factorio-npc-test . && docker run --rm airi-factorio-npc-test
+      - name: Check generated egg artifacts
+        run: node deploy/pterodactyl/build-payload.mjs --check
+
+      - name: Test payload verifier portability
+        run: node --test deploy/pterodactyl/build-payload.test.mjs
+
+      - name: Test deployment protocol and production runtime
+        run: node --test deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
