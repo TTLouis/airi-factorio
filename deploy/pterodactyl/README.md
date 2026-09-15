@@ -59,6 +59,29 @@ bash ./rollback-airi.sh
 
 Rollback changes the managed startup target only. It does not rewrite saves, user mods, or `airi-config.json`.
 
+## Server file layout
+
+The server root is kept intentionally small and separates user content from AIRI-managed internals:
+
+```text
+/home/container/
+├── start-airi.sh                 # managed startup symlink
+├── rollback-airi.sh              # managed rollback helper
+├── airi-config.json              # effective non-secret runtime config
+├── client-mods/
+│   ├── autorio_0.1.0.zip         # downloadable client-side Autorio package
+│   └── SHA256SUMS
+├── mods/                         # user-installed Factorio mods only
+├── saves/                        # Factorio saves
+├── data/                         # server-settings.json and Factorio writable data
+├── logs/                         # AIRI behavior/debug logs
+└── .airi/                        # managed releases/runtime state; do not edit manually
+```
+
+`client-mods/` is **not** the directory Factorio loads server mods from. It is the user-facing place to download the exact managed Autorio client package when a joining client needs it. User-supplied mods remain under `mods/`. At runtime the supervisor builds an isolated `.airi/run-*/mods/` directory, copies approved user mods into it, injects the managed Autorio build, and passes that directory explicitly through Factorio's `--mod-directory` flag.
+
+Reinstall removes the old legacy root-level `autorio_0.1.0.zip` after publishing the same package under `client-mods/`.
+
 ## Egg variables
 
 | Purpose | Setting | Meaning |
@@ -73,7 +96,7 @@ Rollback changes the managed startup target only. It does not rewrite saves, use
 | Provider budget | `MAX_PROVIDER_REQUESTS_PER_HOUR` | defaults to `300` |
 | Save | `SAVE_NAME` | optional explicit save; blank chooses newest or creates `airi-world.zip` |
 | Factorio account | `FACTORIO_USERNAME` / `FACTORIO_TOKEN` | both blank = hidden/private; both set = public listing path |
-| Shutdown timeout | `SHUTDOWN_TIMEOUT_MS` | graceful save/stop timeout before forced termination |
+| Shutdown timeout | `SHUTDOWN_TIMEOUT_MS` | time allowed for Factorio's clean `/quit` path before bounded signal fallback |
 | Factorio version | `FACTORIO_VERSION` | `latest`, `experimental`, or exact supported `2.0.x` |
 
 `OPENAI_MODEL` and `OPENAI_API_BASEURL` are synchronized into `airi-config.json` on startup. Secrets are not. Factorio username/token must be supplied together or startup fails.
@@ -83,6 +106,7 @@ Rollback changes the managed startup target only. It does not rewrite saves, use
 - Factorio stdout/stderr are forwarded to the Pterodactyl console once.
 - Commands typed into the Pterodactyl console are forwarded unchanged to Factorio stdin.
 - Input listeners are detached on exit/stop and broken-pipe errors are handled.
+- Pterodactyl's `^C` stop action signals the AIRI supervisor. The supervisor pauses durable AIRI state, cancels active Autorio work, requests Factorio's native `/quit` over authenticated loopback RCON, and waits for Factorio to save and exit itself. SIGINT and then SIGKILL are bounded fallbacks only if the native quit path does not finish before `SHUTDOWN_TIMEOUT_MS`.
 - `data/server-settings.json` is reconciled at startup while preserving unrelated Factorio fields.
 - provider failures/timeouts clear the active AIRI turn and are reported back to game chat;
 - `!airi stop` can abort an in-flight provider request;
@@ -128,7 +152,7 @@ node deploy/pterodactyl/build-payload.mjs --check
 node --test deploy/pterodactyl/build-payload.test.mjs deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
 ```
 
-The Docker package smoke and real zero-player Factorio harness validate the deployment without real provider credentials. Production provider validation remains an operational check rather than a repository-CI requirement.
+The Docker package smoke and real zero-player Factorio harness validate the deployment without real provider credentials. The package smoke requires both the supervisor's clean-shutdown acknowledgement and Factorio's own `Goodbye` marker after `/quit`, so a wrapper exit caused only by forced process termination is not accepted as graceful. Production provider validation remains an operational check rather than a repository-CI requirement.
 
 ## Source/update boundary
 
