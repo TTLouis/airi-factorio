@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import prompt from './prompt.md?raw'
+import productionPlanningPrompt from './production-planning-prompt.md?raw'
+
+const systemPrompt = `${prompt}\n\n${productionPlanningPrompt}`
 
 const mocks = vi.hoisted(() => ({
   call: vi.fn(),
@@ -60,7 +63,7 @@ describe('actual prompt/message harness', () => {
 
     expect(mocks.call).toHaveBeenCalledTimes(1)
     const [messages, options] = mocks.call.mock.calls[0]
-    expect(messages[0]).toEqual({ role: 'system', content: prompt })
+    expect(messages[0]).toEqual({ role: 'system', content: systemPrompt })
     expect(messages[1]).toEqual({ role: 'user', content: '[CHAT] Louis: wait a moment' })
     expect(options).toMatchObject({ maxRoundTrip: 10 })
     expect(result?.operationCommands).toEqual(["remote.call('autorio_operations', 'wait', 3)"])
@@ -93,7 +96,7 @@ describe('actual prompt/message harness', () => {
 
     expect(mocks.call).toHaveBeenCalledTimes(2)
     const [messages] = mocks.call.mock.calls[1]
-    expect(messages[0]).toEqual({ role: 'system', content: prompt })
+    expect(messages[0]).toEqual({ role: 'system', content: systemPrompt })
     expect(messages).toContainEqual({ role: 'assistant', content: firstResponse })
     expect(messages).toContainEqual({ role: 'user', content: '[MOD] All operations completed' })
     expect(messages.filter((message: { role: string }) => message.role === 'system')).toHaveLength(1)
@@ -109,7 +112,7 @@ describe('actual prompt/message harness', () => {
     })
 
     const [messages] = mocks.call.mock.calls[0]
-    expect(messages[0]).toEqual({ role: 'system', content: prompt })
+    expect(messages[0]).toEqual({ role: 'system', content: systemPrompt })
     expect(messages[1]).toEqual({ role: 'user', content: '[MOD] Error: No iron-ore found' })
   })
 })
