@@ -8,6 +8,7 @@ type Manager = ReturnType<typeof new_task_manager>
 type BasicController = ReturnType<typeof new_basic_operation_controller>
 
 const PLAYER_TRANSFER_DISTANCE = 8
+const MAX_PLACEMENT_DISTANCE = 10
 
 function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
   let min_distance = math.huge
@@ -178,6 +179,11 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return [false, 'Entity not found in inventory']
     }
 
+    if (task.position && squared_distance(actor.position, task.position) > MAX_PLACEMENT_DISTANCE ** 2) {
+      controller.fail(actor, task, 'too_far')
+      return [false, 'Requested placement position is out of build range']
+    }
+
     if (!task.position) {
       task.position = surface.find_non_colliding_position(task.entity_name, actor.position, 1, 1)
       if (!task.position) {
@@ -189,6 +195,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     const create_entity_args: SurfaceCreateEntity = {
       name: task.entity_name,
       position: task.position,
+      direction: task.direction,
       raise_built: true,
       ...actor.entity_build_args(),
     }
@@ -199,7 +206,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     }
 
     item_stack.count = item_stack.count - 1
-    log(`[AUTORIO] Entity placed successfully: ${task.entity_name}`)
+    log(`[AUTORIO] Entity placed successfully: ${task.entity_name} at ${serpent.line(task.position)} direction=${task.direction ?? 'default'}`)
     controller.complete(actor, task)
     return [true, 'Entity placed successfully', entity]
   }
