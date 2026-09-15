@@ -112,6 +112,13 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     }).strict(),
   }).strict(),
   z.object({
+    name: z.literal('set_machine_recipe'),
+    args: z.object({
+      unit_number: unitNumber,
+      recipe_name: factorioNameSchema,
+    }).strict(),
+  }).strict(),
+  z.object({
     name: z.literal('move_items_with_player'),
     args: z.object({
       item_name: factorioNameSchema,
@@ -177,6 +184,7 @@ const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]place_entity['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]move_items['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]move_items_exact['"]${separator}${quotedSafeName}${separator}${positiveInteger}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
+  new RegExp(`${callStart}['"]set_machine_recipe['"]${separator}${positiveInteger}${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]move_items_with_player['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]craft_item['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]attack_nearest_enemy['"](?:${separator}${positiveInteger})?${callEnd}`),
@@ -242,6 +250,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'move_items', ${renderLuaString(operation.args.item_name)}, ${renderLuaString(operation.args.entity_name)}, ${operation.args.max_count}, ${operation.args.to_entity})`
     case 'move_items_exact':
       return `remote.call('autorio_operations', 'move_items_exact', ${renderLuaString(operation.args.item_name)}, ${operation.args.unit_number}, ${operation.args.max_count}, ${operation.args.to_entity})`
+    case 'set_machine_recipe':
+      return `remote.call('autorio_operations', 'set_machine_recipe', ${operation.args.unit_number}, ${renderLuaString(operation.args.recipe_name)})`
     case 'move_items_with_player':
       return `remote.call('autorio_operations', 'move_items_with_player', ${renderLuaString(operation.args.item_name)}, ${renderLuaString(operation.args.player_name)}, ${operation.args.max_count}, ${operation.args.to_player})`
     case 'craft_item':
