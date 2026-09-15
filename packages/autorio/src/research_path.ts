@@ -23,7 +23,7 @@ function valid_node_limit(value: number) {
 
 function prerequisite_names(technology: any) {
   const names: string[] = []
-  for (const [name] of pairs(technology.prerequisites)) names.push(name)
+  for (const name in technology.prerequisites) names.push(name)
   names.sort()
   return names
 }
