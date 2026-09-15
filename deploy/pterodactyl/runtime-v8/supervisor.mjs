@@ -24,6 +24,7 @@ import {
   regularFile,
   reserveBudget,
   safeInteger,
+  withTimeout,
 } from './common.mjs'
 import { createSave, prepareGameConfig, prepareMods, prepareServerSettings, selectSave } from './game-files.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
@@ -404,6 +405,7 @@ export class Session {
     if (this.poll) clearInterval(this.poll)
     this.stopPromise = (async () => {
       let clean = true
+      let gracefulResult
       if (this.agent?.active) {
         try {
           if (typeof this.agent.pausePersistentPlan === 'function') await this.agent.pausePersistentPlan(`server_stop_${reason}`)
@@ -418,12 +420,28 @@ export class Session {
         this.rcon.timeout = Math.min(this.config.stopMs, 30000)
         try { await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")') }
         catch (error) { clean = false; this.log(`Shutdown cancel command failed: ${error instanceof Error ? error.message : error}`) }
-        try { await this.rcon.command('/server-save') }
-        catch (error) { clean = false; this.log(`Shutdown server-save command failed: ${error instanceof Error ? error.message : error}`) }
+
+        this.log('Requesting Factorio graceful /quit shutdown')
+        this.rcon.command('/quit').catch(error => {
+          if (this.gameChild?.alive()) {
+            this.log(`Shutdown /quit acknowledgement failed: ${error instanceof Error ? error.message : error}`)
+          }
+        })
+        try {
+          gracefulResult = await withTimeout(this.gameChild.closed, this.config.stopMs, 'Factorio graceful /quit timed out')
+        }
+        catch (error) {
+          clean = false
+          this.log(`Factorio did not exit cleanly after /quit: ${error instanceof Error ? error.message : error}`)
+        }
       }
-      if (this.gameChild) {
-        const stopped = await this.gameChild.stop(this.config.stopMs, 'SIGINT')
+      if (this.gameChild?.alive()) {
+        this.log('Falling back to SIGINT for Factorio shutdown')
+        const stopped = await this.gameChild.stop(Math.min(this.config.stopMs, 15000), 'SIGINT')
         if (stopped.forced || stopped.result?.code !== 0) clean = false
+      }
+      else if (gracefulResult && gracefulResult.code !== 0) {
+        clean = false
       }
       this.rcon?.close()
       this.log(clean ? 'AIRI Factorio stopped cleanly' : 'AIRI Factorio shutdown required fallback handling')
