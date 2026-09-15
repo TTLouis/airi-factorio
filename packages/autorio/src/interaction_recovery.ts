@@ -1,5 +1,6 @@
 import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
+import { resolve_exact_entity } from './entity_reference'
 import type { new_task_manager } from './task_manager'
 import type {
   PlayerParameters,
@@ -100,7 +101,7 @@ export function new_interaction_recovery(manager: Manager) {
     if (manager.player_state.task_state === TaskStates.SETTING_RECIPE) {
       const task = manager.player_state.parameters_set_recipe
       if (!task) return false
-      const target = game.get_entity_by_unit_number(task.target_unit_number as any)
+      const target = resolve_exact_entity(actor, task.target_unit_number)
       if (!target || !target.valid || target.surface.index !== actor.surface.index || target.force.index !== actor.force.index) return false
       const reach = entity_reach(actor)
       if (squared_distance(actor.position, target.position) <= reach ** 2) return false
@@ -120,7 +121,7 @@ export function new_interaction_recovery(manager: Manager) {
     }
 
     if (task.target_unit_number !== undefined) {
-      const target = game.get_entity_by_unit_number(task.target_unit_number as any)
+      const target = resolve_exact_entity(actor, task.target_unit_number)
       if (!target || !target.valid || target.surface.index !== actor.surface.index || target.force.index !== actor.force.index) return false
       if (squared_distance(actor.position, target.position) <= reach ** 2) return false
       return interrupt(manager, entity_navigation(actor, target, reach), task, `exact entity-transfer approach to <=${reach} tiles`)

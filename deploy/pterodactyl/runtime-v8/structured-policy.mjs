@@ -138,6 +138,32 @@ function parsePlacement(args) {
   return parsed
 }
 
+function parseConstructionPlan(args) {
+  exactKeys(args, ['plan_id', 'placements'])
+  check(Array.isArray(args.placements) && args.placements.length >= 1 && args.placements.length <= 16, 'placements must contain between 1 and 16 entries')
+  return {
+    plan_id: base.factorioName(args.plan_id),
+    placements: args.placements.map((placement, index) => {
+      exactKeys(placement, ['entity_name', 'x', 'y', 'direction'])
+      const parsed = {
+        entity_name: base.factorioName(placement.entity_name),
+        x: finiteCoordinate(placement.x, `placements[${index}].x`),
+        y: finiteCoordinate(placement.y, `placements[${index}].y`),
+      }
+      if (placement.direction !== undefined) parsed.direction = optionalInteger(placement.direction, `placements[${index}].direction`, 0, 15)
+      return parsed
+    }),
+  }
+}
+
+function parseResearchPath(args) {
+  exactKeys(args, ['name', 'max_nodes'])
+  return {
+    name: base.factorioName(args.name),
+    max_nodes: optionalInteger(args.max_nodes ?? 32, 'max_nodes', 1, 64),
+  }
+}
+
 function luaTable(parsed) {
   const fields = []
   if (parsed.entity_name !== undefined) fields.push(`entity_name=${base.luaString(parsed.entity_name)}`)
@@ -154,6 +180,25 @@ function luaTable(parsed) {
   if (parsed.reserve_power !== undefined) fields.push(`reserve_power=${parsed.reserve_power}`)
   if (parsed.extension_direction !== undefined) fields.push(`extension_direction=${base.luaString(parsed.extension_direction)}`)
   return `{${fields.join(',')}}`
+}
+
+function renderConstructionPlan(args) {
+  const parsed = parseConstructionPlan(args)
+  const placements = parsed.placements.map((placement) => {
+    const fields = [
+      `entity_name=${base.luaString(placement.entity_name)}`,
+      `x=${placement.x}`,
+      `y=${placement.y}`,
+    ]
+    if (placement.direction !== undefined) fields.push(`direction=${placement.direction}`)
+    return `{${fields.join(',')}}`
+  }).join(',')
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","validate_construction_plan",{plan_id=${base.luaString(parsed.plan_id)},placements={${placements}}})))`
+}
+
+function renderResearchPath(args) {
+  const parsed = parseResearchPath(args)
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","research_path",${base.luaString(parsed.name)},${parsed.max_nodes})))`
 }
 
 const solveProductionDefinition = {
@@ -243,11 +288,66 @@ const placementPlannerDefinition = {
   },
 }
 
-export const toolDefinitions = [...base.toolDefinitions, solveProductionDefinition, transportCapacityDefinition, localSpatialObservationDefinition, placementPlannerDefinition]
+const constructionPlanValidationDefinition = {
+  type: 'function',
+  function: {
+    name: 'validateConstructionPlan',
+    description: 'Validate one exact local construction batch against the live world and AIRI inventory before any placement occurs. Checks 1..16 exact placements for current placeability, pairwise planned collision, local reach, required items, actor/surface/force identity, and returns validation_id plus placement_count. After validation, execute exactly that validation_id and placement_count with execute_construction_plan; do not edit coordinates between validation and execution.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['plan_id', 'placements'],
+      properties: {
+        plan_id: { type: 'string', minLength: 1, maxLength: 200 },
+        placements: {
+          type: 'array', minItems: 1, maxItems: 16,
+          items: {
+            type: 'object', additionalProperties: false, required: ['entity_name', 'x', 'y'],
+            properties: {
+              entity_name: { type: 'string', minLength: 1, maxLength: 200 },
+              x: { type: 'number', minimum: -1000000, maximum: 1000000 },
+              y: { type: 'number', minimum: -1000000, maximum: 1000000 },
+              direction: { type: 'integer', minimum: 0, maximum: 15 },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+
+const researchPathDefinition = {
+  type: 'function',
+  function: {
+    name: 'getResearchPath',
+    description: 'Return a deterministic dependency-first path to one technology from the live force technology graph. Distinguishes already researched, exact gameplay-trigger requirements, science research, disabled/research-disabled blockers, and the next currently actionable technology. Never infer prerequisite order or trigger details from model memory.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name'],
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 200 },
+        max_nodes: { type: 'integer', minimum: 1, maximum: 64, default: 32 },
+      },
+    },
+  },
+}
+
+export const toolDefinitions = [
+  ...base.toolDefinitions,
+  solveProductionDefinition,
+  transportCapacityDefinition,
+  localSpatialObservationDefinition,
+  placementPlannerDefinition,
+  constructionPlanValidationDefinition,
+  researchPathDefinition,
+]
 export function toolCommand(name, args) {
   if (name === 'solveProduction') return renderSolveProduction(args)
   if (name === 'getTransportCapacity') return renderTransportCapacity(args)
   if (name === 'getLocalSpatialObservation') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","spatial_observation",${luaTable(parseSpatialObservation(args))})))`
   if (name === 'planPlacement') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","plan_placement",${luaTable(parsePlacement(args))})))`
+  if (name === 'validateConstructionPlan') return renderConstructionPlan(args)
+  if (name === 'getResearchPath') return renderResearchPath(args)
   return base.toolCommand(name, args)
 }

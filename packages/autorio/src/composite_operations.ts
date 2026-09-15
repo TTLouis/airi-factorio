@@ -9,16 +9,27 @@ type TaskManager = ReturnType<typeof new_task_manager>
 const DEFAULT_RESOURCE_SEARCH_RADIUS = 256
 const MAX_RESOURCE_SEARCH_RADIUS = 4096
 const MAX_RESOURCE_COUNT = 1000
+const MAX_SUPPLY_ITEMS = 8
+const MAX_SUPPLY_COUNT = 100000
+
+export interface SupplyItemRequest {
+  item_name: string
+  count: number
+}
 
 function valid_integer(value: number, min: number, max: number) {
   return typeof value === 'number' && value === math.floor(value) && value >= min && value <= max
 }
 
+function valid_name(value: string) {
+  return typeof value === 'string' && value.length >= 1 && value.length <= 200
+}
+
 /**
  * High-level deterministic operations built only from existing serialized
  * Autorio tasks. These are intentionally thin orchestration helpers: the
- * underlying navigation/mining controllers remain the source of truth for
- * pathfinding, obstacle recovery, actor ownership and completion receipts.
+ * underlying navigation/mining/interaction controllers remain the source of
+ * truth for pathfinding, obstacle recovery, actor ownership and receipts.
  */
 export function new_composite_operation_controller(
   navigation: NavigationController,
@@ -30,7 +41,7 @@ export function new_composite_operation_controller(
     count: number = 1,
     search_radius: number = DEFAULT_RESOURCE_SEARCH_RADIUS,
   ): [boolean, string] {
-    if (typeof resource_name !== 'string' || resource_name.length < 1 || resource_name.length > 200) {
+    if (!valid_name(resource_name)) {
       return [false, 'resource_name must be a valid Factorio resource prototype name']
     }
     if (!valid_integer(count, 1, MAX_RESOURCE_COUNT)) {
@@ -45,10 +56,6 @@ export function new_composite_operation_controller(
       return [false, `${resource_name} is not a mineable resource entity`]
     }
 
-    // Queue one finite approach followed by the existing mining task. The task
-    // manager keeps both in one batch; navigation failure cancels the dependent
-    // mining task. Once mining starts, its own reach recovery follows the ore
-    // patch without requiring another model turn.
     if (!navigation.submit(resource_name, search_radius)) {
       return [false, `Unable to queue navigation to ${resource_name}`]
     }
@@ -60,5 +67,40 @@ export function new_composite_operation_controller(
     return [true, 'Resource gathering task started']
   }
 
-  return { gather_resource }
+  function supply_entity(target_unit_number: number, items: SupplyItemRequest[]): [boolean, string] {
+    if (!valid_integer(target_unit_number, 1, 9007199254740991)) {
+      return [false, 'unit_number must be a positive safe integer']
+    }
+    if (!Array.isArray(items) || items.length < 1 || items.length > MAX_SUPPLY_ITEMS) {
+      return [false, `items must contain between 1 and ${MAX_SUPPLY_ITEMS} entries`]
+    }
+
+    const seen: Record<string, boolean> = {}
+    for (const item of items) {
+      if (!item || !valid_name(item.item_name)) {
+        return [false, 'each supply item must have a valid item_name']
+      }
+      if (!valid_integer(item.count, 1, MAX_SUPPLY_COUNT)) {
+        return [false, `each supply count must be an integer from 1 to ${MAX_SUPPLY_COUNT}`]
+      }
+      if (seen[item.item_name]) {
+        return [false, `duplicate supply item ${item.item_name}`]
+      }
+      seen[item.item_name] = true
+    }
+
+    let queued = 0
+    for (const item of items) {
+      const result = basic.submit_move_exact(item.item_name, target_unit_number, item.count, true)
+      if (!result[0]) {
+        if (queued > 0) manager.cancel_all_tasks('supply_entity_admission_failed')
+        return [false, `Unable to queue ${item.item_name} supply`]
+      }
+      queued += 1
+    }
+
+    return [true, 'Exact entity supply task started']
+  }
+
+  return { gather_resource, supply_entity }
 }

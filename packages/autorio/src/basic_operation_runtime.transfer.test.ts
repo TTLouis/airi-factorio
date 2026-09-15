@@ -3,6 +3,7 @@ import type { LuaEntity, LuaInventory } from 'factorio:runtime'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { new_basic_operation_controller } from './basic_operations'
 import { new_basic_operation_runtime } from './basic_operation_runtime'
+import { remember_entity_reference } from './entity_reference'
 import { new_task_manager } from './task_manager'
 import { TaskStates } from './types'
 
@@ -104,6 +105,35 @@ describe('exact entity item transfers', () => {
       target_unit_number: 101,
     })
     expect(c.manager.player_state.task_state).toBe(TaskStates.IDLE)
+  })
+
+  it('recovers the same observed unit when native lookup temporarily returns nil', () => {
+    const c = context()
+    const selectedInventory = inventory()
+    const distractorInventory = inventory()
+    const selected = entity(101, selectedInventory)
+    const distractor = entity(202, distractorInventory)
+    remember_entity_reference(selected)
+    c.findEntities.mockReturnValue([distractor, selected] as any)
+    ;(globalThis as any).game.get_entity_by_unit_number = vi.fn(() => undefined)
+
+    expect(c.controller.submit_move_exact('firearm-magazine', 101, 7, true)).toEqual([true, 'Task started'])
+    expect(c.runtime.state_moving_items(c.actor)).toBe(7)
+
+    expect(c.findEntities).toHaveBeenCalledWith({
+      position: { x: 2, y: 0 },
+      radius: 0.25,
+      name: 'gun-turret',
+      force: c.actor.force,
+    })
+    expect(selectedInventory.counts['firearm-magazine']).toBe(7)
+    expect(distractorInventory.counts['firearm-magazine'] ?? 0).toBe(0)
+    expect(c.controller.status().last_result).toMatchObject({
+      code: 'completed',
+      completed: true,
+      moved_count: 7,
+      target_unit_number: 101,
+    })
   })
 
   it.each([

@@ -35,6 +35,8 @@ import { luaString } from './structured-policy.mjs'
 
 const UI_CONTROL_MARKER = '[AIRI_UI_CONTROL]'
 const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow'])
+const UI_PROMPT_MARKER = '[AIRI_UI_PROMPT]'
+const UI_PROMPT_MAX_CHARS = 4000
 
 const RUNTIME_RELIABILITY_GUIDANCE = `
 ## Runtime reliability additions
@@ -204,6 +206,32 @@ export function parseUiControlLine(line) {
     action: value.action,
     player_index: value.player_index,
     player_name: value.player_name,
+    tick: value.tick,
+  }
+}
+
+export function parseUiPromptLine(line) {
+  const input = String(line ?? '')
+  if (!input.includes(UI_PROMPT_MARKER) || input.includes('[CHAT]')) return undefined
+  const marker = input.lastIndexOf(UI_PROMPT_MARKER)
+  const raw = input.slice(marker + UI_PROMPT_MARKER.length).trim()
+  if (!raw || raw.length > 16384) return undefined
+  let value
+  try { value = JSON.parse(raw) }
+  catch { return undefined }
+  if (!exactUiObjectKeys(value, ['version', 'player_index', 'player_name', 'text', 'tick'])) return undefined
+  if (value.version !== 1) return undefined
+  if (!Number.isSafeInteger(value.player_index) || value.player_index < 1 || value.player_index > 1_000_000) return undefined
+  if (!Number.isSafeInteger(value.tick) || value.tick < 0) return undefined
+  if (typeof value.player_name !== 'string' || value.player_name.length < 1 || value.player_name.length > 128 || /[\x00-\x1f\x7f]/.test(value.player_name)) return undefined
+  if (typeof value.text !== 'string') return undefined
+  const text = value.text.trim()
+  if (text.length < 1 || text.length > UI_PROMPT_MAX_CHARS || /[\x00-\x1f\x7f]/.test(text)) return undefined
+  return {
+    version: 1,
+    player_index: value.player_index,
+    player_name: value.player_name,
+    text,
     tick: value.tick,
   }
 }
@@ -624,6 +652,31 @@ export class Session {
     await this.rcon.command(`/silent-command game.print(${luaString(`${label} ${clean}`)})`)
   }
 
+  queuePlayerRequest(sender, rawText) {
+    const text = routeNpcRequest(rawText, this.npcName)
+    if (!text || !this.agent) return false
+    const stop = text.toLowerCase() === 'stop'
+    if (stop) this.agent.cancel('user_stop_immediate')
+    this.queueEvent(async () => {
+      if (stop) {
+        const state = typeof this.agent.pausePersistentPlan === 'function'
+          ? await this.agent.pausePersistentPlan('user_stop')
+          : undefined
+        if (state) await this.syncTaskBoardUi(state)
+        await this.ensureAuthorization()
+        await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")')
+        await this.printChat('Paused the current AIRI plan and cancelled active Autorio work. Say continue/resume when you want me to pick it back up.')
+        return
+      }
+      await this.ensureAuthorization()
+      await this.applyNavigationObstaclePolicy(text)
+      const result = await this.agent.request(text, { sender })
+      await this.syncTaskBoardUi()
+      if (result?.chatMessage) await this.printChat(result.chatMessage)
+    }, { reportError: true })
+    return true
+  }
+
   onGameLine(line) {
     if (!this.ready || this.stopping || !this.agent) return
 
@@ -639,29 +692,19 @@ export class Session {
       return
     }
 
+    const uiPrompt = parseUiPromptLine(line)
+    if (uiPrompt) {
+      if (!chatAuthorized(this.config.chatPlayers, uiPrompt.player_name)) {
+        this.log(`[AIRI UI] Ignored unauthorized prompt player=${uiPrompt.player_name}`)
+        return
+      }
+      this.queuePlayerRequest(uiPrompt.player_name, uiPrompt.text)
+      return
+    }
+
     const chat = line.match(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[CHAT\] ([^:\r\n]+): !airi (.{1,4000})$/)
     if (chat && chatAuthorized(this.config.chatPlayers, chat[1])) {
-      const text = routeNpcRequest(chat[2], this.npcName)
-      if (!text) return
-      const stop = text.toLowerCase() === 'stop'
-      if (stop) this.agent.cancel('user_stop_immediate')
-      this.queueEvent(async () => {
-        if (stop) {
-          const state = typeof this.agent.pausePersistentPlan === 'function'
-            ? await this.agent.pausePersistentPlan('user_stop')
-            : undefined
-          if (state) await this.syncTaskBoardUi(state)
-          await this.ensureAuthorization()
-          await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")')
-          await this.printChat('Paused the current AIRI plan and cancelled active Autorio work. Say continue/resume when you want me to pick it back up.')
-          return
-        }
-        await this.ensureAuthorization()
-        await this.applyNavigationObstaclePolicy(text)
-        const result = await this.agent.request(text, { sender: chat[1] })
-        await this.syncTaskBoardUi()
-        if (result?.chatMessage) await this.printChat(result.chatMessage)
-      }, { reportError: true })
+      this.queuePlayerRequest(chat[1], chat[2])
       return
     }
 

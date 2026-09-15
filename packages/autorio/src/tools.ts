@@ -1,4 +1,5 @@
 import { create_actor_remote_interface, get_controlled_actor } from './actors/actor_controller'
+import { remember_entity_reference } from './entity_reference'
 import { get_actor_inventory_items } from './utils/inventory'
 
 const MAX_NEARBY_RADIUS = 64
@@ -109,6 +110,7 @@ export function create_tools_remote_interface() {
       const returned = math.min(matches.length, bounded_limit)
       for (let i = 0; i < returned; i++) {
         const entity = matches[i]
+        remember_entity_reference(entity)
         entities.push({
           name: entity.name,
           type: entity.type,
@@ -163,6 +165,8 @@ export function create_tools_remote_interface() {
           name,
         }
       }
+
+      remember_entity_reference(entity)
 
       const inventories: Array<Record<string, unknown>> = []
       const max_inventory_index = math.min(entity.get_max_inventory_index(), MAX_ENTITY_INVENTORIES)

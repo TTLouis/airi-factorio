@@ -42,6 +42,15 @@ function taskTypesMatch(actual, expected) {
   return expected.every((taskType, index) => actual[index] === taskType)
 }
 
+function strictTaskTypesForOperation(operation) {
+  if (operation.name === 'execute_construction_plan') {
+    const count = operation.args?.placement_count
+    if (!Number.isSafeInteger(count) || count < 1 || count > 16) return undefined
+    return Array.from({ length: count }, () => 'placing')
+  }
+  return STRICT_TASKS_BY_OPERATION.get(operation.name)
+}
+
 export function verifyDeterministicReceipt(state, evidence) {
   const receipt = parseReceiptSummary(evidence)
   if (!receipt) return { verified: false, reason: 'not_completed_operation_receipt' }
@@ -59,7 +68,7 @@ export function verifyDeterministicReceipt(state, evidence) {
 
   const expectedTaskTypes = []
   for (const operation of operations) {
-    const taskTypes = STRICT_TASKS_BY_OPERATION.get(operation.name)
+    const taskTypes = strictTaskTypesForOperation(operation)
     if (!taskTypes) {
       return { verified: false, reason: `operation_requires_additional_verification:${operation.name}` }
     }

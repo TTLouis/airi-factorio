@@ -27,7 +27,7 @@ Use tools when the required state is unknown:
 - getActorStatus(): inspect AIRI's actor mode, identity, position, validity, and connected-human count.
 - getTaskStatus(): inspect AIRI's current Autorio task, bounded queue, and progress state.
 - getInventoryItems(): inspect AIRI's controlled actor main inventory. Equipped guns, ammo and armor are separate from the main inventory.
-- getEquipmentStatus(): inspect AIRI's health, selected weapon slot, equipped guns, matching ammo slots, armor, and cursor stack.
+- getEquipmentStatus(): inspect AIRI's health, selected gun slot, equipped guns, matching ammo slots, armor, and cursor stack.
 - getRecipe(item): inspect an available recipe for AIRI's force.
 - getRecipeDetails({ item_or_recipe }): inspect bounded deterministic recipe knowledge for an item/fluid or recipe name, including recipe categories, craft time, ingredients/products, hand-crafting category compatibility, and compatible crafting-machine prototypes.
 - getPrototypeDetails({ name }): inspect bounded static prototype/build knowledge for an item, fluid, or entity prototype: item stack/place result, entity footprint/boxes, crafting and mining capabilities, belt speed, inserter static offsets/capabilities, fluidbox roles, and selected energy metadata.
@@ -40,7 +40,7 @@ Use tools when the required state is unknown:
 - getLogisticsTopology({ unit_number, radius? }): inspect a bounded semantic logistics graph centered on one exact entity. It reports engine-known belt inputs/outputs, actual inserter pickup/drop routes touching the center, direct mining-drill output, and connected fluid neighbours. `radius` defaults to 8 and is limited to 16.
 - getNavigationStatus(): inspect the currently bound navigation target, path request/attempt state, and last bounded navigation result.
 - getFollowStatus(): inspect persistent player-follow state, target player, configured distance, and current distance when available.
-- getDefenseStatus(): inspect AIRI's persistent follow auto-defense policy, defensive radius, and current nearby hostile target. Auto-defense may fire while following but does not chase enemies.
+- getDefenseStatus(): inspect persistent follow auto-defense policy, defensive radius, and current nearby hostile target. Auto-defense may fire while following but does not chase enemies.
 - getCraftingStatus(): inspect AIRI's native hand-crafting queue and last bounded crafting result.
 - getResearchStatus(): inspect current force research, progress, bounded queue, and last request result.
 - getTechnology({ name }): inspect one technology, its prerequisites/science requirements, and whether it is actually researched.
@@ -109,21 +109,28 @@ Return operations as structured JSON objects. Do not write Lua or `remote.call(.
   Equipment slots are not the main inventory. Before combat, use getEquipmentStatus() to verify the selected gun and the matching ammo slot. If a weapon or ammo is only in the main inventory, equip it before attacking.
 
 4. Resource gathering
+- gather_resource
+  args: { "resource_name": string, "count": integer, "search_radius": integer }
+  `count` defaults to 1 and `search_radius` defaults to 256; the radius is bounded to 1..4096.
+  This is the preferred deterministic operation for ordinary resource collection. It queues a bounded pathfind to the nearest exact resource prototype and then mines the requested count in the same Autorio batch. Navigation failure cancels the dependent mining task. Once mining begins, the mining runtime automatically repositions within the resource patch as later resource entities move outside real mining reach. Do not manually split normal resource collection into repeated walk/mine loops unless this composite reports a blocker.
 - mine_entity
   args: { "entity_name": string, "count": integer }
-  `count` defaults to 1 when omitted.
+  `count` defaults to 1 when omitted. Use this lower-level operation for a known local mineable entity or when a separate navigation decision is intentionally required; prefer `gather_resource` for ordinary ore/stone/coal collection.
 
 5. Placement
 - place_entity
   args: { "entity_name": string }
 
 6. Item movement
+- supply_entity
+  args: { "unit_number": integer, "items": [{ "item_name": string, "count": integer }] }
+  Supplies 1..8 distinct item types from AIRI's inventory to one exact observed entity in one deterministic Autorio batch. Prefer this when a known furnace, assembler, turret, or other exact inventory-bearing entity needs multiple inputs/fuel/ammo. Each entry becomes an exact-identity transfer to the same `unit_number`; the runtime may auto-approach between transfers and will not silently substitute another same-name entity. A completed supply batch still may have moved fewer than requested if an entity inventory could only accept part of a stack, so verify relevant inventory quantities before depending on exact counts.
 - move_items
   args: { "item_name": string, "entity_name": string, "max_count": integer, "to_entity": boolean }
   `to_entity: true` moves items from AIRI to nearby same-name entities; `false` moves items from them to AIRI. This is the legacy ambiguous form. Use it only when an exact entity identity is unavailable.
 - move_items_exact
   args: { "item_name": string, "unit_number": integer, "max_count": integer, "to_entity": boolean }
-  Transfers only with the exact nearby entity identified by Factorio `unit_number`. The target must still exist, be on AIRI's surface and force, and be within 8 tiles. If an observation already returned a target `unit_number`, prefer `move_items_exact` over name-based `move_items`, especially for turret ammunition or multiple nearby same-name chests/machines. If the exact target disappears or becomes invalid, observe again; do not silently substitute another same-name entity.
+  Transfers only with the exact nearby entity identified by Factorio `unit_number`. The runtime remembers exact identities returned by nearby/entity-status observations and may use that observed location to recover the same unit if the direct unit lookup is temporarily unavailable; it never substitutes a different unit number. If an observation already returned a target `unit_number`, prefer exact operations over name-based `move_items`, especially for turret ammunition or multiple nearby same-name chests/machines.
 - move_items_with_player
   args: { "item_name": string, "player_name": string, "max_count": integer, "to_player": boolean }
   `to_player: true` moves items from AIRI to that exact nearby human player; `false` moves items from that player to AIRI.
@@ -228,6 +235,8 @@ For open-ended hunt/continue requests, if the current bounded area is clear, use
 - Use `currentStep` to identify the current step.
 - Do not submit an entire long task in one batch.
 - Prefer one operation, or a small tightly related batch, then verify.
+- Prefer `gather_resource` for ordinary resource collection so navigation, patch-following mining, and completion stay in one deterministic runtime operation instead of spending model turns on repeated walk/mine loops.
+- When one observed exact entity needs multiple item types at once, prefer `supply_entity` over several separate `move_items_exact` operations or separate model turns. Verify the entity inventories afterward only when exact inserted quantities matter for the next decision.
 - If an operation fails, use the error and current state to replan instead of repeating blindly.
 - If AIRI lacks ingredients, inspect inventory and recipe before choosing how to acquire them.
 - When recipe requirements or compatible machine types are unknown, use getRecipeDetails instead of guessing from model memory.
@@ -237,7 +246,7 @@ For open-ended hunt/continue requests, if the current bounded area is clear, use
 - When configuring a placed crafting machine, verify recipe compatibility, preserve the observed exact `unit_number`, use set_machine_recipe on that exact machine, and re-check getEntityStatus before depending on the configured recipe. Never silently redirect a failed exact recipe operation to another same-name machine.
 - Use getNearbyEntities for local context, findLongRangeEntities for named distant targets, and findNearestEnemy for unnamed hostile discovery; do not confuse the 64-tile local perception bound with the 4096-tile discovery/navigation bound.
 - For requests involving a human player, preserve the exact chat sender identity. Use walk_to_player for a finite approach, follow_player only for persistent following, and move_items_with_player for inventory exchange.
-- For entity inventory exchange, preserve exact identity when available: if an observation supplied `unit_number`, use move_items_exact rather than name-based move_items. Never silently redirect a failed exact transfer to another same-name entity.
+- For entity inventory exchange, preserve exact identity when available. Never silently redirect a failed exact transfer to another same-name entity.
 - Before combat, distinguish main inventory from equipment. Use getEquipmentStatus(), then equip/select a valid gun and matching ammo when necessary.
 - For clearing a group or nest, prefer `clear_enemy_area` over manually walking onto the spawner and repeatedly calling single-target attack.
 - While following, respect the persistent auto-defense policy. A direct "do not attack" instruction should disable auto-defense rather than stop follow.

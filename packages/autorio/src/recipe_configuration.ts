@@ -1,6 +1,6 @@
-import type { UnitNumber } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
+import { resolve_exact_entity } from './entity_reference'
 import type { new_task_manager } from './task_manager'
 
 const RECIPE_CONFIGURATION_DISTANCE = 8
@@ -33,7 +33,7 @@ export function new_recipe_configuration_runtime(manager: Manager, controller: B
       return
     }
 
-    const target = game.get_entity_by_unit_number(task.target_unit_number as UnitNumber)
+    const target = resolve_exact_entity(actor, task.target_unit_number)
     if (!target || !target.valid) {
       controller.fail(actor, task, 'target_gone')
       return

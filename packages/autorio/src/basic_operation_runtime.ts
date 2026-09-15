@@ -1,6 +1,7 @@
-import type { LuaEntity, LuaInventory, SurfaceCreateEntity, UnitNumber } from 'factorio:runtime'
+import type { LuaEntity, LuaInventory, SurfaceCreateEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
+import { resolve_exact_entity } from './entity_reference'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersMineEntity, PlayerParametersWalkToEntity } from './types'
 import { TaskStates } from './types'
@@ -365,7 +366,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     if (!task) return undefined
 
     if (task.target_unit_number !== undefined) {
-      const target = game.get_entity_by_unit_number(task.target_unit_number as UnitNumber)
+      const target = resolve_exact_entity(actor, task.target_unit_number)
       if (!target || !target.valid) {
         controller.fail(actor, task, 'target_gone')
         return undefined
