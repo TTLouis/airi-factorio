@@ -8,6 +8,7 @@ type NavigationStatus = ReturnType<ReturnType<typeof new_navigation_controller>[
 type NavigationResult = NavigationStatus['last_result']
 
 declare const storage: {
+  airi_last_navigation_result?: NavigationResult
   airi_swarm_navigation_results?: Record<string, NavigationResult>
 }
 
@@ -21,18 +22,11 @@ function store_result(key: string, result: NavigationResult) {
   storage.airi_swarm_navigation_results[key] = result
 }
 
-function same_actor(actor: ControlledActor | undefined, result: NavigationResult) {
-  if (!actor || !actor.is_valid || !result) return false
-  const identity = actor.status_snapshot()
-  return identity.actor_id !== undefined
-    && result.actor_id === identity.actor_id
-    && result.actor_kind === identity.kind
-    && result.force_index === actor.force.index
-}
-
 /**
- * Keep the upstream NPC navigation controller intact and scope only its
- * persisted receipt/status projection per logical swarm actor.
+ * Keep the upstream NPC navigation controller intact and scope its persisted
+ * receipt/status projection per logical swarm actor. Any singleton receipt the
+ * upstream controller writes is restored immediately so swarm work cannot
+ * overwrite the primary NPC's receipt channel.
  */
 export function new_actor_scoped_navigation_controller(
   actorId: string,
@@ -41,28 +35,32 @@ export function new_actor_scoped_navigation_controller(
 ) {
   const base = new_navigation_controller(get_actor, manager)
 
-  function capture() {
-    const result = base.status().last_result
-    if (same_actor(get_actor(), result)) store_result(actorId, result)
+  function capture_after(before: NavigationResult) {
+    const after = storage.airi_last_navigation_result
+    if (after !== undefined && after !== before) store_result(actorId, after)
+    if (after !== before) storage.airi_last_navigation_result = before
   }
 
   function submit(entityName: string, searchRadius: number) {
+    const before = storage.airi_last_navigation_result
     const accepted = base.submit(entityName, searchRadius)
-    capture()
+    capture_after(before)
     return accepted
   }
 
   function submit_player(playerName: string, reachDistance?: number) {
+    const before = storage.airi_last_navigation_result
     const result = reachDistance === undefined
       ? base.submit_player(playerName)
       : base.submit_player(playerName, reachDistance)
-    capture()
+    capture_after(before)
     return result
   }
 
   function tick(actor: ControlledActor) {
+    const before = storage.airi_last_navigation_result
     const result = base.tick(actor)
-    capture()
+    capture_after(before)
     return result
   }
 
@@ -72,14 +70,16 @@ export function new_actor_scoped_navigation_controller(
   }
 
   function on_path_finished(event: OnScriptPathRequestFinishedEvent) {
+    const before = storage.airi_last_navigation_result
     const result = base.on_path_finished(event)
-    capture()
+    capture_after(before)
     return result
   }
 
   function status() {
     const raw = base.status()
     const last = persisted_result(actorId)
+    const task = manager.player_state.parameters_walk_to_entity as any
     const blocked = !raw.task_active
       && last !== undefined
       && ['unreachable', 'path_timeout', 'stuck', 'path_busy'].indexOf(last.code) >= 0
@@ -93,7 +93,7 @@ export function new_actor_scoped_navigation_controller(
             ? 'reached'
             : 'idle',
       blocked_reason: blocked ? last?.blocked_reason ?? last?.code : undefined,
-      last_spatial_observation: raw.task_active ? raw.last_spatial_observation : last?.spatial_observation,
+      last_spatial_observation: task?.last_spatial_observation ?? last?.spatial_observation,
       last_result: last,
     }
   }

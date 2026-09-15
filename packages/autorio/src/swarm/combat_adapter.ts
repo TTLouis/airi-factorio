@@ -8,6 +8,7 @@ type CombatStatus = ReturnType<ReturnType<typeof new_combat_controller>['status'
 type CombatResult = CombatStatus['last_result']
 
 declare const storage: {
+  airi_last_combat_result?: CombatResult
   airi_swarm_combat_results?: Record<string, CombatResult>
 }
 
@@ -21,16 +22,11 @@ function store_result(key: string, result: CombatResult) {
   storage.airi_swarm_combat_results[key] = result
 }
 
-function same_actor(actor: ControlledActor | undefined, result: CombatResult) {
-  if (!actor || !actor.is_valid || !result) return false
-  const identity = actor.status_snapshot()
-  return identity.actor_id !== undefined
-    && result.actor_id === identity.actor_id
-    && result.actor_kind === identity.kind
-    && result.force_index === actor.force.index
-}
-
-/** Keep upstream combat behavior intact while namespacing receipts per swarm actor. */
+/**
+ * Keep the upstream NPC combat controller intact while namespacing receipts
+ * per logical swarm actor. Restore the singleton upstream receipt immediately
+ * so swarm combat cannot overwrite the primary NPC's status channel.
+ */
 export function new_actor_scoped_combat_controller(
   actorId: string,
   get_actor: () => ControlledActor | undefined,
@@ -38,26 +34,30 @@ export function new_actor_scoped_combat_controller(
 ) {
   const base = new_combat_controller(get_actor, manager)
 
-  function capture() {
-    const result = base.status().last_result
-    if (same_actor(get_actor(), result)) store_result(actorId, result)
+  function capture_after(before: CombatResult) {
+    const after = storage.airi_last_combat_result
+    if (after !== undefined && after !== before) store_result(actorId, after)
+    if (after !== before) storage.airi_last_combat_result = before
   }
 
   function submit(searchRadius: number) {
+    const before = storage.airi_last_combat_result
     const result = base.submit(searchRadius)
-    capture()
+    capture_after(before)
     return result
   }
 
   function submit_clear(searchRadius: number) {
+    const before = storage.airi_last_combat_result
     const result = base.submit_clear(searchRadius)
-    capture()
+    capture_after(before)
     return result
   }
 
   function tick(actor: ControlledActor) {
+    const before = storage.airi_last_combat_result
     const result = base.tick(actor)
-    capture()
+    capture_after(before)
     return result
   }
 
@@ -67,8 +67,9 @@ export function new_actor_scoped_combat_controller(
   }
 
   function on_path_finished(event: OnScriptPathRequestFinishedEvent) {
+    const before = storage.airi_last_combat_result
     const result = base.on_path_finished(event)
-    capture()
+    capture_after(before)
     return result
   }
 

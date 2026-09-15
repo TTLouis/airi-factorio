@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { new_basic_operation_controller } from './basic_operations'
-import { new_combat_controller } from './combat'
 import { new_crafting_controller } from './crafting'
-import { new_navigation_controller } from './navigation'
+import { new_actor_scoped_combat_controller } from './swarm/combat_adapter'
+import { new_actor_scoped_navigation_controller } from './swarm/navigation_adapter'
 import { new_task_manager } from './task_manager'
 
 function isolated_manager() {
@@ -27,9 +27,9 @@ describe('actor-scoped controller persistence', () => {
     expect((globalThis as any).storage.airi_last_basic_operation_result).toBeUndefined()
   })
 
-  it('isolates navigation receipts by logical actor key', () => {
-    const first = new_navigation_controller(() => undefined, isolated_manager(), { persistenceKey: 'actor-1' })
-    const second = new_navigation_controller(() => undefined, isolated_manager(), { persistenceKey: 'actor-2' })
+  it('isolates navigation receipts by logical actor key without overwriting the singleton receipt', () => {
+    const first = new_actor_scoped_navigation_controller('actor-1', () => undefined, isolated_manager())
+    const second = new_actor_scoped_navigation_controller('actor-2', () => undefined, isolated_manager())
 
     first.submit('', 10)
     second.submit('iron-ore', 0)
@@ -54,9 +54,9 @@ describe('actor-scoped controller persistence', () => {
     expect((globalThis as any).storage.airi_owned_crafting).toBeUndefined()
   })
 
-  it('isolates combat receipts by logical actor key', () => {
-    const first = new_combat_controller(() => undefined, isolated_manager(), { persistenceKey: 'actor-1' })
-    const second = new_combat_controller(() => undefined, isolated_manager(), { persistenceKey: 'actor-2' })
+  it('isolates combat receipts by logical actor key without overwriting the singleton receipt', () => {
+    const first = new_actor_scoped_combat_controller('actor-1', () => undefined, isolated_manager())
+    const second = new_actor_scoped_combat_controller('actor-2', () => undefined, isolated_manager())
 
     first.submit(0)
     second.submit(50)
