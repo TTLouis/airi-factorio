@@ -27,7 +27,8 @@ declare const storage: {
 }
 
 function text(value: unknown, max = MAX_TEXT) {
-  const clean = String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
+  let clean = String(value ?? '').split('\r').join(' ').split('\n').join(' ').split('\t').join(' ').trim()
+  while (clean.includes('  ')) clean = clean.split('  ').join(' ')
   return clean.length <= max ? clean : `${clean.slice(0, math.max(0, max - 1))}…`
 }
 
@@ -46,7 +47,7 @@ function step_status(value: unknown): TaskBoardUiStep['status'] {
 }
 
 export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot | undefined {
-  if (!value || typeof value !== 'object' || !Array.isArray(value.steps)) return undefined
+  if (value === undefined || value === null || typeof value !== 'object' || !Array.isArray(value.steps)) return undefined
   const steps = value.steps.slice(0, 30).map((step: any, index: number) => ({
     id: text(step?.id || `step_${index + 1}`, 80),
     description: text(step?.description, MAX_TEXT),
@@ -82,7 +83,7 @@ function step_prefix(step: TaskBoardUiStep) {
 function render(player: LuaPlayer) {
   destroy_existing(player)
   const board = storage.airi_task_board_ui
-  if (!board) return
+  if (board === undefined) return
 
   const root: any = player.gui.left.add({
     type: 'frame',
@@ -90,7 +91,11 @@ function render(player: LuaPlayer) {
     direction: 'vertical',
     caption: 'AIRI Task Board',
   })
-  const goal = board.objective || board.goal_id || 'Current task'
+  const goal = board.objective.length > 0
+    ? board.objective
+    : board.goal_id.length > 0
+      ? board.goal_id
+      : 'Current task'
   root.add({ type: 'label', caption: `Goal: ${goal}` })
   root.add({
     type: 'label',
@@ -104,26 +109,26 @@ function render(player: LuaPlayer) {
   if (board.steps.length > visible.length) {
     root.add({ type: 'label', caption: `... ${board.steps.length - visible.length} more steps` })
   }
-  if (board.blocker) root.add({ type: 'label', caption: `Blocked: ${board.blocker}` })
-  if (board.pause_reason) root.add({ type: 'label', caption: `Paused: ${board.pause_reason}` })
+  if (board.blocker.length > 0) root.add({ type: 'label', caption: `Blocked: ${board.blocker}` })
+  if (board.pause_reason.length > 0) root.add({ type: 'label', caption: `Paused: ${board.pause_reason}` })
 }
 
 function render_all() {
-  for (const [, player] of pairs(game.connected_players)) render(player)
+  for (const player of game.connected_players) render(player)
 }
 
 export function create_task_board_ui_remote_interface() {
   remote.add_interface('autorio_task_board', {
     set_snapshot: (value: unknown) => {
       const next = sanitize_task_board_ui_snapshot(value)
-      if (!next) return false
+      if (next === undefined) return false
       storage.airi_task_board_ui = next
       render_all()
       return true
     },
     clear: () => {
       storage.airi_task_board_ui = undefined
-      for (const [, player] of pairs(game.connected_players)) destroy_existing(player)
+      for (const player of game.connected_players) destroy_existing(player)
       return true
     },
     status: () => storage.airi_task_board_ui,
