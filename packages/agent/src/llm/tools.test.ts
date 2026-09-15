@@ -33,6 +33,7 @@ describe('agent observation tools', () => {
       'getPlayerStatus',
       'getNearbyEntities',
       'findLongRangeEntities',
+      'findNearestEnemy',
       'getEntityStatus',
       'getNavigationStatus',
       'getFollowStatus',
@@ -118,6 +119,17 @@ describe('agent observation tools', () => {
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 
+  it('renders engine-native hostile discovery and bounds it to 4096 tiles', async () => {
+    await getTool('findNearestEnemy').fn({ parameters: { max_distance: 2048 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery", "find_nearest_enemy", 2048)))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('findNearestEnemy').fn({ parameters: { max_distance: 4097 } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
   it('renders a bounded exact-name entity-status lookup', async () => {
     await getTool('getEntityStatus').fn({ parameters: { name: 'wooden-chest' } })
     expect(mocks.raw).toHaveBeenCalledWith({ body: {
@@ -180,7 +192,7 @@ describe('crafting, research, and combat observation tools', () => {
 
 describe('prompt contract', () => {
   it('documents equipment, discovery, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
-    for (const name of ['getEquipmentStatus', 'getPlayerStatus', 'findLongRangeEntities', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+    for (const name of ['getEquipmentStatus', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
