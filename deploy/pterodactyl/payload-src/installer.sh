@@ -7,9 +7,9 @@ umask 077
 SERVER_DIR="${AIRI_INSTALL_ROOT:-/mnt/server}"
 NODE_VERSION="v24.21.0"
 PNPM_VERSION="10.30.1"
-AIRI_REF="d770af98ebfd75a0dc0f8759567e5611b47a6385"
-REVISION="2026-09-14.6"
-DEPLOYMENT_REVISION="airi-deploy-v8-swarm-playable"
+AIRI_REF="ad3e87523b157880a360e773de68519e49f809f0"
+REVISION="2026-09-14.22"
+DEPLOYMENT_REVISION="airi-deploy-v8-npc-staging"
 AIRI_ACTOR_MODE="${AIRI_ACTOR_MODE:-npc}"
 [[ "$AIRI_ACTOR_MODE" == "npc" ]] || { echo "[AIRI install] ERROR: v8 egg currently requires AIRI_ACTOR_MODE=npc" >&2; exit 1; }
 export AIRI_ACTOR_MODE
@@ -54,11 +54,11 @@ WORK="$(mktemp -d "$SERVER_DIR/.airi/install.XXXXXX")"
 APP="$WORK/app"
 mkdir -p "$APP/src/runtime-v8" "$APP/src/staging" "$APP/autorio" "$APP/factorio" "$APP/client-mod" "$WORK/tmp" "$WORK/home" "$WORK/cache" "$WORK/npm-cache"
 export HOME="$WORK/home" TMPDIR="$WORK/tmp" XDG_CACHE_HOME="$WORK/cache" NPM_CONFIG_CACHE="$WORK/npm-cache"
-unset OPENAI_API_KEY OPENAI_API_BASEURL FACTORIO_RCON_PASSWORD RCON_PASSWORD SERVER_TOKEN NODE_OPTIONS NODE_PATH || true
+unset OPENAI_API_KEY OPENAI_API_BASEURL FACTORIO_RCON_PASSWORD RCON_PASSWORD SERVER_TOKEN FACTORIO_TOKEN NODE_OPTIONS NODE_PATH || true
 export NODE_TLS_REJECT_UNAUTHORIZED=1
 
 fetch() {
-  curl --fail --location --retry 8 --retry-delay 5 --retry-max-time 240 --retry-all-errors --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$1" --output "$2"
+  curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$1" --output "$2"
 }
 
 log "Installer revision $REVISION; source $AIRI_REF"
@@ -88,18 +88,13 @@ tar -xzf "$WORK/airi-source.tar.gz" --strip-components=1 --no-same-owner -C "$WO
 [[ -f "$WORK/source/deploy/pterodactyl/staging/guard.ts" ]] || fail 'Pinned source lacks the v8 NPC guard'
 [[ -f "$WORK/source/deploy/pterodactyl/runtime-v8/supervisor.mjs" ]] || fail 'Pinned source lacks the v8 runtime supervisor'
 
-log 'Running v8 deployment/runtime protocol tests'
-(
-  cd "$WORK/source"
-  node --test deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
-)
-
-log 'Installing the Autorio build graph and testing the native NPC source'
+# Full staging/runtime and Autorio test suites run in GitHub CI. Reinstall should
+# remain a bounded deployment path, not a second CI runner inside Pterodactyl.
+log 'Installing the Autorio build graph for deployment'
 (
   cd "$WORK/source"
   NODE_ENV=development pnpm install --filter 'autorio.ts...' --frozen-lockfile --ignore-scripts --store-dir "$WORK/pnpm-store" --package-import-method=copy
   pnpm --filter @proj-airi/tstl-plugin-reload-factorio-mod run build
-  pnpm --filter autorio.ts run test
 )
 
 log 'Preparing native actor-aware Autorio source and compiling the deployment guard'
@@ -114,6 +109,7 @@ grep -q 'native-actor-aware-autorio' "$WORK/source-preparation.json" || fail 'Na
   pnpm --filter autorio.ts run build
 )
 [[ -s "$WORK/source/packages/autorio/dist/control.lua" ]] || fail 'Lua compilation did not emit control.lua'
+[[ -s "$WORK/source/packages/autorio/dist/data.lua" ]] || fail 'Lua packaging did not emit data.lua'
 cp "$WORK/source/packages/autorio/info.json" "$WORK/source/packages/autorio/dist/info.json"
 cp -a "$WORK/source/packages/autorio/dist/." "$APP/autorio/"
 
@@ -190,7 +186,7 @@ START_AIRI
 chmod 755 "$APP/start-airi.sh"
 
 log 'Writing checksummed release manifest'
-APP_ROOT="$APP" AIRI_REF_VALUE="$AIRI_REF" FACTORIO_TARGET_VALUE="$FACTORIO_TARGET" node --input-type=module <<'MANIFEST'
+APP_ROOT="$APP" AIRI_REF_VALUE="$AIRI_REF" RELEASE_REVISION_VALUE="$REVISION" FACTORIO_TARGET_VALUE="$FACTORIO_TARGET" node --input-type=module <<'MANIFEST'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -209,6 +205,7 @@ const names = [
   'src/staging/supervisor-adapter.mjs',
   'src/staging/npc-agent-loop.mjs',
   'autorio/control.lua',
+  'autorio/data.lua',
   'autorio/info.json',
   'factorio/bin/x64/factorio',
 ]
@@ -219,6 +216,7 @@ for (const name of names) {
 }
 await fs.writeFile(path.join(root, 'manifest.json'), JSON.stringify({
   revision: 'airi-pterodactyl-v8',
+  releaseRevision: process.env.RELEASE_REVISION_VALUE,
   source: process.env.AIRI_REF_VALUE,
   factorio: process.env.FACTORIO_TARGET_VALUE,
   files,
@@ -259,19 +257,17 @@ echo "[AIRI rollback] Restored startup target: $TARGET"
 ROLLBACK_AIRI
 chmod 755 "$SERVER_DIR/rollback-airi.sh"
 
-if [[ ! -e "$SERVER_DIR/airi-config.json" ]]; then
-  AIRI_CONFIG_PATH="$SERVER_DIR/airi-config.json" AIRI_SUPERVISOR="$RELEASE/src/runtime-v8/supervisor.mjs" "$RELEASE/node/bin/node" --input-type=module <<'CONFIG'
-import fs from 'node:fs/promises'
+AIRI_CONFIG_PATH="$SERVER_DIR/airi-config.json" AIRI_SUPERVISOR="$RELEASE/src/runtime-v8/supervisor.mjs" "$RELEASE/node/bin/node" --input-type=module <<'CONFIG'
 import { pathToFileURL } from 'node:url'
-const { seedConfigFromEnv } = await import(pathToFileURL(process.env.AIRI_SUPERVISOR).href)
-await fs.writeFile(process.env.AIRI_CONFIG_PATH, `${JSON.stringify(seedConfigFromEnv(), null, 2)}\n`)
+const { migrateConfigFile } = await import(pathToFileURL(process.env.AIRI_SUPERVISOR).href)
+await migrateConfigFile(process.env.AIRI_CONFIG_PATH)
 CONFIG
-fi
 
 log "Installation complete: $DEPLOYMENT_REVISION"
 log "Pinned source: $AIRI_REF"
 log "Factorio: $FACTORIO_TARGET"
 log 'Actor ownership: standalone NPC; zero connected humans is valid.'
-log 'Set AIRI_CHAT_PLAYER to the human allowed to issue !airi requests.'
+log 'Set AIRI_CHAT_PLAYERS to control who may issue !airi requests (blank/* = everyone, comma list = allowlist, none = disabled).'
+log 'Set FACTORIO_USERNAME and FACTORIO_TOKEN together to publish the server; leave both blank for a hidden server.'
 log 'Startup command: bash ./start-airi.sh'
 exit 0

@@ -55,6 +55,42 @@ export function cleanString(value, label, max = 256) {
   return value
 }
 
+export function parseChatPlayers(value) {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (trimmed === '' || trimmed === '*') return { mode: 'all', names: [] }
+  if (trimmed.toLowerCase() === 'none') return { mode: 'disabled', names: [] }
+  const seen = new Set()
+  const names = []
+  for (const part of trimmed.split(',')) {
+    const name = part.trim()
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    names.push(name)
+  }
+  return { mode: 'allowlist', names }
+}
+
+export function chatAuthorized(chatPlayers, sender) {
+  if (!sender) return false
+  if (chatPlayers.mode === 'all') return true
+  if (chatPlayers.mode === 'disabled') return false
+  return chatPlayers.names.includes(sender)
+}
+
+export function describeChatPlayers(chatPlayers) {
+  return chatPlayers.mode === 'allowlist' ? `allowlist:${chatPlayers.names.length}` : chatPlayers.mode
+}
+
+export function describeRelease(manifest) {
+  const release = typeof manifest?.releaseRevision === 'string' && /^[A-Za-z0-9._-]{1,80}$/.test(manifest.releaseRevision)
+    ? manifest.releaseRevision
+    : (typeof manifest?.revision === 'string' && /^[A-Za-z0-9._-]{1,80}$/.test(manifest.revision) ? manifest.revision : 'unknown')
+  const source = typeof manifest?.source === 'string' && /^[a-f0-9]{40}$/.test(manifest.source)
+    ? manifest.source.slice(0, 12)
+    : 'unknown'
+  return `Release revision=${release} source=${source}`
+}
+
 export function redact(values, text) {
   let output = String(text)
   for (const value of values) {
@@ -92,15 +128,22 @@ export class Child {
   constructor(command, args, { cwd, env = process.env, log = () => {}, label = path.basename(command) } = {}) {
     this.label = label
     this.log = log
+    this.input = null
     this.proc = spawn(command, args, {
       cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     })
+    this.proc.stdin.on('error', error => {
+      if (error?.code !== 'EPIPE' && error?.code !== 'ERR_STREAM_DESTROYED') {
+        this.log(`${this.label} stdin forwarding failed: ${error instanceof Error ? error.message : error}`)
+      }
+    })
     this.result = null
     this.closed = new Promise(resolve => {
       this.proc.once('exit', (code, signal) => {
+        this.detachInput()
         this.result = { code, signal }
         resolve(this.result)
       })
@@ -123,6 +166,35 @@ export class Child {
 
   alive() { return this.result === null && this.proc.exitCode === null && !this.proc.killed }
 
+  attachInput(stream) {
+    this.detachInput()
+    check(stream && typeof stream.on === 'function' && typeof stream.off === 'function', 'Child input stream must support on/off listeners')
+    const onData = chunk => {
+      if (!this.alive() || !this.proc.stdin?.writable || this.proc.stdin.destroyed) return
+      try {
+        this.proc.stdin.write(chunk, error => {
+          if (error && error.code !== 'EPIPE' && error.code !== 'ERR_STREAM_DESTROYED') {
+            this.log(`${this.label} stdin forwarding failed: ${error.message}`)
+          }
+        })
+      }
+      catch (error) {
+        if (error?.code !== 'EPIPE' && error?.code !== 'ERR_STREAM_DESTROYED') {
+          this.log(`${this.label} stdin forwarding failed: ${error instanceof Error ? error.message : error}`)
+        }
+      }
+    }
+    stream.on('data', onData)
+    this.input = { stream, onData }
+    return this
+  }
+
+  detachInput() {
+    if (!this.input) return
+    this.input.stream.off('data', this.input.onData)
+    this.input = null
+  }
+
   signal(signal) {
     if (!this.alive()) return false
     try {
@@ -134,6 +206,7 @@ export class Child {
   }
 
   async stop(timeoutMs = 30000, signal = 'SIGTERM') {
+    this.detachInput()
     if (!this.alive()) return { forced: false, result: await this.closed }
     this.signal(signal)
     try {

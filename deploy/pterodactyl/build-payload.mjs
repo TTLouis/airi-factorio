@@ -9,7 +9,13 @@ const sourcePath = join(here, 'payload-src', 'installer.sh')
 const installPath = join(here, 'install.sh')
 const eggPath = join(here, 'egg-airi-factorio-server.json')
 const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
-const PAYLOAD_REF = 'b93cbd094a91508883f39450420fbb1caf6c3752'
+const PAYLOAD_REF = 'b73d12101bad1b4515b75818474985a95e933ef4'
+const CHANNEL = Object.freeze({
+  name: 'AIRI Factorio Server (Swarm E2E)',
+  description: 'Development AIRI Factorio channel for swarm E2E testing. Reinstall resolves the latest feat/swarm-pterodactyl-playable commit to an exact SHA. Restart never updates code. The bundled chat/LLM loop remains single-NPC while the installed Autorio runtime exposes swarm coordination APIs and deterministic swarm test coverage.',
+  sourceRef: 'feat/swarm-pterodactyl-playable',
+  release: 'swarm-e2e',
+})
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
@@ -20,7 +26,7 @@ function assertNpcV8Source(source) {
   const failures = []
   if (!text.includes('airi-deploy-v8')) failures.push('missing v8 deployment revision')
   if (!text.includes('AIRI_ACTOR_MODE')) failures.push('missing AIRI_ACTOR_MODE')
-  if (!text.includes('AIRI_CHAT_PLAYER')) failures.push('missing AIRI_CHAT_PLAYER')
+  if (!text.includes('AIRI_CHAT_PLAYERS')) failures.push('missing AIRI_CHAT_PLAYERS')
   if (!/AIRI_REF="[a-f0-9]{40}"/.test(text)) failures.push('missing immutable AIRI_REF pin')
   if (text.includes('airi-deploy-v7')) failures.push('contains v7 deployment guard')
   if (text.includes('explicit-authorized-single-connected-player')) failures.push('contains connected-player patch contract')
@@ -33,7 +39,7 @@ export function installerLoader(source) {
   assertNpcV8Source(source)
   const sourceHash = sha256(source)
   return `#!/usr/bin/env bash
-# Generated AIRI Factorio swarm-capable standalone-NPC v8 installer loader.
+# Generated AIRI Factorio standalone-NPC v8 installer loader.
 # Immutable source: deploy/pterodactyl/payload-src/installer.sh
 set -Eeuo pipefail
 umask 077
@@ -48,13 +54,68 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 for tool in bash curl sha256sum awk mktemp rm; do command -v "$tool" >/dev/null || fail "Missing installer loader tool: $tool"; done
-curl --fail --location --retry 8 --retry-delay 5 --retry-max-time 240 --retry-all-errors --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$TMP" || fail 'Unable to download pinned AIRI installer source'
+curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$TMP" || fail 'Unable to download pinned AIRI installer source'
 ACTUAL_SOURCE_SHA256="$(sha256sum "$TMP" | awk '{print $1}')"
 [[ "$ACTUAL_SOURCE_SHA256" == "$EXPECTED_SOURCE_SHA256" ]] || fail 'Pinned AIRI installer source checksum mismatch'
 if [[ "\${1:-}" == '--verify-only' ]]; then log "Pinned payload verified at $REF; installation was not run."; exit 0; fi
 [[ $# == 0 ]] || fail 'Only --verify-only is supported as a loader argument.'
 log "Using immutable installer payload $REF"
 bash "$TMP"
+`
+}
+
+export function channelInstaller(source) {
+  assertNpcV8Source(source)
+  const sourceHash = sha256(source)
+  return `#!/usr/bin/env bash
+# Generated ARII Factorio channel installer: ${CHANNEL.release}
+# Reinstall follows ${CHANNEL.sourceRef}; restart keeps the installed exact SHA.
+set -Eeuo pipefail
+umask 077
+PAYLOAD_REF="${PAYLOAD_REF}"
+EXPECTED_PAYLOAD_SHA256="${sourceHash}"
+DEFAULT_SOURCE_REF="${CHANNEL.sourceRef}"
+CHANNEL="${CHANNEL.release}"
+SOURCE_REF="\${AIRI_SOURCE_REF:-$DEFAULT_SOURCE_REF}"
+BASE="$(mktemp)"
+PATCHED="$(mktemp)"
+RESOLUTION="$(mktemp)"
+log() { printf '[AIRI channel:%s] %s\\n' "$CHANNEL" "$*"; }
+fail() { log "ERROR: $*" >&2; exit 78; }
+cleanup() { local code=$?; trap - EXIT; rm -f -- "$BASE" "$PATCHED" "$RESOLUTION"; exit "$code"; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+for tool in bash curl sha256sum awk grep mktemp rm tr; do command -v "$tool" >/dev/null || fail "Missing channel installer tool: $tool"; done
+[[ -n "$SOURCE_REF" && "$SOURCE_REF" != -* && "$SOURCE_REF" != */../* && "$SOURCE_REF" != ../* && "$SOURCE_REF" != */.. && "$SOURCE_REF" != *' '* ]] || fail 'Invalid AIRI_SOURCE_REF'
+if [[ "$SOURCE_REF" =~ ^[a-f0-9]{40}$ ]]; then
+  RESOLVED_SHA="$SOURCE_REF"
+else
+  curl --fail --location --retry 3 --connect-timeout 20 --max-time 60 --proto '=https' --proto-redir '=https' \\
+    --get --data-urlencode "sha=$SOURCE_REF" --data-urlencode 'per_page=1' \\
+    'https://api.github.com/repos/TTLouis/airi-factorio/commits' --output "$RESOLUTION" \\
+    || fail "Unable to resolve AIRI_SOURCE_REF=$SOURCE_REF"
+  RESOLVED_SHA="$(grep -m1 -oE '\"sha\"[[:space:]]*:[[:space:]]*\"[a-f0-9]{40}\"' "$RESOLUTION" | grep -oE '[a-f0-9]{40}' || true)"
+  [[ "$RESOLVED_SHA" =~ ^[a-f0-9]{40}$ ]] || fail "AIRI_SOURCE_REF did not resolve to a commit: $SOURCE_REF"
+fi
+log "Resolved $SOURCE_REF -> $RESOLVED_SHA"
+URL="https://raw.githubusercontent.com/TTLouis/airi-factorio/$PAYLOAD_REF/deploy/pterodactyl/payload-src/installer.sh"
+curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$BASE" \\
+  || fail 'Unable to download immutable AIRI installer payload'
+ACTUAL_PAYLOAD_SHA256="$(sha256sum "$BASE" | awk '{print $1}')"
+[[ "$ACTUAL_PAYLOAD_SHA256" == "$EXPECTED_PAYLOAD_SHA256" ]] || fail 'Immutable AIRI installer payload checksum mismatch'
+[[ "$(grep -Ec '^AIRI_REF="[a-f0-9]{40}"$' "$BASE")" == 1 && "$(grep -c '^AIRI_REF=' "$BASE")" == 1 ]] || fail 'Unexpected AIRI_REF assignment contract in immutable payload'
+[[ "$(grep -Ec '^REVISION="[A-Za-z0-9._-]+"$' "$BASE")" == 1 && "$(grep -c '^REVISION=' "$BASE")" == 1 ]] || fail 'Unexpected REVISION assignment contract in immutable payload'
+SHORT_SHA="\${RESOLVED_SHA:0:12}"
+awk -v ref="$RESOLVED_SHA" -v revision="$CHANNEL-$SHORT_SHA" '
+  /^AIRI_REF=/ { print "AIRI_REF=\\\"" ref "\\\""; next }
+  /^REVISION=/ { print "REVISION=\\\"" revision "\\\""; next }
+  { print }
+' "$BASE" > "$PATCHED"
+grep -Fxq "AIRI_REF=\\\"$RESOLVED_SHA\\\"" "$PATCHED" || fail 'Failed to apply resolved source SHA'
+grep -Fxq "REVISION=\\\"$CHANNEL-$SHORT_SHA\\\"" "$PATCHED" || fail 'Failed to apply channel release revision'
+log "Installing exact source $RESOLVED_SHA from $SOURCE_REF"
+bash "$PATCHED"
 `
 }
 
@@ -75,10 +136,10 @@ function egg(installScript) {
   return {
     _comment: 'DO NOT EDIT: generated by deploy/pterodactyl/build-payload.mjs',
     meta: { version: 'PTDL_v2', update_url: null },
-    exported_at: '2026-09-14T00:00:00+00:00',
-    name: 'AIRI Factorio Server (Swarm-Capable NPC v8)',
+    exported_at: '2026-09-15T00:00:00+00:00',
+    name: CHANNEL.name,
     author: 'noreply@ttlouis.space',
-    description: 'Swarm-capable AIRI Factorio preview. Installs the validated multi-NPC Autorio runtime and hardened v8 supervisor. The bundled chat/LLM loop remains single-NPC while swarm Blackboard coordination APIs are staged for rollout. Loopback-only RCON is managed by the supervisor.',
+    description: CHANNEL.description,
     features: [],
     docker_images: {
       'ghcr.io/ptero-eggs/yolks:debian_bookworm': 'ghcr.io/ptero-eggs/yolks:debian_bookworm',
@@ -99,22 +160,26 @@ function egg(installScript) {
       },
     },
     variables: [
-      variable('AIRI Actor Mode', 'Controlled actor mode. The v8 egg currently starts the chat supervisor on one standalone NPC while the installed Autorio mod is swarm-capable.', 'AIRI_ACTOR_MODE', 'npc', 'required|string|in:npc'),
-      variable('AIRI Chat Player', 'Optional exact in-game player name allowed to issue !airi chat requests. This does not control that player character.', 'AIRI_CHAT_PLAYER', '', 'nullable|string|max:64'),
+      variable('AIRI Source Ref', 'Git branch, tag, or exact 40-character commit SHA followed when this swarm egg is reinstalled. Restart does not resolve or update this ref.', 'AIRI_SOURCE_REF', CHANNEL.sourceRef, 'required|string|max:200'),
+      variable('AIRI Actor Mode', 'Controlled actor mode. The chat supervisor remains one standalone NPC while the installed Autorio runtime is swarm-capable.', 'AIRI_ACTOR_MODE', 'npc', 'required|string|in:npc'),
+      variable('AIRI Chat Players', 'Players allowed to issue !airi commands. Leave blank or use * to allow everyone. Enter comma-separated exact player names for an allowlist. Use none to disable in-game AIRI commands.', 'AIRI_CHAT_PLAYERS', '', 'nullable|string|max:512'),
       variable('OpenAI API Key', 'Provider credential. Kept environment-only and never written to airi-config.json.', 'OPENAI_API_KEY', '', 'required|string|max:512', { viewable: false }),
-      variable('AI Model', 'OpenAI-compatible model identifier used by AIRI.', 'OPENAI_MODEL', 'gpt-5.6', 'required|string|max:200'),
-      variable('Provider Base URL', 'OpenAI-compatible API base URL. Remote endpoints must use HTTPS.', 'OPENAI_API_BASEURL', 'https://api.openai.com/v1', 'required|string|url|max:255'),
+      variable('AI Model', 'OpenAI-compatible model identifier used by AIRI. Replace the placeholder with a model supported by your provider.', 'OPENAI_MODEL', 'replace-me', 'required|string|max:200'),
+      variable('Provider Base URL', 'OpenAI-compatible API base URL. Replace the non-routable placeholder; remote endpoints must use HTTPS.', 'OPENAI_API_BASEURL', 'https://provider.invalid/v1', 'required|string|url|max:255'),
+      variable('Provider Timeout (ms)', 'Maximum time for one provider response before the AIRI turn is cancelled and reported in game.', 'PROVIDER_TIMEOUT_MS', '120000', 'required|numeric|between:1000,600000'),
       variable('Save File Name', 'Save under /saves. Leave blank to use the newest existing save or create airi-world.zip.', 'SAVE_NAME', '', 'nullable|string|max:160'),
-      variable('Max AI Requests Per Hour', 'Persisted hourly provider request cap.', 'MAX_PROVIDER_REQUESTS_PER_HOUR', '30', 'required|numeric|between:1,1200'),
+      variable('Factorio Username', 'Factorio.com username used for public server listing. Leave both username and token blank for a hidden/private server.', 'FACTORIO_USERNAME', '', 'nullable|string|max:128'),
+      variable('Factorio Authentication Token', 'Factorio.com authentication token used for public server listing. Leave both username and token blank for a hidden/private server.', 'FACTORIO_TOKEN', '', 'nullable|string|max:128', { viewable: false }),
+      variable('Max AI Requests Per Hour', 'Persisted hourly provider request cap.', 'MAX_PROVIDER_REQUESTS_PER_HOUR', '300', 'required|numeric|between:1,1200'),
       variable('Shutdown Timeout (ms)', 'Graceful Factorio save/stop timeout before forced termination.', 'SHUTDOWN_TIMEOUT_MS', '60000', 'required|numeric|between:1000,300000'),
-      variable('Factorio Version', 'Factorio 2.0 headless version: latest, experimental, or exact 2.0.x.', 'FACTORIO_VERSION', 'latest', 'required|string|max:20'),
+      variable('Factorio Version', 'Factorio 2.0 headless version: latest, experimental, or exact 2.0.x release.', 'FACTORIO_VERSION', 'latest', 'required|string|max:20'),
     ],
   }
 }
 
 export function buildArtifacts(source) {
   const installScript = installerLoader(source)
-  const eggJson = `${JSON.stringify(egg(installScript), null, 4)}\n`
+  const eggJson = `${JSON.stringify(egg(channelInstaller(source)), null, 4)}\n`
   return { installScript, eggJson }
 }
 
@@ -131,10 +196,10 @@ export function verifyGeneratedArtifacts(source, installText, eggText) {
   let parsedEgg
   try { parsedEgg = JSON.parse(currentEgg) }
   catch (error) { throw new Error(`Generated egg JSON is invalid: ${error.message}`) }
-  if (normalizeCheckoutText(parsedEgg?.scripts?.installation?.script ?? '') !== expected.installScript) {
-    throw new Error('Generated egg does not embed the expected immutable installer loader')
-  }
   if (currentEgg !== expected.eggJson) throw new Error('Generated egg schema is stale')
+  const sourceRef = parsedEgg.variables?.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')
+  if (sourceRef?.default_value !== CHANNEL.sourceRef) throw new Error('Generated swarm egg has the wrong source ref')
+  if (!parsedEgg.scripts?.installation?.script?.includes(`CHANNEL="${CHANNEL.release}"`)) throw new Error('Generated swarm egg has the wrong channel loader')
   return true
 }
 
@@ -144,15 +209,16 @@ function main() {
   const source = readFileSync(sourcePath)
   if (checkOnly) {
     verifyGeneratedArtifacts(source, readFileSync(installPath, 'utf8'), readFileSync(eggPath, 'utf8'))
-    console.log('Pterodactyl swarm-capable v8 artifacts are current and internally verified.')
+    console.log('Pterodactyl swarm E2E artifacts are current and internally verified.')
     return
   }
   const { installScript, eggJson } = buildArtifacts(source)
   writeFileSync(installPath, installScript)
   writeFileSync(eggPath, eggJson)
-  console.log('Generated swarm-capable v8 install.sh and egg-airi-factorio-server.json.')
+  console.log('Generated swarm E2E install.sh and egg-airi-factorio-server.json.')
   console.log(`  payload source sha256: ${sha256(source)}`)
   console.log(`  immutable payload ref: ${PAYLOAD_REF}`)
+  console.log(`  reinstall source ref: ${CHANNEL.sourceRef}`)
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main()

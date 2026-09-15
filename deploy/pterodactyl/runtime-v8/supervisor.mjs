@@ -5,20 +5,9 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import {
-  Child,
-  Rcon,
-  check,
-  cleanString,
-  DeploymentError,
-  directory,
-  freeTcpPort,
-  hashFile,
-  nonce,
-  readJson,
-  redact,
-  regularFile,
-  reserveBudget,
-  safeInteger,
+  atomicWrite, Child, Rcon, chatAuthorized, check, cleanString, describeChatPlayers,
+  describeRelease, DeploymentError, directory, freeTcpPort, hashFile, nonce,
+  parseChatPlayers, readJson, redact, regularFile, reserveBudget, safeInteger,
 } from './common.mjs'
 import { createSave, prepareGameConfig, prepareMods, prepareServerSettings, selectSave } from './game-files.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
@@ -26,39 +15,68 @@ import { providerEndpoint, providerRequest } from './provider.mjs'
 import { configureNpcSession } from './supervisor-adapter.mjs'
 import { luaString } from './structured-policy.mjs'
 
+export const AIRI_CONFIG_DEFAULTS = {
+  actorMode: 'npc', chatPlayers: '', providerUrl: 'https://provider.invalid/v1',
+  model: 'replace-me', save: '', providerTimeoutMs: 120000, gamePort: 34197,
+  maxProviderRequestsPerHour: 30, shutdownTimeoutMs: 60000,
+}
+
 export function configuration(raw = {}, env = process.env) {
   check(raw && typeof raw === 'object' && !Array.isArray(raw), 'airi-config.json must be an object')
-  const actorMode = env.AIRI_ACTOR_MODE ?? raw.actorMode ?? 'npc'
+  const actorMode = cleanString(env.AIRI_ACTOR_MODE ?? raw.actorMode ?? AIRI_CONFIG_DEFAULTS.actorMode, 'AIRI_ACTOR_MODE', 32)
   check(actorMode === 'npc', 'This v8 egg currently supports AIRI_ACTOR_MODE=npc only')
-
   const legacyChat = env.AIRI_PLAYER ?? raw.player ?? ''
-  const chatPlayer = env.AIRI_CHAT_PLAYER ?? raw.chatPlayer ?? legacyChat
+  const legacySingleChatPlayer = env.AIRI_CHAT_PLAYER ?? raw.chatPlayer ?? legacyChat
+  const chatPlayersSource = env.AIRI_CHAT_PLAYERS ?? raw.chatPlayers ?? legacySingleChatPlayer
+  const factorioUsername = cleanString(env.FACTORIO_USERNAME ?? '', 'FACTORIO_USERNAME', 128)
+  const factorioToken = cleanString(env.FACTORIO_TOKEN ?? '', 'FACTORIO_TOKEN', 128)
+  check((factorioUsername === '') === (factorioToken === ''), 'FACTORIO_USERNAME and FACTORIO_TOKEN must both be set or both left blank')
   const config = {
     actorMode,
-    chatPlayer: cleanString(chatPlayer, 'AIRI_CHAT_PLAYER', 64),
-    save: cleanString(env.SAVE_NAME ?? raw.save ?? '', 'SAVE_NAME', 160),
-    model: cleanString(env.OPENAI_MODEL ?? raw.model ?? 'gpt-5.6', 'OPENAI_MODEL', 200),
-    base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? 'https://api.openai.com/v1',
+    chatPlayers: parseChatPlayers(cleanString(chatPlayersSource, 'AIRI_CHAT_PLAYERS', 512)),
+    save: cleanString(env.SAVE_NAME ?? raw.save ?? AIRI_CONFIG_DEFAULTS.save, 'SAVE_NAME', 160),
+    model: cleanString(env.OPENAI_MODEL ?? raw.model ?? AIRI_CONFIG_DEFAULTS.model, 'OPENAI_MODEL', 200),
+    base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? AIRI_CONFIG_DEFAULTS.providerUrl,
     key: env.OPENAI_API_KEY ?? '',
-    gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? 34197, 'SERVER_PORT', 1024, 65535),
-    budget: safeInteger(env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? 30, 'MAX_PROVIDER_REQUESTS_PER_HOUR', 1, 1200),
-    stopMs: safeInteger(env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? 60000, 'SHUTDOWN_TIMEOUT_MS', 1000, 300000),
+    providerTimeoutMs: safeInteger(env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? AIRI_CONFIG_DEFAULTS.providerTimeoutMs, 'PROVIDER_TIMEOUT_MS', 1000, 600000),
+    gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? AIRI_CONFIG_DEFAULTS.gamePort, 'SERVER_PORT', 1024, 65535),
+    budget: safeInteger(env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? AIRI_CONFIG_DEFAULTS.maxProviderRequestsPerHour, 'MAX_PROVIDER_REQUESTS_PER_HOUR', 1, 1200),
+    stopMs: safeInteger(env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? AIRI_CONFIG_DEFAULTS.shutdownTimeoutMs, 'SHUTDOWN_TIMEOUT_MS', 1000, 300000),
+    factorio: { username: factorioUsername, token: factorioToken, public: factorioUsername !== '' && factorioToken !== '' },
   }
   check(typeof config.key === 'string' && config.key.trim().length > 0 && !/[\r\n\0]/.test(config.key), 'OPENAI_API_KEY is missing or malformed')
   providerEndpoint(config.base)
   return config
 }
 
-export function seedConfigFromEnv(env = process.env) {
-  const config = { actorMode: env.AIRI_ACTOR_MODE ?? 'npc' }
-  if (env.AIRI_CHAT_PLAYER) config.chatPlayer = env.AIRI_CHAT_PLAYER
-  else if (env.AIRI_PLAYER) config.chatPlayer = env.AIRI_PLAYER
-  if (env.SAVE_NAME) config.save = env.SAVE_NAME
-  if (env.OPENAI_MODEL) config.model = env.OPENAI_MODEL
-  if (env.OPENAI_API_BASEURL) config.providerUrl = env.OPENAI_API_BASEURL
-  if (env.MAX_PROVIDER_REQUESTS_PER_HOUR) config.maxProviderRequestsPerHour = Number(env.MAX_PROVIDER_REQUESTS_PER_HOUR)
-  if (env.SHUTDOWN_TIMEOUT_MS) config.shutdownTimeoutMs = Number(env.SHUTDOWN_TIMEOUT_MS)
-  return config
+export function migrateConfig(raw = {}, env = process.env) {
+  check(raw && typeof raw === 'object' && !Array.isArray(raw), 'airi-config.json must be an object')
+  const actorMode = cleanString(env.AIRI_ACTOR_MODE ?? raw.actorMode ?? AIRI_CONFIG_DEFAULTS.actorMode, 'AIRI_ACTOR_MODE', 32)
+  check(actorMode === 'npc', 'This v8 egg currently supports AIRI_ACTOR_MODE=npc only')
+  const chatPlayers = cleanString(
+    env.AIRI_CHAT_PLAYERS ?? env.AIRI_CHAT_PLAYER ?? env.AIRI_PLAYER ?? raw.chatPlayers ?? raw.chatPlayer ?? raw.player ?? AIRI_CONFIG_DEFAULTS.chatPlayers,
+    'AIRI_CHAT_PLAYERS', 512,
+  )
+  const next = {
+    actorMode,
+    chatPlayers,
+    providerUrl: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? AIRI_CONFIG_DEFAULTS.providerUrl,
+    model: cleanString(env.OPENAI_MODEL ?? raw.model ?? AIRI_CONFIG_DEFAULTS.model, 'OPENAI_MODEL', 200),
+    save: cleanString(env.SAVE_NAME ?? raw.save ?? AIRI_CONFIG_DEFAULTS.save, 'SAVE_NAME', 160),
+    providerTimeoutMs: safeInteger(env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? AIRI_CONFIG_DEFAULTS.providerTimeoutMs, 'PROVIDER_TIMEOUT_MS', 1000, 600000),
+    gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? AIRI_CONFIG_DEFAULTS.gamePort, 'SERVER_PORT', 1024, 65535),
+    maxProviderRequestsPerHour: safeInteger(env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? AIRI_CONFIG_DEFAULTS.maxProviderRequestsPerHour, 'MAX_PROVIDER_REQUESTS_PER_HOUR', 1, 1200),
+    shutdownTimeoutMs: safeInteger(env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? AIRI_CONFIG_DEFAULTS.shutdownTimeoutMs, 'SHUTDOWN_TIMEOUT_MS', 1000, 300000),
+  }
+  providerEndpoint(next.providerUrl)
+  return next
+}
+
+export async function migrateConfigFile(filename, env = process.env) {
+  const raw = await readJson(filename, {})
+  const next = migrateConfig(raw, env)
+  if (JSON.stringify(next) !== JSON.stringify(raw)) await atomicWrite(filename, `${JSON.stringify(next, null, 2)}\n`)
+  return next
 }
 
 export function installedAppRoot(moduleUrl = import.meta.url) {
@@ -99,15 +117,9 @@ export class Session {
   }
 
   gameArgs(rconPort) {
-    return [
-      '--config', this.ini,
-      '--mod-directory', this.modDir,
-      '--start-server', this.save,
-      '--server-settings', this.settingsFile,
-      '--bind', `0.0.0.0:${this.config.gamePort}`,
-      '--rcon-bind', `127.0.0.1:${rconPort}`,
-      '--rcon-password', this.rconPassword,
-    ]
+    return ['--config', this.ini, '--mod-directory', this.modDir, '--start-server', this.save,
+      '--server-settings', this.settingsFile, '--bind', `0.0.0.0:${this.config.gamePort}`,
+      '--rcon-bind', `127.0.0.1:${rconPort}`, '--rcon-password', this.rconPassword]
   }
 
   async rawStatus() {
@@ -124,19 +136,10 @@ export class Session {
   async ensureAuthorization() {
     const current = await this.rawStatus()
     const stable = current.revision === 'airi-deploy-v8-npc-staging'
-      && current.session === this.session
-      && current.mode === 'npc'
-      && current.allowed === true
-      && current.actor_kind === 'standalone_character'
-      && Number.isSafeInteger(current.actor_id)
-      && current.actor_id > 0
-      && Number.isSafeInteger(current.epoch)
-      && current.epoch > 0
-    if (stable) {
-      this.lastStatus = current
-      return current
-    }
-
+      && current.session === this.session && current.mode === 'npc' && current.allowed === true
+      && current.actor_kind === 'standalone_character' && Number.isSafeInteger(current.actor_id)
+      && current.actor_id > 0 && Number.isSafeInteger(current.epoch) && current.epoch > 0
+    if (stable) { this.lastStatus = current; return current }
     if (this.agent?.active) {
       this.agent.cancel()
       this.log('NPC identity/session changed; active model turn cancelled before rebind')
@@ -146,32 +149,18 @@ export class Session {
 
   async start() {
     const rconPort = await freeTcpPort([this.config.gamePort])
-    const secrets = [this.config.key, this.rconPassword, this.session]
-    const gameLog = line => {
-      this.log(redact(secrets, line))
-      this.onGameLine(line)
-    }
+    const secrets = [this.config.key, this.rconPassword, this.session, this.config.factorio.token]
+    const gameLog = line => { this.log(redact(secrets, line)); this.onGameLine(line) }
     this.gameChild = new Child(path.join(this.game, 'bin', 'x64', 'factorio'), this.gameArgs(rconPort), {
-      cwd: this.root,
-      env: this.cleanEnv(),
-      label: 'Factorio',
-      log: gameLog,
-    })
+      cwd: this.root, env: this.cleanEnv(), label: 'Factorio', log: gameLog,
+    }).attachInput(process.stdin)
 
     const deadline = Date.now() + this.startupMs
     while (Date.now() < deadline) {
       check(this.gameChild.alive(), 'Factorio exited before RCON became ready')
       const rcon = new Rcon(rconPort, this.rconPassword, 2500)
-      try {
-        await rcon.connect()
-        rcon.timeout = 10000
-        this.rcon = rcon
-        break
-      }
-      catch {
-        rcon.close()
-        await delay(200)
-      }
+      try { await rcon.connect(); rcon.timeout = 10000; this.rcon = rcon; break }
+      catch { rcon.close(); await delay(200) }
     }
     check(this.rcon, 'Timed out waiting for authenticated Factorio RCON')
     const version = await this.rcon.command('/version')
@@ -183,15 +172,9 @@ export class Session {
       rcon: this.rcon,
       systemPrompt: prompt,
       provider: (messages, context) => this.provider({
-        base: this.config.base,
-        key: this.config.key,
-        model: this.config.model,
-        timeoutMs: 45000,
+        base: this.config.base, key: this.config.key, model: this.config.model, timeoutMs: this.config.providerTimeoutMs,
       }, messages, context),
-      reserve: async () => {
-        await this.ensureAuthorization()
-        return reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget)
-      },
+      reserve: async () => { await this.ensureAuthorization(); return reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget) },
       log: message => this.log(`[AIRI agent] ${redact(secrets, message)}`),
     })
 
@@ -199,14 +182,12 @@ export class Session {
     this.poll = setInterval(() => {
       if (!this.stopping) this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
     }, 2000)
-    this.log(`AIRI Factorio ready; standalone NPC actor_id=${this.lastStatus.actor_id}, chat=${this.config.chatPlayer || 'disabled'}`)
+    this.log(`AIRI Factorio ready; standalone NPC actor_id=${this.lastStatus.actor_id}, chat=${describeChatPlayers(this.config.chatPlayers)}`)
     return this.lastStatus
   }
 
   queueEvent(fn) {
-    this.eventQueue = this.eventQueue.then(fn).catch(error => {
-      this.log(error instanceof Error ? error.message : String(error))
-    })
+    this.eventQueue = this.eventQueue.then(fn).catch(error => this.log(error instanceof Error ? error.message : String(error)))
     return this.eventQueue
   }
 
@@ -219,7 +200,7 @@ export class Session {
   onGameLine(line) {
     if (!this.ready || this.stopping || !this.agent) return
     const chat = line.match(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[CHAT\] ([^:\r\n]+): !airi (.{1,4000})$/)
-    if (chat && this.config.chatPlayer && chat[1] === this.config.chatPlayer) {
+    if (chat && chatAuthorized(this.config.chatPlayers, chat[1])) {
       const text = chat[2].trim()
       this.queueEvent(async () => {
         await this.ensureAuthorization()
@@ -234,7 +215,6 @@ export class Session {
       })
       return
     }
-
     if (line.includes('[AUTORIO] All operations completed') && Date.now() - this.lastCompletionAt > 250) {
       this.lastCompletionAt = Date.now()
       this.queueEvent(async () => {
@@ -245,7 +225,6 @@ export class Session {
       })
       return
     }
-
     if (line.includes('[AUTORIO] [ERROR]')) {
       this.agent.cancel()
       this.log('[AIRI agent] Autorio reported an error; active model turn cancelled')
@@ -264,9 +243,9 @@ export class Session {
       if (this.rcon && this.gameChild?.alive()) {
         this.rcon.timeout = Math.min(this.config.stopMs, 30000)
         try { await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")') }
-        catch { clean = false }
+        catch (error) { clean = false; this.log(`Shutdown cancel command failed: ${error instanceof Error ? error.message : error}`) }
         try { await this.rcon.command('/server-save') }
-        catch { clean = false }
+        catch (error) { clean = false; this.log(`Shutdown server-save command failed: ${error instanceof Error ? error.message : error}`) }
       }
       if (this.gameChild) {
         const stopped = await this.gameChild.stop(this.config.stopMs, 'SIGINT')
@@ -296,10 +275,10 @@ async function main() {
   check(os.arch() === 'x64', 'AIRI Pterodactyl v8 requires amd64')
   const root = path.resolve(process.env.CONTAINER_ROOT || '/home/container')
   const app = installedAppRoot()
-  await verifyManifest(app)
+  const manifest = await verifyManifest(app)
   await directory(path.join(root, '.airi'))
   await directory(path.join(root, '.airi', 'tmp'))
-  const raw = await readJson(path.join(root, 'airi-config.json'), {})
+  const raw = await migrateConfigFile(path.join(root, 'airi-config.json'))
   const config = configuration(raw)
   const game = path.join(app, 'factorio')
   await regularFile(path.join(game, 'bin', 'x64', 'factorio'))
@@ -307,16 +286,13 @@ async function main() {
   let session
   let requestedStop = false
   const log = message => console.log(`[${new Date().toISOString()}] [AIRI Factorio] ${message}`)
-
-  const handleSignal = () => {
-    requestedStop = true
-    session?.stop('signal')
-  }
+  log(describeRelease(manifest))
+  const handleSignal = () => { requestedStop = true; session?.stop('signal') }
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, handleSignal)
 
   try {
     const modDir = await prepareMods(root, app, work)
-    const settingsFile = await prepareServerSettings(root, game)
+    const settingsFile = await prepareServerSettings(root, game, config.factorio)
     const ini = await prepareGameConfig(work, game, root)
     const selected = await selectSave(root, config.save)
     if (selected.create) {
@@ -324,12 +300,10 @@ async function main() {
       await createSave(selected.filename, game, modDir, ini, root, log)
     }
     session = new Session({ root, app, game, config, save: selected.filename, settingsFile, modDir, ini, log })
-    await session.start()
+    try { await session.start() }
+    catch (error) { log(`Startup failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`); throw error }
     const result = await session.gameChild.closed
-    if (!requestedStop) {
-      log(`Factorio exited unexpectedly: ${JSON.stringify(result)}`)
-      process.exitCode = 1
-    }
+    if (!requestedStop) { log(`Factorio exited unexpectedly: ${JSON.stringify(result)}`); process.exitCode = 1 }
   }
   finally {
     if (session && !session.stopping) await session.stop(requestedStop ? 'requested' : 'unexpected child exit')
