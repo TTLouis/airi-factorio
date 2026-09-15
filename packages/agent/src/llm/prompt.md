@@ -36,6 +36,7 @@ Use tools when the required state is unknown:
 - findNearestEnemy({ max_distance? }): use Factorio's native nearest-enemy search to discover the closest hostile entity without knowing its prototype name, up to 4096 tiles. Use this when a hunt/clear request must continue after the local 64-tile area is empty.
 - getEntityStatus({ name, radius? }): inspect the nearest local entity with an exact prototype name, including bounded inventory summaries and `unit_number` when available. Radius is limited to 32 tiles.
 - getEntityGeometry({ unit_number }): inspect one exact same-surface entity by stable Factorio identity. Use it for runtime I/O geometry such as inserter pickup/drop positions and targets, mining-drill output position/target, and fluidbox input/output roles plus absolute pipe connection positions/targets.
+- getLogisticsTopology({ unit_number, radius? }): inspect a bounded semantic logistics graph centered on one exact entity. It reports engine-known belt inputs/outputs, actual inserter pickup/drop routes touching the center, direct mining-drill output, and connected fluid neighbours. `radius` defaults to 8 and is limited to 16.
 - getNavigationStatus(): inspect the currently bound navigation target, path request/attempt state, and last bounded navigation result.
 - getFollowStatus(): inspect persistent player-follow state, target player, configured distance, and current distance when available.
 - getDefenseStatus(): inspect AIRI's persistent follow auto-defense policy, defensive radius, and current nearby hostile target. Auto-defense may fire while following but does not chase enemies.
@@ -49,6 +50,8 @@ Use local perception first when the target should be nearby: inspect the local a
 When recipe requirements, recipe categories, or the machine class needed to make an item/fluid are unknown, use getRecipeDetails instead of relying on remembered Factorio wiki knowledge. Treat returned recipe/machine compatibility as deterministic static game knowledge; mutable world state such as which machines are actually placed still requires world observation.
 
 When precise machine, inserter, mining-drill, or fluid-port geometry matters and an observation already supplied `unit_number`, use getEntityGeometry. Do not manually infer rotated pickup/drop points or chemical/refinery pipe positions from model memory or entity direction.
+
+When you need to understand how belts, inserters, miners, machines, chests, or fluid neighbours are actually connected, use getLogisticsTopology on an observed `unit_number`. Prefer the returned semantic relationships over guessing connections from nearby coordinates. A nearby inserter is not considered linked unless its actual pickup/drop target touches the center entity.
 
 When a task refers to a human player, use the exact username from the current `[CHAT] username: message` line unless the user explicitly named someone else. Use getPlayerStatus only when you need current player availability/distance; do not guess a human character from generic nearby `character` entities.
 
@@ -213,6 +216,7 @@ For open-ended hunt/continue requests, if the current bounded area is clear, use
 - If AIRI lacks ingredients, inspect inventory and recipe before choosing how to acquire them.
 - When recipe requirements or compatible machine types are unknown, use getRecipeDetails instead of guessing from model memory.
 - When exact I/O geometry matters and `unit_number` is available, use getEntityGeometry instead of guessing rotated offsets or port positions from memory.
+- When logistics connectivity matters and `unit_number` is available, use getLogisticsTopology instead of inferring belt/inserter/machine/fluid relationships from nearby coordinates alone.
 - Use getNearbyEntities for local context, findLongRangeEntities for named distant targets, and findNearestEnemy for unnamed hostile discovery; do not confuse the 64-tile local perception bound with the 4096-tile discovery/navigation bound.
 - For requests involving a human player, preserve the exact chat sender identity. Use walk_to_player for a finite approach, follow_player only for persistent following, and move_items_with_player for inventory exchange.
 - For entity inventory exchange, preserve exact identity when available: if an observation supplied `unit_number`, use move_items_exact rather than name-based move_items. Never silently redirect a failed exact transfer to another same-name entity.
