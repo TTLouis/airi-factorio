@@ -19,6 +19,11 @@ function finiteNumber(value, label, min, max) {
   return value
 }
 
+function positiveNumber(value, label, max) {
+  check(typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= max, `${label} must be > 0 and <= ${max}`)
+  return value
+}
+
 export function luaString(value) {
   check(typeof value === 'string' && Buffer.byteLength(value) <= 16384, 'Invalid Lua string')
   return `'${value.replaceAll('\\', '\\\\').replaceAll("'", "\\'").replaceAll('\n', '\\n').replaceAll('\r', '\\r')}'`
@@ -178,6 +183,65 @@ function functionTool(name, description, parameters) {
   return { type: 'function', function: { name, description, parameters } }
 }
 
+const throughputMeasurementDefinition = functionTool(
+  'measureTransportThroughput',
+  'Measure achieved live throughput over a bounded simulation window for one exact placed inserter or one exact straight transport-belt lane. Call this tool alone; the harness waits and polls internally without spending extra model turns. Inserter results count real delivered held-stack items. Belt-lane results count real item-stack crossings and observed stack heights. proven_sufficient means the measured lower bound covers required_rate_per_second with utilization_limit headroom. not_proven is not an impossibility claim because supply starvation, sink blocking, power, or contention may limit the sample.',
+  {
+    type: 'object',
+    additionalProperties: false,
+    required: ['kind', 'unit_number'],
+    properties: {
+      kind: { type: 'string', enum: ['inserter_instance', 'belt_lane'] },
+      unit_number: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+      lane_index: { type: 'integer', minimum: 1, maximum: 2 },
+      item_name: nameStringSchema,
+      warmup_ticks: { type: 'integer', minimum: 0, maximum: 600, default: 60 },
+      window_ticks: { type: 'integer', minimum: 60, maximum: 3600, default: 300 },
+      required_rate_per_second: { type: 'number', exclusiveMinimum: 0, maximum: 1000000000 },
+      utilization_limit: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.8 },
+      required_stack_size: { type: 'integer', minimum: 1, maximum: 255 },
+    },
+  },
+)
+
+function parseThroughputMeasurement(args) {
+  exactKeys(args, [
+    'kind', 'unit_number', 'lane_index', 'item_name', 'warmup_ticks', 'window_ticks',
+    'required_rate_per_second', 'utilization_limit', 'required_stack_size',
+  ])
+  check(args.kind === 'inserter_instance' || args.kind === 'belt_lane', 'kind must be inserter_instance or belt_lane')
+  const parsed = {
+    kind: args.kind,
+    unit_number: integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER),
+  }
+  if (args.item_name !== undefined) parsed.item_name = factorioName(args.item_name)
+  if (args.warmup_ticks !== undefined) parsed.warmup_ticks = integer(args.warmup_ticks, 'warmup_ticks', 0, 600)
+  if (args.window_ticks !== undefined) parsed.window_ticks = integer(args.window_ticks, 'window_ticks', 60, 3600)
+  if (args.required_rate_per_second !== undefined) parsed.required_rate_per_second = positiveNumber(args.required_rate_per_second, 'required_rate_per_second', 1000000000)
+  if (args.utilization_limit !== undefined) parsed.utilization_limit = positiveNumber(args.utilization_limit, 'utilization_limit', 1)
+  if (args.kind === 'inserter_instance') {
+    check(args.lane_index === undefined && args.required_stack_size === undefined, 'inserter_instance does not accept lane_index or required_stack_size')
+  }
+  else {
+    parsed.lane_index = integer(args.lane_index, 'lane_index', 1, 2)
+    if (args.required_stack_size !== undefined) parsed.required_stack_size = integer(args.required_stack_size, 'required_stack_size', 1, 255)
+  }
+  return parsed
+}
+
+function renderThroughputMeasurement(args) {
+  const parsed = parseThroughputMeasurement(args)
+  const fields = [`kind=${luaString(parsed.kind)}`, `unit_number=${parsed.unit_number}`]
+  if (parsed.lane_index !== undefined) fields.push(`lane_index=${parsed.lane_index}`)
+  if (parsed.item_name !== undefined) fields.push(`item_name=${luaString(parsed.item_name)}`)
+  if (parsed.warmup_ticks !== undefined) fields.push(`warmup_ticks=${parsed.warmup_ticks}`)
+  if (parsed.window_ticks !== undefined) fields.push(`window_ticks=${parsed.window_ticks}`)
+  if (parsed.required_rate_per_second !== undefined) fields.push(`required_rate_per_second=${parsed.required_rate_per_second}`)
+  if (parsed.utilization_limit !== undefined) fields.push(`utilization_limit=${parsed.utilization_limit}`)
+  if (parsed.required_stack_size !== undefined) fields.push(`required_stack_size=${parsed.required_stack_size}`)
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","throughput_measurement_start",{${fields.join(',')}})))`
+}
+
 export const toolDefinitions = [
   functionTool('getActorStatus', 'Read AIRI actor mode, identity, validity, position and connected-human count.', emptyObjectSchema),
   functionTool('getTaskStatus', 'Read current Autorio task and bounded queue state.', emptyObjectSchema),
@@ -243,6 +307,7 @@ export const toolDefinitions = [
     required: ['unit_number'],
     additionalProperties: false,
   }),
+  throughputMeasurementDefinition,
   functionTool('getNavigationStatus', 'Read bounded navigation target and last result.', emptyObjectSchema),
   functionTool('getFollowStatus', 'Read persistent player-follow state, target player, configured distance, and current distance.', emptyObjectSchema),
   functionTool('getDefenseStatus', 'Read persistent follow auto-defense policy, defensive radius, and current nearby hostile target.', emptyObjectSchema),
@@ -332,6 +397,8 @@ export function toolCommand(name, rawArgs = {}) {
       const radius = integer(args.radius ?? 8, 'radius', 1, 16)
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","logistics_topology",${unitNumber},${radius})))`
     }
+    case 'measureTransportThroughput':
+      return renderThroughputMeasurement(args)
     case 'getNavigationStatus':
       noExtra(args, [])
       return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_navigation","status")))'
