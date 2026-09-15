@@ -41,7 +41,7 @@ const operationKeys = {
   equip_armor: ['item_name'],
   select_weapon_slot: ['slot'],
   mine_entity: ['entity_name', 'count'],
-  place_entity: ['entity_name'],
+  place_entity: ['entity_name', 'x', 'y', 'direction'],
   move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
   move_items_with_player: ['item_name', 'player_name', 'max_count', 'to_player'],
   craft_item: ['item_name', 'count'],
@@ -81,8 +81,18 @@ export function parseOperation(value) {
       return { name, args: { slot: integer(args.slot, 'slot', 1, 64) } }
     case 'mine_entity':
       return { name, args: { entity_name: factorioName(args.entity_name), count: integer(args.count ?? 1, 'count', 1, 1000) } }
-    case 'place_entity':
-      return { name, args: { entity_name: factorioName(args.entity_name) } }
+    case 'place_entity': {
+      const hasX = args.x !== undefined
+      const hasY = args.y !== undefined
+      check(hasX === hasY, 'x and y must be provided together')
+      const parsed = { entity_name: factorioName(args.entity_name) }
+      if (hasX) {
+        parsed.x = finiteNumber(args.x, 'x', -1000000, 1000000)
+        parsed.y = finiteNumber(args.y, 'y', -1000000, 1000000)
+      }
+      if (args.direction !== undefined) parsed.direction = integer(args.direction, 'direction', 0, 15)
+      return { name, args: parsed }
+    }
     case 'move_items':
       check(typeof args.to_entity === 'boolean', 'to_entity must be boolean')
       return { name, args: { item_name: factorioName(args.item_name), entity_name: factorioName(args.entity_name), max_count: integer(args.max_count, 'max_count', 1, 100000), to_entity: args.to_entity } }
@@ -117,7 +127,15 @@ export function renderOperation(value) {
     case 'equip_armor': return `remote.call('autorio_operations','equip_armor',${luaString(operation.args.item_name)})`
     case 'select_weapon_slot': return `remote.call('autorio_operations','select_weapon_slot',${operation.args.slot})`
     case 'mine_entity': return `remote.call('autorio_operations','mine_entity',${luaString(operation.args.entity_name)},${operation.args.count})`
-    case 'place_entity': return `remote.call('autorio_operations','place_entity',${luaString(operation.args.entity_name)})`
+    case 'place_entity': {
+      const name = luaString(operation.args.entity_name)
+      if (operation.args.x !== undefined && operation.args.y !== undefined) {
+        const direction = operation.args.direction === undefined ? 'nil' : operation.args.direction
+        return `remote.call('autorio_operations','place_entity',${name},${operation.args.x},${operation.args.y},${direction})`
+      }
+      if (operation.args.direction !== undefined) return `remote.call('autorio_operations','place_entity',${name},nil,nil,${operation.args.direction})`
+      return `remote.call('autorio_operations','place_entity',${name})`
+    }
     case 'move_items': return `remote.call('autorio_operations','move_items',${luaString(operation.args.item_name)},${luaString(operation.args.entity_name)},${operation.args.max_count},${operation.args.to_entity})`
     case 'move_items_with_player': return `remote.call('autorio_operations','move_items_with_player',${luaString(operation.args.item_name)},${luaString(operation.args.player_name)},${operation.args.max_count},${operation.args.to_player})`
     case 'craft_item': return `remote.call('autorio_operations','craft_item',${luaString(operation.args.item_name)},${operation.args.count})`
