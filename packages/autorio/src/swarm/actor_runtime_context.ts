@@ -2,14 +2,14 @@ import type { OnScriptPathRequestFinishedEvent } from 'factorio:runtime'
 import type { ControlledActor } from '../actors/types'
 import { new_basic_operation_runtime } from '../basic_operation_runtime'
 import { new_basic_operation_controller } from '../basic_operations'
-import { new_combat_controller } from '../combat'
 import { new_crafting_controller } from '../crafting'
-import { new_navigation_controller } from '../navigation'
 import { new_recipe_configuration_runtime } from '../recipe_configuration'
 import { new_task_manager } from '../task_manager'
 import { TaskStates } from '../types'
 import { direction_towards } from '../utils/direction'
 import type { new_actor_registry } from './actor_registry'
+import { new_actor_scoped_combat_controller } from './combat_adapter'
+import { new_actor_scoped_navigation_controller } from './navigation_adapter'
 import type { ActorId } from './types'
 
 type ActorRegistry = ReturnType<typeof new_actor_registry>
@@ -20,9 +20,9 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
   const basic = new_basic_operation_controller(get_actor, manager, { persistenceKey: actorId })
   const basicRuntime = new_basic_operation_runtime(manager, basic)
   const recipeConfiguration = new_recipe_configuration_runtime(manager, basic)
-  const navigation = new_navigation_controller(get_actor, manager, { persistenceKey: actorId })
+  const navigation = new_actor_scoped_navigation_controller(actorId, get_actor, manager)
   const crafting = new_crafting_controller(get_actor, manager, { persistenceKey: actorId })
-  const combat = new_combat_controller(get_actor, manager, { persistenceKey: actorId })
+  const combat = new_actor_scoped_combat_controller(actorId, get_actor, manager)
 
   function tick_walking_direct(actor: ControlledActor) {
     const task = manager.player_state.parameters_walking_direct
@@ -99,8 +99,15 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
   }
 
   function on_path_finished(event: OnScriptPathRequestFinishedEvent) {
-    if (!navigation.owns_path_request(event.id)) return false
-    return navigation.on_path_finished(event)
+    if (navigation.owns_path_request(event.id)) {
+      navigation.on_path_finished(event)
+      return true
+    }
+    if (combat.owns_path_request(event.id)) {
+      combat.on_path_finished(event)
+      return true
+    }
+    return false
   }
 
   function owns_player_index(playerIndex: number) {
