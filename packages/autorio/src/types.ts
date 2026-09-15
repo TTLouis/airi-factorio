@@ -87,8 +87,10 @@ export interface PlayerParametersMoveItems {
   owner_actor_kind?: string
   owner_force_index?: number
   item_name: string
-  /** Exact entity prototype target for entity transfers. */
+  /** Entity prototype target for legacy nearby entity transfers. */
   entity_name?: string
+  /** Stable Factorio entity identity for an exact entity transfer. */
+  target_unit_number?: number
   /** Exact connected player target for player transfers. */
   player_name?: string
   max_count: number
