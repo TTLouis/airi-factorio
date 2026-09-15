@@ -26,6 +26,7 @@ export interface ActorStatusSnapshot {
   kind: string
   valid: boolean
   name: string
+  npc_id?: string
   position: MapPositionStruct
   has_character: boolean
   actor_id?: number
