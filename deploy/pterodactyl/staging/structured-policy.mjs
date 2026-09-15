@@ -45,6 +45,7 @@ const operationKeys = {
   move_items_with_player: ['item_name', 'player_name', 'max_count', 'to_player'],
   craft_item: ['item_name', 'count'],
   attack_nearest_enemy: ['search_radius'],
+  clear_enemy_area: ['search_radius'],
   research_technology: ['technology_name'],
   wait: ['ticks'],
 }
@@ -88,6 +89,8 @@ export function parseOperation(value) {
       return { name, args: { item_name: factorioName(args.item_name), count: integer(args.count ?? 1, 'count', 1, 1000) } }
     case 'attack_nearest_enemy':
       return { name, args: { search_radius: integer(args.search_radius ?? 50, 'search_radius', 1, 256) } }
+    case 'clear_enemy_area':
+      return { name, args: { search_radius: integer(args.search_radius ?? 96, 'search_radius', 1, 256) } }
     case 'research_technology':
       return { name, args: { technology_name: factorioName(args.technology_name) } }
     case 'wait':
@@ -114,6 +117,7 @@ export function renderOperation(value) {
     case 'move_items_with_player': return `remote.call('autorio_operations','move_items_with_player',${luaString(operation.args.item_name)},${luaString(operation.args.player_name)},${operation.args.max_count},${operation.args.to_player})`
     case 'craft_item': return `remote.call('autorio_operations','craft_item',${luaString(operation.args.item_name)},${operation.args.count})`
     case 'attack_nearest_enemy': return `remote.call('autorio_operations','attack_nearest_enemy',${operation.args.search_radius})`
+    case 'clear_enemy_area': return `remote.call('autorio_operations','clear_enemy_area',${operation.args.search_radius})`
     case 'research_technology': return `remote.call('autorio_operations','research_technology',${luaString(operation.args.technology_name)})`
     case 'wait': return `remote.call('autorio_operations','wait',${operation.args.ticks})`
     default: throw new PolicyError('Unapproved operation')
