@@ -88,6 +88,14 @@ Rollback changes the managed startup target only. It does not rewrite saves, use
 - `!airi stop` can abort an in-flight provider request;
 - RCON queue failures do not permanently poison later commands.
 
+## AI behavior trace for NPC E2E
+
+The NPC runtime writes a bounded JSONL behavior trace to `logs/airi-behavior.jsonl` under the server root. It correlates one AIRI request across actor binding, provider-budget reservations, provider calls, tool observations, structured plans, operation admission acknowledgements, completion signals, and verification/status reads. Provider timing and safe response metadata are included when available. Sensitive fields and bearer/API-key-like values are redacted before writing. The trace rotates at roughly 5 MiB and retains up to five files; trace-write failures are fail-open and do not stop AIRI.
+
+For the current E2E phase this intentionally lives inside the **existing packaged runtime files**. That keeps the installer/bootstrap contract unchanged: after this source change reaches `feat/npc-transition-work`, the existing NPC E2E egg only needs a **Reinstall** to pick it up. Do not require a new egg import for behavior-trace changes unless the installer/bootstrap contract itself later changes.
+
+The trace is for debugging/evaluation only. Completion task-status snapshots recorded by the trace are not silently injected into model context, and the trace records only explicit model-visible structured plans rather than hidden reasoning.
+
 ## Generated artifacts
 
 - `payload-src/installer.sh` — audited, human-readable transactional installer payload.

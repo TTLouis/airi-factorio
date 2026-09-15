@@ -62,8 +62,19 @@ export async function providerRequest(config, messages, { fetchImpl = fetch, sig
     let data
     try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')) }
     catch { throw new DeploymentError('Provider returned invalid JSON') }
-    const message = data?.choices?.[0]?.message
+    const choice = data?.choices?.[0]
+    const message = choice?.message
     check(message && typeof message === 'object', 'Provider response has no assistant message')
+    Object.defineProperty(message, '_airiProvider', {
+      configurable: true,
+      enumerable: false,
+      value: {
+        response_id: typeof data?.id === 'string' ? data.id : undefined,
+        model: typeof data?.model === 'string' ? data.model : config.model,
+        finish_reason: choice?.finish_reason,
+        usage: data?.usage && typeof data.usage === 'object' ? data.usage : undefined,
+      },
+    })
     return message
   }
   catch (error) {
