@@ -1,0 +1,165 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { prototype_details } from './prototype_knowledge'
+
+function luaPairs(value: Record<string, unknown>) {
+  return Object.entries(value)
+}
+
+describe('prototype build knowledge', () => {
+  const originalPairs = (globalThis as any).pairs
+  const originalPrototypes = (globalThis as any).prototypes
+
+  beforeEach(() => {
+    ;(globalThis as any).pairs = luaPairs
+
+    const electricMiningDrill = {
+      name: 'electric-mining-drill',
+      type: 'mining-drill',
+      is_building: true,
+      tile_width: 3,
+      tile_height: 3,
+      collision_box: { left_top: { x: -1.4, y: -1.4 }, right_bottom: { x: 1.4, y: 1.4 } },
+      selection_box: { left_top: { x: -1.5, y: -1.5 }, right_bottom: { x: 1.5, y: 1.5 } },
+      items_to_place_this: [{ name: 'electric-mining-drill', count: 1 }],
+      fluidbox_prototypes: [],
+      mining_speed: 0.5,
+      mining_drill_radius: 2.49,
+      resource_categories: { 'basic-solid': true },
+      energy_usage: 90000,
+    }
+    const chemicalPlant = {
+      name: 'chemical-plant',
+      type: 'assembling-machine',
+      is_building: true,
+      tile_width: 3,
+      tile_height: 3,
+      collision_box: {},
+      selection_box: {},
+      items_to_place_this: [{ name: 'chemical-plant', count: 1 }],
+      crafting_speed: 1,
+      crafting_categories: { chemistry: true },
+      ingredient_count: 3,
+      energy_usage: 210000,
+      fluidbox_prototypes: [
+        { index: 1, production_type: 'input', filter: undefined, minimum_temperature: 15, maximum_temperature: 100, pipe_connections: [{}, {}] },
+        { index: 2, production_type: 'output', filter: undefined, pipe_connections: [{}] },
+      ],
+    }
+    const belt = {
+      name: 'transport-belt',
+      type: 'transport-belt',
+      is_building: true,
+      tile_width: 1,
+      tile_height: 1,
+      collision_box: {},
+      selection_box: {},
+      items_to_place_this: [{ name: 'transport-belt', count: 1 }],
+      fluidbox_prototypes: [],
+      belt_speed: 0.03125,
+      max_underground_distance: undefined,
+    }
+    const inserter = {
+      name: 'inserter',
+      type: 'inserter',
+      is_building: true,
+      tile_width: 1,
+      tile_height: 1,
+      collision_box: {},
+      selection_box: {},
+      items_to_place_this: [{ name: 'inserter', count: 1 }],
+      fluidbox_prototypes: [],
+      inserter_pickup_position: { x: 0, y: -1 },
+      inserter_drop_position: { x: 0, y: 1 },
+      allow_custom_vectors: false,
+      bulk: false,
+      inserter_max_belt_stack_size: 1,
+      energy_usage: 13000,
+    }
+
+    ;(globalThis as any).prototypes = {
+      entity: {
+        'electric-mining-drill': electricMiningDrill,
+        'chemical-plant': chemicalPlant,
+        'transport-belt': belt,
+        inserter,
+      },
+      item: {
+        'electric-mining-drill': { name: 'electric-mining-drill', stack_size: 50, place_result: electricMiningDrill },
+        'chemical-plant': { name: 'chemical-plant', stack_size: 10, place_result: chemicalPlant },
+        'transport-belt': { name: 'transport-belt', stack_size: 100, place_result: belt },
+        inserter: { name: 'inserter', stack_size: 50, place_result: inserter },
+      },
+      fluid: {
+        water: { name: 'water', default_temperature: 15, max_temperature: 100, heat_capacity: 200, fuel_value: 0 },
+      },
+    }
+  })
+
+  afterEach(() => {
+    ;(globalThis as any).pairs = originalPairs
+    ;(globalThis as any).prototypes = originalPrototypes
+  })
+
+  it('describes mining drill footprint, speed, radius and resource categories', () => {
+    const result = prototype_details('electric-mining-drill') as any
+    expect(result).toMatchObject({
+      found: true,
+      item: { stack_size: 50, place_result: 'electric-mining-drill' },
+      entity: {
+        type: 'mining-drill',
+        tile_width: 3,
+        tile_height: 3,
+        place_items: [{ name: 'electric-mining-drill', count: 1 }],
+        mining: {
+          speed: 0.5,
+          radius: 2.49,
+          resource_categories: ['basic-solid'],
+          energy_usage: 90000,
+        },
+      },
+    })
+  })
+
+  it('describes crafting capability and bounded fluidbox roles without dumping Lua objects', () => {
+    const result = prototype_details('chemical-plant') as any
+    expect(result.entity).toMatchObject({
+      crafting: {
+        speed: 1,
+        categories: ['chemistry'],
+        ingredient_count: 3,
+        energy_usage: 210000,
+      },
+      fluidboxes: [
+        { index: 1, production_type: 'input', pipe_connection_count: 2 },
+        { index: 2, production_type: 'output', pipe_connection_count: 1 },
+      ],
+      fluidboxes_truncated: false,
+    })
+  })
+
+  it('describes belt and inserter build rules', () => {
+    expect((prototype_details('transport-belt') as any).entity.belt).toEqual({
+      speed: 0.03125,
+      max_underground_distance: undefined,
+    })
+    expect((prototype_details('inserter') as any).entity.inserter).toMatchObject({
+      pickup_position: { x: 0, y: -1 },
+      drop_position: { x: 0, y: 1 },
+      allow_custom_vectors: false,
+      max_belt_stack_size: 1,
+      energy_usage: 13000,
+    })
+  })
+
+  it('returns fluid prototype details and a bounded missing-prototype result', () => {
+    expect(prototype_details('water')).toMatchObject({
+      found: true,
+      fluid: { name: 'water', default_temperature: 15, max_temperature: 100, heat_capacity: 200 },
+    })
+    expect(prototype_details('missing-mod-prototype')).toEqual({
+      found: false,
+      query: 'missing-mod-prototype',
+      error: 'prototype not found as item, fluid, or entity',
+    })
+  })
+})

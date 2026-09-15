@@ -13,8 +13,11 @@ import { new_basic_operation_runtime } from './basic_operation_runtime'
 import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
 import { new_crafting_controller } from './crafting'
+import { create_discovery_remote_interface } from './discovery'
+import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
 import { new_navigation_obstacle_recovery } from './navigation_obstacle_recovery'
+import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
 import { new_research_controller } from './research'
 import { with_research_trigger } from './research_trigger'
 import { new_swarm_runtime_service } from './swarm/runtime_service'
@@ -26,6 +29,9 @@ import { direction_towards } from './utils/direction'
 import { get_actor_inventory_items } from './utils/inventory'
 
 create_tools_remote_interface()
+create_discovery_remote_interface(get_controlled_actor)
+create_knowledge_remote_interface(get_controlled_actor)
+create_prototype_knowledge_remote_interface()
 create_task_board_ui_remote_interface()
 
 let setup_complete = false
@@ -185,9 +191,9 @@ export function get_nearest_entity(actor: ControlledActor, entities: LuaEntity[]
   let nearest_entity: LuaEntity | null = null
   if (entities.length === 0) return null
   for (const entity of entities) {
-    const distance = (entity.position.x - actor.position.x) ** 2 + (entity.position.y - actor.position.y) ** 2
-    if (distance < min_distance) {
-      min_distance = distance
+    const candidate = (entity.position.x - actor.position.x) ** 2 + (entity.position.y - actor.position.y) ** 2
+    if (candidate < min_distance) {
+      min_distance = candidate
       nearest_entity = entity
     }
   }
@@ -204,7 +210,6 @@ function state_walking_direct(actor: ControlledActor) {
     log('[AUTORIO] No parameters found when walking directly')
     return
   }
-
   const target = task.target_position
   if (!target) {
     log('[AUTORIO] No target position, switching to IDLE state')
@@ -212,7 +217,6 @@ function state_walking_direct(actor: ControlledActor) {
     task_manager.next_task()
     return
   }
-
   const direction = get_direction(actor.position, target)
   actor.set_walking_state({ walking: true, direction })
   if (((target.x - actor.position.x) ** 2 + (target.y - actor.position.y) ** 2) < 2) {
@@ -246,7 +250,6 @@ let no_actor_found = false
 
 script.on_event(defines.events.on_tick, (unused_event) => {
   if (!setup_complete) setup()
-
   get_swarm_runtime().tick_all()
 
   const actor = get_controlled_actor()
@@ -270,30 +273,14 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   }
   else {
     navigation_obstacle_recovery.suspend(actor)
-    if (task_manager.player_state.task_state === TaskStates.MINING) {
-      basic_operation_runtime.state_mining(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.PLACING) {
-      basic_operation_runtime.state_placing(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) {
-      basic_operation_runtime.state_moving_items(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.CRAFTING) {
-      crafting_controller.tick(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) {
-      research_controller.tick(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) {
-      state_walking_direct(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.ATTACKING) {
-      combat_controller.tick(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.WAITING) {
-      basic_operation_runtime.state_waiting(actor)
-    }
+    if (task_manager.player_state.task_state === TaskStates.MINING) basic_operation_runtime.state_mining(actor)
+    else if (task_manager.player_state.task_state === TaskStates.PLACING) basic_operation_runtime.state_placing(actor)
+    else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) basic_operation_runtime.state_moving_items(actor)
+    else if (task_manager.player_state.task_state === TaskStates.CRAFTING) crafting_controller.tick(actor)
+    else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) research_controller.tick(actor)
+    else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) state_walking_direct(actor)
+    else if (task_manager.player_state.task_state === TaskStates.ATTACKING) combat_controller.tick(actor)
+    else if (task_manager.player_state.task_state === TaskStates.WAITING) basic_operation_runtime.state_waiting(actor)
   }
 })
 

@@ -109,7 +109,7 @@ jobs:
         run: node --test deploy/pterodactyl/build-payload.test.mjs
       - name: Test swarm Pterodactyl infrastructure
         run: |
-          node --test deploy/pterodactyl/staging/guard.test.mjs deploy/pterodactyl/staging/source-preparer.test.mjs deploy/pterodactyl/staging/swarm-ui-policy.test.mjs
+          node --test deploy/pterodactyl/staging/guard.test.mjs deploy/pterodactyl/staging/source-preparer.test.mjs deploy/pterodactyl/staging/swarm-ui-policy.test.mjs deploy/pterodactyl/staging/swarm-knowledge-policy.test.mjs
           node --test deploy/pterodactyl/runtime-v8/child-input.test.mjs deploy/pterodactyl/runtime-v8/config-authority.test.mjs deploy/pterodactyl/runtime-v8/game-files.test.mjs
 
   swarm-factorio-integration:
