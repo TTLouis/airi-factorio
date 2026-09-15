@@ -6,6 +6,7 @@ function make_actor(kind = 'standalone_character') {
   const surface = {
     index: 1,
     request_to_generate_chunks: vi.fn(),
+    force_generate_chunk_requests: vi.fn(),
   }
   const force = {
     chart: vi.fn(),
@@ -31,16 +32,19 @@ beforeEach(() => {
 })
 
 describe('standalone NPC awareness bubble', () => {
-  it('requests and charts exactly a 3x3 chunk window when entering a chunk', () => {
+  it('fully generates and charts exactly a 3x3 chunk window when entering a chunk', () => {
     const { actor, surface, force } = make_actor()
     const controller = new_awareness_controller()
 
     expect(controller.tick(actor)).toBe(true)
     expect(surface.request_to_generate_chunks).toHaveBeenCalledWith(actor.position, 1)
+    expect(surface.force_generate_chunk_requests).toHaveBeenCalledTimes(1)
     expect(force.chart).toHaveBeenCalledWith(surface, {
       left_top: { x: 0, y: -64 },
       right_bottom: { x: 96, y: 32 },
     })
+    expect(surface.request_to_generate_chunks.mock.invocationCallOrder[0]).toBeLessThan(surface.force_generate_chunk_requests.mock.invocationCallOrder[0]!)
+    expect(surface.force_generate_chunk_requests.mock.invocationCallOrder[0]).toBeLessThan(force.chart.mock.invocationCallOrder[0]!)
   })
 
   it('does not repeat generation/chart work while AIRI remains in the same chunk', () => {
@@ -53,6 +57,7 @@ describe('standalone NPC awareness bubble', () => {
     expect(controller.tick(actor)).toBe(false)
 
     expect(surface.request_to_generate_chunks).toHaveBeenCalledTimes(1)
+    expect(surface.force_generate_chunk_requests).toHaveBeenCalledTimes(1)
     expect(force.chart).toHaveBeenCalledTimes(1)
   })
 
@@ -65,6 +70,7 @@ describe('standalone NPC awareness bubble', () => {
     expect(controller.tick(actor)).toBe(true)
 
     expect(surface.request_to_generate_chunks).toHaveBeenCalledTimes(2)
+    expect(surface.force_generate_chunk_requests).toHaveBeenCalledTimes(2)
     expect(force.chart).toHaveBeenLastCalledWith(surface, {
       left_top: { x: 32, y: -64 },
       right_bottom: { x: 128, y: 32 },
@@ -77,6 +83,7 @@ describe('standalone NPC awareness bubble', () => {
 
     expect(controller.tick(actor)).toBe(false)
     expect(surface.request_to_generate_chunks).not.toHaveBeenCalled()
+    expect(surface.force_generate_chunk_requests).not.toHaveBeenCalled()
     expect(force.chart).not.toHaveBeenCalled()
   })
 })
