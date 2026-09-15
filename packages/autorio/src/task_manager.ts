@@ -3,6 +3,14 @@ import { register_actor_mode_transition_handler, register_npc_recovery_handler }
 import type { PlayerParameters, PlayerState } from './types'
 import { TaskStates } from './types'
 
+interface TaskBatchReceipt {
+  batch_id: number
+  task_count: number
+  task_types: TaskStates[]
+  tick: number
+  reason?: string
+}
+
 export function new_task_manager(get_controlled_actor: () => ControlledActor | undefined) {
   const player_state: PlayerState = {
     task_state: TaskStates.IDLE,
@@ -10,10 +18,41 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
 
   const task_queue: PlayerParameters[] = []
   const cancel_handlers: Partial<Record<TaskStates, () => void>> = {}
+  let batch_sequence = 0
+  let active_batch_id: number | undefined
+  let active_batch_task_types: TaskStates[] = []
+  let last_completed_batch: TaskBatchReceipt | undefined
+  let last_cancelled_batch: TaskBatchReceipt | undefined
+
+  function begin_or_extend_batch(task: PlayerParameters) {
+    if (active_batch_id === undefined) {
+      batch_sequence += 1
+      active_batch_id = batch_sequence
+      active_batch_task_types = []
+    }
+    active_batch_task_types.push(task.type)
+  }
+
+  function close_batch(kind: 'completed' | 'cancelled', reason?: string) {
+    if (active_batch_id === undefined) return undefined
+    const receipt: TaskBatchReceipt = {
+      batch_id: active_batch_id,
+      task_count: active_batch_task_types.length,
+      task_types: [...active_batch_task_types],
+      tick: game.tick,
+      reason,
+    }
+    if (kind === 'completed') last_completed_batch = receipt
+    else last_cancelled_batch = receipt
+    active_batch_id = undefined
+    active_batch_task_types = []
+    return receipt
+  }
 
   function add_task(task: PlayerParameters) {
+    begin_or_extend_batch(task)
     task_queue.push(task)
-    log(`[AUTORIO] Task added: ${task.type}, task queue length: ${task_queue.length}`)
+    log(`[AUTORIO] Task added: ${task.type}, batch=${active_batch_id}, task queue length: ${task_queue.length}`)
 
     if (task_queue.length === 1) {
       next_task()
@@ -74,12 +113,16 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     const task = task_queue.shift()
     if (!task) {
       player_state.task_state = TaskStates.IDLE
-      game.print('[AUTORIO] All operations completed')
-      log('[AUTORIO] All operations completed')
+      const receipt = close_batch('completed')
+      const details = receipt
+        ? `batch=${receipt.batch_id}, task_count=${receipt.task_count}, tasks=${receipt.task_types.join(',') || 'none'}, tick=${receipt.tick}`
+        : `batch=none, task_count=0, tasks=none, tick=${game.tick}`
+      game.print(`[AUTORIO] All operations completed: ${details}`)
+      log(`[AUTORIO] All operations completed: ${details}`)
       return
     }
 
-    log(`[AUTORIO] Next task: ${task.type}, task queue length: ${task_queue.length}`)
+    log(`[AUTORIO] Next task: ${task.type}, batch=${active_batch_id}, task queue length: ${task_queue.length}`)
     player_state.task_state = task.type
     switch (task.type) {
       case TaskStates.WALKING_TO_ENTITY:
@@ -229,6 +272,15 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       queue_length: task_queue.length,
       queued_task_types: task_queue.map(task => task.type),
       current_task: get_current_task_snapshot(),
+      active_batch: active_batch_id === undefined
+        ? undefined
+        : {
+            batch_id: active_batch_id,
+            task_count: active_batch_task_types.length,
+            task_types: [...active_batch_task_types],
+          },
+      last_completed_batch,
+      last_cancelled_batch,
     }
   }
 
@@ -237,15 +289,17 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     reset_task_state()
   }
 
-  function cancel_all_tasks() {
+  function cancel_all_tasks(reason = 'cancelled') {
     run_cancel_cleanup()
     reset_task_state()
     task_queue.length = 0
+    close_batch('cancelled', reason)
   }
 
   function discard_all_tasks_after_actor_loss() {
     clear_task_state_without_controls()
     task_queue.length = 0
+    close_batch('cancelled', 'actor_loss')
   }
 
   register_npc_recovery_handler(({ previous_actor_id }) => {
@@ -255,7 +309,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
 
   register_actor_mode_transition_handler(({ previous_mode, next_mode }) => {
     if (player_state.task_state === TaskStates.IDLE && task_queue.length === 0) return
-    cancel_all_tasks()
+    cancel_all_tasks('actor_mode_change')
     log(`[AUTORIO] Cancelled active and queued work before actor mode change ${previous_mode} -> ${next_mode}`)
   })
 
