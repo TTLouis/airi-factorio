@@ -14,7 +14,7 @@ const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
 // Immutable commit containing the audited installer payload. Channel eggs keep
 // this bootstrap immutable, then resolve AIRI_SOURCE_REF to an exact commit at
 // reinstall time and patch only the payload's AIRI_REF/revision assignments.
-const PAYLOAD_REF = 'a16cc6d1201ae529813a4530a51125ba2654a144'
+const PAYLOAD_REF = '9ef5bc6cdfb8fbf3c5a2e52b82bc3ad41c856f3e'
 const CHANNELS = Object.freeze({
   main: {
     name: 'AIRI Factorio Server (Main)',
@@ -60,7 +60,7 @@ REF="${PAYLOAD_REF}"
 EXPECTED_SOURCE_SHA256="${sourceHash}"
 URL="https://raw.githubusercontent.com/TTLouis/airi-factorio/$REF/deploy/pterodactyl/payload-src/installer.sh"
 TMP="$(mktemp)"
-log() { printf '[AIRI bootstrap] %s\\n' "$*"; }
+log() { printf '[AIRI bootstrap] %s\n' "$*"; }
 fail() { log "ERROR: $*" >&2; exit 78; }
 cleanup() { local code=$?; trap - EXIT; rm -f -- "$TMP"; exit "$code"; }
 trap cleanup EXIT
@@ -95,7 +95,7 @@ SOURCE_REF="\${AIRI_SOURCE_REF:-$DEFAULT_SOURCE_REF}"
 BASE="$(mktemp)"
 PATCHED="$(mktemp)"
 RESOLUTION="$(mktemp)"
-log() { printf '[AIRI channel:%s] %s\\n' "$CHANNEL" "$*"; }
+log() { printf '[AIRI channel:%s] %s\n' "$CHANNEL" "$*"; }
 fail() { log "ERROR: $*" >&2; exit 78; }
 cleanup() { local code=$?; trap - EXIT; rm -f -- "$BASE" "$PATCHED" "$RESOLUTION"; exit "$code"; }
 trap cleanup EXIT
@@ -106,16 +106,16 @@ for tool in bash curl sha256sum awk grep mktemp rm tr; do command -v "$tool" >/d
 if [[ "$SOURCE_REF" =~ ^[a-f0-9]{40}$ ]]; then
   RESOLVED_SHA="$SOURCE_REF"
 else
-  curl --fail --location --retry 3 --connect-timeout 20 --max-time 60 --proto '=https' --proto-redir '=https' \\
-    --get --data-urlencode "sha=$SOURCE_REF" --data-urlencode 'per_page=1' \\
-    'https://api.github.com/repos/TTLouis/airi-factorio/commits' --output "$RESOLUTION" \\
+  curl --fail --location --retry 3 --connect-timeout 20 --max-time 60 --proto '=https' --proto-redir '=https' \
+    --get --data-urlencode "sha=$SOURCE_REF" --data-urlencode 'per_page=1' \
+    'https://api.github.com/repos/TTLouis/airi-factorio/commits' --output "$RESOLUTION" \
     || fail "Unable to resolve AIRI_SOURCE_REF=$SOURCE_REF"
   RESOLVED_SHA="$(grep -m1 -oE '\"sha\"[[:space:]]*:[[:space:]]*\"[a-f0-9]{40}\"' "$RESOLUTION" | grep -oE '[a-f0-9]{40}' || true)"
   [[ "$RESOLVED_SHA" =~ ^[a-f0-9]{40}$ ]] || fail "AIRI_SOURCE_REF did not resolve to a commit: $SOURCE_REF"
 fi
 log "Resolved $SOURCE_REF -> $RESOLVED_SHA"
 URL="https://raw.githubusercontent.com/TTLouis/airi-factorio/$PAYLOAD_REF/deploy/pterodactyl/payload-src/installer.sh"
-curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$BASE" \\
+curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$BASE" \
   || fail 'Unable to download immutable AIRI installer payload'
 ACTUAL_PAYLOAD_SHA256="$(sha256sum "$BASE" | awk '{print $1}')"
 [[ "$ACTUAL_PAYLOAD_SHA256" == "$EXPECTED_PAYLOAD_SHA256" ]] || fail 'Immutable AIRI installer payload checksum mismatch'
@@ -123,12 +123,12 @@ ACTUAL_PAYLOAD_SHA256="$(sha256sum "$BASE" | awk '{print $1}')"
 [[ "$(grep -Ec '^REVISION="[A-Za-z0-9._-]+"$' "$BASE")" == 1 && "$(grep -c '^REVISION=' "$BASE")" == 1 ]] || fail 'Unexpected REVISION assignment contract in immutable payload'
 SHORT_SHA="\${RESOLVED_SHA:0:12}"
 awk -v ref="$RESOLVED_SHA" -v revision="$CHANNEL-$SHORT_SHA" '
-  /^AIRI_REF=/ { print "AIRI_REF=\\\"" ref "\\\""; next }
-  /^REVISION=/ { print "REVISION=\\\"" revision "\\\""; next }
+  /^AIRI_REF=/ { print "AIRI_REF=\"" ref "\""; next }
+  /^REVISION=/ { print "REVISION=\"" revision "\""; next }
   { print }
 ' "$BASE" > "$PATCHED"
-grep -Fxq "AIRI_REF=\\\"$RESOLVED_SHA\\\"" "$PATCHED" || fail 'Failed to apply resolved source SHA'
-grep -Fxq "REVISION=\\\"$CHANNEL-$SHORT_SHA\\\"" "$PATCHED" || fail 'Failed to apply channel release revision'
+grep -Fxq "AIRI_REF=\"$RESOLVED_SHA\"" "$PATCHED" || fail 'Failed to apply resolved source SHA'
+grep -Fxq "REVISION=\"$CHANNEL-$SHORT_SHA\"" "$PATCHED" || fail 'Failed to apply channel release revision'
 log "Installing exact source $RESOLVED_SHA from $SOURCE_REF"
 bash "$PATCHED"
 `
