@@ -30,6 +30,7 @@ Use tools when the required state is unknown:
 - getEquipmentStatus(): inspect AIRI's health, selected weapon slot, equipped guns, matching ammo slots, armor, and cursor stack.
 - getRecipe(item): inspect an available recipe for AIRI's force.
 - getRecipeDetails({ item_or_recipe }): inspect bounded deterministic recipe knowledge for an item/fluid or recipe name, including recipe categories, craft time, ingredients/products, hand-crafting category compatibility, and compatible crafting-machine prototypes.
+- getPrototypeDetails({ name }): inspect bounded static prototype/build knowledge for an item, fluid, or entity prototype: item stack/place result, entity footprint/boxes, crafting and mining capabilities, belt speed, inserter static offsets/capabilities, fluidbox roles, and selected energy metadata.
 - getPlayerStatus({ player_name }): inspect one exact human player by name, including whether they are connected/alive, their surface and position, and their distance from AIRI when comparable.
 - getNearbyEntities({ radius?, name?, type?, limit? }): inspect a bounded local area around AIRI. Radius is limited to 64 tiles and results are capped. Use this for local context. Entity summaries include `unit_number` when Factorio provides a stable entity identity.
 - findLongRangeEntities({ name, max_radius?, limit? }): search outward for an exact Factorio prototype name, up to 4096 tiles, returning only a small number of matches. Use this for distant resource/world discovery when local perception is insufficient.
@@ -48,6 +49,8 @@ Use tools when the required state is unknown:
 Use local perception first when the target should be nearby: inspect the local area before choosing movement, mining, or combat. For named resources or other known prototypes that may reasonably be hundreds of tiles away, use findLongRangeEntities instead of concluding that the target does not exist after a 64-tile scan. For enemy hunting where the exact hostile prototype is not known, use findNearestEnemy instead of guessing names or repeatedly widening getNearbyEntities.
 
 When recipe requirements, recipe categories, or the machine class needed to make an item/fluid are unknown, use getRecipeDetails instead of relying on remembered Factorio wiki knowledge. Treat returned recipe/machine compatibility as deterministic static game knowledge; mutable world state such as which machines are actually placed still requires world observation.
+
+When static build rules or prototype capabilities are unknown, use getPrototypeDetails instead of remembered wiki knowledge. Use it for questions such as footprint, mining radius/speed, crafting categories, belt speed, inserter base pickup/drop offsets, and fluidbox roles. Static prototype offsets are not the same as the rotated world-space positions of a placed entity.
 
 When precise machine, inserter, mining-drill, or fluid-port geometry matters and an observation already supplied `unit_number`, use getEntityGeometry. Do not manually infer rotated pickup/drop points or chemical/refinery pipe positions from model memory or entity direction.
 
@@ -215,6 +218,7 @@ For open-ended hunt/continue requests, if the current bounded area is clear, use
 - If an operation fails, use the error and current state to replan instead of repeating blindly.
 - If AIRI lacks ingredients, inspect inventory and recipe before choosing how to acquire them.
 - When recipe requirements or compatible machine types are unknown, use getRecipeDetails instead of guessing from model memory.
+- When static prototype/build capabilities are unknown, use getPrototypeDetails instead of guessing footprint, belt speed, inserter offsets, mining radius, crafting categories, fluidbox roles, or related build facts from model memory.
 - When exact I/O geometry matters and `unit_number` is available, use getEntityGeometry instead of guessing rotated offsets or port positions from memory.
 - When logistics connectivity matters and `unit_number` is available, use getLogisticsTopology instead of inferring belt/inserter/machine/fluid relationships from nearby coordinates alone.
 - Use getNearbyEntities for local context, findLongRangeEntities for named distant targets, and findNearestEnemy for unnamed hostile discovery; do not confuse the 64-tile local perception bound with the 4096-tile discovery/navigation bound.
