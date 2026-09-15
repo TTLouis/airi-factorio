@@ -38,59 +38,38 @@ function operation_status() {
 
 function current_matches_session() {
   const data = state()
-  if (!data.airi_deployment_session || !data.airi_deployment_mode || data.airi_deployment_actor_id === undefined || !data.airi_deployment_actor_kind) {
-    return false
-  }
+  if (!data.airi_deployment_session || !data.airi_deployment_mode || data.airi_deployment_actor_id === undefined || !data.airi_deployment_actor_kind) return false
   const status = actor_status()
   const actor = status.actor
-  if (!actor || actor.valid !== true || actor.has_character !== true) {
-    return false
-  }
-  if (status.mode !== data.airi_deployment_mode || actor.actor_id !== data.airi_deployment_actor_id || actor.kind !== data.airi_deployment_actor_kind) {
-    return false
-  }
-  if (data.airi_deployment_mode === 'npc') {
-    return actor.kind === 'standalone_character'
-  }
+  if (!actor || actor.valid !== true || actor.has_character !== true) return false
+  if (status.mode !== data.airi_deployment_mode || actor.actor_id !== data.airi_deployment_actor_id || actor.kind !== data.airi_deployment_actor_kind) return false
+  if (data.airi_deployment_mode === 'npc') return actor.kind === 'standalone_character'
   return actor.kind === 'connected_player'
 }
 
 function cancel_tasks() {
   if (remote.interfaces.autorio_operations !== undefined) {
+    // Persistent modes are runtime state, not queued tasks. Disable follow first
+    // so a later idle tick cannot silently re-admit player navigation after the
+    // deployment/task cancellation has completed.
+    remote.call('autorio_operations', 'stop_follow_player')
     remote.call('autorio_operations', 'cancel_all_tasks')
   }
 }
 
 remote.add_interface('airi_deployment', {
-  // Declared inline, like every other handler in this table. TypeScriptToLua
-  // gave a `const configure = (...) => {...}` referenced here by shorthand an
-  // implicit extra leading parameter (TSTL could not prove the standalone
-  // binding is never used as a method), which silently shifted every
-  // argument: mode received the session token and session was left nil.
-  // Declaring the handler directly as a table value compiles with no such
-  // parameter, matching status/authorize/cancel/disable below.
   configure: (mode: ActorMode, session: string) => {
-    if ((mode !== 'npc' && mode !== 'player') || session === '') {
-      return false
-    }
+    if ((mode !== 'npc' && mode !== 'player') || session === '') return false
 
     cancel_tasks()
     const changed = remote.call('autorio_actor', 'set_mode', mode) as [boolean, unknown]
-    if (!changed || changed[0] !== true) {
-      return false
-    }
+    if (!changed || changed[0] !== true) return false
 
     const status = actor_status()
     const actor = status.actor
-    if (!actor || status.mode !== mode || actor.valid !== true || actor.has_character !== true || actor.actor_id === undefined) {
-      return false
-    }
-    if (mode === 'npc' && actor.kind !== 'standalone_character') {
-      return false
-    }
-    if (mode === 'player' && actor.kind !== 'connected_player') {
-      return false
-    }
+    if (!actor || status.mode !== mode || actor.valid !== true || actor.has_character !== true || actor.actor_id === undefined) return false
+    if (mode === 'npc' && actor.kind !== 'standalone_character') return false
+    if (mode === 'player' && actor.kind !== 'connected_player') return false
 
     const data = state()
     data.airi_deployment_mode = mode
