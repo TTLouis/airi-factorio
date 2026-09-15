@@ -1,0 +1,40 @@
+import { beforeEach, describe, expect, it } from 'vitest'
+import { sanitize_task_board_ui_snapshot } from './task_board_ui'
+
+beforeEach(() => {
+  ;(globalThis as any).storage = {}
+})
+
+describe('in-game task board UI projection', () => {
+  it('keeps bounded canonical progress and status fields', () => {
+    const board = sanitize_task_board_ui_snapshot({
+      goal_id: 'goal_1',
+      objective: 'Climb the technology tree',
+      status: 'blocked',
+      blocker: 'provider recovery exhausted',
+      pause_reason: '',
+      completed_count: 2,
+      total_steps: 5,
+      active_index: 2,
+      steps: [
+        { id: 'step_1', description: 'Find stone', status: 'completed' },
+        { id: 'step_2', description: 'Mine stone', status: 'completed' },
+        { id: 'step_3', description: 'Trigger steam power', status: 'blocked' },
+        { id: 'step_4', description: 'Build power', status: 'pending' },
+        { id: 'step_5', description: 'Start research', status: 'pending' },
+      ],
+    })
+    expect(board).toMatchObject({
+      status: 'blocked',
+      completed_count: 2,
+      total_steps: 5,
+      active_index: 2,
+      steps: [{ id: 'step_1' }, { id: 'step_2' }, { id: 'step_3' }, { id: 'step_4' }, { id: 'step_5' }],
+    })
+  })
+
+  it('rejects malformed snapshots instead of creating a second source of truth', () => {
+    expect(sanitize_task_board_ui_snapshot(undefined)).toBeUndefined()
+    expect(sanitize_task_board_ui_snapshot({ status: 'active' })).toBeUndefined()
+  })
+})

@@ -14,8 +14,11 @@ import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
 import { new_crafting_controller } from './crafting'
 import { new_navigation_controller } from './navigation'
+import { new_navigation_obstacle_recovery } from './navigation_obstacle_recovery'
 import { new_research_controller } from './research'
+import { with_research_trigger } from './research_trigger'
 import { new_swarm_runtime_service } from './swarm/runtime_service'
+import { create_task_board_ui_remote_interface } from './task_board_ui'
 import { new_task_manager } from './task_manager'
 import { create_tools_remote_interface } from './tools'
 import { TaskStates } from './types'
@@ -23,6 +26,7 @@ import { direction_towards } from './utils/direction'
 import { get_actor_inventory_items } from './utils/inventory'
 
 create_tools_remote_interface()
+create_task_board_ui_remote_interface()
 
 let setup_complete = false
 
@@ -30,6 +34,7 @@ export const task_manager = new_task_manager(get_controlled_actor)
 const basic_operation_controller = new_basic_operation_controller(get_controlled_actor, task_manager)
 const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_operation_controller)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
+const navigation_obstacle_recovery = new_navigation_obstacle_recovery()
 const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
 const combat_controller = new_combat_controller(get_controlled_actor, task_manager)
@@ -42,7 +47,11 @@ function get_swarm_runtime() {
 }
 
 remote.add_interface('autorio_navigation', {
-  status: () => navigation_controller.status(),
+  status: () => ({
+    ...navigation_controller.status(),
+    obstacle_recovery: navigation_obstacle_recovery.status(),
+  }),
+  set_clear_obstacles: (enabled: boolean) => navigation_obstacle_recovery.set_enabled(enabled),
 })
 
 remote.add_interface('autorio_crafting', {
@@ -51,7 +60,7 @@ remote.add_interface('autorio_crafting', {
 
 remote.add_interface('autorio_research', {
   status: () => research_controller.status(),
-  technology: (name: string) => research_controller.technology(name),
+  technology: (name: string) => with_research_trigger(name, research_controller.technology(name) as Record<string, unknown>),
   request_result: (request_id: number) => research_controller.request_result(request_id),
 })
 
@@ -140,9 +149,7 @@ remote.add_interface('autorio_operations', {
   },
   move_items: (item_name: string, entity_name: string, max_count: number, to_entity: boolean): [boolean, string] => {
     const result = basic_operation_controller.submit_move(item_name, entity_name, max_count, to_entity)
-    if (result[0]) {
-      log(`[AUTORIO] New move_items task for ${item_name} ${to_entity ? 'to' : 'from'} ${entity_name}`)
-    }
+    if (result[0]) log(`[AUTORIO] New move_items task for ${item_name} ${to_entity ? 'to' : 'from'} ${entity_name}`)
     return result
   },
   wait: (ticks: number): [boolean, string] => {
@@ -166,8 +173,6 @@ remote.add_interface('autorio_operations', {
     }
   },
   log_actor_info: () => log_actor_info(),
-  // Compatibility alias for older callers. The player id is intentionally ignored:
-  // diagnostics now always describe AIRI's selected ControlledActor.
   log_player_info: (_player_id?: number) => log_actor_info(),
 })
 
@@ -189,8 +194,6 @@ export function get_nearest_entity(actor: ControlledActor, entities: LuaEntity[]
   return nearest_entity
 }
 
-// Kept exported for the historical regression tests; production dispatch reaches
-// the same owned runtime through on_tick below.
 export function state_moving_items(actor: ControlledActor) {
   return basic_operation_runtime.state_moving_items(actor)
 }
@@ -219,15 +222,11 @@ function state_walking_direct(actor: ControlledActor) {
   }
 }
 
-// FIXME: who are changing the selected entity while mining?
-// This only happens in multiplayer, why?
 script.on_event(defines.events.on_selected_entity_changed, (unused_event: OnSelectedEntityChangedEvent) => {})
 
 script.on_event(defines.events.on_script_path_request_finished, (event: OnScriptPathRequestFinishedEvent) => {
   const routed = get_swarm_runtime().on_path_finished(event)
-  if ('code' in routed && routed.code === 'not_owned') {
-    navigation_controller.on_path_finished(event)
-  }
+  if ('code' in routed && routed.code === 'not_owned') navigation_controller.on_path_finished(event)
 })
 
 script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEntityEvent) => {
@@ -239,8 +238,6 @@ script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEnti
 })
 
 function setup() {
-  // Production setup must never delete world enemies. Deterministic tests own
-  // their fixtures explicitly; combat must interact with real enemy entities.
   setup_complete = true
   log('[AUTORIO] Setup complete')
 }
@@ -250,8 +247,6 @@ let no_actor_found = false
 script.on_event(defines.events.on_tick, (unused_event) => {
   if (!setup_complete) setup()
 
-  // Swarm actors are independent of the legacy selected actor. Always tick all
-  // attached logical actors before applying the compatibility singleton path.
   get_swarm_runtime().tick_all()
 
   const actor = get_controlled_actor()
@@ -264,48 +259,47 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   }
   no_actor_found = false
 
-  if (task_manager.player_state.task_state === TaskStates.IDLE) return
+  if (task_manager.player_state.task_state === TaskStates.IDLE) {
+    navigation_obstacle_recovery.suspend(actor)
+    return
+  }
 
   if (task_manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
-    navigation_controller.tick(actor)
+    const handled = navigation_obstacle_recovery.tick(actor, task_manager.player_state.parameters_walk_to_entity)
+    if (!handled) navigation_controller.tick(actor)
   }
-  else if (task_manager.player_state.task_state === TaskStates.MINING) {
-    basic_operation_runtime.state_mining(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.PLACING) {
-    basic_operation_runtime.state_placing(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) {
-    basic_operation_runtime.state_moving_items(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.CRAFTING) {
-    crafting_controller.tick(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) {
-    research_controller.tick(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) {
-    state_walking_direct(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.ATTACKING) {
-    combat_controller.tick(actor)
-  }
-  else if (task_manager.player_state.task_state === TaskStates.WAITING) {
-    basic_operation_runtime.state_waiting(actor)
+  else {
+    navigation_obstacle_recovery.suspend(actor)
+    if (task_manager.player_state.task_state === TaskStates.MINING) {
+      basic_operation_runtime.state_mining(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.PLACING) {
+      basic_operation_runtime.state_placing(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) {
+      basic_operation_runtime.state_moving_items(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.CRAFTING) {
+      crafting_controller.tick(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) {
+      research_controller.tick(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) {
+      state_walking_direct(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.ATTACKING) {
+      combat_controller.tick(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.WAITING) {
+      basic_operation_runtime.state_waiting(actor)
+    }
   }
 })
 
 script.on_event(defines.events.on_player_crafted_item, (event: OnPlayerCraftedItemEvent) => {
   const actor = get_controlled_actor()
-  if (!actor || !actor.owns_player_index(event.player_index)) {
-    // Not our controlled actor's craft (e.g. another connected player) — ignore it.
-    // Standalone NPC crafting produces no LuaPlayer event at all.
-    return
-  }
-
-  // This event is diagnostic only. Queue ownership and completion are verified
-  // by the crafting controller against the controlled actor's native queue and
-  // real inventory output; a player-sourced event cannot complete an NPC task.
+  if (!actor || !actor.owns_player_index(event.player_index)) return
   log(`[AUTORIO] Actor ${actor.status_snapshot().name} crafted item: ${event.item_stack.name}`)
 })
 
