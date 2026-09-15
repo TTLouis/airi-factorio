@@ -228,7 +228,12 @@ RELEASE="$SERVER_DIR/.airi/releases/$RELEASE_ID"
 [[ ! -e "$RELEASE" ]] || fail 'Release directory collision'
 mv "$APP" "$RELEASE"
 
-cp "$RELEASE/client-mod/autorio_0.1.0.zip" "$SERVER_DIR/autorio_0.1.0.zip"
+CLIENT_MOD_DIR="$SERVER_DIR/client-mods"
+[[ ! -L "$CLIENT_MOD_DIR" ]] || fail 'client-mods cannot be a symlink'
+mkdir -p "$CLIENT_MOD_DIR"
+cp "$RELEASE/client-mod/autorio_0.1.0.zip" "$CLIENT_MOD_DIR/autorio_0.1.0.zip"
+cp "$RELEASE/client-mod/SHA256SUMS" "$CLIENT_MOD_DIR/SHA256SUMS"
+rm -f -- "$SERVER_DIR/autorio_0.1.0.zip"
 PREVIOUS_TARGET=""
 if [[ -L "$SERVER_DIR/start-airi.sh" ]]; then
   PREVIOUS_TARGET="$(readlink -- "$SERVER_DIR/start-airi.sh")"
@@ -267,6 +272,7 @@ log "Installation complete: $DEPLOYMENT_REVISION"
 log "Pinned source: $AIRI_REF"
 log "Factorio: $FACTORIO_TARGET"
 log 'Actor ownership: standalone NPC; zero connected humans is valid.'
+log 'Managed client mod: client-mods/autorio_0.1.0.zip'
 log 'Set AIRI_CHAT_PLAYERS to control who may issue !airi requests (blank/* = everyone, comma list = allowlist, none = disabled).'
 log 'Set FACTORIO_USERNAME and FACTORIO_TOKEN together to publish the server; leave both blank for a hidden server.'
 log 'Startup command: bash ./start-airi.sh'
