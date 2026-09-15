@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile
+      no_cache: true
       args:
         AIRI_SOURCE_REF: ${AIRI_SOURCE_REF:-feat/npc-transition-work}
         FACTORIO_VERSION: ${FACTORIO_VERSION:-latest}
