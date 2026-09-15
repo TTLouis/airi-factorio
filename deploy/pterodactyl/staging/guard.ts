@@ -48,11 +48,13 @@ function current_matches_session() {
 }
 
 function cancel_tasks() {
-  if (remote.interfaces.autorio_operations !== undefined) {
+  const operations = remote.interfaces.autorio_operations
+  if (operations !== undefined) {
     // Persistent modes are runtime state, not queued tasks. Disable follow first
     // so a later idle tick cannot silently re-admit player navigation after the
-    // deployment/task cancellation has completed.
-    remote.call('autorio_operations', 'stop_follow_player')
+    // deployment/task cancellation has completed. Keep the guard compatible
+    // with older/minimal Autorio interfaces that do not expose follow yet.
+    if (operations.stop_follow_player !== undefined) remote.call('autorio_operations', 'stop_follow_player')
     remote.call('autorio_operations', 'cancel_all_tasks')
   }
 }
