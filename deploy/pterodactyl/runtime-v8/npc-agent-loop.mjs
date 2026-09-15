@@ -20,7 +20,7 @@ The Pterodactyl harness may provide a [PLAN_STATE] message. It is harness-owned 
 
 For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
 
-An empty operations array means no Autorio world action will happen after your reply. Never say that you are now continuing, going to mine, walking somewhere, placing something, loading something, attacking something, or otherwise executing a next step while returning operations: []. If work remains, submit the concrete next operation(s), or clearly report the blocker/pause. When the whole requested goal is actually verified complete, return plan: [], currentStep: 0, operations: [], and say it is complete.
+An empty operations array normally means no new Autorio world action will happen after your reply. Never claim that a finite action is continuing when neither a new operation nor a live persistent runtime mode exists. Persistent controllers such as follow are different: if a read-only status tool proves the controller is active, healthy, and live, operations: [] may accurately describe that background mode without submitting a duplicate operation. When the whole requested goal is actually verified complete, return plan: [], currentStep: 0, operations: [], and say it is complete.
 
 Before a non-empty operation batch, chatMessage should tell the human what concrete current plan step AIRI is about to attempt. [MOD] completion/error messages may include a detailed getTaskStatus snapshot. Use that receipt plus any needed read-only verification to advance, replan, complete, or report a blocker.
 `.trim()
@@ -53,6 +53,28 @@ function currentPlanStep(plan, currentStep) {
   return plan[Math.min(Math.max(currentStep, 0), plan.length - 1)] ?? ''
 }
 
+function safePersistentRuntime(value) {
+  if (!value || typeof value !== 'object') return undefined
+  if (value.kind !== 'follow') return undefined
+  return {
+    kind: 'follow',
+    active: value.active === true,
+    healthy: value.healthy === true,
+    controller_live: value.controller_live === true,
+    state: cleanMemoryText(value.state, 32),
+    target_player: cleanMemoryText(value.target_player, 128),
+    current_distance: Number.isFinite(value.current_distance) ? value.current_distance : undefined,
+    desired_distance: Number.isFinite(value.desired_distance) ? value.desired_distance : undefined,
+    last_progress_tick: Number.isFinite(value.last_progress_tick) ? value.last_progress_tick : undefined,
+    stuck_for_ticks: Number.isFinite(value.stuck_for_ticks) ? value.stuck_for_ticks : undefined,
+    path_request_id: Number.isSafeInteger(value.path_request_id) ? value.path_request_id : undefined,
+    path_attempts: Number.isSafeInteger(value.path_attempts) ? value.path_attempts : undefined,
+    waypoints_remaining: Number.isSafeInteger(value.waypoints_remaining) ? value.waypoints_remaining : undefined,
+    last_repath_tick: Number.isFinite(value.last_repath_tick) ? value.last_repath_tick : undefined,
+    last_failure: cleanMemoryText(value.last_failure, 300),
+  }
+}
+
 export class NpcDialogueMemory extends BaseNpcDialogueMemory {
   constructor(options = {}) {
     super(options)
@@ -69,6 +91,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       status: state.status,
       blocker: state.blocker,
       pause_reason: state.pause_reason,
+      persistent_runtime: state.persistent_runtime,
       plan: state.plan,
       current_step: state.current_step,
       current_step_text: currentPlanStep(state.plan, state.current_step),
@@ -88,14 +111,16 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return key ? this.planByNpc.get(key) : undefined
   }
 
-  recordPlan(key, requestInfo, plan, { continuation = false } = {}) {
+  recordPlan(key, requestInfo, plan, { continuation = false, persistentRuntime } = {}) {
     const previous = this.planByNpc.get(key)
     const hasOperations = plan.operations.length > 0
     const incomingPlan = safePlan(plan.plan)
     const incomingStep = Number.isSafeInteger(plan.currentStep) ? plan.currentStep : 0
     const now = Date.now()
+    const runtime = safePersistentRuntime(persistentRuntime)
+    const runtimeHealthy = runtime?.active === true && runtime.healthy === true && runtime.controller_live === true
 
-    if (!hasOperations && !continuation) {
+    if (!hasOperations && !continuation && !runtimeHealthy) {
       return { state: previous, blockedByHarness: false, changed: false }
     }
 
@@ -117,6 +142,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         status: 'active',
         blocker: '',
         pause_reason: '',
+        persistent_runtime: previous?.persistent_runtime,
         plan: incomingPlan,
         current_step: incomingStep,
         revision: (previous?.revision ?? 0) + 1,
@@ -129,6 +155,28 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       return { state, blockedByHarness: false, changed: true }
     }
 
+    if (runtimeHealthy && incomingPlan.length > 0) {
+      const state = {
+        ...(previous ?? {}),
+        goal_id: previous?.goal_id ?? `goal_${now.toString(36)}`,
+        owner: cleanMemoryText(requestInfo?.sender ?? previous?.owner ?? 'unknown', 128),
+        objective: cleanMemoryText(previous?.objective ?? requestInfo?.text ?? '', 1000),
+        status: 'active',
+        blocker: '',
+        pause_reason: '',
+        persistent_runtime: runtime,
+        plan: incomingPlan,
+        current_step: incomingStep,
+        revision: (previous?.revision ?? 0) + 1,
+        last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
+        last_operations: [],
+        updated_at: now,
+        history,
+      }
+      this.planByNpc.set(key, state)
+      return { state, blockedByHarness: false, persistentRuntimeActive: true, changed: true }
+    }
+
     if (!previous) return { state: undefined, blockedByHarness: false, changed: false }
 
     if (incomingPlan.length > 0) {
@@ -137,6 +185,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         status: 'blocked',
         blocker: 'no_autorio_operation_for_remaining_plan',
         pause_reason: '',
+        persistent_runtime: runtime,
         plan: incomingPlan,
         current_step: incomingStep,
         revision: previous.revision + 1,
@@ -154,6 +203,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       status: 'completed',
       blocker: '',
       pause_reason: '',
+      persistent_runtime: undefined,
       plan: [],
       current_step: 0,
       revision: previous.revision + 1,
@@ -174,6 +224,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       status: 'paused',
       blocker: '',
       pause_reason: cleanMemoryText(reason, 300),
+      persistent_runtime: undefined,
       revision: previous.revision + 1,
       updated_at: Date.now(),
       history: [...previous.history, {
@@ -242,6 +293,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         status: value.status,
         blocker: cleanMemoryText(value.blocker, 500),
         pause_reason: cleanMemoryText(value.pause_reason, 300),
+        persistent_runtime: safePersistentRuntime(value.persistent_runtime),
         plan: safePlan(value.plan),
         current_step: Number.isSafeInteger(value.current_step) && value.current_step >= 0 ? value.current_step : 0,
         revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : 1,
@@ -339,6 +391,7 @@ function planProgress(plan, stateResult) {
     const step = currentPlanStep(state?.plan ?? plan.plan, state?.current_step ?? plan.currentStep)
     return `[Plan paused] ${step || 'Remaining work'}: no Autorio operation was submitted, so AIRI did not pretend that execution continued.`
   }
+  if (stateResult?.persistentRuntimeActive) return plan.chatMessage
   if (plan.operations.length > 0 && plan.plan.length > 0) {
     const index = Math.min(plan.currentStep + 1, plan.plan.length)
     const step = currentPlanStep(plan.plan, plan.currentStep)
@@ -481,6 +534,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     catch (error) {
       await this.traceEvent('factorio.status_error', { message: error instanceof Error ? error.message : String(error) })
       return JSON.stringify({ status_error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  async persistentRuntimeStatus() {
+    try {
+      const raw = String(await this.rcon.command(toolCommand('getFollowStatus', {}))).slice(0, 16000)
+      const follow = JSON.parse(raw)
+      if (!follow || follow.active !== true) return undefined
+      const status = safePersistentRuntime({ kind: 'follow', ...follow })
+      await this.traceEvent('persistent_runtime.status', { runtime: status })
+      return status
+    }
+    catch (error) {
+      await this.traceEvent('persistent_runtime.status_error', { message: error instanceof Error ? error.message : String(error) })
+      return undefined
     }
   }
 
@@ -653,6 +721,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       await this.assertCurrent()
     }
 
+    const persistentRuntime = commands.length === 0 && plan.plan.length > 0
+      ? await this.persistentRuntimeStatus()
+      : undefined
+
     this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
     let stateResult
     if (this.requestInfo) {
@@ -665,15 +737,22 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
       stateResult = this.memory.recordPlan?.(this.requestInfo.memoryKey, this.requestInfo, plan, {
         continuation: this.continuations > 0,
+        persistentRuntime,
       })
       await this.persistState()
     }
 
     if (commands.length === 0) {
       this.active = false
+      const outcome = stateResult?.blockedByHarness
+        ? 'blocked_no_operation'
+        : stateResult?.persistentRuntimeActive
+          ? 'persistent_runtime_active'
+          : 'no_operations'
       await this.traceEvent('request.completed', {
         chat_message: plan.chatMessage,
-        outcome: stateResult?.blockedByHarness ? 'blocked_no_operation' : 'no_operations',
+        outcome,
+        persistent_runtime: persistentRuntime,
       })
       this.traceRequest = null
     }
@@ -690,6 +769,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       actorId: before.actor_id,
       goalId: stateResult?.state?.goal_id,
       goalStatus: stateResult?.state?.status,
+      persistentRuntime: stateResult?.state?.persistent_runtime,
     }
   }
 
