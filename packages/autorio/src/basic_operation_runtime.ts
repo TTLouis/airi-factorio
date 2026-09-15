@@ -1,11 +1,18 @@
-import type { LuaEntity, LuaInventory, SurfaceCreateEntity } from 'factorio:runtime'
+import type { LuaEntity, LuaInventory, SurfaceCreateEntity, UnitNumber } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
 import type { new_task_manager } from './task_manager'
+import type { PlayerParametersMineEntity, PlayerParametersWalkToEntity } from './types'
 import { TaskStates } from './types'
 
 type Manager = ReturnType<typeof new_task_manager>
 type BasicController = ReturnType<typeof new_basic_operation_controller>
+
+const PLAYER_TRANSFER_DISTANCE = 8
+const ENTITY_TRANSFER_DISTANCE = 8
+const MAX_PLACEMENT_DISTANCE = 10
+const MINING_TARGET_SEARCH_RADIUS = 5
+const MINING_REACH_MARGIN = 0.25
 
 function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
   let min_distance = math.huge
@@ -18,6 +25,61 @@ function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
     }
   }
   return nearest
+}
+
+function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
+  return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
+}
+
+function mining_reach_distance(actor: ControlledActor, entity: LuaEntity) {
+  const character = actor.character
+  if (!character) return 0.5
+  const raw = entity.type === 'resource'
+    ? character.resource_reach_distance
+    : character.reach_distance
+  const reach = typeof raw === 'number' && raw === raw && raw > 0 && raw < math.huge ? raw : 2.5
+  return math.max(0.5, reach - MINING_REACH_MARGIN)
+}
+
+function within_mining_reach(actor: ControlledActor, entity: LuaEntity) {
+  const reach = mining_reach_distance(actor, entity)
+  return squared_distance(actor.position, entity.position) <= reach ** 2
+}
+
+function mining_reposition_task(actor: ControlledActor, entity: LuaEntity): PlayerParametersWalkToEntity | undefined {
+  const identity = actor.status_snapshot()
+  if (identity.actor_id === undefined) return undefined
+  return {
+    type: TaskStates.WALKING_TO_ENTITY,
+    entity_name: entity.name,
+    search_radius: MINING_TARGET_SEARCH_RADIUS,
+    reach_distance: mining_reach_distance(actor, entity),
+    path: null,
+    path_drawn: false,
+    path_index: 1,
+    calculating_path: false,
+    target_position: { x: entity.position.x, y: entity.position.y },
+    target: entity,
+    target_unit_number: entity.unit_number,
+    owner_actor_id: identity.actor_id,
+    owner_actor_kind: identity.kind,
+    owner_force_index: actor.force.index,
+    path_attempts: 0,
+    started_tick: game.tick,
+    last_progress_tick: game.tick,
+  }
+}
+
+function entity_inventories(entity: LuaEntity, item_name: string, require_insert: boolean) {
+  const inventories: LuaInventory[] = []
+  const max_index = entity.get_max_inventory_index()
+  for (let i = 1; i <= max_index; i++) {
+    const inventory = entity.get_inventory(i)
+    if (!inventory) continue
+    if (require_insert && !inventory.can_insert({ name: item_name })) continue
+    inventories.push(inventory)
+  }
+  return inventories
 }
 
 export function new_basic_operation_runtime(manager: Manager, controller: BasicController) {
@@ -41,6 +103,26 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     })[0]
   }
 
+  function reposition_for_mining(actor: ControlledActor, entity: LuaEntity, task: PlayerParametersMineEntity) {
+    const navigation = mining_reposition_task(actor, entity)
+    if (!navigation) {
+      controller.fail(actor, task, 'actor_changed')
+      return false
+    }
+
+    const reach = navigation.reach_distance ?? 0
+    const target_position = { x: entity.position.x, y: entity.position.y }
+    actor.set_mining_state({ mining: false })
+    task.position = undefined
+    task.last_target_amount = undefined
+    if (!manager.interrupt_current_with(navigation, task)) {
+      controller.fail(actor, task, 'too_far')
+      return false
+    }
+    log(`[AUTORIO] Mining target ${entity.name} at ${serpent.line(target_position)} is outside reach; repositioning to <=${reach} tiles before resuming the same mining operation`)
+    return true
+  }
+
   function finish_mining(actor: ControlledActor) {
     const task = manager.player_state.parameters_mine_entity
     if (!task) return
@@ -55,11 +137,6 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
 
     const target = current_mining_target(actor)
     if (!target) {
-      // A standalone scripted character has no LuaPlayer mined-entity event. A
-      // disappeared selected entity is the engine-visible completion boundary
-      // retained from the verified mining harness. Cross-world interference is
-      // still treated fail-closed at actor identity boundaries; stronger product
-      // attribution can be layered on top without changing this receipt model.
       task.count -= 1
       task.position = undefined
       task.last_target_amount = undefined
@@ -97,15 +174,21 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return
     }
 
-    // Factorio throws a fatal script error when find_entities_filtered receives
-    // an unknown prototype name. Model/user supplied strings must therefore be
-    // validated before they reach any prototype-filtered engine call.
     if (!prototypes.entity[task.entity_name]) {
       controller.fail(actor, task, 'invalid_entity')
       return
     }
 
     if (poll_standalone_mining(actor)) return
+
+    if (task.position) {
+      const existing = current_mining_target(actor)
+      if (existing && !within_mining_reach(actor, existing)) {
+        reposition_for_mining(actor, existing, task)
+        return
+      }
+    }
+
     if (actor.get_mining_state().mining) return
 
     if (task.position) {
@@ -120,7 +203,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
 
     const entities = actor.surface.find_entities_filtered({
       position: actor.position,
-      radius: 5,
+      radius: MINING_TARGET_SEARCH_RADIUS,
       name: task.entity_name,
     })
     if (entities.length === 0) {
@@ -130,6 +213,10 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     const nearest = nearest_entity(actor, entities)
     if (!nearest) {
       controller.fail(actor, task, 'no_target')
+      return
+    }
+    if (!within_mining_reach(actor, nearest)) {
+      reposition_for_mining(actor, nearest, task)
       return
     }
     start_mining(actor, nearest)
@@ -180,6 +267,11 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return [false, 'Entity not found in inventory']
     }
 
+    if (task.position && squared_distance(actor.position, task.position) > MAX_PLACEMENT_DISTANCE ** 2) {
+      controller.fail(actor, task, 'too_far')
+      return [false, 'Requested placement position is out of build range']
+    }
+
     if (!task.position) {
       task.position = surface.find_non_colliding_position(task.entity_name, actor.position, 1, 1)
       if (!task.position) {
@@ -191,6 +283,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     const create_entity_args: SurfaceCreateEntity = {
       name: task.entity_name,
       position: task.position,
+      direction: task.direction,
       raise_built: true,
       ...actor.entity_build_args(),
     }
@@ -201,9 +294,113 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     }
 
     item_stack.count = item_stack.count - 1
-    log(`[AUTORIO] Entity placed successfully: ${task.entity_name}`)
+    log(`[AUTORIO] Entity placed successfully: ${task.entity_name} at ${serpent.line(task.position)} direction=${task.direction ?? 'default'}`)
     controller.complete(actor, task)
     return [true, 'Entity placed successfully', entity]
+  }
+
+  function move_items_with_player(actor: ControlledActor) {
+    const task = manager.player_state.parameters_move_items
+    if (!task?.player_name) return undefined
+
+    const player = game.get_player(task.player_name)
+    if (!player || !player.valid || !player.connected || !player.character) {
+      controller.fail(actor, task, 'player_unavailable')
+      return 0
+    }
+    if (player.surface.index !== actor.surface.index) {
+      controller.fail(actor, task, 'different_surface')
+      return 0
+    }
+    if (squared_distance(actor.position, player.position) > PLAYER_TRANSFER_DISTANCE ** 2) {
+      controller.fail(actor, task, 'too_far')
+      return 0
+    }
+
+    const actor_inventory = actor.get_main_inventory()
+    const player_inventory = player.get_main_inventory()
+    if (!actor_inventory || !player_inventory) {
+      controller.fail(actor, task, 'no_inventory')
+      return 0
+    }
+
+    let moved = 0
+    if (task.to_player) {
+      const [item_stack] = actor_inventory.find_item_stack(task.item_name)
+      if (!item_stack) {
+        controller.fail(actor, task, 'item_missing')
+        return 0
+      }
+      const to_move = math.min(item_stack.count, task.max_count)
+      moved = player_inventory.insert({ name: task.item_name, count: to_move })
+      if (moved > 0) actor_inventory.remove({ name: task.item_name, count: moved })
+    }
+    else {
+      const [item_stack] = player_inventory.find_item_stack(task.item_name)
+      if (!item_stack) {
+        controller.fail(actor, task, 'item_missing')
+        return 0
+      }
+      const to_move = math.min(item_stack.count, task.max_count)
+      if (actor_inventory.can_insert({ name: task.item_name, count: to_move })) {
+        const removed = player_inventory.remove({ name: task.item_name, count: to_move })
+        if (removed > 0) {
+          moved = actor_inventory.insert({ name: task.item_name, count: removed })
+          if (moved < removed) player_inventory.insert({ name: task.item_name, count: removed - moved })
+        }
+      }
+    }
+
+    if (moved <= 0) {
+      controller.fail(actor, task, 'nothing_moved', { moved_count: 0 })
+      return 0
+    }
+    log(`[AUTORIO] Moved ${moved} ${task.item_name} ${task.to_player ? 'to' : 'from'} player ${task.player_name}`)
+    controller.complete(actor, task, { moved_count: moved })
+    return moved
+  }
+
+  function entity_targets(actor: ControlledActor) {
+    const task = manager.player_state.parameters_move_items
+    if (!task) return undefined
+
+    if (task.target_unit_number !== undefined) {
+      const target = game.get_entity_by_unit_number(task.target_unit_number as UnitNumber)
+      if (!target || !target.valid) {
+        controller.fail(actor, task, 'target_gone')
+        return undefined
+      }
+      if (target.surface.index !== actor.surface.index) {
+        controller.fail(actor, task, 'different_surface')
+        return undefined
+      }
+      if (target.force.index !== actor.force.index) {
+        controller.fail(actor, task, 'wrong_force')
+        return undefined
+      }
+      if (squared_distance(actor.position, target.position) > ENTITY_TRANSFER_DISTANCE ** 2) {
+        controller.fail(actor, task, 'too_far')
+        return undefined
+      }
+      return [target]
+    }
+
+    if (!task.entity_name || !prototypes.entity[task.entity_name]) {
+      controller.fail(actor, task, 'invalid_entity')
+      return undefined
+    }
+
+    const nearby = actor.surface.find_entities_filtered({
+      position: actor.position,
+      radius: ENTITY_TRANSFER_DISTANCE,
+      name: task.entity_name,
+      force: actor.force,
+    })
+    if (nearby.length === 0) {
+      controller.fail(actor, task, 'no_target')
+      return undefined
+    }
+    return nearby
   }
 
   function state_moving_items(actor: ControlledActor) {
@@ -217,21 +414,10 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return 0
     }
 
-    if (!prototypes.entity[task.entity_name]) {
-      controller.fail(actor, task, 'invalid_entity')
-      return 0
-    }
+    if (task.player_name) return move_items_with_player(actor)
 
-    const nearby_entities = actor.surface.find_entities_filtered({
-      position: actor.position,
-      radius: 8,
-      name: task.entity_name,
-      force: actor.force,
-    })
-    if (nearby_entities.length === 0) {
-      controller.fail(actor, task, 'no_target')
-      return 0
-    }
+    const targets = entity_targets(actor)
+    if (!targets) return 0
 
     const actor_inventory = actor.get_main_inventory()
     if (!actor_inventory) {
@@ -247,16 +433,8 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
         return 0
       }
 
-      nearby_entities
-        .map((entity) => {
-          const inventories: LuaInventory[] = []
-          const max_index = entity.get_max_inventory_index()
-          for (let i = 1; i <= max_index; i++) {
-            const inventory = entity.get_inventory(i)
-            if (inventory && inventory.can_insert({ name: task.item_name })) inventories.push(inventory)
-          }
-          return inventories
-        })
+      targets
+        .map(entity => entity_inventories(entity, task.item_name, true))
         .flat()
         .forEach((inventory) => {
           if (moved_total >= task.max_count) return
@@ -270,16 +448,8 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
         })
     }
     else {
-      nearby_entities
-        .map((entity) => {
-          const inventories: LuaInventory[] = []
-          const max_index = entity.get_max_inventory_index()
-          for (let i = 1; i <= max_index; i++) {
-            const inventory = entity.get_inventory(i)
-            if (inventory) inventories.push(inventory)
-          }
-          return inventories
-        })
+      targets
+        .map(entity => entity_inventories(entity, task.item_name, false))
         .flat()
         .forEach((inventory) => {
           if (moved_total >= task.max_count) return
@@ -296,7 +466,8 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       controller.fail(actor, task, 'nothing_moved', { moved_count: 0 })
       return 0
     }
-    log(`[AUTORIO] Moved a total of ${moved_total} ${task.item_name}`)
+    const target_label = task.target_unit_number !== undefined ? ` entity unit ${task.target_unit_number}` : ''
+    log(`[AUTORIO] Moved a total of ${moved_total} ${task.item_name}${target_label}`)
     controller.complete(actor, task, { moved_count: moved_total })
     return moved_total
   }
