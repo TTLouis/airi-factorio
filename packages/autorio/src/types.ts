@@ -74,7 +74,10 @@ export interface PlayerParametersPlaceEntity {
   owner_actor_kind?: string
   owner_force_index?: number
   entity_name: string
+  /** Exact requested placement position. When omitted the runtime finds a local valid position. */
   position?: MapPositionStruct
+  /** Factorio direction value (0..15) for precise placement. */
+  direction?: number
 }
 
 export interface PlayerParametersMoveItems {
