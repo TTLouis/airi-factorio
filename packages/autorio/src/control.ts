@@ -18,6 +18,7 @@ import { new_defense_controller } from './defense'
 import { create_discovery_remote_interface } from './discovery'
 import { new_equipment_controller } from './equipment'
 import { new_follow_controller } from './follow'
+import { new_interaction_recovery } from './interaction_recovery'
 import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
 import { new_navigation_obstacle_recovery } from './navigation_obstacle_recovery'
@@ -47,6 +48,7 @@ const awareness_controller = new_awareness_controller()
 const basic_operation_controller = new_basic_operation_controller(get_controlled_actor, task_manager)
 const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_operation_controller)
 const recipe_configuration_runtime = new_recipe_configuration_runtime(task_manager, basic_operation_controller)
+const interaction_recovery = new_interaction_recovery(task_manager)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
 const navigation_obstacle_recovery = new_navigation_obstacle_recovery()
 const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
@@ -324,6 +326,8 @@ script.on_event(defines.events.on_tick, (unused_event) => {
 
   follow_controller.suspend(actor)
   defense_controller.suspend(actor)
+
+  if (interaction_recovery.tick(actor)) return
 
   if (task_manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
     const handled = navigation_obstacle_recovery.tick(actor, task_manager.player_state.parameters_walk_to_entity)
