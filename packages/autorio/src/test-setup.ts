@@ -106,4 +106,5 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   abs: Math.abs,
   floor: Math.floor,
   ceil: Math.ceil,
+  random: (min: number, _max: number) => min,
 }
