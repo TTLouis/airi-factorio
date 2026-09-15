@@ -19,7 +19,6 @@ radar.flags = {
 radar.selectable_in_game = false
 radar.allow_copy_paste = false
 radar.minable = nil
-radar.destructible = false
 radar.is_military_target = false
 radar.collision_box = {{0, 0}, {0, 0}}
 radar.selection_box = {{0, 0}, {0, 0}}
