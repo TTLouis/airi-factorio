@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feat/npc-transition-work
 
   pull_request:
     branches:
