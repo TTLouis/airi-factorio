@@ -10,7 +10,7 @@ import { TaskStates } from './types'
 
 type BasicTask = PlayerParametersMineEntity | PlayerParametersPlaceEntity | PlayerParametersMoveItems | PlayerParametersWaiting
 type BasicOperationCode = 'queued' | 'completed' | 'cancelled'
-  | 'no_actor' | 'invalid_count' | 'invalid_ticks' | 'invalid_max_count'
+  | 'no_actor' | 'invalid_count' | 'invalid_ticks' | 'invalid_max_count' | 'invalid_position' | 'invalid_direction'
   | 'actor_changed' | 'no_target' | 'target_gone' | 'no_inventory'
   | 'invalid_entity' | 'item_missing' | 'no_position' | 'create_failed'
   | 'nothing_moved' | 'player_unavailable' | 'different_surface' | 'too_far'
@@ -33,6 +33,8 @@ export interface BasicOperationResult {
   to_entity?: boolean
   to_player?: boolean
   requested_ticks?: number
+  requested_position?: { x: number, y: number }
+  direction?: number
 }
 
 declare const storage: {
@@ -50,6 +52,10 @@ function owner(task: BasicTask) {
 
 function valid_integer(value: number, min: number, max: number) {
   return typeof value === 'number' && value === math.floor(value) && value >= min && value <= max
+}
+
+function valid_coordinate(value: number) {
+  return typeof value === 'number' && value === value && value >= -1000000 && value <= 1000000
 }
 
 function next_operation_id() {
@@ -100,6 +106,10 @@ function result_for(actor: ControlledActor | undefined, task: BasicTask | undefi
     to_entity: task?.type === TaskStates.MOVING_ITEMS ? task.to_entity : undefined,
     to_player: task?.type === TaskStates.MOVING_ITEMS ? task.to_player : undefined,
     requested_ticks: task?.type === TaskStates.WAITING ? (task.requested_ticks ?? task.remaining_ticks) : undefined,
+    requested_position: task?.type === TaskStates.PLACING && task.position
+      ? { x: task.position.x, y: task.position.y }
+      : undefined,
+    direction: task?.type === TaskStates.PLACING ? task.direction : undefined,
     ...details,
   }
   storage.airi_last_basic_operation_result = result
@@ -144,13 +154,24 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
     return queue(task, actor)
   }
 
-  function submit_placement(entity_name: string) {
+  function submit_placement(entity_name: string, x?: number, y?: number, direction?: number) {
+    const has_x = x !== undefined
+    const has_y = y !== undefined
+    if (has_x !== has_y || (has_x && (!valid_coordinate(x!) || !valid_coordinate(y!)))) {
+      result_for(get_actor(), undefined, false, false, 'invalid_position')
+      return false
+    }
+    if (direction !== undefined && !valid_integer(direction, 0, 15)) {
+      result_for(get_actor(), undefined, false, false, 'invalid_direction')
+      return false
+    }
     const actor = actor_for_submission()
     if (!actor) return false
     const task: PlayerParametersPlaceEntity = {
       type: TaskStates.PLACING,
       entity_name,
-      position: undefined,
+      position: has_x ? { x: x!, y: y! } : undefined,
+      direction,
     }
     return queue(task, actor)
   }
