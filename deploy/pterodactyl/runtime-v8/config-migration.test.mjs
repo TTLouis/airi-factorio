@@ -1,0 +1,128 @@
+import assert from 'node:assert/strict'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+
+import { AIRI_CONFIG_DEFAULTS, migrateConfig, migrateConfigFile } from './supervisor.mjs'
+
+async function temp(t) {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-config-migration-'))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  return dir
+}
+
+test('a fresh config uses explicit non-provider placeholders', () => {
+  const next = migrateConfig({}, {})
+  assert.equal(next.providerUrl, 'https://provider.invalid/v1')
+  assert.equal(next.model, 'replace-me')
+  assert.equal(next.providerUrl, AIRI_CONFIG_DEFAULTS.providerUrl)
+  assert.equal(next.model, AIRI_CONFIG_DEFAULTS.model)
+})
+
+test('an old config missing providerUrl is migrated to the default while preserving other values', () => {
+  const next = migrateConfig({ model: 'foo' }, {})
+  assert.equal(next.model, 'foo')
+  assert.equal(next.providerUrl, AIRI_CONFIG_DEFAULTS.providerUrl)
+  assert.equal(next.actorMode, AIRI_CONFIG_DEFAULTS.actorMode)
+})
+
+test('a custom stored providerUrl survives migration when there is no env override', () => {
+  const next = migrateConfig({ providerUrl: 'https://custom.example/v1' }, {})
+  assert.equal(next.providerUrl, 'https://custom.example/v1')
+})
+
+test('OPENAI_API_BASEURL is synchronized into providerUrl so the file reflects the effective endpoint', () => {
+  const next = migrateConfig(
+    { providerUrl: 'https://stale-stored-value.example/v1' },
+    { OPENAI_API_BASEURL: 'https://env-override.example/v1' },
+  )
+  assert.equal(next.providerUrl, 'https://env-override.example/v1')
+})
+
+test('OPENAI_MODEL is synchronized into model so the file reflects the setup value', () => {
+  const next = migrateConfig(
+    { model: 'stale-stored-model' },
+    { OPENAI_MODEL: 'setup-model' },
+  )
+  assert.equal(next.model, 'setup-model')
+})
+
+test('OPENAI_API_KEY is never written into the migrated config', () => {
+  const next = migrateConfig({}, { OPENAI_API_KEY: 'super-secret-key' })
+  assert.equal('key' in next, false)
+  assert.equal('apiKey' in next, false)
+  assert.equal(JSON.stringify(next).includes('super-secret-key'), false)
+})
+
+test('factorioUsername is stripped from the migrated config, including from a legacy stored value', () => {
+  const fresh = migrateConfig({}, { FACTORIO_USERNAME: 'ttlouis' })
+  assert.equal('factorioUsername' in fresh, false)
+
+  const legacy = migrateConfig({ factorioUsername: 'ttlouis-old' }, {})
+  assert.equal('factorioUsername' in legacy, false)
+})
+
+test('migrateConfigFile writes a fresh file with explicit provider placeholders', async (t) => {
+  const root = await temp(t)
+  const filename = path.join(root, 'airi-config.json')
+  const next = await migrateConfigFile(filename, {})
+  const onDisk = JSON.parse(await fsp.readFile(filename, 'utf8'))
+  assert.equal(onDisk.providerUrl, AIRI_CONFIG_DEFAULTS.providerUrl)
+  assert.equal(onDisk.model, AIRI_CONFIG_DEFAULTS.model)
+  assert.deepEqual(onDisk, next)
+})
+
+test('migrateConfigFile migrates an existing file missing providerUrl without discarding user values', async (t) => {
+  const root = await temp(t)
+  const filename = path.join(root, 'airi-config.json')
+  await fsp.writeFile(filename, `${JSON.stringify({ model: 'foo' }, null, 2)}\n`)
+  await migrateConfigFile(filename, {})
+  const onDisk = JSON.parse(await fsp.readFile(filename, 'utf8'))
+  assert.equal(onDisk.model, 'foo')
+  assert.equal(onDisk.providerUrl, AIRI_CONFIG_DEFAULTS.providerUrl)
+})
+
+test('migrateConfigFile does not rewrite an already-migrated, unchanged file', async (t) => {
+  const root = await temp(t)
+  const filename = path.join(root, 'airi-config.json')
+  await migrateConfigFile(filename, {})
+  const before = (await fsp.stat(filename)).mtimeMs
+  await new Promise(resolve => setTimeout(resolve, 20))
+  await migrateConfigFile(filename, {})
+  const after = (await fsp.stat(filename)).mtimeMs
+  assert.equal(before, after)
+})
+
+test('migrateConfigFile keeps setup provider and model values visible across restarts', async (t) => {
+  const root = await temp(t)
+  const filename = path.join(root, 'airi-config.json')
+  await migrateConfigFile(filename, {})
+  let onDisk = JSON.parse(await fsp.readFile(filename, 'utf8'))
+  assert.equal(onDisk.providerUrl, AIRI_CONFIG_DEFAULTS.providerUrl)
+  assert.equal(onDisk.model, AIRI_CONFIG_DEFAULTS.model)
+
+  await migrateConfigFile(filename, {
+    OPENAI_API_BASEURL: 'https://env-override.example/v1',
+    OPENAI_MODEL: 'setup-model',
+  })
+  onDisk = JSON.parse(await fsp.readFile(filename, 'utf8'))
+  assert.equal(onDisk.providerUrl, 'https://env-override.example/v1')
+  assert.equal(onDisk.model, 'setup-model')
+
+  // Removing the env overrides does not erase what was durably written: the
+  // env-synced values are now the stored preferences until something else
+  // overrides or edits them again.
+  await migrateConfigFile(filename, {})
+  onDisk = JSON.parse(await fsp.readFile(filename, 'utf8'))
+  assert.equal(onDisk.providerUrl, 'https://env-override.example/v1')
+  assert.equal(onDisk.model, 'setup-model')
+})
+
+test('migrateConfigFile never persists OPENAI_API_KEY to disk', async (t) => {
+  const root = await temp(t)
+  const filename = path.join(root, 'airi-config.json')
+  await migrateConfigFile(filename, { OPENAI_API_KEY: 'super-secret-key' })
+  const text = await fsp.readFile(filename, 'utf8')
+  assert.equal(text.includes('super-secret-key'), false)
+})

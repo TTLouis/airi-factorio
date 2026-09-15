@@ -66,12 +66,22 @@ describe('parseModErrorMessage', () => {
 })
 
 describe('parseOperationCompletedMessage', () => {
-  it('should parse operation completed message', () => {
+  it('should parse legacy operation completed message', () => {
     const log = `51.889 Script @__autorio__/control.lua:920: [AUTORIO] All operations completed`
     const result = parseOperationCompletedMessage(log)
     expect(result).toEqual({
       serverTimestamp: '51.889',
       type: 'operationsCompleted',
+    })
+  })
+
+  it('preserves detailed Autorio batch receipt text', () => {
+    const log = `51.889 Script @__autorio__/control.lua:920: [AUTORIO] All operations completed: batch=7, task_count=2, tasks=walking_direct,waiting, tick=12345`
+    const result = parseOperationCompletedMessage(log)
+    expect(result).toEqual({
+      serverTimestamp: '51.889',
+      type: 'operationsCompleted',
+      details: 'batch=7, task_count=2, tasks=walking_direct,waiting, tick=12345',
     })
   })
 })

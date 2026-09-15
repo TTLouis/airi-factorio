@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { sanitize_task_board_ui_snapshot } from './task_board_ui'
+import {
+  sanitize_task_board_ui_snapshot,
+  task_board_ui_is_open,
+  toggle_task_board_ui_open,
+} from './task_board_ui'
 
 beforeEach(() => {
   ;(globalThis as any).storage = {}
@@ -36,5 +40,17 @@ describe('in-game task board UI projection', () => {
   it('rejects malformed snapshots instead of creating a second source of truth', () => {
     expect(sanitize_task_board_ui_snapshot(undefined)).toBeUndefined()
     expect(sanitize_task_board_ui_snapshot({ status: 'active' })).toBeUndefined()
+  })
+
+  it('keeps the task board panel closed by default and toggles per player', () => {
+    expect(task_board_ui_is_open(1)).toBe(false)
+    expect(task_board_ui_is_open(2)).toBe(false)
+
+    expect(toggle_task_board_ui_open(1)).toBe(true)
+    expect(task_board_ui_is_open(1)).toBe(true)
+    expect(task_board_ui_is_open(2)).toBe(false)
+
+    expect(toggle_task_board_ui_open(1)).toBe(false)
+    expect(task_board_ui_is_open(1)).toBe(false)
   })
 })

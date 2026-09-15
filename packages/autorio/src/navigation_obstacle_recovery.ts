@@ -46,6 +46,7 @@ function task_signature(actor: ControlledActor, task: NavigationTask) {
   return [
     identity.actor_id ?? 0,
     task.owner_actor_id ?? 0,
+    task.target_player_name ?? '',
     task.entity_name,
     task.target_unit_number ?? 0,
     task.started_tick ?? 0,

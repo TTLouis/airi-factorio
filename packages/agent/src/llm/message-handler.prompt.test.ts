@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import prompt from './prompt.md?raw'
+import productionPlanningPrompt from './production-planning-prompt.md?raw'
+
+const systemPrompt = `${prompt}\n\n${productionPlanningPrompt}`
 
 const mocks = vi.hoisted(() => ({
   call: vi.fn(),
@@ -47,7 +50,7 @@ beforeEach(() => {
 })
 
 describe('actual prompt/message harness', () => {
-  it('sends the production prompt as the system message for a chat request', async () => {
+  it('sends the production prompt and sender identity for a chat request', async () => {
     const handler = await createMessageHandler()
 
     const result = await handler.handleMessage({
@@ -60,13 +63,13 @@ describe('actual prompt/message harness', () => {
 
     expect(mocks.call).toHaveBeenCalledTimes(1)
     const [messages, options] = mocks.call.mock.calls[0]
-    expect(messages[0]).toEqual({ role: 'system', content: prompt })
-    expect(messages[1]).toEqual({ role: 'user', content: '[CHAT] wait a moment' })
+    expect(messages[0]).toEqual({ role: 'system', content: systemPrompt })
+    expect(messages[1]).toEqual({ role: 'user', content: '[CHAT] Louis: wait a moment' })
     expect(options).toMatchObject({ maxRoundTrip: 10 })
     expect(result?.operationCommands).toEqual(["remote.call('autorio_operations', 'wait', 3)"])
   })
 
-  it('keeps the structured model response in history and appends completion events', async () => {
+  it('keeps the structured model response in history and appends detailed completion receipts', async () => {
     const handler = await createMessageHandler()
 
     const firstResponse = JSON.stringify(modelPlan())
@@ -89,13 +92,17 @@ describe('actual prompt/message harness', () => {
     await handler.handleMessage({
       type: 'operationsCompleted',
       serverTimestamp: '10.000',
+      details: 'batch=4, task_count=1, tasks=waiting, tick=123',
     })
 
     expect(mocks.call).toHaveBeenCalledTimes(2)
     const [messages] = mocks.call.mock.calls[1]
-    expect(messages[0]).toEqual({ role: 'system', content: prompt })
+    expect(messages[0]).toEqual({ role: 'system', content: systemPrompt })
     expect(messages).toContainEqual({ role: 'assistant', content: firstResponse })
-    expect(messages).toContainEqual({ role: 'user', content: '[MOD] All operations completed' })
+    expect(messages).toContainEqual({
+      role: 'user',
+      content: '[MOD] All operations completed. Batch receipt: batch=4, task_count=1, tasks=waiting, tick=123',
+    })
     expect(messages.filter((message: { role: string }) => message.role === 'system')).toHaveLength(1)
   })
 
@@ -109,7 +116,7 @@ describe('actual prompt/message harness', () => {
     })
 
     const [messages] = mocks.call.mock.calls[0]
-    expect(messages[0]).toEqual({ role: 'system', content: prompt })
+    expect(messages[0]).toEqual({ role: 'system', content: systemPrompt })
     expect(messages[1]).toEqual({ role: 'user', content: '[MOD] Error: No iron-ore found' })
   })
 })

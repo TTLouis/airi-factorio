@@ -12,6 +12,7 @@ export enum TaskStates {
   RESEARCHING = 'researching',
   WALKING_DIRECT = 'walking_direct',
   MOVING_ITEMS = 'moving_items',
+  SETTING_RECIPE = 'setting_recipe',
   ATTACKING = 'attacking',
   WAITING = 'waiting',
 }
@@ -20,6 +21,12 @@ export interface PlayerParametersWalkToEntity {
   type: TaskStates.WALKING_TO_ENTITY
   entity_name: string
   search_radius: number
+  /** When set, navigation binds this exact connected player's character instead
+   * of searching for a generic character prototype. */
+  target_player_name?: string
+  /** Optional distance at which a player-target navigation task is considered
+   * complete. Persistent follow uses this to stop at its configured spacing. */
+  reach_distance?: number
   path: PathfinderWaypoint[] | null
   path_drawn: boolean
   path_index: number
@@ -71,7 +78,10 @@ export interface PlayerParametersPlaceEntity {
   owner_actor_kind?: string
   owner_force_index?: number
   entity_name: string
+  /** Exact requested placement position. When omitted the runtime finds a local valid position. */
   position?: MapPositionStruct
+  /** Factorio direction value (0..15) for precise placement. */
+  direction?: number
 }
 
 export interface PlayerParametersMoveItems {
@@ -81,9 +91,27 @@ export interface PlayerParametersMoveItems {
   owner_actor_kind?: string
   owner_force_index?: number
   item_name: string
-  entity_name: string
+  /** Entity prototype target for legacy nearby entity transfers. */
+  entity_name?: string
+  /** Stable Factorio entity identity for an exact entity transfer. */
+  target_unit_number?: number
+  /** Exact connected player target for player transfers. */
+  player_name?: string
   max_count: number
-  to_entity: boolean
+  to_entity?: boolean
+  to_player?: boolean
+}
+
+export interface PlayerParametersSetRecipe {
+  type: TaskStates.SETTING_RECIPE
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
+  /** Stable Factorio entity identity. Recipe configuration never falls back to a same-name machine. */
+  target_unit_number: number
+  /** Exact Factorio recipe prototype name to set on the target assembling machine. */
+  recipe_name: string
 }
 
 export interface PlayerParametersCraftItem {
@@ -104,6 +132,10 @@ export interface PlayerParametersCraftItem {
 export interface PlayerParametersAttackNearestEnemy {
   type: TaskStates.ATTACKING
   search_radius: number
+  /** One-shot preserves the original behavior; clear_area keeps reacquiring
+   * enemies until the bounded origin area is clear. */
+  combat_mode?: 'single' | 'clear_area'
+  origin_position?: MapPositionStruct
   target: LuaEntity | null
   owner_actor_id?: number
   owner_actor_kind?: string
@@ -114,6 +146,31 @@ export interface PlayerParametersAttackNearestEnemy {
   started_tick?: number
   last_progress_tick?: number
   last_distance?: number
+  targets_destroyed?: number
+  turrets_placed?: number
+  /** Number of hostile spawners/worm turrets observed when an area-clear task
+   * first acquires its bounded combat area. */
+  initial_static_threats?: number
+  /** Deterministic maximum support-turret count derived from initial_static_threats. */
+  support_turret_budget?: number
+  /** Becomes true only after the NPC has advanced to a safe staging distance;
+   * prevents dropping a turret immediately at the task origin. */
+  support_stage_started?: boolean
+  last_turret_position?: MapPositionStruct
+  last_turret_unit_number?: number
+  turret_ammo_name?: string
+  last_turret_ammo_loaded?: number
+  /** Combat-owned path state. Approach paths target static nests; retreat paths
+   * return to the latest known support-turret position. */
+  combat_path_mode?: 'approach' | 'retreat'
+  combat_path?: PathfinderWaypoint[] | null
+  combat_path_request_id?: number
+  combat_path_requested_tick?: number
+  combat_path_attempts?: number
+  combat_path_next_retry_tick?: number
+  combat_path_target_position?: MapPositionStruct
+  combat_path_last_progress_tick?: number
+  combat_path_last_waypoint_distance?: number
 }
 
 export interface PlayerParametersResearchTechnology {
@@ -146,6 +203,7 @@ export type PlayerParameters
     | PlayerParametersMineEntity
     | PlayerParametersPlaceEntity
     | PlayerParametersMoveItems
+    | PlayerParametersSetRecipe
     | PlayerParametersCraftItem
     | PlayerParametersAttackNearestEnemy
     | PlayerParametersResearchTechnology
@@ -158,6 +216,7 @@ export interface PlayerState {
   parameters_mine_entity?: PlayerParametersMineEntity
   parameters_place_entity?: PlayerParametersPlaceEntity
   parameters_move_items?: PlayerParametersMoveItems
+  parameters_set_recipe?: PlayerParametersSetRecipe
   parameters_craft_item?: PlayerParametersCraftItem
   parameters_attack_nearest_enemy?: PlayerParametersAttackNearestEnemy
   parameters_research_technology?: PlayerParametersResearchTechnology

@@ -27,6 +27,7 @@ export interface ModErrorMessage {
 export interface OperationCompletedMessage {
   type: 'operationsCompleted'
   serverTimestamp: string
+  details?: string
 }
 
 export type StdoutMessage = ChatMessage | CommandMessage | ModErrorMessage | OperationCompletedMessage
@@ -117,7 +118,7 @@ export function parseChatMessage(log: string): ChatMessage | null {
 
   // example: 2000-01-02 12:34:56 [CHAT] username: message
   const playerChatRegex = /(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) \[CHAT\] (.+?): (.+)/
-  const playerMatch = log.match(playerRegex)
+  const playerMatch = log.match(playerChatRegex)
 
   if (playerMatch) {
     const [, date, , username, message] = playerMatch
@@ -141,13 +142,19 @@ export function parseModErrorMessage(log: string): ModErrorMessage | null {
 }
 
 export function parseOperationCompletedMessage(log: string): OperationCompletedMessage | null {
-  // example: 51.889 Script @__autorio__/control.lua:920: [AUTORIO] All operations completed
-  const operationCompletedRegex = /(\d+\.\d{3}) Script @__autorio__\/control\.lua:(\d+): \[AUTORIO\] All operations completed/
+  // examples:
+  // 51.889 Script @__autorio__/control.lua:920: [AUTORIO] All operations completed
+  // 51.889 Script @__autorio__/control.lua:920: [AUTORIO] All operations completed: batch=7, task_count=2, tasks=walking_direct,waiting, tick=12345
+  const operationCompletedRegex = /(\d+\.\d{3}) Script @__autorio__\/control\.lua:(\d+): \[AUTORIO\] All operations completed(?:: (.+))?$/
   const operationCompletedMatch = log.match(operationCompletedRegex)
 
   if (operationCompletedMatch) {
-    const [, serverTimestamp] = operationCompletedMatch
-    return { serverTimestamp, type: 'operationsCompleted' }
+    const [, serverTimestamp, , details] = operationCompletedMatch
+    return {
+      serverTimestamp,
+      type: 'operationsCompleted',
+      ...(details ? { details } : {}),
+    }
   }
 
   return null

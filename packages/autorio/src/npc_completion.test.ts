@@ -7,6 +7,7 @@ import { TaskStates } from './types'
 beforeEach(() => {
   ;(globalThis as any).game.connected_players = []
   ;(globalThis as any).storage.airi_actor_mode = 'player'
+  ;(globalThis as any).storage.airi_awareness_chunk = undefined
   task_manager.cancel_all_tasks()
   ;(globalThis as any).storage.standalone_character_unit_number = undefined
   ;(globalThis as any).serpent = {
@@ -24,6 +25,7 @@ function configureNpcWorld(resource?: Record<string, any>) {
     current_research: undefined,
     research_progress: 0,
     get_spawn_position: () => ({ x: 0, y: 0 }),
+    chart: vi.fn(),
   }
 
   let character_created = false
@@ -56,6 +58,9 @@ function configureNpcWorld(resource?: Record<string, any>) {
     wind_speed: 0,
     wind_orientation: 0,
     find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
+    is_chunk_generated: vi.fn(() => true),
+    request_to_generate_chunks: vi.fn(),
+    force_generate_chunk_requests: vi.fn(),
     create_entity: vi.fn(({ name }: { name: string }) => {
       if (name !== 'character') return undefined
       character_created = true

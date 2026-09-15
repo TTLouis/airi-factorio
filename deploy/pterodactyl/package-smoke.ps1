@@ -78,7 +78,7 @@ try {
         '-v', "${Volume}:/mnt/server",
         '-e', 'AIRI_INSTALL_ROOT=/mnt/server',
         '-e', 'AIRI_ACTOR_MODE=npc',
-        '-e', 'AIRI_CHAT_PLAYER=SmokeOperator',
+        '-e', 'AIRI_CHAT_PLAYERS=SmokeOperator',
         '-e', "FACTORIO_VERSION=$FactorioSmokeVersion",
         $Image,
         'bash', '/tmp/egg-install.sh'
@@ -90,7 +90,7 @@ try {
         '-v', "${Volume}:/mnt/server",
         $Image,
         'bash', '-lc',
-        'set -Eeuo pipefail; test -L /mnt/server/start-airi.sh; test -x /mnt/server/rollback-airi.sh; test -s /mnt/server/autorio_0.1.0.zip; test -s /mnt/server/airi-config.json; ! grep -q smoke-secret /mnt/server/airi-config.json; target=$(readlink /mnt/server/start-airi.sh); case "$target" in .airi/releases/*/start-airi.sh) ;; *) echo "unexpected startup target: $target" >&2; exit 1;; esac; test -s "/mnt/server/${target%/start-airi.sh}/manifest.json"'
+        'set -Eeuo pipefail; test -L /mnt/server/start-airi.sh; test -x /mnt/server/rollback-airi.sh; test -s /mnt/server/client-mods/autorio_0.1.0.zip; test -s /mnt/server/client-mods/SHA256SUMS; test ! -e /mnt/server/autorio_0.1.0.zip; test -s /mnt/server/airi-config.json; ! grep -q smoke-secret /mnt/server/airi-config.json; target=$(readlink /mnt/server/start-airi.sh); case "$target" in .airi/releases/*/start-airi.sh) ;; *) echo "unexpected startup target: $target" >&2; exit 1;; esac; test -s "/mnt/server/${target%/start-airi.sh}/manifest.json"'
     )
 
     Write-Host '[pterodactyl-smoke] Starting packaged runtime with zero connected players.'
@@ -115,7 +115,7 @@ try {
     $lastLogs = ''
     for ($i = 0; $i -lt 180; $i++) {
         $lastLogs = (& docker logs $Container 2>&1) -join "`n"
-        if ($lastLogs -match 'AIRI Factorio ready; standalone NPC actor_id=') {
+        if ($lastLogs -match 'AIRI Factorio ready;') {
             $ready = $true
             break
         }
@@ -137,6 +137,12 @@ try {
     Invoke-Docker -Arguments @('stop', '--signal=SIGINT', '--time=60', $Container)
     $logs = Get-DockerOutput -Arguments @('logs', $Container)
     Write-Host $logs
+    if ($logs -notmatch 'Requesting Factorio graceful /quit shutdown') {
+        throw 'Supervisor did not request Factorio /quit.'
+    }
+    if ($logs -notmatch 'Goodbye') {
+        throw 'Factorio clean Goodbye shutdown marker missing.'
+    }
     if ($logs -notmatch 'AIRI Factorio stopped cleanly') {
         throw 'Clean shutdown acknowledgement missing.'
     }
@@ -150,7 +156,7 @@ try {
         "find /home/container/saves -maxdepth 1 -type f -name '*.zip' -size +0c | grep -q ."
     )
 
-    Write-Host '[pterodactyl-smoke] PASS: generated PTDL_v2 egg installed, started a zero-player standalone NPC, saved, and stopped cleanly.'
+    Write-Host '[pterodactyl-smoke] PASS: generated PTDL_v2 egg installed, started a zero-player standalone NPC, Factorio said Goodbye after /quit, saved, and stopped cleanly.'
 }
 finally {
     & docker rm -f $Container *> $null

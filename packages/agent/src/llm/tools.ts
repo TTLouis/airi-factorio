@@ -19,12 +19,43 @@ const nearbyEntitiesSchema = z.object({
   limit: z.number().int().min(1).max(100).default(50),
 }).strict()
 
+const longRangeEntitiesSchema = z.object({
+  name: factorioNameSchema,
+  max_radius: z.number().int().min(64).max(4096).default(1024),
+  limit: z.number().int().min(1).max(16).default(8),
+}).strict()
+
+const nearestEnemySchema = z.object({
+  max_distance: z.number().int().min(1).max(4096).default(1024),
+}).strict()
+
 const entityStatusSchema = z.object({
   name: factorioNameSchema,
   radius: z.number().int().min(1).max(32).default(8),
 }).strict()
 
-async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat') {
+const entityGeometrySchema = z.object({
+  unit_number: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+}).strict()
+
+const logisticsTopologySchema = z.object({
+  unit_number: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  radius: z.number().int().min(1).max(16).default(8),
+}).strict()
+
+const playerStatusSchema = z.object({
+  player_name: factorioNameSchema,
+}).strict()
+
+const recipeDetailsSchema = z.object({
+  item_or_recipe: factorioNameSchema,
+}).strict()
+
+const prototypeDetailsSchema = z.object({
+  name: factorioNameSchema,
+}).strict()
+
+async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow' | 'autorio_defense' | 'autorio_equipment') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
   return response.data.output
@@ -55,13 +86,19 @@ export const tools: ToolFunction[] = [
   },
   {
     name: 'getInventoryItems',
-    description: 'Get the items in AIRI\'s controlled actor inventory',
+    description: 'Get the items in AIRI\'s controlled actor main inventory. Equipment slots are separate; use getEquipmentStatus for guns, ammo, armor, selected gun slot, health, and cursor stack.',
     schema: z.object({}),
     fn: async () => {
       const response = await v2FactorioConsoleCommandRawPost({ body: { input: '/c remote.call("autorio_tools", "get_inventory_items")' } })
       logger.withFields({ response: response.data.output }).debug('Inventory items')
       return response.data.output
     },
+  },
+  {
+    name: 'getEquipmentStatus',
+    description: 'Inspect AIRI health and equipment state: selected gun slot, equipped guns, matching ammo slots, armor, and cursor stack. Use this before combat instead of inferring equipment from the main inventory.',
+    schema: z.object({}).strict(),
+    fn: async () => readRemoteStatus('autorio_equipment'),
   },
   {
     name: 'getRecipe',
@@ -72,13 +109,46 @@ export const tools: ToolFunction[] = [
     fn: async ({ parameters }) => {
       const item = factorioNameSchema.parse(parameters.item)
       logger.withFields({ item }).debug('Try to get recipe for item')
-
       const response = await v2FactorioConsoleCommandRawPost({
-        body: {
-          input: `/c remote.call("autorio_tools", "get_recipe", ${renderLuaString(item)})`,
-        },
+        body: { input: `/c remote.call("autorio_tools", "get_recipe", ${renderLuaString(item)})` },
       })
       logger.withFields({ response: response.data.output }).debug('Recipe')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getRecipeDetails',
+    description: 'Get bounded deterministic recipe knowledge for an item/fluid or recipe name, including categories, craft time, ingredients/products, hand-crafting category compatibility, and compatible crafting-machine prototypes.',
+    schema: recipeDetailsSchema,
+    fn: async ({ parameters }) => {
+      const parsed = recipeDetailsSchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "recipe_details", ${renderLuaString(parsed.item_or_recipe)})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Detailed recipe knowledge')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getPrototypeDetails',
+    description: 'Read bounded static prototype/build knowledge for an item, fluid, or entity name: item stack/place result, entity footprint and build boxes, crafting/mining capabilities, belt speed, inserter offsets, fluidbox roles, and selected energy/capability metadata.',
+    schema: prototypeDetailsSchema,
+    fn: async ({ parameters }) => {
+      const parsed = prototypeDetailsSchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_prototypes", "details", ${renderLuaString(parsed.name)})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Prototype build details')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getPlayerStatus',
+    description: 'Inspect one exact human player by name: connection/character availability, surface, position, and distance from AIRI when comparable.',
+    schema: playerStatusSchema,
+    fn: async ({ parameters }) => {
+      const parsed = playerStatusSchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_player_status", ${renderLuaString(parsed.player_name)})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Player status')
       return response.data.output
     },
   },
@@ -97,6 +167,30 @@ export const tools: ToolFunction[] = [
     },
   },
   {
+    name: 'findLongRangeEntities',
+    description: 'Search outward in bounded rings for an exact Factorio prototype name, up to 4096 tiles, returning only a small number of matching distant targets. Use this for resource/world discovery, not broad local inspection.',
+    schema: longRangeEntitiesSchema,
+    fn: async ({ parameters }) => {
+      const parsed = longRangeEntitiesSchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery", "find_entities", ${renderLuaString(parsed.name)}, ${parsed.max_radius}, ${parsed.limit})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Long-range entities')
+      return response.data.output
+    },
+  },
+  {
+    name: 'findNearestEnemy',
+    description: 'Use Factorio native nearest-enemy search to discover the closest hostile entity without knowing its prototype name, up to 4096 tiles. Use this when hunting/clearing enemies after the local 64-tile area is empty.',
+    schema: nearestEnemySchema,
+    fn: async ({ parameters }) => {
+      const parsed = nearestEnemySchema.parse(parameters ?? {})
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery", "find_nearest_enemy", ${parsed.max_distance})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Nearest hostile')
+      return response.data.output
+    },
+  },
+  {
     name: 'getEntityStatus',
     description: 'Inspect the nearest local entity with an exact prototype name and return bounded inventory summaries. Use this to verify placed chests and nearby machines without dumping the map.',
     schema: entityStatusSchema,
@@ -109,10 +203,46 @@ export const tools: ToolFunction[] = [
     },
   },
   {
+    name: 'getEntityGeometry',
+    description: 'Inspect one exact same-surface entity by Factorio unit_number and return bounded runtime I/O geometry: inserter pickup/drop positions and targets, mining-drill output position/target, and fluidbox production roles and absolute pipe connection positions/targets.',
+    schema: entityGeometrySchema,
+    fn: async ({ parameters }) => {
+      const parsed = entityGeometrySchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "entity_geometry", ${parsed.unit_number})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Exact entity geometry')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getLogisticsTopology',
+    description: 'Inspect a bounded semantic logistics graph centered on one exact same-surface entity: engine belt inputs/outputs, actual inserter pickup/drop routes touching the center, direct mining-drill output, and connected fluidbox neighbours. Use this instead of inferring logistics from nearby coordinates.',
+    schema: logisticsTopologySchema,
+    fn: async ({ parameters }) => {
+      const parsed = logisticsTopologySchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "logistics_topology", ${parsed.unit_number}, ${parsed.radius})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Bounded logistics topology')
+      return response.data.output
+    },
+  },
+  {
     name: 'getNavigationStatus',
     description: 'Read AIRI navigation state, bound target, active path request/attempt count, and last bounded navigation result. Use it to distinguish reached from no-target, unreachable, path timeout, stuck, or ownership failures.',
     schema: z.object({}).strict(),
     fn: async () => readRemoteStatus('autorio_navigation'),
+  },
+  {
+    name: 'getFollowStatus',
+    description: 'Read AIRI persistent player-follow state, target player, configured distance, current distance, and whether follow movement is active, waiting for player availability, or blocked by surface mismatch.',
+    schema: z.object({}).strict(),
+    fn: async () => readRemoteStatus('autorio_follow'),
+  },
+  {
+    name: 'getDefenseStatus',
+    description: 'Read AIRI persistent follow auto-defense policy, defensive radius, and any current nearby hostile target. Auto-defense may shoot while following but does not chase.',
+    schema: z.object({}).strict(),
+    fn: async () => readRemoteStatus('autorio_defense'),
   },
   {
     name: 'getCraftingStatus',
@@ -128,7 +258,7 @@ export const tools: ToolFunction[] = [
   },
   {
     name: 'getTechnology',
-    description: 'Inspect one exact technology: researched state, level, prerequisites, science requirements, and any request blocker. Use this to verify research completion.',
+    description: 'Inspect one exact technology: researched state, level, prerequisites, science requirements, and whether it is actually researched.',
     schema: technologySchema,
     fn: async ({ parameters }) => {
       const { name } = technologySchema.parse(parameters)

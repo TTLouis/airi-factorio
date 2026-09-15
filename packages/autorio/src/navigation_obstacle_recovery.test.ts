@@ -7,7 +7,9 @@ import { TaskStates } from './types'
 function fixture() {
   const position = { x: 0, y: 0 }
   const tree: any = { valid: true, type: 'tree', name: 'tree-01', position: { x: 1, y: 0 } }
-  const surface: any = { find_entities_filtered: vi.fn(() => [tree]) }
+  const surface: any = {
+    find_entities_filtered: vi.fn(() => [tree]),
+  }
   let miningState: any = { mining: false }
   const actor = {
     is_valid: true,

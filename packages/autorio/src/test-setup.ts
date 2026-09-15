@@ -39,6 +39,10 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   block: (value: unknown) => String(value),
 }
 
+;(globalThis as any).helpers = {
+  table_to_json: (value: unknown) => JSON.stringify(value),
+}
+
 // Factorio 2.0 exposes prototype tables globally. Production runtime guards use
 // prototypes.entity before calling find_entities_filtered because Factorio throws
 // for unknown prototype names. Unit tests only need the common fixture prototypes
@@ -50,6 +54,7 @@ import { event_handlers, set_load_handler } from './test-event-registry'
     'iron-chest': {},
     'wooden-chest': {},
     'steel-chest': {},
+    'gun-turret': {},
   },
 }
 
@@ -85,6 +90,8 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   inventory: {
     character_guns: 'character_guns',
     character_ammo: 'character_ammo',
+    character_armor: 'character_armor',
+    turret_ammo: 'turret_ammo',
   },
 }
 
@@ -99,4 +106,5 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   abs: Math.abs,
   floor: Math.floor,
   ceil: Math.ceil,
+  random: (min: number, _max: number) => min,
 }

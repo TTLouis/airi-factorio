@@ -4,6 +4,9 @@
 # their shebangs even when the repository is checked out on Windows.
 *.sh text eol=lf
 
-# Must stay byte-identical across checkouts: build-payload.sh compresses this
-# file and checks the result against the exact bytes embedded in install.sh.
+# Installer source is hashed byte-for-byte by the generated immutable loader,
+# so normalize it consistently across Windows and Linux checkouts.
 deploy/pterodactyl/payload-src/installer.sh text eol=lf
+
+# Generated Pterodactyl artifacts are compared deterministically across hosts.
+deploy/pterodactyl/egg-airi-factorio-server.json text eol=lf

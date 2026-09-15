@@ -52,14 +52,16 @@ docker run --rm \
   -v "$ROOT:/mnt/server" \
   -e AIRI_INSTALL_ROOT=/mnt/server \
   -e AIRI_ACTOR_MODE=npc \
-  -e AIRI_CHAT_PLAYER=SmokeOperator \
+  -e AIRI_CHAT_PLAYERS=SmokeOperator \
   -e FACTORIO_VERSION="$FACTORIO_SMOKE_VERSION" \
   "$IMAGE" \
   bash /tmp/egg-install.sh
 
 [[ -L "$ROOT/start-airi.sh" ]] || { echo '[pterodactyl-smoke] installer did not activate start-airi.sh' >&2; exit 1; }
 [[ -x "$ROOT/rollback-airi.sh" ]] || { echo '[pterodactyl-smoke] rollback helper is missing' >&2; exit 1; }
-[[ -s "$ROOT/autorio_0.1.0.zip" ]] || { echo '[pterodactyl-smoke] managed client mod is missing' >&2; exit 1; }
+[[ -s "$ROOT/client-mods/autorio_0.1.0.zip" ]] || { echo '[pterodactyl-smoke] managed client mod is missing from client-mods/' >&2; exit 1; }
+[[ -s "$ROOT/client-mods/SHA256SUMS" ]] || { echo '[pterodactyl-smoke] managed client mod checksum is missing' >&2; exit 1; }
+[[ ! -e "$ROOT/autorio_0.1.0.zip" ]] || { echo '[pterodactyl-smoke] legacy root client mod should have been removed' >&2; exit 1; }
 [[ -s "$ROOT/airi-config.json" ]] || { echo '[pterodactyl-smoke] airi-config.json is missing' >&2; exit 1; }
 ! grep -q 'smoke-secret' "$ROOT/airi-config.json" || { echo '[pterodactyl-smoke] provider secret leaked to airi-config.json' >&2; exit 1; }
 
@@ -82,7 +84,7 @@ docker run -d --name "$NAME" \
 ready=0
 for _ in $(seq 1 180); do
   docker logs "$NAME" > "$LOG" 2>&1 || true
-  if grep -q 'AIRI Factorio ready; standalone NPC actor_id=' "$LOG"; then
+  if grep -q 'AIRI Factorio ready;' "$LOG"; then
     ready=1
     break
   fi
@@ -104,7 +106,9 @@ echo '[pterodactyl-smoke] Standalone NPC is ready; requesting graceful save/stop
 docker stop --signal=SIGINT --time=60 "$NAME" >/dev/null
 docker logs "$NAME" > "$LOG" 2>&1 || true
 cat "$LOG"
+grep -q 'Requesting Factorio graceful /quit shutdown' "$LOG" || { echo '[pterodactyl-smoke] supervisor did not request Factorio /quit' >&2; exit 1; }
+grep -q 'Goodbye' "$LOG" || { echo '[pterodactyl-smoke] Factorio clean Goodbye shutdown marker missing' >&2; exit 1; }
 grep -q 'AIRI Factorio stopped cleanly' "$LOG" || { echo '[pterodactyl-smoke] clean shutdown acknowledgement missing' >&2; exit 1; }
 find "$ROOT/saves" -maxdepth 1 -type f -name '*.zip' -size +0c | grep -q . || { echo '[pterodactyl-smoke] no saved Factorio world was produced' >&2; exit 1; }
 
-echo '[pterodactyl-smoke] PASS: generated PTDL_v2 egg installed, started a zero-player standalone NPC, saved, and stopped cleanly.'
+echo '[pterodactyl-smoke] PASS: generated PTDL_v2 egg installed, started a zero-player standalone NPC, Factorio said Goodbye after /quit, saved, and stopped cleanly.'

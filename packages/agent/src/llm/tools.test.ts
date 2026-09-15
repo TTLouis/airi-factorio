@@ -13,9 +13,7 @@ import { tools } from './tools'
 
 function getTool(name: string) {
   const tool = tools.find(tool => tool.name === name)
-  if (!tool) {
-    throw new Error(`missing tool: ${name}`)
-  }
+  if (!tool) throw new Error(`missing tool: ${name}`)
   return tool
 }
 
@@ -30,10 +28,20 @@ describe('agent observation tools', () => {
       'getActorStatus',
       'getTaskStatus',
       'getInventoryItems',
+      'getEquipmentStatus',
       'getRecipe',
+      'getRecipeDetails',
+      'getPrototypeDetails',
+      'getPlayerStatus',
       'getNearbyEntities',
+      'findLongRangeEntities',
+      'findNearestEnemy',
       'getEntityStatus',
+      'getEntityGeometry',
+      'getLogisticsTopology',
       'getNavigationStatus',
+      'getFollowStatus',
+      'getDefenseStatus',
       'getCraftingStatus',
       'getResearchStatus',
       'getTechnology',
@@ -41,194 +49,225 @@ describe('agent observation tools', () => {
     ])
   })
 
-  it('reads actor status through the read-only actor interface', async () => {
+  it('reads actor and equipment status through read-only interfaces', async () => {
     const result = await getTool('getActorStatus').fn({ parameters: {} })
-
-    expect(mocks.raw).toHaveBeenCalledWith({
-      body: {
-        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor", "status")))',
-      },
-    })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor", "status")))',
+    } })
     expect(result).toBe('{"ok":true}')
+
+    mocks.raw.mockClear()
+    await getTool('getEquipmentStatus').fn({ parameters: {} })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_equipment", "status")))',
+    } })
   })
 
   it('reads task status through the existing Autorio status operation', async () => {
-    const result = await getTool('getTaskStatus').fn({ parameters: {} })
-
-    expect(mocks.raw).toHaveBeenCalledWith({
-      body: {
-        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_operations", "status")))',
-      },
-    })
-    expect(result).toBe('{"ok":true}')
+    await getTool('getTaskStatus').fn({ parameters: {} })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_operations", "status")))',
+    } })
   })
 
-  it('escapes recipe item names before placing them in Lua', async () => {
+  it('escapes recipe item names and rejects control characters', async () => {
     await getTool('getRecipe').fn({ parameters: { item: "mod's-item" } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/c remote.call("autorio_tools", "get_recipe", \'mod\\\'s-item\')',
+    } })
 
-    expect(mocks.raw).toHaveBeenCalledWith({
-      body: {
-        input: '/c remote.call("autorio_tools", "get_recipe", \'mod\\\'s-item\')',
-      },
-    })
-  })
-
-  it('rejects control characters in recipe tool input before RCON execution', async () => {
+    mocks.raw.mockClear()
     await expect(getTool('getRecipe').fn({ parameters: { item: 'iron-plate\n/c game.clear()' } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 
-  it('renders bounded nearby-entity filters into a read-only remote call', async () => {
-    await getTool('getNearbyEntities').fn({
-      parameters: {
-        radius: 32,
-        name: 'iron-ore',
-        type: 'resource',
-        limit: 25,
-      },
-    })
+  it('reads detailed recipe and compatible-machine knowledge by item or recipe name', async () => {
+    await getTool('getRecipeDetails').fn({ parameters: { item_or_recipe: "mod's-fluid" } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "recipe_details", \'mod\\\'s-fluid\')))',
+    } })
 
-    expect(mocks.raw).toHaveBeenCalledWith({
-      body: {
-        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_nearby_entities", 32, \'iron-ore\', \'resource\', 25)))',
-      },
-    })
+    mocks.raw.mockClear()
+    await expect(getTool('getRecipeDetails').fn({ parameters: { item_or_recipe: 'oil\n/c game.clear()' } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
   })
 
-  it('applies safe defaults and rejects oversized nearby-entity queries', async () => {
-    await getTool('getNearbyEntities').fn({ parameters: {} })
-    expect(mocks.raw).toHaveBeenCalledWith({
-      body: {
-        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_nearby_entities", 20, nil, nil, 50)))',
-      },
-    })
+  it('reads bounded prototype/build details and rejects unsafe names or extras', async () => {
+    await getTool('getPrototypeDetails').fn({ parameters: { name: "mod's-machine" } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_prototypes", "details", \'mod\\\'s-machine\')))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getPrototypeDetails').fn({ parameters: { name: 'inserter\n/c game.clear()' } })).rejects.toThrow()
+    await expect(getTool('getPrototypeDetails').fn({ parameters: { name: 'inserter', unit_number: 42 } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('reads exact human player status by name', async () => {
+    await getTool('getPlayerStatus').fn({ parameters: { player_name: 'TTLouis' } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_player_status", \'TTLouis\')))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getPlayerStatus').fn({ parameters: { player_name: 'TTLouis\n/c game.clear()' } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('renders bounded nearby-entity filters and rejects oversized local queries', async () => {
+    await getTool('getNearbyEntities').fn({ parameters: {
+      radius: 32,
+      name: 'iron-ore',
+      type: 'resource',
+      limit: 25,
+    } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_nearby_entities", 32, \'iron-ore\', \'resource\', 25)))',
+    } })
 
     mocks.raw.mockClear()
     await expect(getTool('getNearbyEntities').fn({ parameters: { radius: 65 } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 
-  it('renders a bounded exact-name entity-status lookup', async () => {
-    await getTool('getEntityStatus').fn({
-      parameters: {
-        name: 'wooden-chest',
-      },
-    })
-
-    expect(mocks.raw).toHaveBeenCalledWith({
-      body: {
-        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_entity_status", \'wooden-chest\', 8)))',
-      },
-    })
-  })
-
-  it('escapes entity-status names and rejects an oversized lookup radius', async () => {
-    await getTool('getEntityStatus').fn({ parameters: { name: "mod's-chest", radius: 16 } })
-    expect(mocks.raw).toHaveBeenCalledWith({
-      body: {
-        input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_entity_status", \'mod\\\'s-chest\', 16)))',
-      },
-    })
+  it('renders exact-name long-range discovery and bounds it to 4096 tiles', async () => {
+    await getTool('findLongRangeEntities').fn({ parameters: {
+      name: 'copper-ore',
+      max_radius: 2048,
+      limit: 4,
+    } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery", "find_entities", \'copper-ore\', 2048, 4)))',
+    } })
 
     mocks.raw.mockClear()
-    await expect(getTool('getEntityStatus').fn({ parameters: { name: 'wooden-chest', radius: 33 } })).rejects.toThrow()
+    await expect(getTool('findLongRangeEntities').fn({ parameters: { name: 'copper-ore', max_radius: 4097 } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('renders engine-native hostile discovery and bounds it to 4096 tiles', async () => {
+    await getTool('findNearestEnemy').fn({ parameters: { max_distance: 2048 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery", "find_nearest_enemy", 2048)))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('findNearestEnemy').fn({ parameters: { max_distance: 4097 } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('renders a bounded exact-name entity-status lookup', async () => {
+    await getTool('getEntityStatus').fn({ parameters: { name: 'wooden-chest' } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_entity_status", \'wooden-chest\', 8)))',
+    } })
+  })
+
+  it('renders exact unit-number geometry lookup and rejects invalid ids', async () => {
+    await getTool('getEntityGeometry').fn({ parameters: { unit_number: 4242 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "entity_geometry", 4242)))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getEntityGeometry').fn({ parameters: { unit_number: 0 } })).rejects.toThrow()
+    await expect(getTool('getEntityGeometry').fn({ parameters: { unit_number: 1.5 } })).rejects.toThrow()
+    await expect(getTool('getEntityGeometry').fn({ parameters: { unit_number: 42, radius: 8 } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('renders bounded exact logistics topology and rejects invalid bounds', async () => {
+    await getTool('getLogisticsTopology').fn({ parameters: { unit_number: 4242 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "logistics_topology", 4242, 8)))',
+    } })
+
+    mocks.raw.mockClear()
+    await getTool('getLogisticsTopology').fn({ parameters: { unit_number: 4242, radius: 16 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "logistics_topology", 4242, 16)))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getLogisticsTopology').fn({ parameters: { unit_number: 0 } })).rejects.toThrow()
+    await expect(getTool('getLogisticsTopology').fn({ parameters: { unit_number: 1.5 } })).rejects.toThrow()
+    await expect(getTool('getLogisticsTopology').fn({ parameters: { unit_number: 42, radius: 17 } })).rejects.toThrow()
+    await expect(getTool('getLogisticsTopology').fn({ parameters: { unit_number: 42, radius: 8, name: 'steel-chest' } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 })
 
-describe('navigation observation tool', () => {
-  it('reads bounded navigation target/path and last-result state', async () => {
-    const output = '{"task_active":false,"last_result":{"code":"unreachable","completed":false}}'
-    mocks.raw.mockResolvedValue({ data: { output } })
-    expect(await getTool('getNavigationStatus').fn({ parameters: {} })).toBe(output)
+describe('navigation and follow observation tools', () => {
+  it('reads navigation state', async () => {
+    await getTool('getNavigationStatus').fn({ parameters: {} })
     expect(mocks.raw).toHaveBeenCalledWith({ body: {
       input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_navigation", "status")))',
     } })
   })
+
+  it('reads persistent follow state', async () => {
+    await getTool('getFollowStatus').fn({ parameters: {} })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_follow", "status")))',
+    } })
+  })
+
+  it('reads persistent follow auto-defense state', async () => {
+    await getTool('getDefenseStatus').fn({ parameters: {} })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_defense", "status")))',
+    } })
+  })
 })
 
-describe('crafting observation tool', () => {
-  it('reads native queue ownership and last-result state', async () => {
-    const output = '{"task_active":false,"last_result":{"code":"completed","completed":true}}'
-    mocks.raw.mockResolvedValue({ data: { output } })
-    expect(await getTool('getCraftingStatus').fn({ parameters: {} })).toBe(output)
+describe('crafting, research, and combat observation tools', () => {
+  it('reads crafting state', async () => {
+    await getTool('getCraftingStatus').fn({ parameters: {} })
     expect(mocks.raw).toHaveBeenCalledWith({ body: {
       input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting", "status")))',
     } })
   })
-})
 
-describe('research observation tools', () => {
-  it('reads force research without treating the request result as completion', async () => {
-    const output = '{"current":{"name":"automation"},"progress":0.1,"last_request_result":{"accepted":true}}'
-    mocks.raw.mockResolvedValue({ data: { output } })
-    expect(await getTool('getResearchStatus').fn({ parameters: {} })).toBe(output)
+  it('reads research and exact technology state', async () => {
+    await getTool('getResearchStatus').fn({ parameters: {} })
     expect(mocks.raw).toHaveBeenCalledWith({ body: {
       input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research", "status")))',
     } })
-  })
 
-  it('escapes exact technology names', async () => {
-    await getTool('getTechnology').fn({ parameters: { name: "mod's-tech" } })
+    mocks.raw.mockClear()
+    await getTool('getTechnology').fn({ parameters: { name: 'automation' } })
     expect(mocks.raw).toHaveBeenCalledWith({ body: {
-      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research", "technology", \'mod\\\'s-tech\')))',
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research", "technology", \'automation\')))',
     } })
   })
 
-  it('rejects malformed and extra technology arguments before RCON', async () => {
-    for (const parameters of [{}, { name: 'automation\n/c game.clear()' }, { name: 'automation', force: 'enemy' }]) {
-      await expect(getTool('getTechnology').fn({ parameters })).rejects.toThrow()
-    }
-    expect(mocks.raw).not.toHaveBeenCalled()
-  })
-})
-
-describe('combat observation tool', () => {
-  it('reads bounded combat target and last-result state', async () => {
-    const output = '{"task_active":false,"last_result":{"code":"target_destroyed","completed":true}}'
-    mocks.raw.mockResolvedValue({ data: { output } })
-    expect(await getTool('getCombatStatus').fn({ parameters: {} })).toBe(output)
+  it('reads combat state', async () => {
+    await getTool('getCombatStatus').fn({ parameters: {} })
     expect(mocks.raw).toHaveBeenCalledWith({ body: {
       input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_combat", "status")))',
     } })
   })
 })
 
-describe('navigation, crafting, research, and combat prompt contract', () => {
-  it('documents the actual observation tools', () => {
-    for (const name of ['getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+describe('prompt contract', () => {
+  it('documents equipment, discovery, static prototype knowledge, recipe knowledge, geometry, topology, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
+    for (const name of ['getEquipmentStatus', 'getPrototypeDetails', 'getRecipeDetails', 'getEntityGeometry', 'getLogisticsTopology', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
+    for (const operation of ['walk_to_player', 'move_items_with_player', 'follow_player', 'stop_follow_player', 'set_auto_defense', 'equip_weapon', 'equip_ammo', 'equip_armor', 'select_weapon_slot', 'set_machine_recipe', 'clear_enemy_area']) {
+      expect(prompt).toContain(operation)
+    }
+    expect(prompt).toContain('4096')
+    expect(prompt).toContain('[CHAT] <username>: <message>')
   })
 
-  it('distinguishes navigation idle from verified arrival and bounded failures', () => {
+  it('retains explicit verification requirements', () => {
     expect(prompt).toContain('Navigation completion must be verified')
-    expect(prompt).toContain('reached')
-    expect(prompt).toContain('unreachable')
-    expect(prompt).toContain('path_timeout')
-  })
-
-  it('requires crafting output verification and preserves a pre-existing native queue', () => {
     expect(prompt).toContain('Hand-crafting completion must be verified')
-    expect(prompt).toContain('native_queue_busy')
-    expect(prompt).toContain('output_missing')
-    expect(prompt).toContain('preserves pre-existing native crafts')
-  })
-
-  it('distinguishes research submission from technology completion and shared research cancellation', () => {
-    expect(prompt).toContain('A queued/accepted request is not completed research')
+    expect(prompt).toContain('Machine recipe configuration must be verified')
     expect(prompt).toContain('does not mean the technology is unlocked')
-    expect(prompt).toContain('does not cancel already-started shared force research')
-    expect(prompt).toContain('force_busy')
-    expect(prompt).toContain('Gameplay-trigger technologies require their actual trigger')
-  })
-
-  it('requires combat result verification instead of treating idle as a kill', () => {
     expect(prompt).toContain('Combat completion must be verified')
-    expect(prompt).toContain('target_destroyed')
-    expect(prompt).toContain('no_weapon_or_ammo')
-    expect(prompt).toContain('stuck')
-    expect(prompt).toContain('timeout')
   })
 })

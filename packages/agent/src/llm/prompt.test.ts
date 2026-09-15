@@ -3,11 +3,22 @@ import prompt from './prompt.md?raw'
 
 const documentedOperations = [
   'walk_to_entity',
+  'walk_to_player',
+  'follow_player',
+  'stop_follow_player',
+  'set_auto_defense',
+  'equip_weapon',
+  'equip_ammo',
+  'equip_armor',
+  'select_weapon_slot',
   'mine_entity',
   'place_entity',
   'move_items',
+  'move_items_exact',
+  'move_items_with_player',
   'craft_item',
   'attack_nearest_enemy',
+  'clear_enemy_area',
   'research_technology',
   'wait',
 ]
@@ -25,15 +36,19 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('getActorStatus()')
     expect(prompt).toContain('getTaskStatus()')
     expect(prompt).toContain('getInventoryItems()')
+    expect(prompt).toContain('getEquipmentStatus()')
     expect(prompt).toContain('getRecipe(item)')
+    expect(prompt).toContain('getPlayerStatus({ player_name })')
     expect(prompt).toContain('getNearbyEntities({ radius?, name?, type?, limit? })')
     expect(prompt).toContain('getEntityStatus({ name, radius? })')
     expect(prompt).toContain('getNavigationStatus()')
+    expect(prompt).toContain('getFollowStatus()')
     expect(prompt).toContain('getCraftingStatus()')
     expect(prompt).toContain('getCombatStatus()')
     expect(prompt).toContain('Radius is limited to 64 tiles')
     expect(prompt).toContain('Radius is limited to 32 tiles')
-    expect(prompt).toContain("AIRI's controlled actor inventory")
+    expect(prompt).toContain("AIRI's controlled actor main inventory")
+    expect(prompt).toContain('Equipped guns, ammo and armor are separate from the main inventory')
   })
 
   it('teaches verification-first planning', () => {
@@ -47,7 +62,7 @@ describe('production Factorio prompt contract', () => {
     expect(prompt).toContain('path_timeout')
     expect(prompt).toContain('replan instead of repeating blindly')
     expect(prompt).toContain('inspect the local area before choosing movement, mining, or combat')
-    expect(prompt).toContain('verify the relevant inventory/entity state before depending on that result')
+    expect(prompt).toContain('verify the relevant state before depending on the result')
   })
 
   it('distinguishes passive transport-belt displacement from AIRI walking', () => {
@@ -68,6 +83,24 @@ describe('production Factorio prompt contract', () => {
     for (const operation of documentedOperations) {
       expect(prompt).toContain(operation)
     }
+  })
+
+  it('prefers stable exact entity identity for item transfers when available', () => {
+    expect(prompt).toContain('Entity summaries include `unit_number`')
+    expect(prompt).toContain('prefer `move_items_exact` over name-based `move_items`')
+    expect(prompt).toContain('Never silently redirect a failed exact transfer to another same-name entity')
+    expect(prompt).toContain('The target must still exist, be on AIRI\'s surface and force, and be within 8 tiles')
+  })
+
+  it('documents equipment as separate state and requires combat readiness checks', () => {
+    expect(prompt).toContain('Equipment slots are not the main inventory')
+    expect(prompt).toContain('verify the selected gun and the matching ammo slot')
+    expect(prompt).toContain('If a weapon or ammo is only in the main inventory, equip it before attacking')
+  })
+
+  it('documents persistent follow recovery across player lifecycle changes', () => {
+    expect(prompt).toContain('Disconnects, death/respawn, or temporary surface mismatch do not cancel an existing follow intent')
+    expect(prompt).toContain('automatically reacquires the same named player after reconnect/respawn')
   })
 
   it('requires structured operations instead of model-generated Lua', () => {

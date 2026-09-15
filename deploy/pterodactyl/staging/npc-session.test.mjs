@@ -37,39 +37,82 @@ function status(overrides = {}) {
 test('npc staging configuration separates actor ownership from chat authorization', () => {
   const config = stagingConfiguration({}, {
     AIRI_ACTOR_MODE: 'npc',
-    AIRI_CHAT_PLAYER: 'Louis',
+    AIRI_CHAT_PLAYERS: 'Louis',
     AIRI_PLAYER: 'LegacyName',
   })
   assert.equal(config.actorMode, 'npc')
   assert.equal(config.player, '')
-  assert.equal(config.chatPlayer, 'Louis')
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['Louis'] })
   assert.equal(chatAuthorized(config, 'Louis'), true)
   assert.equal(chatAuthorized(config, 'LegacyName'), false)
+})
+
+test('blank AIRI_CHAT_PLAYERS allows every player', () => {
+  const config = stagingConfiguration({}, { AIRI_ACTOR_MODE: 'npc' })
+  assert.deepEqual(config.chatPlayers, { mode: 'all', names: [] })
+  assert.equal(chatAuthorized(config, 'AnyoneAtAll'), true)
+})
+
+test('"*" AIRI_CHAT_PLAYERS allows every player', () => {
+  const config = stagingConfiguration({}, { AIRI_ACTOR_MODE: 'npc', AIRI_CHAT_PLAYERS: '*' })
+  assert.equal(chatAuthorized(config, 'AnyoneAtAll'), true)
+})
+
+test('"none" AIRI_CHAT_PLAYERS rejects every player', () => {
+  const config = stagingConfiguration({}, { AIRI_ACTOR_MODE: 'npc', AIRI_CHAT_PLAYERS: 'none' })
+  assert.deepEqual(config.chatPlayers, { mode: 'disabled', names: [] })
+  assert.equal(chatAuthorized(config, 'TTLouis'), false)
+})
+
+test('comma-separated AIRI_CHAT_PLAYERS trims whitespace, drops empties, and dedupes', () => {
+  const config = stagingConfiguration({}, { AIRI_ACTOR_MODE: 'npc', AIRI_CHAT_PLAYERS: ' TTLouis , Alice ,,Bob, Alice ' })
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['TTLouis', 'Alice', 'Bob'] })
+  assert.equal(chatAuthorized(config, 'TTLouis'), true)
+  assert.equal(chatAuthorized(config, 'Alice'), true)
+  assert.equal(chatAuthorized(config, 'Bob'), true)
+  assert.equal(chatAuthorized(config, 'Eve'), false)
+})
+
+test('npc mode may use AIRI_CHAT_PLAYER as a backward-compatible single-name fallback', () => {
+  const config = stagingConfiguration({}, { AIRI_ACTOR_MODE: 'npc', AIRI_CHAT_PLAYER: 'Louis' })
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['Louis'] })
+  assert.equal(chatAuthorized(config, 'Louis'), true)
+})
+
+test('AIRI_CHAT_PLAYERS explicitly blank does not fall back to a non-blank legacy AIRI_CHAT_PLAYER', () => {
+  const config = stagingConfiguration({}, { AIRI_ACTOR_MODE: 'npc', AIRI_CHAT_PLAYER: 'Legacy', AIRI_CHAT_PLAYERS: '' })
+  assert.deepEqual(config.chatPlayers, { mode: 'all', names: [] })
+  assert.equal(chatAuthorized(config, 'AnyoneAtAll'), true)
 })
 
 test('npc mode may use AIRI_PLAYER only as an explicit compatibility chat fallback', () => {
   const config = stagingConfiguration({}, { AIRI_ACTOR_MODE: 'npc', AIRI_PLAYER: 'Louis' })
   assert.equal(config.player, '')
-  assert.equal(config.chatPlayer, 'Louis')
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['Louis'] })
 })
 
 test('player mode retains the legacy controlled-player field', () => {
   const config = stagingConfiguration({}, { AIRI_ACTOR_MODE: 'player', AIRI_PLAYER: 'Louis' })
   assert.equal(config.actorMode, 'player')
   assert.equal(config.player, 'Louis')
-  assert.equal(config.chatPlayer, '')
+  assert.deepEqual(config.chatPlayers, { mode: 'all', names: [] })
 })
 
 test('invalid actor mode and unsafe names fail closed', () => {
   assert.throws(() => stagingConfiguration({}, { AIRI_ACTOR_MODE: 'swarm' }))
   assert.throws(() => stagingConfiguration({}, { AIRI_ACTOR_MODE: 'npc', AIRI_CHAT_PLAYER: 'bad\nname' }))
+  assert.throws(() => stagingConfiguration({}, { AIRI_ACTOR_MODE: 'npc', AIRI_CHAT_PLAYERS: 'bad\nname' }))
 })
 
 test('seeded staging config never invents unset values', () => {
   assert.deepEqual(seedStagingConfigFromEnv({}), {})
+  assert.deepEqual(seedStagingConfigFromEnv({ AIRI_ACTOR_MODE: 'npc', AIRI_CHAT_PLAYERS: 'Louis' }), {
+    actorMode: 'npc',
+    chatPlayers: 'Louis',
+  })
   assert.deepEqual(seedStagingConfigFromEnv({ AIRI_ACTOR_MODE: 'npc', AIRI_CHAT_PLAYER: 'Louis' }), {
     actorMode: 'npc',
-    chatPlayer: 'Louis',
+    chatPlayers: 'Louis',
   })
 })
 

@@ -13,10 +13,13 @@ describe('task manager status snapshot', () => {
       queue_length: 0,
       queued_task_types: [],
       current_task: undefined,
+      active_batch: undefined,
+      last_completed_batch: undefined,
+      last_cancelled_batch: undefined,
     })
   })
 
-  it('reports the current task and queued task types', () => {
+  it('reports the current task, queued task types, and active batch receipt', () => {
     const manager = new_task_manager(() => undefined)
 
     manager.add_task({
@@ -37,6 +40,13 @@ describe('task manager status snapshot', () => {
         type: TaskStates.WAITING,
         remaining_ticks: 120,
       },
+      active_batch: {
+        batch_id: 1,
+        task_count: 2,
+        task_types: [TaskStates.WAITING, TaskStates.WAITING],
+      },
+      last_completed_batch: undefined,
+      last_cancelled_batch: undefined,
     })
   })
 
@@ -82,6 +92,13 @@ describe('task manager status snapshot', () => {
         owns_native_queue: true,
         queued_crafts: 2,
       },
+      active_batch: {
+        batch_id: 1,
+        task_count: 1,
+        task_types: [TaskStates.CRAFTING],
+      },
+      last_completed_batch: undefined,
+      last_cancelled_batch: undefined,
     })
   })
 
@@ -114,10 +131,17 @@ describe('task manager status snapshot', () => {
         owns_native_queue: false,
         queued_crafts: 0,
       },
+      active_batch: {
+        batch_id: 1,
+        task_count: 1,
+        task_types: [TaskStates.CRAFTING],
+      },
+      last_completed_batch: undefined,
+      last_cancelled_batch: undefined,
     })
   })
 
-  it('clears current and queued task status when all tasks are cancelled', () => {
+  it('clears current and queued task status when all tasks are cancelled while retaining the cancellation receipt', () => {
     const manager = new_task_manager(() => undefined)
 
     manager.add_task({
@@ -136,6 +160,15 @@ describe('task manager status snapshot', () => {
       queue_length: 0,
       queued_task_types: [],
       current_task: undefined,
+      active_batch: undefined,
+      last_completed_batch: undefined,
+      last_cancelled_batch: {
+        batch_id: 1,
+        task_count: 2,
+        task_types: [TaskStates.WAITING, TaskStates.WAITING],
+        tick: 0,
+        reason: 'cancelled',
+      },
     })
   })
 })

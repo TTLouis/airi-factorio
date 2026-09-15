@@ -21,6 +21,8 @@ function actor_status() {
       kind?: string
       valid?: boolean
       has_character?: boolean
+      name?: string
+      npc_id?: string
     }
     connected_players?: number
   }
@@ -36,63 +38,49 @@ function operation_status() {
 
 function current_matches_session() {
   const data = state()
-  if (!data.airi_deployment_session || !data.airi_deployment_mode || data.airi_deployment_actor_id === undefined || !data.airi_deployment_actor_kind) {
-    return false
-  }
+  if (!data.airi_deployment_session || !data.airi_deployment_mode || data.airi_deployment_actor_id === undefined || !data.airi_deployment_actor_kind) return false
   const status = actor_status()
   const actor = status.actor
-  if (!actor || actor.valid !== true || actor.has_character !== true) {
-    return false
-  }
-  if (status.mode !== data.airi_deployment_mode || actor.actor_id !== data.airi_deployment_actor_id || actor.kind !== data.airi_deployment_actor_kind) {
-    return false
-  }
-  if (data.airi_deployment_mode === 'npc') {
-    return actor.kind === 'standalone_character'
-  }
+  if (!actor || actor.valid !== true || actor.has_character !== true) return false
+  if (status.mode !== data.airi_deployment_mode || actor.actor_id !== data.airi_deployment_actor_id || actor.kind !== data.airi_deployment_actor_kind) return false
+  if (data.airi_deployment_mode === 'npc') return actor.kind === 'standalone_character'
   return actor.kind === 'connected_player'
 }
 
 function cancel_tasks() {
-  if (remote.interfaces.autorio_operations !== undefined) {
+  const operations = remote.interfaces.autorio_operations
+  if (operations !== undefined) {
+    // Persistent modes are runtime state, not queued tasks. Disable follow first
+    // so a later idle tick cannot silently re-admit player navigation after the
+    // deployment/task cancellation has completed. Keep the guard compatible
+    // with older/minimal Autorio interfaces that do not expose follow yet.
+    if (operations.stop_follow_player !== undefined) remote.call('autorio_operations', 'stop_follow_player')
     remote.call('autorio_operations', 'cancel_all_tasks')
   }
 }
 
-function configure(mode: ActorMode, session: string) {
-  if ((mode !== 'npc' && mode !== 'player') || session === '') {
-    return false
-  }
-
-  cancel_tasks()
-  const changed = remote.call('autorio_actor', 'set_mode', mode) as [boolean, unknown]
-  if (!changed || changed[0] !== true) {
-    return false
-  }
-
-  const status = actor_status()
-  const actor = status.actor
-  if (!actor || status.mode !== mode || actor.valid !== true || actor.has_character !== true || actor.actor_id === undefined) {
-    return false
-  }
-  if (mode === 'npc' && actor.kind !== 'standalone_character') {
-    return false
-  }
-  if (mode === 'player' && actor.kind !== 'connected_player') {
-    return false
-  }
-
-  const data = state()
-  data.airi_deployment_mode = mode
-  data.airi_deployment_session = session
-  data.airi_deployment_actor_id = actor.actor_id
-  data.airi_deployment_actor_kind = actor.kind
-  data.airi_deployment_epoch = (data.airi_deployment_epoch ?? 0) + 1
-  return session
-}
-
 remote.add_interface('airi_deployment', {
-  configure,
+  configure: (mode: ActorMode, session: string) => {
+    if ((mode !== 'npc' && mode !== 'player') || session === '') return false
+
+    cancel_tasks()
+    const changed = remote.call('autorio_actor', 'set_mode', mode) as [boolean, unknown]
+    if (!changed || changed[0] !== true) return false
+
+    const status = actor_status()
+    const actor = status.actor
+    if (!actor || status.mode !== mode || actor.valid !== true || actor.has_character !== true || actor.actor_id === undefined) return false
+    if (mode === 'npc' && actor.kind !== 'standalone_character') return false
+    if (mode === 'player' && actor.kind !== 'connected_player') return false
+
+    const data = state()
+    data.airi_deployment_mode = mode
+    data.airi_deployment_session = session
+    data.airi_deployment_actor_id = actor.actor_id
+    data.airi_deployment_actor_kind = actor.kind
+    data.airi_deployment_epoch = (data.airi_deployment_epoch ?? 0) + 1
+    return session
+  },
   status: () => {
     const actor = actor_status()
     const tasks = operation_status()
@@ -102,6 +90,8 @@ remote.add_interface('airi_deployment', {
       mode: state().airi_deployment_mode,
       actor_id: actor.actor?.actor_id,
       actor_kind: actor.actor?.kind,
+      actor_name: actor.actor?.name,
+      npc_id: actor.actor?.npc_id,
       connected_players: actor.connected_players ?? 0,
       allowed: current_matches_session(),
       idle: tasks.task_state === 'idle' && tasks.queue_empty === true && tasks.queue_length === 0,

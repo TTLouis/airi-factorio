@@ -202,6 +202,9 @@ describe('Player-sourced completion events are gated by actor identity', () => {
       find_entities_filtered: vi.fn(() => []),
       find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
       create_entity: vi.fn(() => character),
+      is_chunk_generated: vi.fn(() => true),
+      request_to_generate_chunks: vi.fn(),
+      force_generate_chunk_requests: vi.fn(),
     }
     character.surface = surface
     ;(globalThis as any).game.surfaces[1] = surface
@@ -284,7 +287,7 @@ describe('Bug 4 (fixed): ATTACKING is dispatched through the bounded combat cont
     expect(task_manager.player_state.task_state).toBe(TaskStates.IDLE)
   })
 
-  it('shoots the bound enemy when Factorio reports it can be shot', () => {
+  it('shoots the bound enemy while moving instead of freezing in melee range', () => {
     const on_tick = get_handler('on_tick')
     const target = enemy(5)
     const fake_player = connect_player_seeing([target], true)
@@ -295,7 +298,7 @@ describe('Bug 4 (fixed): ATTACKING is dispatched through the bounded combat cont
     expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
     expect(fake_player.character.can_shoot).toHaveBeenCalledWith(target, target.position)
     expect(fake_player.shooting_state).toEqual({ state: 'shooting_selected', position: target.position })
-    expect(fake_player.walking_state).toEqual({ walking: false, direction: 'north' })
+    expect(fake_player.walking_state).toEqual({ walking: true, direction: 'west' })
     expect(fake_player.update_selected_entity).toHaveBeenCalledWith(target.position)
   })
 
@@ -310,7 +313,7 @@ describe('Bug 4 (fixed): ATTACKING is dispatched through the bounded combat cont
     expect(task_manager.player_state.task_state).toBe(TaskStates.ATTACKING)
     expect(fake_player.character.can_shoot).toHaveBeenCalledWith(target, target.position)
     expect(fake_player.walking_state).toEqual({ walking: true, direction: 'east' })
-    expect(fake_player.shooting_state).toEqual({ state: 'not_shooting', position: target.position })
+    expect(fake_player.shooting_state).toEqual({ state: 'not_shooting', position: fake_player.position })
   })
 
   it('completes the single-target task once its bound target is no longer valid', () => {

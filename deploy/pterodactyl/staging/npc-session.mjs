@@ -4,9 +4,24 @@ function check(ok, message) {
   if (!ok) throw new StagingConfigError(message)
 }
 
-function cleanName(value, label) {
-  check(typeof value === 'string' && value.length <= 64 && !/[\x00-\x1f\x7f]/.test(value), `Invalid ${label}`)
+function cleanName(value, label, max = 64) {
+  check(typeof value === 'string' && value.length <= max && !/[\x00-\x1f\x7f]/.test(value), `Invalid ${label}`)
   return value
+}
+
+export function parseChatPlayers(value) {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (trimmed === '' || trimmed === '*') return { mode: 'all', names: [] }
+  if (trimmed.toLowerCase() === 'none') return { mode: 'disabled', names: [] }
+  const seen = new Set()
+  const names = []
+  for (const part of trimmed.split(',')) {
+    const name = part.trim()
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    names.push(name)
+  }
+  return { mode: 'allowlist', names }
 }
 
 export function stagingConfiguration(raw = {}, env = process.env) {
@@ -15,22 +30,24 @@ export function stagingConfiguration(raw = {}, env = process.env) {
   check(actorMode === 'npc' || actorMode === 'player', 'AIRI_ACTOR_MODE must be npc or player')
 
   const legacyPlayer = cleanName(env.AIRI_PLAYER ?? raw.player ?? '', 'AIRI_PLAYER')
-  const chatPlayer = cleanName(env.AIRI_CHAT_PLAYER ?? raw.chatPlayer ?? (actorMode === 'npc' ? legacyPlayer : ''), 'AIRI_CHAT_PLAYER')
+  const legacySingle = cleanName(env.AIRI_CHAT_PLAYER ?? raw.chatPlayer ?? (actorMode === 'npc' ? legacyPlayer : ''), 'AIRI_CHAT_PLAYER')
+  const chatPlayersSource = cleanName(env.AIRI_CHAT_PLAYERS ?? raw.chatPlayers ?? legacySingle, 'AIRI_CHAT_PLAYERS', 512)
 
   return {
     actorMode,
     // In player mode this retains the v7 controlled-player meaning. In NPC
     // mode it is never actor ownership; it is only accepted as a deprecated
-    // chat-authorizer fallback when AIRI_CHAT_PLAYER is unset.
+    // chat-authorizer fallback when AIRI_CHAT_PLAYERS/AIRI_CHAT_PLAYER is unset.
     player: actorMode === 'player' ? legacyPlayer : '',
-    chatPlayer,
+    chatPlayers: parseChatPlayers(chatPlayersSource),
   }
 }
 
 export function seedStagingConfigFromEnv(env = process.env) {
   const config = {}
   if (env.AIRI_ACTOR_MODE) config.actorMode = env.AIRI_ACTOR_MODE
-  if (env.AIRI_CHAT_PLAYER) config.chatPlayer = env.AIRI_CHAT_PLAYER
+  if (env.AIRI_CHAT_PLAYERS) config.chatPlayers = env.AIRI_CHAT_PLAYERS
+  else if (env.AIRI_CHAT_PLAYER) config.chatPlayers = env.AIRI_CHAT_PLAYER
   if (env.AIRI_PLAYER) config.player = env.AIRI_PLAYER
   return config
 }
@@ -89,8 +106,12 @@ export function requireActorEpoch(expected, status) {
 
 export function chatAuthorized(config, sender) {
   if (!config || config.actorMode !== 'npc') return false
-  if (!config.chatPlayer) return false
-  return sender === config.chatPlayer
+  if (!sender) return false
+  const chatPlayers = config.chatPlayers
+  if (!chatPlayers) return false
+  if (chatPlayers.mode === 'all') return true
+  if (chatPlayers.mode === 'disabled') return false
+  return chatPlayers.names.includes(sender)
 }
 
 export function npcStartupCommands() {

@@ -16,13 +16,17 @@ export async function prepareNativeNpcSource(sourceRoot, guardSource) {
   const controlPath = path.join(autorio, 'src', 'control.ts')
   const toolsPath = path.join(autorio, 'src', 'tools.ts')
   const actorPath = path.join(autorio, 'src', 'actors', 'actor_controller.ts')
+  const dataPath = path.join(autorio, 'data.lua')
+  const packagePath = path.join(autorio, 'package.json')
   const guardPath = path.join(autorio, 'src', 'airi_deployment_guard.ts')
 
-  const [controlOriginal, tools, actorController, tsconfigText] = await Promise.all([
+  const [controlOriginal, tools, actorController, tsconfigText, dataLua, packageText] = await Promise.all([
     fs.readFile(controlPath, 'utf8'),
     fs.readFile(toolsPath, 'utf8'),
     fs.readFile(actorPath, 'utf8'),
     fs.readFile(path.join(autorio, 'tsconfig.json'), 'utf8'),
+    fs.readFile(dataPath, 'utf8'),
+    fs.readFile(packagePath, 'utf8'),
   ])
 
   // Fail closed if the pinned source is not the native actor-aware runtime we
@@ -38,6 +42,23 @@ export async function prepareNativeNpcSource(sourceRoot, guardSource) {
   check(actorController.includes('StandaloneCharacterActor.create'), 'Standalone NPC creation is missing')
   check(!controlOriginal.includes('airi_guarded_interface'), 'Legacy guarded-interface patch is already present')
   check(!controlOriginal.includes('airi_guard_ready'), 'Legacy connected-player tick guard is already present')
+
+  // The standalone NPC's fog-of-war awareness is implemented as a hidden,
+  // engine-native RadarPrototype. Keep this deployment contract explicit so a
+  // stale package cannot silently omit data.lua, grow the scan window, or
+  // reintroduce inherited world graphics/ground decals.
+  check(dataLua.includes('airi-npc-awareness-radar'), 'NPC awareness radar prototype is missing')
+  check(dataLua.includes('max_distance_of_sector_revealed = 0'), 'NPC awareness radar must disable long-range sector scanning')
+  check(dataLua.includes('max_distance_of_nearby_sector_revealed = 1'), 'NPC awareness radar must stay bounded to a 3x3 chunk window')
+  check(dataLua.includes('energy_source = {type = "void"}'), 'NPC awareness radar must not depend on the electric network')
+  check(dataLua.includes('radar.pictures = nil'), 'NPC awareness radar must not render the inherited radar sprite/shadow')
+  check(dataLua.includes('radar.integration_patch = nil'), 'NPC awareness radar must not render the inherited ground integration patch')
+  check(dataLua.includes('radar.water_reflection = nil'), 'NPC awareness radar must not render an inherited water reflection')
+
+  let packageJson
+  try { packageJson = JSON.parse(packageText) }
+  catch { throw new SourcePreparationError('Invalid Autorio package.json') }
+  check(typeof packageJson?.scripts?.build === 'string' && packageJson.scripts.build.includes("copyFileSync('data.lua','dist/data.lua')"), 'Autorio build does not package data.lua')
 
   let tsconfig
   try { tsconfig = JSON.parse(tsconfigText) }
@@ -60,8 +81,10 @@ export async function prepareNativeNpcSource(sourceRoot, guardSource) {
     controller: 'native-actor-aware-autorio',
     deploymentGuard: 'airi-deploy-v8-npc-staging',
     actorMode: 'npc',
+    awarenessRadar: 'airi-npc-awareness-radar',
     patchedGameplaySemantics: false,
     controlPath,
+    dataPath,
     guardPath,
   }
 }
