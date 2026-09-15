@@ -29,6 +29,7 @@ function make_context() {
   const surface = {
     find_entities_filtered: vi.fn(() => [target] as any[]),
     find_non_colliding_position: vi.fn(() => ({ x: 6, y: 0 })),
+    get_tile: vi.fn(() => ({ name: 'grass-1' })),
     request_path: vi.fn(() => ++next_request_id),
   }
   const actor = {
