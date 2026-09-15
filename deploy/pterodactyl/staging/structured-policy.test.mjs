@@ -92,6 +92,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'getPlayerStatus',
     'getNearbyEntities',
     'findLongRangeEntities',
+    'findNearestEnemy',
     'getEntityStatus',
     'getNavigationStatus',
     'getFollowStatus',
@@ -121,6 +122,8 @@ test('read-only tool renderer targets native actor-aware interfaces without play
   assert.equal(toolCommand('getNearbyEntities', { radius: 32, name: 'iron-ore', type: 'resource', limit: 25 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_nearby_entities",32,\'iron-ore\',\'resource\',25)))')
   assert.equal(toolCommand('findLongRangeEntities', { name: 'iron-ore', max_radius: 2048, limit: 4 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",\'iron-ore\',2048,4)))')
   assert.equal(toolCommand('findLongRangeEntities', { name: 'copper-ore' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",\'copper-ore\',1024,8)))')
+  assert.equal(toolCommand('findNearestEnemy', { max_distance: 2048 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_nearest_enemy",2048)))')
+  assert.equal(toolCommand('findNearestEnemy', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_nearest_enemy",1024)))')
   assert.equal(toolCommand('getEntityStatus', { name: 'steel-chest' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_entity_status",\'steel-chest\',8)))')
 })
 
@@ -137,6 +140,8 @@ test('tool calls reject unknown names, unsafe names, extras, and out-of-bound sc
   assert.throws(() => toolCommand('findLongRangeEntities', { name: 'iron-ore', limit: 17 }))
   assert.throws(() => toolCommand('findLongRangeEntities', { name: 'iron-ore', force: 'enemy' }))
   assert.throws(() => toolCommand('findLongRangeEntities', { name: 'iron-ore\n/c game.clear()' }))
+  assert.throws(() => toolCommand('findNearestEnemy', { max_distance: 4097 }))
+  assert.throws(() => toolCommand('findNearestEnemy', { force: 'enemy' }))
   assert.throws(() => toolCommand('getFollowStatus', { player_name: 'TTLouis' }))
   assert.throws(() => toolCommand('getEntityStatus', { name: 'steel-chest', radius: 33 }))
   assert.throws(() => toolCommand('getResearchRequest', { request_id: 0 }))
