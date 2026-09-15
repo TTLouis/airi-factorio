@@ -24,6 +24,9 @@ export interface PlayerParametersWalkToEntity {
   /** When set, navigation binds this exact connected player's character instead
    * of searching for a generic character prototype. */
   target_player_name?: string
+  /** Optional distance at which a player-target navigation task is considered
+   * complete. Persistent follow uses this to stop at its configured spacing. */
+  reach_distance?: number
   path: PathfinderWaypoint[] | null
   path_drawn: boolean
   path_index: number
