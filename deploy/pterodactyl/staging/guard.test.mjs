@@ -19,6 +19,8 @@ async function fixture() {
       kind: 'standalone_character',
       valid: true,
       has_character: true,
+      name: 'Aster-1',
+      npc_id: 'npc-1',
     },
   }
   let tasks = { task_state: 'idle', queue_empty: true, queue_length: 0 }
@@ -78,7 +80,7 @@ async function fixture() {
   }
 }
 
-test('npc configure succeeds with zero connected players and captures standalone actor identity', async () => {
+test('npc configure succeeds with zero connected players and captures physical plus logical NPC identity', async () => {
   const f = await fixture()
   assert.equal(f.calls.airi_deployment.configure('npc', 'session-1'), 'session-1')
   const status = f.calls.airi_deployment.status()
@@ -86,6 +88,8 @@ test('npc configure succeeds with zero connected players and captures standalone
   assert.equal(status.mode, 'npc')
   assert.equal(status.actor_id, 18)
   assert.equal(status.actor_kind, 'standalone_character')
+  assert.equal(status.actor_name, 'Aster-1')
+  assert.equal(status.npc_id, 'npc-1')
   assert.equal(status.connected_players, 0)
   assert.equal(status.idle, true)
   assert.equal(status.actor_interface, true)
@@ -98,7 +102,7 @@ test('human join count does not change NPC authorization', async () => {
   assert.equal(f.calls.airi_deployment.status().allowed, true)
 })
 
-test('replacement NPC invalidates the previous atomic authorization epoch', async () => {
+test('replacement NPC invalidates the physical authorization epoch while preserving logical identity', async () => {
   const f = await fixture()
   f.calls.airi_deployment.configure('npc', 'session-1')
   const epoch = f.calls.airi_deployment.status().epoch
@@ -109,11 +113,16 @@ test('replacement NPC invalidates the previous atomic authorization epoch', asyn
     actor: { ...f.actor.actor, actor_id: 42 },
   })
   assert.equal(f.calls.airi_deployment.authorize(epoch), false)
-  assert.equal(f.calls.airi_deployment.status().allowed, false)
+  const stale = f.calls.airi_deployment.status()
+  assert.equal(stale.allowed, false)
+  assert.equal(stale.actor_name, 'Aster-1')
+  assert.equal(stale.npc_id, 'npc-1')
 
   assert.equal(f.calls.airi_deployment.configure('npc', 'session-1'), 'session-1')
   const refreshed = f.calls.airi_deployment.status()
   assert.equal(refreshed.actor_id, 42)
+  assert.equal(refreshed.actor_name, 'Aster-1')
+  assert.equal(refreshed.npc_id, 'npc-1')
   assert.equal(refreshed.allowed, true)
   assert.ok(refreshed.epoch > epoch)
 })
@@ -154,7 +163,7 @@ test('cancel and disable clear owned task state without depending on human contr
   const first = f.calls.airi_deployment.status().epoch
   f.setTasks({ task_state: 'waiting', queue_empty: false, queue_length: 1 })
   f.calls.airi_deployment.cancel()
-  assert.equal(f.cancelCount >= 2, true) // configure + explicit cancel
+  assert.equal(f.cancelCount >= 2, true)
   assert.equal(f.calls.airi_deployment.status().idle, true)
   assert.ok(f.calls.airi_deployment.status().epoch > first)
 
@@ -173,6 +182,7 @@ test('player mode remains possible but requires a connected-player actor snapsho
       kind: 'connected_player',
       valid: true,
       has_character: true,
+      name: 'Louis',
     },
   })
   assert.equal(f.calls.airi_deployment.configure('player', 'session-1'), 'session-1')
