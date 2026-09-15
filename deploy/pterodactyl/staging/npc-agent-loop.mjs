@@ -134,6 +134,7 @@ export class NpcAgentLoop {
     maxToolRounds = 12,
     maxContinuations = 10,
     maxToolLoopRetries = 3,
+    maxToolValidationRetries = 3,
     maxRecoveryAttempts = 3,
     maxWorkingMessages = 36,
     maxWorkingChars = 60000,
@@ -147,6 +148,7 @@ export class NpcAgentLoop {
     check(memory && typeof memory.context === 'function' && typeof memory.remember === 'function', 'NPC dialogue memory required')
     check(typeof npcId === 'string' && npcId.length > 0 && npcId.length <= 128 && !/[\x00-\x1f\x7f]/.test(npcId), 'Invalid NPC memory identity')
     check(memoryKeyForStatus === undefined || typeof memoryKeyForStatus === 'function', 'NPC memory key resolver must be a function')
+    check(Number.isSafeInteger(maxToolValidationRetries) && maxToolValidationRetries >= 0 && maxToolValidationRetries <= 10, 'Invalid tool validation retry limit')
     this.rcon = rcon
     this.provider = provider
     this.systemPrompt = systemPrompt
@@ -155,6 +157,7 @@ export class NpcAgentLoop {
     this.maxToolRounds = maxToolRounds
     this.maxContinuations = maxContinuations
     this.maxToolLoopRetries = maxToolLoopRetries
+    this.maxToolValidationRetries = maxToolValidationRetries
     this.maxRecoveryAttempts = maxRecoveryAttempts
     this.maxWorkingMessages = maxWorkingMessages
     this.maxWorkingChars = maxWorkingChars
@@ -176,6 +179,7 @@ export class NpcAgentLoop {
     this.continuations = 0
     this.toolCache = new Map()
     this.duplicateToolRounds = 0
+    this.toolValidationRetries = 0
     this.requestInfo = null
     this.generation = (this.generation ?? 0) + 1
   }
@@ -245,6 +249,7 @@ export class NpcAgentLoop {
     this.prepareContinuationContext()
     this.toolCache.clear()
     this.duplicateToolRounds = 0
+    this.toolValidationRetries = 0
     this.messages.push({ role: 'user', content: '[MOD] All operations completed' })
     return this.runGuarded()
   }
@@ -386,18 +391,29 @@ export class NpcAgentLoop {
     throw new AgentLoopError(`Provider response recovery exhausted after ${this.maxRecoveryAttempts} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
   }
 
-  async handleToolBatch(message) {
+  prepareToolBatch(message) {
     check(Array.isArray(message.tool_calls) && message.tool_calls.length >= 1 && message.tool_calls.length <= 4, 'Invalid tool call batch')
-    this.messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls })
-    let duplicateThisRound = false
-
-    for (const tool of message.tool_calls) {
+    return message.tool_calls.map((tool) => {
       check(tool && tool.type === 'function' && typeof tool.id === 'string' && tool.id.length >= 1 && tool.id.length <= 200, 'Invalid tool call')
       check(tool.function && typeof tool.function.name === 'string' && typeof tool.function.arguments === 'string', 'Invalid tool function')
       const args = strictJson(tool.function.arguments, 'tool arguments')
       const command = toolCommand(tool.function.name, args)
-      const signature = toolSignature(tool.function.name, args)
-      const cached = this.toolCache.get(signature)
+      return {
+        tool,
+        args,
+        command,
+        signature: toolSignature(tool.function.name, args),
+      }
+    })
+  }
+
+  async handleToolBatch(message) {
+    const prepared = this.prepareToolBatch(message)
+    this.messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls })
+    let duplicateThisRound = false
+
+    for (const entry of prepared) {
+      const cached = this.toolCache.get(entry.signature)
       let output
 
       if (cached !== undefined) {
@@ -406,11 +422,11 @@ export class NpcAgentLoop {
       }
       else {
         await this.assertCurrent()
-        output = String(await this.rcon.command(command)).slice(0, 12000)
+        output = String(await this.rcon.command(entry.command)).slice(0, 12000)
         await this.assertCurrent()
-        this.toolCache.set(signature, output)
+        this.toolCache.set(entry.signature, output)
       }
-      this.messages.push({ role: 'tool', tool_call_id: tool.id, content: String(output).slice(0, 16000) })
+      this.messages.push({ role: 'tool', tool_call_id: entry.tool.id, content: String(output).slice(0, 16000) })
     }
 
     if (duplicateThisRound) {
@@ -430,7 +446,24 @@ export class NpcAgentLoop {
       const message = await this.callProvider(current, generation, { round })
 
       if (message.tool_calls !== undefined) {
-        await this.handleToolBatch(message)
+        try {
+          await this.handleToolBatch(message)
+          this.toolValidationRetries = 0
+        }
+        catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          if (reason.startsWith('Repeated tool observation loop after')) {
+            return this.recoverPlan(generation, error, round + 1)
+          }
+          this.toolValidationRetries++
+          if (this.toolValidationRetries > this.maxToolValidationRetries) {
+            return this.recoverPlan(generation, error, round + 1)
+          }
+          this.messages.push({
+            role: 'user',
+            content: `[HARNESS] Tool call rejected (${this.toolValidationRetries}/${this.maxToolValidationRetries}): ${reason}. Retry using only an approved tool name and strict JSON arguments matching its schema. Do not repeat the rejected payload.`,
+          })
+        }
         continue
       }
 
