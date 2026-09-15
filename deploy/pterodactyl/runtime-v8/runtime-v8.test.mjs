@@ -190,7 +190,7 @@ test('session starts zero-player standalone NPC over authenticated loopback RCON
   assert.equal(status.actor_kind, 'standalone_character')
   assert.equal(status.connected_players, 0)
   assert.equal(status.allowed, true)
-  assert.match(logs.find(line => line.includes('AIRI Factorio ready')) ?? '', /standalone NPC actor_id=18/)
+  assert.match(logs.find(line => line.includes('AIRI Factorio ready')) ?? '', /AIRI Factorio ready; npc=AIRI \(airi\), actor_id=18/)
   const clean = await session.stop('requested')
   assert.equal(clean, true)
   const saved = await fsp.readFile(save, 'utf8')
