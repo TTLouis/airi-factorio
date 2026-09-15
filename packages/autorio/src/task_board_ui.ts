@@ -112,16 +112,25 @@ function render_panel(player: LuaPlayer) {
   destroy_panel(player)
   if (!task_board_ui_is_open(player.index)) return
 
-  const root: any = player.gui.left.add({
+  // Keep Factorio GUI elements strongly typed. Casting these to `any` makes
+  // TypeScriptToLua emit JS-style method calls with the wrong Lua self ABI.
+  const root = player.gui.left.add({
     type: 'frame',
     name: ROOT_NAME,
     direction: 'vertical',
     caption: 'AIRI Task Board',
   })
+
   const board = storage.airi_task_board_ui
   if (board === undefined) {
-    root.add({ type: 'label', caption: 'Status: IDLE' })
-    root.add({ type: 'label', caption: 'No active AIRI task.' })
+    const idle = root.add({
+      type: 'table',
+      column_count: 2,
+    })
+    idle.add({ type: 'label', caption: 'STATUS' })
+    idle.add({ type: 'label', caption: 'IDLE' })
+    idle.add({ type: 'label', caption: 'TASK' })
+    idle.add({ type: 'label', caption: 'No active AIRI task.' })
     return
   }
 
@@ -130,21 +139,68 @@ function render_panel(player: LuaPlayer) {
     : board.goal_id.length > 0
       ? board.goal_id
       : 'Current task'
-  root.add({ type: 'label', caption: `Goal: ${goal}` })
-  root.add({
-    type: 'label',
-    caption: `Status: ${board.status.toUpperCase()}   Progress: ${board.status === 'completed' ? board.total_steps : math.min(board.active_index + 1, board.total_steps)}/${board.total_steps}`,
-  })
+  const progress = board.status === 'completed'
+    ? board.total_steps
+    : math.min(board.active_index + 1, board.total_steps)
 
+  const summary = root.add({
+    type: 'table',
+    column_count: 2,
+  })
+  summary.add({ type: 'label', caption: 'GOAL' })
+  summary.add({ type: 'label', caption: goal })
+  summary.add({ type: 'label', caption: 'STATUS' })
+  summary.add({ type: 'label', caption: board.status.toUpperCase() })
+  summary.add({ type: 'label', caption: 'PROGRESS' })
+  summary.add({ type: 'label', caption: `${progress}/${board.total_steps}` })
+  summary.add({ type: 'label', caption: 'DONE' })
+  summary.add({ type: 'label', caption: `${board.completed_count}/${board.total_steps}` })
+
+  const steps_frame = root.add({
+    type: 'frame',
+    direction: 'vertical',
+    caption: 'Steps',
+  })
+  const headings = steps_frame.add({
+    type: 'table',
+    column_count: 3,
+  })
+  headings.add({ type: 'label', caption: 'STATE' })
+  headings.add({ type: 'label', caption: 'STEP' })
+  headings.add({ type: 'label', caption: 'DESCRIPTION' })
+
+  const scroll = steps_frame.add({ type: 'scroll-pane' })
+  const grid = scroll.add({
+    type: 'table',
+    column_count: 3,
+  })
   const visible = board.steps.slice(0, MAX_STEPS)
-  for (const step of visible) {
-    root.add({ type: 'label', caption: `${step_prefix(step)} ${step.description}` })
+  for (let index = 0; index < visible.length; index++) {
+    const step = visible[index]
+    grid.add({ type: 'label', caption: step_prefix(step) })
+    grid.add({ type: 'label', caption: `${index + 1}` })
+    grid.add({ type: 'label', caption: step.description })
   }
   if (board.steps.length > visible.length) {
-    root.add({ type: 'label', caption: `... ${board.steps.length - visible.length} more steps` })
+    grid.add({ type: 'label', caption: '[+]' })
+    grid.add({ type: 'label', caption: '-' })
+    grid.add({ type: 'label', caption: `${board.steps.length - visible.length} more steps` })
   }
-  if (board.blocker.length > 0) root.add({ type: 'label', caption: `Blocked: ${board.blocker}` })
-  if (board.pause_reason.length > 0) root.add({ type: 'label', caption: `Paused: ${board.pause_reason}` })
+
+  if (board.blocker.length > 0 || board.pause_reason.length > 0) {
+    const attention = root.add({
+      type: 'table',
+      column_count: 2,
+    })
+    if (board.blocker.length > 0) {
+      attention.add({ type: 'label', caption: 'BLOCKED' })
+      attention.add({ type: 'label', caption: board.blocker })
+    }
+    if (board.pause_reason.length > 0) {
+      attention.add({ type: 'label', caption: 'PAUSED' })
+      attention.add({ type: 'label', caption: board.pause_reason })
+    }
+  }
 }
 
 function render(player: LuaPlayer) {
