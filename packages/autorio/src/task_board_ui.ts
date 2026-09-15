@@ -2,6 +2,7 @@ import type { MapPositionStruct } from 'factorio:prototype'
 import type { FrameGuiElement, LuaEntity, LuaGuiElement, LuaPlayer, LuaSurface } from 'factorio:runtime'
 
 import { get_controlled_actor } from './actors/actor_controller'
+import { create_skill_remote_interface, handle_skill_export_click, render_skill_export_section } from './skills'
 import { get_actor_inventory_items } from './utils/inventory'
 
 const BUTTON_NAME = 'airi_task_board_button'
@@ -609,6 +610,7 @@ function render_panel(player: LuaPlayer) {
   render_world_preview(content, runtime)
   render_steps(content, board)
   render_activity(content, board)
+  render_skill_export_section(content)
 
   const resources = content.add({ type: 'flow', direction: 'horizontal' })
   render_inventory(resources, runtime)
@@ -669,6 +671,7 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
 }
 
 export function create_task_board_ui_remote_interface() {
+  create_skill_remote_interface()
   remote.add_interface('autorio_task_board', {
     set_snapshot: (value: unknown) => {
       const next = sanitize_task_board_ui_snapshot(value)
@@ -704,6 +707,10 @@ export function create_task_board_ui_remote_interface() {
       clear_terminate_confirmation(player.index)
       close_task_board_ui(player.index)
       destroy_panel(player)
+      return
+    }
+    if (handle_skill_export_click(player, element.name)) {
+      render_panel(player)
       return
     }
     handle_control_click(player, element.name)
