@@ -106,6 +106,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'getEquipmentStatus',
     'getRecipe',
     'getRecipeDetails',
+    'getPrototypeDetails',
     'getPlayerStatus',
     'getNearbyEntities',
     'findLongRangeEntities',
@@ -125,6 +126,7 @@ test('tool surface matches current NPC observation contract and uses strict sche
   for (const tool of toolDefinitions) assert.equal(tool.function.parameters.additionalProperties, false)
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getRecipe').function.parameters.required, ['item'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getRecipeDetails').function.parameters.required, ['item_or_recipe'])
+  assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getPrototypeDetails').function.parameters.required, ['name'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getEntityGeometry').function.parameters.required, ['unit_number'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getLogisticsTopology').function.parameters.required, ['unit_number'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getPlayerStatus').function.parameters.required, ['player_name'])
@@ -141,6 +143,7 @@ test('read-only tool renderer targets native actor-aware interfaces without play
   assert.equal(toolCommand('getResearchRequest', { request_id: 42 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","request_result",42)))')
   assert.equal(toolCommand('getRecipe', { item: 'iron-gear-wheel' }), '/silent-command remote.call("autorio_tools","get_recipe",\'iron-gear-wheel\')')
   assert.equal(toolCommand('getRecipeDetails', { item_or_recipe: "mod's-fluid" }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","recipe_details",\'mod\\\'s-fluid\')))')
+  assert.equal(toolCommand('getPrototypeDetails', { name: "mod's-machine" }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_prototypes","details",\'mod\\\'s-machine\')))')
   assert.equal(toolCommand('getPlayerStatus', { player_name: 'TTLouis' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_player_status",\'TTLouis\')))')
   assert.equal(toolCommand('getNearbyEntities', { radius: 32, name: 'iron-ore', type: 'resource', limit: 25 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_nearby_entities",32,\'iron-ore\',\'resource\',25)))')
   assert.equal(toolCommand('findLongRangeEntities', { name: 'iron-ore', max_radius: 2048, limit: 4 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",\'iron-ore\',2048,4)))')
@@ -161,6 +164,8 @@ test('tool calls reject unknown names, unsafe names, extras, and out-of-bound sc
   assert.throws(() => toolCommand('getRecipe', { item: 'iron-plate\n/c game.clear()' }))
   assert.throws(() => toolCommand('getRecipeDetails', { item_or_recipe: 'iron-plate', force: 'enemy' }))
   assert.throws(() => toolCommand('getRecipeDetails', { item_or_recipe: 'iron-plate\n/c game.clear()' }))
+  assert.throws(() => toolCommand('getPrototypeDetails', { name: 'inserter', force: 'enemy' }))
+  assert.throws(() => toolCommand('getPrototypeDetails', { name: 'inserter\n/c game.clear()' }))
   assert.throws(() => toolCommand('getEntityGeometry', { unit_number: 0 }))
   assert.throws(() => toolCommand('getEntityGeometry', { unit_number: 1.5 }))
   assert.throws(() => toolCommand('getEntityGeometry', { unit_number: 42, radius: 8 }))
