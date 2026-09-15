@@ -82,11 +82,20 @@ test('configure handshake fails closed when the repeated command still has no ex
   assert.equal(rcon.commands[0], rcon.commands[1])
 })
 
+test('deployment status can inspect an unauthorized replacement epoch but strict callers still fail closed', async () => {
+  const inspect = new FakeRcon([JSON.stringify(readyStatus({ allowed: false, actor_id: 42 }))])
+  const status = await deploymentStatus(inspect)
+  assert.equal(status.allowed, false)
+  assert.equal(status.actor_id, 42)
+
+  const strict = new FakeRcon([JSON.stringify(readyStatus({ allowed: false, actor_id: 42 }))])
+  await assert.rejects(() => deploymentStatus(strict, { requireAllowed: true }), /not authorized/)
+})
+
 test('deployment status requires native npc identity and interfaces', async () => {
   for (const broken of [
     { revision: 'airi-deploy-v7' },
     { mode: 'player' },
-    { allowed: false },
     { actor_kind: 'connected_player' },
     { actor_id: undefined },
     { epoch: 0 },
