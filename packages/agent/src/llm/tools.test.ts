@@ -256,7 +256,7 @@ describe('prompt contract', () => {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
-    for (const operation of ['walk_to_player', 'move_items_with_player', 'follow_player', 'stop_follow_player', 'set_auto_defense', 'equip_weapon', 'equip_ammo', 'equip_armor', 'select_weapon_slot', 'clear_enemy_area']) {
+    for (const operation of ['walk_to_player', 'move_items_with_player', 'follow_player', 'stop_follow_player', 'set_auto_defense', 'equip_weapon', 'equip_ammo', 'equip_armor', 'select_weapon_slot', 'set_machine_recipe', 'clear_enemy_area']) {
       expect(prompt).toContain(operation)
     }
     expect(prompt).toContain('4096')
@@ -266,6 +266,7 @@ describe('prompt contract', () => {
   it('retains explicit verification requirements', () => {
     expect(prompt).toContain('Navigation completion must be verified')
     expect(prompt).toContain('Hand-crafting completion must be verified')
+    expect(prompt).toContain('Machine recipe configuration must be verified')
     expect(prompt).toContain('does not mean the technology is unlocked')
     expect(prompt).toContain('Combat completion must be verified')
   })
