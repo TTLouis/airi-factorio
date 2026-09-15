@@ -143,6 +143,7 @@ export function new_actor_runtime_router(registry: ActorRegistry) {
     const authorityToken = allowed
       ? direct_authority_token(actorId, runtime.revision, runtime.bodyRevision, agent!.revision)
       : undefined
+    const navigationStatus = context?.navigation.status()
 
     return {
       found: true as const,
@@ -161,7 +162,12 @@ export function new_actor_runtime_router(registry: ActorRegistry) {
       inventory: actor && actor.is_valid ? get_actor_inventory_items(actor) : [],
       tasks: context?.manager.get_status_snapshot(),
       basic: context?.basic.status(),
-      navigation: context?.navigation.status(),
+      navigation: navigationStatus
+        ? { ...navigationStatus, obstacle_recovery: context?.navigationObstacleRecovery.status() }
+        : undefined,
+      follow: context?.follow.status(),
+      defense: context?.defense.status(),
+      equipment: context?.equipment.status(),
       crafting: context?.crafting.status(),
       combat: context?.combat.status(),
       claim_id: claim?.id,
@@ -192,6 +198,12 @@ export function new_actor_runtime_router(registry: ActorRegistry) {
   remote.add_interface('autorio_swarm_actor', {
     status: (actor_id: ActorId) => direct_snapshot(actor_id),
     authorize: (actor_id: ActorId, authority_token: string) => authorize(actor_id, authority_token),
+    set_clear_obstacles: (actor_id: ActorId, authority_token: string, enabled: boolean) =>
+      guarded(actor_id, authority_token, (context) => ({
+        ok: true as const,
+        enabled: context.navigationObstacleRecovery.set_enabled(enabled),
+        status: context.navigationObstacleRecovery.status(),
+      })),
     walk_to_entity: (actor_id: ActorId, authority_token: string, entity_name: string, search_radius: number) =>
       guarded(actor_id, authority_token, (context) => {
         const accepted = context.navigation.submit(entity_name, search_radius)
@@ -199,6 +211,23 @@ export function new_actor_runtime_router(registry: ActorRegistry) {
       }),
     walk_to_player: (actor_id: ActorId, authority_token: string, player_name: string) =>
       guarded(actor_id, authority_token, context => tuple_result(context.navigation.submit_player(player_name), context.navigation.status())),
+    follow_player: (actor_id: ActorId, authority_token: string, player_name: string, follow_distance: number = 4) =>
+      guarded(actor_id, authority_token, context => tuple_result(
+        context.follow.submit(player_name, follow_distance, context.navigationObstacleRecovery.enabled()),
+        context.follow.status(),
+      )),
+    stop_follow_player: (actor_id: ActorId, authority_token: string) =>
+      guarded(actor_id, authority_token, context => tuple_result(context.follow.stop(), context.follow.status())),
+    set_auto_defense: (actor_id: ActorId, authority_token: string, enabled: boolean) =>
+      guarded(actor_id, authority_token, context => tuple_result(context.defense.set_enabled(enabled), context.defense.status())),
+    equip_weapon: (actor_id: ActorId, authority_token: string, item_name: string, slot: number = 1) =>
+      guarded(actor_id, authority_token, context => tuple_result(context.equipment.equip_weapon(item_name, slot), context.equipment.status())),
+    equip_ammo: (actor_id: ActorId, authority_token: string, item_name: string, slot: number = 1) =>
+      guarded(actor_id, authority_token, context => tuple_result(context.equipment.equip_ammo(item_name, slot), context.equipment.status())),
+    equip_armor: (actor_id: ActorId, authority_token: string, item_name: string) =>
+      guarded(actor_id, authority_token, context => tuple_result(context.equipment.equip_armor(item_name), context.equipment.status())),
+    select_weapon_slot: (actor_id: ActorId, authority_token: string, slot: number) =>
+      guarded(actor_id, authority_token, context => tuple_result(context.equipment.select_weapon_slot(slot), context.equipment.status())),
     gather_resource: (actor_id: ActorId, authority_token: string, resource_name: string, count: number = 1, search_radius: number = 256) =>
       guarded(actor_id, authority_token, context => tuple_result(context.composite.gather_resource(resource_name, count, search_radius), {
         navigation: context.navigation.status(),

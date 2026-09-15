@@ -4,6 +4,7 @@ import { new_basic_operation_runtime } from '../basic_operation_runtime'
 import { new_basic_operation_controller } from '../basic_operations'
 import { new_composite_operation_controller } from '../composite_operations'
 import { new_crafting_controller } from '../crafting'
+import { new_equipment_controller } from '../equipment'
 import { new_interaction_recovery } from '../interaction_recovery'
 import { new_recipe_configuration_runtime } from '../recipe_configuration'
 import { new_task_manager } from '../task_manager'
@@ -11,7 +12,10 @@ import { TaskStates } from '../types'
 import { direction_towards } from '../utils/direction'
 import type { new_actor_registry } from './actor_registry'
 import { new_actor_scoped_combat_controller } from './combat_adapter'
+import { new_actor_scoped_defense_controller } from './defense_adapter'
+import { new_actor_scoped_follow_controller } from './follow_adapter'
 import { new_actor_scoped_navigation_controller } from './navigation_adapter'
+import { new_actor_scoped_navigation_obstacle_recovery } from './navigation_obstacle_recovery_adapter'
 import type { ActorId } from './types'
 
 type ActorRegistry = ReturnType<typeof new_actor_registry>
@@ -24,9 +28,13 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
   const recipeConfiguration = new_recipe_configuration_runtime(manager, basic)
   const interactionRecovery = new_interaction_recovery(manager)
   const navigation = new_actor_scoped_navigation_controller(actorId, get_actor, manager)
+  const navigationObstacleRecovery = new_actor_scoped_navigation_obstacle_recovery(actorId)
   const composite = new_composite_operation_controller(navigation, basic, manager)
   const crafting = new_crafting_controller(get_actor, manager, { persistenceKey: actorId })
   const combat = new_actor_scoped_combat_controller(actorId, get_actor, manager)
+  const equipment = new_equipment_controller(get_actor)
+  const follow = new_actor_scoped_follow_controller(actorId, get_actor, navigation)
+  const defense = new_actor_scoped_defense_controller(actorId, get_actor)
 
   function tick_walking_direct(actor: ControlledActor) {
     const task = manager.player_state.parameters_walking_direct
@@ -52,6 +60,7 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
     if (manager.player_state.task_state === TaskStates.IDLE && manager.is_task_queue_empty()) return false
     const snapshot = registry.runtime_snapshot(actorId, game.tick)
     manager.handle_actor_loss(snapshot?.physical?.physicalActorId ?? -1)
+    navigationObstacleRecovery.suspend(get_actor())
     return true
   }
 
@@ -62,14 +71,31 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
       return false
     }
 
-    if (manager.player_state.task_state !== TaskStates.IDLE && interactionRecovery.tick(actor)) return true
+    if (manager.player_state.task_state === TaskStates.IDLE) {
+      navigationObstacleRecovery.suspend(actor)
+      follow.tick(actor)
+      if (manager.player_state.task_state !== TaskStates.IDLE) {
+        defense.suspend(actor)
+        return true
+      }
+      if (follow.status().active) defense.tick(actor)
+      else defense.suspend(actor)
+      return true
+    }
 
+    follow.suspend(actor)
+    defense.suspend(actor)
+
+    if (interactionRecovery.tick(actor)) return true
+
+    if (manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
+      const handled = navigationObstacleRecovery.tick(actor, manager.player_state.parameters_walk_to_entity)
+      if (!handled) navigation.tick(actor)
+      return true
+    }
+
+    navigationObstacleRecovery.suspend(actor)
     switch (manager.player_state.task_state) {
-      case TaskStates.IDLE:
-        return true
-      case TaskStates.WALKING_TO_ENTITY:
-        navigation.tick(actor)
-        return true
       case TaskStates.MINING:
         basicRuntime.state_mining(actor)
         return true
@@ -133,7 +159,13 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
       logical_actor: registry.runtime_snapshot(actorId, game.tick),
       tasks: manager.get_status_snapshot(),
       basic: basic.status(),
-      navigation: navigation.status(),
+      navigation: {
+        ...navigation.status(),
+        obstacle_recovery: navigationObstacleRecovery.status(),
+      },
+      follow: follow.status(),
+      defense: defense.status(),
+      equipment: equipment.status(),
       crafting: crafting.status(),
       combat: combat.status(),
     }
@@ -145,6 +177,10 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
     basic,
     composite,
     navigation,
+    navigationObstacleRecovery,
+    follow,
+    defense,
+    equipment,
     crafting,
     combat,
     tick,

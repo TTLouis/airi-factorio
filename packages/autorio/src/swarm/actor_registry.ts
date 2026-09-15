@@ -29,6 +29,10 @@ export interface ActorRuntimeSnapshot {
   revision: number
 }
 
+declare const storage: {
+  airi_swarm_follow_states?: Record<string, { active?: boolean }>
+}
+
 function same_physical_identity(left: PhysicalActorIdentity, right: PhysicalActorIdentity) {
   return left.physicalActorId === right.physicalActorId
     && left.kind === right.kind
@@ -155,11 +159,12 @@ export function new_actor_registry(swarm: SwarmStorage) {
     }
     const agentId = find_bound_agent_id(swarm, actorId)
     const agent = agentId !== undefined ? swarm.agents[agentId] : undefined
+    const userControlled = storage.airi_swarm_follow_states?.[actorId]?.active === true
     return {
       actorId,
       agentId,
       registered: registration !== undefined,
-      available: actor !== undefined && agent !== undefined && agent.state === 'available',
+      available: actor !== undefined && agent !== undefined && agent.state === 'available' && !userControlled,
       capabilities: registration !== undefined ? [...registration.capabilities] : [],
       state: state.state,
       bodyRevision: state.bodyRevision,
