@@ -1,5 +1,5 @@
 import { actorChanged, deploymentStatus, executeAuthorizedBatch } from './supervisor-adapter.mjs'
-import { parsePlan, renderOperation, toolCommand } from './structured-policy.mjs'
+import { luaString, parsePlan, renderOperation, toolCommand } from './structured-policy.mjs'
 
 export class AgentLoopError extends Error {}
 
@@ -10,6 +10,47 @@ function check(ok, message) {
 function strictJson(value, label) {
   try { return JSON.parse(value) }
   catch { throw new AgentLoopError(`Invalid ${label} JSON`) }
+}
+
+export function navigationObstaclePolicy(text) {
+  const normalized = String(text ?? '').trim().toLocaleLowerCase()
+  const denyPhrases = [
+    '不要自动清障', '不要清障', '别清障', '不要砍树', '别砍树', '不要自动砍树', '不要挖树',
+    '不要挖石头', '别挖石头', '不要挖岩石', '不要破坏树', '不要破坏树木',
+    "don't clear obstacles", 'do not clear obstacles', 'no automatic obstacle clearing',
+    "don't cut trees", 'do not cut trees', "don't mine rocks", 'do not mine rocks',
+    'preserve trees', 'leave the trees alone',
+  ]
+  if (denyPhrases.some(phrase => normalized.includes(phrase))) {
+    return { shouldUpdate: true, clearObstacles: false }
+  }
+  const continuation = ['continue', 'resume', '继续', '继续吧', '继续做', '接着', '接着做']
+    .some(prefix => normalized === prefix || normalized.startsWith(`${prefix} `) || normalized.startsWith(`${prefix}，`) || normalized.startsWith(`${prefix},`))
+  if (continuation) return { shouldUpdate: false, clearObstacles: true }
+  return { shouldUpdate: true, clearObstacles: true }
+}
+
+export function liveTaskBoardSnapshot(objective, plan, { completed = false } = {}) {
+  const descriptions = Array.isArray(plan?.plan) ? plan.plan.map(value => String(value)).filter(Boolean).slice(0, 30) : []
+  const current = descriptions.length === 0
+    ? 0
+    : Math.min(Math.max(Number.isSafeInteger(plan?.currentStep) ? plan.currentStep : 0, 0), descriptions.length - 1)
+  const steps = descriptions.map((description, index) => ({
+    id: `step_${index + 1}`,
+    description,
+    status: completed || index < current ? 'completed' : index === current ? 'active' : 'pending',
+  }))
+  return {
+    goal_id: 'live_plan',
+    objective: String(objective ?? '').slice(0, 500),
+    status: completed ? 'completed' : 'active',
+    blocker: '',
+    pause_reason: '',
+    completed_count: completed ? steps.length : current,
+    total_steps: steps.length,
+    active_index: current,
+    steps,
+  }
 }
 
 export class NpcAgentLoop {
@@ -24,6 +65,8 @@ export class NpcAgentLoop {
     this.log = log
     this.maxToolRounds = maxToolRounds
     this.maxContinuations = maxContinuations
+    this.clearObstacles = true
+    this.objective = ''
     this.reset()
   }
 
@@ -40,10 +83,45 @@ export class NpcAgentLoop {
     return status
   }
 
+  async clearTaskBoardUi() {
+    try {
+      await this.rcon.command('/silent-command remote.call("autorio_task_board","clear")')
+    }
+    catch (error) {
+      this.log(`Task Board UI clear failed: ${error instanceof Error ? error.message : error}`)
+    }
+  }
+
+  async syncTaskBoardUi(snapshot) {
+    try {
+      const json = JSON.stringify(snapshot)
+      await this.rcon.command(`/silent-command remote.call("autorio_task_board","set_snapshot",helpers.json_to_table(${luaString(json)}))`)
+      return true
+    }
+    catch (error) {
+      this.log(`Task Board UI sync failed: ${error instanceof Error ? error.message : error}`)
+      return false
+    }
+  }
+
+  async applyNavigationObstaclePolicy(text) {
+    const policy = navigationObstaclePolicy(text)
+    if (!policy.shouldUpdate) return this.clearObstacles
+    this.clearObstacles = policy.clearObstacles
+    try {
+      await this.rcon.command(`/silent-command remote.call("autorio_navigation","set_clear_obstacles",${this.clearObstacles ? 'true' : 'false'})`)
+    }
+    catch (error) {
+      this.log(`Navigation obstacle policy update failed: ${error instanceof Error ? error.message : error}`)
+    }
+    return this.clearObstacles
+  }
+
   async assertCurrent() {
     check(this.epoch, 'No active NPC actor epoch')
     const current = await deploymentStatus(this.rcon)
     if (actorChanged(this.epoch, current)) {
+      await this.clearTaskBoardUi()
       this.reset()
       throw new AgentLoopError('NPC actor epoch changed; stale model turn cancelled')
     }
@@ -53,7 +131,10 @@ export class NpcAgentLoop {
   async request(text) {
     check(typeof text === 'string' && text.trim().length > 0 && text.length <= 4000, 'Invalid chat request')
     this.reset()
+    this.objective = text.trim()
     this.epoch = await this.captureEpoch()
+    await this.clearTaskBoardUi()
+    await this.applyNavigationObstaclePolicy(text)
     this.messages = [
       { role: 'system', content: this.systemPrompt },
       { role: 'user', content: `[CHAT] ${text}` },
@@ -72,6 +153,7 @@ export class NpcAgentLoop {
   }
 
   cancel() {
+    this.clearTaskBoardUi().catch(() => {})
     this.reset()
   }
 
@@ -109,21 +191,17 @@ export class NpcAgentLoop {
 
       check(typeof message.content === 'string', 'Provider message has no strict JSON content')
       const plan = parsePlan(strictJson(message.content, 'provider content'))
-      // Render and validate every operation before the first world mutation.
-      // The full dependency batch is then admitted in one RCON/Lua command so
-      // Factorio cannot advance a simulation tick between operation N and N+1.
       const commands = plan.operations.map(renderOperation)
       const before = await this.assertCurrent()
       if (commands.length > 0) {
         await executeAuthorizedBatch(this.rcon, before.epoch, commands)
-        // Death/recovery or a mode transition after admission invalidates the
-        // continuation, while Autorio's actor-bound task ownership handles the
-        // already-admitted batch safely inside the game.
         await this.assertCurrent()
       }
 
       this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
-      if (commands.length === 0) this.active = false
+      const completed = commands.length === 0
+      await this.syncTaskBoardUi(liveTaskBoardSnapshot(this.objective, plan, { completed }))
+      if (completed) this.active = false
       return {
         chatMessage: plan.chatMessage,
         plan: plan.plan,
