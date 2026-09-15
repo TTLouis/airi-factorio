@@ -156,6 +156,14 @@ function parseConstructionPlan(args) {
   }
 }
 
+function parseResearchPath(args) {
+  exactKeys(args, ['name', 'max_nodes'])
+  return {
+    name: base.factorioName(args.name),
+    max_nodes: optionalInteger(args.max_nodes ?? 32, 'max_nodes', 1, 64),
+  }
+}
+
 function luaTable(parsed) {
   const fields = []
   if (parsed.entity_name !== undefined) fields.push(`entity_name=${base.luaString(parsed.entity_name)}`)
@@ -186,6 +194,11 @@ function renderConstructionPlan(args) {
     return `{${fields.join(',')}}`
   }).join(',')
   return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","validate_construction_plan",{plan_id=${base.luaString(parsed.plan_id)},placements={${placements}}})))`
+}
+
+function renderResearchPath(args) {
+  const parsed = parseResearchPath(args)
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","research_path",${base.luaString(parsed.name)},${parsed.max_nodes})))`
 }
 
 const solveProductionDefinition = {
@@ -303,6 +316,23 @@ const constructionPlanValidationDefinition = {
   },
 }
 
+const researchPathDefinition = {
+  type: 'function',
+  function: {
+    name: 'getResearchPath',
+    description: 'Return a deterministic dependency-first path to one technology from the live force technology graph. Distinguishes already researched, exact gameplay-trigger requirements, science research, disabled/research-disabled blockers, and the next currently actionable technology. Never infer prerequisite order or trigger details from model memory.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name'],
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 200 },
+        max_nodes: { type: 'integer', minimum: 1, maximum: 64, default: 32 },
+      },
+    },
+  },
+}
+
 export const toolDefinitions = [
   ...base.toolDefinitions,
   solveProductionDefinition,
@@ -310,6 +340,7 @@ export const toolDefinitions = [
   localSpatialObservationDefinition,
   placementPlannerDefinition,
   constructionPlanValidationDefinition,
+  researchPathDefinition,
 ]
 export function toolCommand(name, args) {
   if (name === 'solveProduction') return renderSolveProduction(args)
@@ -317,5 +348,6 @@ export function toolCommand(name, args) {
   if (name === 'getLocalSpatialObservation') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","spatial_observation",${luaTable(parseSpatialObservation(args))})))`
   if (name === 'planPlacement') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","plan_placement",${luaTable(parsePlacement(args))})))`
   if (name === 'validateConstructionPlan') return renderConstructionPlan(args)
+  if (name === 'getResearchPath') return renderResearchPath(args)
   return base.toolCommand(name, args)
 }
