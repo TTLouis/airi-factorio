@@ -37,12 +37,12 @@ describe('recipe knowledge', () => {
       const category = filters[0]?.crafting_category
       if (category === 'oil-processing') {
         return {
-          refinery-z: {
+          'refinery-z': {
             type: 'assembling-machine',
             crafting_speed: 2,
             crafting_categories: { 'oil-processing': true },
           },
-          refinery-a: {
+          'refinery-a': {
             type: 'assembling-machine',
             crafting_speed: 1,
             crafting_categories: { 'oil-processing': true },
