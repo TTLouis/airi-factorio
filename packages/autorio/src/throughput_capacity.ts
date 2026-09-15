@@ -12,6 +12,10 @@ export type ThroughputCapacityRequest
     prototype_name: string
     item_name?: string
   }
+  | {
+    kind: 'inserter_instance'
+    unit_number: number
+  }
 
 const MAX_NAME_LENGTH = 200
 const MAX_RATE = 1_000_000_000
@@ -24,14 +28,71 @@ function valid_positive_number(value: unknown): value is number {
   return typeof value === 'number' && value === value && value > 0 && value < math.huge && value <= MAX_RATE
 }
 
+function valid_unit_number(value: unknown): value is number {
+  return typeof value === 'number' && value >= 1 && math.floor(value) === value
+}
+
 function fail(message: string) {
   return { ok: false as const, error: { code: 'INVALID_REQUEST' as const, message } }
 }
 
+function entity_summary(entity: any) {
+  if (!entity || !entity.valid) return undefined
+  return {
+    name: entity.name,
+    type: entity.type,
+    unit_number: entity.unit_number,
+    position: entity.position,
+    direction: entity.direction,
+  }
+}
+
+function inserter_transfer_rate_unvalidated() {
+  return {
+    validated: false as const,
+    reason: 'inserter items-per-second depends on pickup/drop topology and belt state; no fixed throughput is asserted without scenario validation',
+  }
+}
+
 export function throughput_capacity(actor: ControlledActor, request: ThroughputCapacityRequest) {
   if (!actor || !actor.is_valid) return fail('controlled actor is unavailable')
-  if (!request || !valid_name(request.prototype_name)) return fail('prototype_name must be a bounded non-empty string')
+  if (!request) return fail('request is required')
 
+  if (request.kind === 'inserter_instance') {
+    if (!valid_unit_number(request.unit_number)) return fail('unit_number must be a positive integer')
+    const entity = game.get_entity_by_unit_number(request.unit_number as any)
+    if (!entity || !entity.valid) return fail(`entity not found: ${request.unit_number}`)
+    if (entity.surface.index !== actor.surface.index) return fail('entity is on another surface')
+    if (entity.type !== 'inserter') return fail(`entity is not an inserter: ${request.unit_number}`)
+
+    const held = entity.held_stack
+    return {
+      ok: true as const,
+      kind: 'inserter_instance' as const,
+      unit_number: request.unit_number,
+      prototype_name: entity.name,
+      active: entity.active,
+      target_pickup_count: entity.inserter_target_pickup_count,
+      stack_size_override: entity.inserter_stack_size_override,
+      pickup_from_left_lane: entity.pickup_from_left_lane,
+      pickup_from_right_lane: entity.pickup_from_right_lane,
+      pickup_position: entity.pickup_position,
+      drop_position: entity.drop_position,
+      pickup_target: entity_summary(entity.pickup_target),
+      drop_target: entity_summary(entity.drop_target),
+      held_stack: held?.valid_for_read
+        ? { name: held.name, count: held.count }
+        : undefined,
+      transfer_rate: inserter_transfer_rate_unvalidated(),
+      evidence_ids: [
+        `engine:entity:${request.unit_number}:inserter_target_pickup_count`,
+        `engine:entity:${request.unit_number}:inserter_stack_size_override`,
+        `engine:entity:${request.unit_number}:pickup_drop_topology`,
+      ],
+    }
+  }
+
+  if (!valid_name(request.prototype_name)) return fail('prototype_name must be a bounded non-empty string')
   const prototype = (prototypes.entity as any)[request.prototype_name]
   if (!prototype) return fail(`entity prototype not found: ${request.prototype_name}`)
 
@@ -45,8 +106,6 @@ export function throughput_capacity(actor: ControlledActor, request: ThroughputC
       return fail('required_rate_per_second must be positive and bounded when provided')
     }
 
-    // Factorio's prototype contract defines belt_speed * 480 as the maximum
-    // unstacked item rate across both lanes. One lane is exactly half of it.
     const base_belt_rate = prototype.belt_speed * 480
     const base_lane_rate = prototype.belt_speed * 240
     const stack_size = 1 + (actor.force.belt_stack_size_bonus ?? 0)
@@ -127,10 +186,7 @@ export function throughput_capacity(actor: ControlledActor, request: ThroughputC
         pickup_position: prototype.inserter_pickup_position,
         drop_position: prototype.inserter_drop_position,
       },
-      transfer_rate: {
-        validated: false as const,
-        reason: 'inserter items-per-second depends on pickup/drop topology and belt state; no fixed throughput is asserted without scenario validation',
-      },
+      transfer_rate: inserter_transfer_rate_unvalidated(),
       evidence_ids: [
         `engine:prototype:${request.prototype_name}:inserter`,
         prototype.bulk === true ? 'engine:force:bulk_inserter_capacity_bonus' : 'engine:force:inserter_stack_size_bonus',
@@ -139,5 +195,5 @@ export function throughput_capacity(actor: ControlledActor, request: ThroughputC
     }
   }
 
-  return fail('kind must be belt or inserter')
+  return fail('kind must be belt, inserter, or inserter_instance')
 }
