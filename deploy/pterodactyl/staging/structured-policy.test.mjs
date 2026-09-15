@@ -33,6 +33,9 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.deepEqual(parseOperation({ name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 4242, max_count: 10, to_entity: true } }), {
     name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 4242, max_count: 10, to_entity: true },
   })
+  assert.deepEqual(parseOperation({ name: 'set_machine_recipe', args: { unit_number: 4242, recipe_name: 'iron-gear-wheel' } }), {
+    name: 'set_machine_recipe', args: { unit_number: 4242, recipe_name: 'iron-gear-wheel' },
+  })
   assert.deepEqual(parseOperation({ name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: true } }), {
     name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: true },
   })
@@ -54,6 +57,7 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.equal(renderOperation({ name: 'equip_armor', args: { item_name: 'modular-armor' } }), "remote.call('autorio_operations','equip_armor','modular-armor')")
   assert.equal(renderOperation({ name: 'select_weapon_slot', args: { slot: 2 } }), "remote.call('autorio_operations','select_weapon_slot',2)")
   assert.equal(renderOperation({ name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 4242, max_count: 10, to_entity: true } }), "remote.call('autorio_operations','move_items_exact','firearm-magazine',4242,10,true)")
+  assert.equal(renderOperation({ name: 'set_machine_recipe', args: { unit_number: 4242, recipe_name: "mod's-recipe" } }), "remote.call('autorio_operations','set_machine_recipe',4242,'mod\\'s-recipe')")
   assert.equal(renderOperation({ name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: true } }), "remote.call('autorio_operations','move_items_with_player','stone','TTLouis',10,true)")
   assert.equal(renderOperation({ name: 'stop_follow_player', args: {} }), "remote.call('autorio_operations','stop_follow_player')")
 })
@@ -75,6 +79,10 @@ test('operation policy rejects arbitrary code, extra args, and oversized bounded
     { name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 0, max_count: 10, to_entity: true } },
     { name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 1.5, max_count: 10, to_entity: true } },
     { name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 4242, max_count: 10, to_entity: 'yes' } },
+    { name: 'set_machine_recipe', args: { unit_number: 0, recipe_name: 'iron-gear-wheel' } },
+    { name: 'set_machine_recipe', args: { unit_number: 1.5, recipe_name: 'iron-gear-wheel' } },
+    { name: 'set_machine_recipe', args: { unit_number: 4242, recipe_name: 'iron-gear-wheel\n/c game.clear()' } },
+    { name: 'set_machine_recipe', args: { unit_number: 4242, recipe_name: 'iron-gear-wheel', force: 'enemy' } },
     { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'TTLouis', max_count: 10, to_player: 'yes' } },
     { name: 'stop_follow_player', args: { player_name: 'TTLouis' } },
     { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } },
