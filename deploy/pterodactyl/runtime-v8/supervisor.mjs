@@ -66,10 +66,6 @@ export function configuration(raw = {}, env = process.env) {
   return config
 }
 
-// airi-config.json holds AIRI's own non-secret runtime configuration only.
-// Factorio account/listing settings (FACTORIO_USERNAME/FACTORIO_TOKEN) and
-// provider credentials (OPENAI_API_KEY) are never part of this file: the
-// former flows into data/server-settings.json, the latter stays env-only.
 export const AIRI_CONFIG_DEFAULTS = {
   actorMode: 'npc',
   chatPlayers: '',
@@ -82,11 +78,6 @@ export const AIRI_CONFIG_DEFAULTS = {
   shutdownTimeoutMs: 60000,
 }
 
-// Fills in any default field missing from an existing config without
-// touching values the user already set, and keeps setup-controlled provider
-// fields synchronized with the effective runtime values. Pterodactyl's
-// OPENAI_API_BASEURL and OPENAI_MODEL values therefore remain visible in
-// airi-config.json instead of leaving stale defaults behind.
 export function migrateConfig(raw = {}, env = process.env) {
   check(raw && typeof raw === 'object' && !Array.isArray(raw), 'airi-config.json must be an object')
   const next = { ...AIRI_CONFIG_DEFAULTS, ...raw }
@@ -117,7 +108,9 @@ function parseStatus(text) {
 
 function expectedCancellation(error) {
   const message = error instanceof Error ? error.message : String(error)
-  return message === 'Provider request cancelled' || message === 'Model turn was cancelled or superseded'
+  return message === 'Provider request cancelled'
+    || message === 'Model turn was cancelled or superseded'
+    || message === 'NPC actor epoch changed; stale model turn cancelled'
 }
 
 export class Session {
@@ -135,6 +128,7 @@ export class Session {
     this.eventQueue = Promise.resolve()
     this.lastCompletionAt = 0
     this.lastStatus = null
+    this.authorizationPromise = null
   }
 
   cleanEnv() {
@@ -169,26 +163,36 @@ export class Session {
   }
 
   async ensureAuthorization() {
-    const current = await this.rawStatus()
-    const stable = current.revision === 'airi-deploy-v8-npc-staging'
-      && current.session === this.session
-      && current.mode === 'npc'
-      && current.allowed === true
-      && current.actor_kind === 'standalone_character'
-      && Number.isSafeInteger(current.actor_id)
-      && current.actor_id > 0
-      && Number.isSafeInteger(current.epoch)
-      && current.epoch > 0
-    if (stable) {
-      this.lastStatus = current
-      return current
-    }
+    if (this.authorizationPromise) return this.authorizationPromise
+    this.authorizationPromise = (async () => {
+      const current = await this.rawStatus()
+      const stable = current.revision === 'airi-deploy-v8-npc-staging'
+        && current.session === this.session
+        && current.mode === 'npc'
+        && current.allowed === true
+        && current.actor_kind === 'standalone_character'
+        && Number.isSafeInteger(current.actor_id)
+        && current.actor_id > 0
+        && Number.isSafeInteger(current.epoch)
+        && current.epoch > 0
+      if (stable) {
+        this.lastStatus = current
+        return current
+      }
 
-    if (this.agent?.active) {
-      this.agent.cancel()
-      this.log('NPC identity/session changed; active model turn cancelled before rebind')
+      if (this.agent?.active) {
+        this.agent.cancel()
+        this.log('NPC identity/session changed; active model turn cancelled before rebind')
+      }
+      return this.bindNpc()
+    })()
+
+    try {
+      return await this.authorizationPromise
     }
-    return this.bindNpc()
+    finally {
+      this.authorizationPromise = null
+    }
   }
 
   async start() {
@@ -288,11 +292,22 @@ export class Session {
       return
     }
 
+    const recovery = line.match(/\[AUTORIO\] Recovered standalone NPC actor_id=(\d+) -> (\d+) without inventory transfer/)
+    if (recovery) {
+      this.agent.cancel()
+      this.queueEvent(async () => {
+        await this.ensureAuthorization()
+        await this.printChat(`I was killed or lost my body and respawned. Previous actor ${recovery[1]}, replacement actor ${recovery[2]}. The interrupted task was cancelled.`)
+      })
+      return
+    }
+
     if (line.includes('[AUTORIO] All operations completed') && Date.now() - this.lastCompletionAt > 250) {
       this.lastCompletionAt = Date.now()
       this.queueEvent(async () => {
         if (!this.agent.active) return
         await this.ensureAuthorization()
+        if (!this.agent.active) return
         const result = await this.agent.completed()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
