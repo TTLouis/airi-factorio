@@ -1,7 +1,7 @@
 import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import { describe, expect, it, vi } from 'vitest'
-import { find_long_range_entities } from './discovery'
+import { find_long_range_entities, find_nearest_enemy } from './discovery'
 
 type Filter = {
   position: { x: number, y: number }
@@ -46,12 +46,14 @@ function make_context(entities: LuaEntity[]) {
       }
       return nearest
     }),
+    find_nearest_enemy: vi.fn(),
   }
 
   const actor = {
     is_valid: true,
     position,
     surface,
+    force: { name: 'player', index: 1 },
   } as unknown as ControlledActor
 
   return { actor, surface }
@@ -131,5 +133,58 @@ describe('long-range discovery', () => {
     })
     expect(surface.find_entities_filtered).not.toHaveBeenCalled()
     expect(surface.get_closest).not.toHaveBeenCalled()
+  })
+
+  it('uses Factorio native nearest-enemy search for distant hostile discovery', () => {
+    const { actor, surface } = make_context([])
+    const enemy = {
+      valid: true,
+      name: 'biter-spawner',
+      type: 'unit-spawner',
+      position: { x: -120, y: 90 },
+      force: { name: 'enemy' },
+      unit_number: 77,
+      health: 350,
+    } as unknown as LuaEntity
+    surface.find_nearest_enemy.mockReturnValue(enemy)
+
+    const result = find_nearest_enemy(actor, 2048)
+
+    expect(surface.find_nearest_enemy).toHaveBeenCalledWith({
+      position: { x: 0, y: 0 },
+      max_distance: 2048,
+      force: actor.force,
+    })
+    expect(result).toMatchObject({
+      found: true,
+      max_distance: 2048,
+      entity: {
+        name: 'biter-spawner',
+        type: 'unit-spawner',
+        position: { x: -120, y: 90 },
+        distance: 150,
+        unit_number: 77,
+      },
+    })
+    expect(surface.find_entities_filtered).not.toHaveBeenCalled()
+  })
+
+  it('bounds nearest-enemy discovery and reports no target without broad entity scans', () => {
+    const { actor, surface } = make_context([])
+    surface.find_nearest_enemy.mockReturnValue(undefined)
+
+    const result = find_nearest_enemy(actor, 99999)
+
+    expect(surface.find_nearest_enemy).toHaveBeenCalledWith({
+      position: { x: 0, y: 0 },
+      max_distance: 4096,
+      force: actor.force,
+    })
+    expect(result).toEqual({
+      found: false,
+      actor_position: { x: 0, y: 0 },
+      max_distance: 4096,
+    })
+    expect(surface.find_entities_filtered).not.toHaveBeenCalled()
   })
 })
