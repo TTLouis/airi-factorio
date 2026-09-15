@@ -202,7 +202,7 @@ describe('bounded combat controller', () => {
     ;(globalThis as any).game.tick += 1
     controller.tick(actor)
     expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
-    expect(controller.status()).toMatchObject({ path: { attempts: 1, waypoints_remaining: 2 } })
+    expect(controller.status()).toMatchObject({ path: { mode: 'approach', attempts: 1, waypoints_remaining: 2 } })
   })
 
   it('bounds repeated no-path results and cancels dependent combat work with an explicit receipt', () => {
@@ -530,8 +530,8 @@ describe('bounded area-clearing combat', () => {
     })
   })
 
-  it('retreats toward the latest support turret while firing at a close mobile threat', () => {
-    const { actor, character, manager, controller } = world()
+  it('pathfinds back to the latest support turret while firing instead of retreating blindly through terrain', () => {
+    const { actor, character, manager, surface, controller } = world()
     controller.submit_clear(80)
     const task = manager.player_state.parameters_attack_nearest_enemy!
     task.last_turret_position = { x: -10, y: 0 }
@@ -541,7 +541,41 @@ describe('bounded area-clearing combat', () => {
 
     controller.tick(actor)
     expect(actor.set_shooting_state).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'shooting_selected' }))
+    expect(surface.request_path).toHaveBeenCalledWith(expect.objectContaining({
+      start: { x: 15, y: 0 },
+      goal: { x: -10, y: 0 },
+      radius: 1.5,
+    }))
+    expect(controller.status()).toMatchObject({ path: { mode: 'retreat', attempts: 1 } })
+
+    const requestId = controller.status().path.request_id
+    controller.on_path_finished({ id: requestId, path: [waypoint(10, 4), waypoint(0, 4), waypoint(-10, 0)], try_again_later: false } as any)
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+    expect(actor.set_shooting_state).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'shooting_selected' }))
     expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
+  })
+
+  it('low health with an established support position retreats by path instead of aborting or walking straight through obstacles', () => {
+    const { actor, character, manager, surface, controller } = world()
+    character.health = 50
+    character.max_health = 250
+    character.can_shoot.mockReturnValue(false)
+    controller.submit_clear(80)
+    const task = manager.player_state.parameters_attack_nearest_enemy!
+    task.last_turret_position = { x: -12, y: 3 }
+    task.turrets_placed = 1
+    actor.position = { x: 10, y: 0 }
+
+    controller.tick(actor)
+
+    expect(surface.request_path).toHaveBeenCalledWith(expect.objectContaining({
+      start: { x: 10, y: 0 },
+      goal: { x: -12, y: 3 },
+      radius: 1.5,
+    }))
+    expect(controller.status()).toMatchObject({ path: { mode: 'retreat' } })
+    expect(controller.status().last_result).not.toMatchObject({ code: 'low_health' })
   })
 
   it('aborts instead of making a suicidal unsupported push at low health', () => {
