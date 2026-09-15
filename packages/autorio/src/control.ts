@@ -164,6 +164,13 @@ remote.add_interface('autorio_operations', {
     }
     return result
   },
+  move_items_exact: (item_name: string, unit_number: number, max_count: number, to_entity: boolean): [boolean, string] => {
+    const result = basic_operation_controller.submit_move_exact(item_name, unit_number, max_count, to_entity)
+    if (result[0]) {
+      log(`[AUTORIO] New exact move_items task for ${item_name} ${to_entity ? 'to' : 'from'} entity unit ${unit_number}`)
+    }
+    return result
+  },
   move_items_with_player: (item_name: string, player_name: string, max_count: number, to_player: boolean): [boolean, string] => {
     const result = basic_operation_controller.submit_player_move(item_name, player_name, max_count, to_player)
     if (result[0]) {
