@@ -191,6 +191,15 @@ test('session starts zero-player standalone NPC over authenticated loopback RCON
   assert.equal(status.connected_players, 0)
   assert.equal(status.allowed, true)
   assert.match(logs.find(line => line.includes('AIRI Factorio ready')) ?? '', /AIRI Factorio ready; npc=AIRI \(airi\), actor_id=18/)
+
+  let reserveAuthorizationChecks = 0
+  session.ensureAuthorization = async () => {
+    reserveAuthorizationChecks++
+    throw new Error('provider budget reserve must not reauthorize the NPC')
+  }
+  await session.agent.reserve({ epoch: status.epoch, actorId: status.actor_id })
+  assert.equal(reserveAuthorizationChecks, 0)
+
   const clean = await session.stop('requested')
   assert.equal(clean, true)
   const saved = await fsp.readFile(save, 'utf8')
