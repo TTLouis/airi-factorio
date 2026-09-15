@@ -34,8 +34,13 @@ export function new_awareness_controller() {
 
     // A standalone character does not get the normal player exploration bubble.
     // Keep a 3x3 chunk generation/chart window centered on AIRI's current chunk
-    // so the pathfinder has terrain ahead and humans can see where AIRI went.
+    // so the pathfinder always has real terrain ahead and humans can see where
+    // AIRI has travelled. Generation requests are normally asynchronous; force
+    // the small pending window to finish here so entering unexplored terrain
+    // cannot leave pathfinding waiting on chunks that have only been requested.
+    // This runs only when AIRI crosses a chunk boundary, never every tick.
     actor.surface.request_to_generate_chunks(actor.position, RADAR_CHUNK_RADIUS)
+    actor.surface.force_generate_chunk_requests()
     actor.force.chart(actor.surface, {
       left_top: {
         x: (chunk_x - RADAR_CHUNK_RADIUS) * CHUNK_SIZE,
