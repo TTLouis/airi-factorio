@@ -25,6 +25,10 @@ const longRangeEntitiesSchema = z.object({
   limit: z.number().int().min(1).max(16).default(8),
 }).strict()
 
+const nearestEnemySchema = z.object({
+  max_distance: z.number().int().min(1).max(4096).default(1024),
+}).strict()
+
 const entityStatusSchema = z.object({
   name: factorioNameSchema,
   radius: z.number().int().min(1).max(32).default(8),
@@ -133,6 +137,18 @@ export const tools: ToolFunction[] = [
       const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery", "find_entities", ${renderLuaString(parsed.name)}, ${parsed.max_radius}, ${parsed.limit})))`
       const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
       logger.withFields({ output: response.data.output, parameters: parsed }).debug('Long-range entities')
+      return response.data.output
+    },
+  },
+  {
+    name: 'findNearestEnemy',
+    description: 'Use Factorio native nearest-enemy search to discover the closest hostile entity without knowing its prototype name, up to 4096 tiles. Use this when hunting/clearing enemies after the local 64-tile area is empty.',
+    schema: nearestEnemySchema,
+    fn: async ({ parameters }) => {
+      const parsed = nearestEnemySchema.parse(parameters ?? {})
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery", "find_nearest_enemy", ${parsed.max_distance})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Nearest hostile')
       return response.data.output
     },
   },
