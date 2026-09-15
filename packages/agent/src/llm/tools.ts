@@ -38,6 +38,11 @@ const entityGeometrySchema = z.object({
   unit_number: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 }).strict()
 
+const logisticsTopologySchema = z.object({
+  unit_number: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  radius: z.number().int().min(1).max(16).default(8),
+}).strict()
+
 const playerStatusSchema = z.object({
   player_name: factorioNameSchema,
 }).strict()
@@ -100,11 +105,8 @@ export const tools: ToolFunction[] = [
     fn: async ({ parameters }) => {
       const item = factorioNameSchema.parse(parameters.item)
       logger.withFields({ item }).debug('Try to get recipe for item')
-
       const response = await v2FactorioConsoleCommandRawPost({
-        body: {
-          input: `/c remote.call("autorio_tools", "get_recipe", ${renderLuaString(item)})`,
-        },
+        body: { input: `/c remote.call("autorio_tools", "get_recipe", ${renderLuaString(item)})` },
       })
       logger.withFields({ response: response.data.output }).debug('Recipe')
       return response.data.output
@@ -193,6 +195,18 @@ export const tools: ToolFunction[] = [
       const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "entity_geometry", ${parsed.unit_number})))`
       const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
       logger.withFields({ output: response.data.output, parameters: parsed }).debug('Exact entity geometry')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getLogisticsTopology',
+    description: 'Inspect a bounded semantic logistics graph centered on one exact same-surface entity: engine belt inputs/outputs, actual inserter pickup/drop routes touching the center, direct mining-drill output, and connected fluidbox neighbours. Use this instead of inferring logistics from nearby coordinates.',
+    schema: logisticsTopologySchema,
+    fn: async ({ parameters }) => {
+      const parsed = logisticsTopologySchema.parse(parameters)
+      const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "logistics_topology", ${parsed.unit_number}, ${parsed.radius})))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Bounded logistics topology')
       return response.data.output
     },
   },
