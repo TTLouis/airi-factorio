@@ -185,12 +185,12 @@ export class NpcAgentLoop {
   }
 
   async captureEpoch() {
-    return deploymentStatus(this.rcon)
+    return deploymentStatus(this.rcon, { requireAllowed: true })
   }
 
   async assertCurrent() {
-    check(this.epoch, 'No active NPC actor epoch')
-    const current = await deploymentStatus(this.rcon)
+    if (!this.active || !this.epoch) throw new AgentLoopError('Model turn was cancelled or superseded')
+    const current = await deploymentStatus(this.rcon, { requireAllowed: true })
     if (actorChanged(this.epoch, current)) {
       this.reset()
       throw new AgentLoopError('NPC actor epoch changed; stale model turn cancelled')
@@ -298,6 +298,7 @@ export class NpcAgentLoop {
 
   async callProvider(current, generation, { round, allowTools = true, recoveryAttempt = 0 }) {
     await this.reserve({ epoch: current.epoch, actorId: current.actor_id })
+    check(generation === this.generation && this.active && this.epoch, 'Model turn was cancelled or superseded')
     await this.assertCurrent()
 
     const controller = new AbortController()
