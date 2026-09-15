@@ -170,6 +170,18 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     }
   }
 
+  function interrupt_current_with(recovery_task: PlayerParameters, resume_task: PlayerParameters) {
+    if (player_state.task_state === TaskStates.IDLE) return false
+    const interrupted_type = player_state.task_state
+    stop_task_controls()
+    clear_task_state_without_controls()
+    task_queue.unshift(resume_task)
+    task_queue.unshift(recovery_task)
+    log(`[AUTORIO] Temporarily interrupted ${interrupted_type} with ${recovery_task.type}; original task will resume afterward`)
+    next_task()
+    return true
+  }
+
   function is_task_queue_empty() {
     return task_queue.length === 0
   }
@@ -339,6 +351,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     player_state,
     add_task,
     next_task,
+    interrupt_current_with,
     is_task_queue_empty,
     get_status_snapshot,
     reset_task_state,
