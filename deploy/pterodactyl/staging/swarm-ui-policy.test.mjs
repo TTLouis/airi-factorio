@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { navigationObstaclePolicy } from './npc-agent-loop.mjs'
+import { navigationObstaclePolicy } from '../runtime-v8/supervisor.mjs'
 
 test('explicit preserve-tree requests disable natural obstacle clearing and continue preserves policy', () => {
   assert.deepEqual(navigationObstaclePolicy('去矿区，但是不要砍树'), { shouldUpdate: true, clearObstacles: false })
