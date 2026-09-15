@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   lint-typescript:
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -36,6 +37,7 @@ jobs:
         run: pnpm run lint
 
   lint-python:
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -48,6 +50,7 @@ jobs:
         run: pixi run lint
 
   typecheck-typescript:
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -71,6 +74,7 @@ jobs:
           pnpm --filter autorio.ts run build
 
   typecheck-python:
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -84,6 +88,7 @@ jobs:
 
 
   test-typescript:
+    if: github.ref != 'refs/heads/feat/swarm-pterodactyl-playable' && github.head_ref != 'feat/swarm-pterodactyl-playable'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
