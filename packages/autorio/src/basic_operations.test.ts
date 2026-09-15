@@ -88,6 +88,29 @@ describe('basic operation ownership and receipts', () => {
     })
   })
 
+  it('queues exact entity transfer identity and records it in the receipt', () => {
+    const c = context()
+
+    expect(c.controller.submit_move_exact('firearm-magazine', 4242, 25, true)).toEqual([true, 'Task started'])
+    expect(c.manager.player_state.parameters_move_items).toMatchObject({
+      operation_id: 1,
+      owner_actor_id: 18,
+      owner_actor_kind: 'standalone_character',
+      owner_force_index: 1,
+      item_name: 'firearm-magazine',
+      target_unit_number: 4242,
+      max_count: 25,
+      to_entity: true,
+    })
+    expect(c.controller.status().last_result).toMatchObject({
+      code: 'queued',
+      accepted: true,
+      target_unit_number: 4242,
+      item_name: 'firearm-magazine',
+      to_entity: true,
+    })
+  })
+
   it('rejects malformed precise placement before queueing work', () => {
     const c = context()
 
@@ -105,6 +128,8 @@ describe('basic operation ownership and receipts', () => {
     expect(c.controller.status().last_result?.code).toBe('invalid_count')
     expect(c.controller.submit_move('iron-plate', 'steel-chest', 0, true)[0]).toBe(false)
     expect(c.controller.status().last_result?.code).toBe('invalid_max_count')
+    expect(c.controller.submit_move_exact('iron-plate', 0, 1, true)[0]).toBe(false)
+    expect(c.controller.status().last_result?.code).toBe('invalid_unit_number')
     expect(c.controller.submit_wait(360001)[0]).toBe(false)
     expect(c.controller.status().last_result?.code).toBe('invalid_ticks')
     expect(c.manager.get_status_snapshot()).toMatchObject({ task_state: TaskStates.IDLE, queue_length: 0 })
