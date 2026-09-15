@@ -34,7 +34,7 @@ const playerStatusSchema = z.object({
   player_name: factorioNameSchema,
 }).strict()
 
-async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow' | 'autorio_equipment') {
+async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow' | 'autorio_defense' | 'autorio_equipment') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
   return response.data.output
@@ -159,6 +159,12 @@ export const tools: ToolFunction[] = [
     description: 'Read AIRI persistent player-follow state, target player, configured distance, current distance, and whether follow movement is active, waiting for player availability, or blocked by surface mismatch.',
     schema: z.object({}).strict(),
     fn: async () => readRemoteStatus('autorio_follow'),
+  },
+  {
+    name: 'getDefenseStatus',
+    description: 'Read AIRI persistent follow auto-defense policy, defensive radius, and any current nearby hostile target. Auto-defense may shoot while following but does not chase.',
+    schema: z.object({}).strict(),
+    fn: async () => readRemoteStatus('autorio_defense'),
   },
   {
     name: 'getCraftingStatus',
