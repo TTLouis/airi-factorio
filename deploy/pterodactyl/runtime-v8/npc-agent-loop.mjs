@@ -2,6 +2,13 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import { AgentLoopError, NpcAgentLoop as BaseNpcAgentLoop, NpcDialogueMemory as BaseNpcDialogueMemory } from '../staging/npc-agent-loop.mjs'
+import {
+  addTaskBoardEvidence,
+  reconcileTaskBoard,
+  sanitizeTaskBoard,
+  setTaskBoardStatus,
+  taskBoardProgress,
+} from './common.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
 import { renderOperation, toolCommand } from './structured-policy.mjs'
 
@@ -16,7 +23,9 @@ const PLAN_HISTORY_LIMIT = 24
 const DURABLE_PLAN_PROMPT = `
 ## Durable goal and plan state
 
-The Pterodactyl harness may provide a [PLAN_STATE] message. It is harness-owned durable goal/plan context for this logical NPC and survives ordinary model turns and server restarts. Use it to resume a prior task, answer what you were doing, or continue after a pause. It is not authoritative live Factorio state: re-observe mutable world state before depending on it.
+The Pterodactyl harness may provide a [PLAN_STATE] message. It is harness-owned durable goal/plan context for this logical NPC and survives ordinary model turns and server restarts. Use it to resume a prior task, answer what you were doing, or continue after a pause. It is not authoritative live Factorio state: re-observe mutable game state before depending on it.
+
+The task_board field is the canonical single-NPC Task Board Lite. Its stable step ids, statuses, completed count, evidence, and revision are harness-owned. Your plan/currentStep fields are proposals used to advance or intentionally replan the remaining work; do not assume that changing the length of your plan array resets completed progress.
 
 For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
 
@@ -75,15 +84,84 @@ function safePersistentRuntime(value) {
   }
 }
 
+function visibleTaskBoard(board) {
+  if (!board || board.kind !== 'task_board_lite') return undefined
+  return {
+    kind: board.kind,
+    goal_id: board.goal_id,
+    status: board.status,
+    blocker: board.blocker,
+    pause_reason: board.pause_reason,
+    revision: board.revision,
+    completed_count: board.completed_count,
+    total_steps: board.total_steps,
+    active_index: board.active_index,
+    active_step_id: board.active_step_id,
+    steps: board.steps,
+    evidence: (board.evidence ?? []).slice(-8),
+    events: (board.events ?? []).slice(-12),
+  }
+}
+
+function receiptEvidence(raw, outcome) {
+  try {
+    const parsed = JSON.parse(raw)
+    const receipt = outcome === 'failed'
+      ? (parsed?.last_cancelled_batch ?? parsed?.last_completed_batch)
+      : (parsed?.last_completed_batch ?? parsed?.last_cancelled_batch)
+    const batchId = Number.isSafeInteger(receipt?.batch_id) ? receipt.batch_id : undefined
+    return {
+      kind: outcome === 'failed' ? 'operation_error_receipt' : 'operation_receipt',
+      ref: batchId === undefined ? '' : `batch_${batchId}`,
+      summary: JSON.stringify({
+        outcome,
+        task_state: parsed?.task_state,
+        queue_length: parsed?.queue_length,
+        batch_id: batchId,
+        task_count: receipt?.task_count,
+        task_types: Array.isArray(receipt?.task_types) ? receipt.task_types.slice(0, 16) : undefined,
+        tick: receipt?.tick,
+        reason: receipt?.reason,
+      }),
+    }
+  }
+  catch {
+    return {
+      kind: outcome === 'failed' ? 'operation_error_receipt' : 'operation_receipt',
+      ref: '',
+      summary: cleanMemoryText(raw, 1200),
+    }
+  }
+}
+
 export class NpcDialogueMemory extends BaseNpcDialogueMemory {
   constructor(options = {}) {
     super(options)
     this.planByNpc = new Map()
   }
 
+  ensureTaskBoard(state) {
+    if (!state) return undefined
+    if (!state.task_board) {
+      state.task_board = sanitizeTaskBoard(undefined, {
+        fallbackPlan: state.plan,
+        fallbackCurrentStep: state.current_step,
+        goalId: state.goal_id,
+        now: state.updated_at,
+      })
+      state.task_board = setTaskBoardStatus(state.task_board, state.status, {
+        blocker: state.blocker,
+        pauseReason: state.pause_reason,
+        now: state.updated_at,
+      })
+    }
+    return state.task_board
+  }
+
   planContext(key) {
     const state = this.planByNpc.get(key)
     if (!state) return ''
+    const taskBoard = this.ensureTaskBoard(state)
     const visible = {
       goal_id: state.goal_id,
       owner: state.owner,
@@ -92,6 +170,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       blocker: state.blocker,
       pause_reason: state.pause_reason,
       persistent_runtime: state.persistent_runtime,
+      task_board: visibleTaskBoard(taskBoard),
       plan: state.plan,
       current_step: state.current_step,
       current_step_text: currentPlanStep(state.plan, state.current_step),
@@ -108,7 +187,9 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
   }
 
   currentPlan(key) {
-    return key ? this.planByNpc.get(key) : undefined
+    const state = key ? this.planByNpc.get(key) : undefined
+    this.ensureTaskBoard(state)
+    return state
   }
 
   recordPlan(key, requestInfo, plan, { continuation = false, persistentRuntime } = {}) {
@@ -216,6 +297,46 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return { state, blockedByHarness: false, changed: true }
   }
 
+  reconcileTaskBoard(key, previousBoard, plan, stateResult, { allowReplan = false } = {}) {
+    const state = stateResult?.state
+    if (!state) return stateResult
+    const now = state.updated_at ?? Date.now()
+    let board = previousBoard
+      ? sanitizeTaskBoard(previousBoard, { fallbackPlan: state.plan, fallbackCurrentStep: state.current_step, goalId: state.goal_id, now })
+      : sanitizeTaskBoard(state.task_board, { fallbackPlan: state.plan, fallbackCurrentStep: state.current_step, goalId: state.goal_id, now })
+
+    if (state.status === 'completed') {
+      board = setTaskBoardStatus(board, 'completed', { now })
+    }
+    else {
+      board = reconcileTaskBoard(board, plan.plan, plan.currentStep, { now, allowReplan })
+      board = setTaskBoardStatus(board, state.status, {
+        blocker: state.blocker,
+        pauseReason: state.pause_reason,
+        now,
+      })
+    }
+
+    state.task_board = board
+    if (state.status !== 'completed') {
+      state.plan = board.steps.map(step => step.description)
+      state.current_step = board.active_index
+    }
+    this.planByNpc.set(key, state)
+    return { ...stateResult, state }
+  }
+
+  recordBoardEvidence(key, evidence) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state) return undefined
+    const board = this.ensureTaskBoard(state)
+    state.task_board = addTaskBoardEvidence(board, evidence)
+    state.revision += 1
+    state.updated_at = Date.now()
+    this.planByNpc.set(key, state)
+    return state.task_board
+  }
+
   pausePlan(key, reason = 'cancelled') {
     const previous = key ? this.planByNpc.get(key) : undefined
     if (!previous || previous.status === 'completed') return previous
@@ -235,6 +356,8 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         chat: previous.last_chat_message,
       }].slice(-PLAN_HISTORY_LIMIT),
     }
+    const board = this.ensureTaskBoard(previous)
+    state.task_board = setTaskBoardStatus(board, 'paused', { pauseReason: state.pause_reason, now: state.updated_at })
     this.planByNpc.set(key, state)
     return state
   }
@@ -286,7 +409,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       const value = item.state
       if (!value || typeof value !== 'object' || typeof value.goal_id !== 'string') continue
       if (!['active', 'blocked', 'paused', 'completed'].includes(value.status)) continue
-      this.planByNpc.set(item.key, {
+      const state = {
         goal_id: cleanMemoryText(value.goal_id, 100),
         owner: cleanMemoryText(value.owner, 128),
         objective: cleanMemoryText(value.objective, 1000),
@@ -307,7 +430,23 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
           step: cleanMemoryText(entry?.step, 500),
           chat: cleanMemoryText(entry?.chat, 2000),
         })),
+      }
+      state.task_board = sanitizeTaskBoard(value.task_board, {
+        fallbackPlan: state.plan,
+        fallbackCurrentStep: state.current_step,
+        goalId: state.goal_id,
+        now: state.updated_at,
       })
+      state.task_board = setTaskBoardStatus(state.task_board, state.status, {
+        blocker: state.blocker,
+        pauseReason: state.pause_reason,
+        now: state.updated_at,
+      })
+      if (state.status !== 'completed') {
+        state.plan = state.task_board.steps.map(step => step.description)
+        state.current_step = state.task_board.active_index
+      }
+      this.planByNpc.set(item.key, state)
     }
   }
 }
@@ -386,16 +525,13 @@ function stateFileFromOptions(options) {
 }
 
 function planProgress(plan, stateResult) {
+  const progress = taskBoardProgress(stateResult?.state?.task_board)
   if (stateResult?.blockedByHarness) {
-    const state = stateResult.state
-    const step = currentPlanStep(state?.plan ?? plan.plan, state?.current_step ?? plan.currentStep)
-    return `[Plan paused] ${step || 'Remaining work'}: no Autorio operation was submitted, so AIRI did not pretend that execution continued.`
+    return `[Plan paused] ${progress?.step || 'Remaining work'}: no Autorio operation was submitted, so AIRI did not pretend that execution continued.`
   }
   if (stateResult?.persistentRuntimeActive) return plan.chatMessage
-  if (plan.operations.length > 0 && plan.plan.length > 0) {
-    const index = Math.min(plan.currentStep + 1, plan.plan.length)
-    const step = currentPlanStep(plan.plan, plan.currentStep)
-    return `[Plan ${index}/${plan.plan.length}] ${step}${plan.chatMessage ? ` — ${plan.chatMessage}` : ''}`
+  if (plan.operations.length > 0 && progress?.total > 0) {
+    return `[Plan ${progress.index}/${progress.total}] ${progress.step}${plan.chatMessage ? ` — ${plan.chatMessage}` : ''}`
   }
   if (stateResult?.state?.status === 'completed') {
     return plan.chatMessage ? `[Plan complete] ${plan.chatMessage}` : '[Plan complete] Goal verified complete.'
@@ -416,6 +552,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.persistQueue = Promise.resolve()
     this.traceRequest = null
     this.traceRequestSequence = 0
+    this.planUpdateReason = 'request'
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
       ?? (process.env.NODE_TEST_CONTEXT ? null : path.resolve(process.cwd(), 'logs', 'airi-behavior.jsonl'))
@@ -458,6 +595,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   async request(text, options = {}) {
     await this.loadPersistentState()
     this.lastMemoryKey = `npc:${this.npcId}`
+    this.planUpdateReason = 'request'
     if (this.traceRequest) await this.traceEvent('request.superseded')
     this.traceRequest = {
       id: `req_${Date.now().toString(36)}_${(++this.traceRequestSequence).toString(36)}`,
@@ -529,6 +667,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     try {
       const taskStatus = String(await this.rcon.command(toolCommand('getTaskStatus', {}))).slice(0, 16000)
       await this.traceEvent('factorio.status', { task_status: taskStatus })
+      const evidence = receiptEvidence(taskStatus, this.planUpdateReason === 'failure' ? 'failed' : 'completed')
+      if (this.memory.recordBoardEvidence?.(this.activePlanKey(), evidence)) await this.persistState()
       return taskStatus
     }
     catch (error) {
@@ -573,6 +713,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   async completed() {
     await this.loadPersistentState()
+    this.planUpdateReason = 'completion'
     await this.traceEvent('factorio.completed_signal')
     const taskStatus = await this.taskStatusReceipt()
     return this.continueFromModMessage(
@@ -584,6 +725,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   async failed(errorText) {
     await this.loadPersistentState()
     if (!this.active) return null
+    this.planUpdateReason = 'failure'
     const taskStatus = await this.taskStatusReceipt()
     return this.continueFromModMessage(
       `[MOD] Autorio operation error: ${cleanMemoryText(errorText, 4000)}. Dependent queued operations may have been cancelled. Detailed task receipt: ${taskStatus}`,
@@ -729,6 +871,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     let stateResult
     if (this.requestInfo) {
       this.lastMemoryKey = this.requestInfo.memoryKey
+      const previousState = this.memory.currentPlan?.(this.requestInfo.memoryKey)
+      const previousBoard = previousState?.task_board
       this.memory.remember(this.requestInfo.memoryKey, this.requestInfo.turnId, {
         sender: this.requestInfo.sender,
         user: this.requestInfo.text,
@@ -739,6 +883,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         continuation: this.continuations > 0,
         persistentRuntime,
       })
+      stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, plan, stateResult, {
+        allowReplan: this.planUpdateReason === 'failure',
+      }) ?? stateResult
       await this.persistState()
     }
 
@@ -753,22 +900,30 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         chat_message: plan.chatMessage,
         outcome,
         persistent_runtime: persistentRuntime,
+        task_board: visibleTaskBoard(stateResult?.state?.task_board),
       })
       this.traceRequest = null
     }
     else {
-      await this.traceEvent('request.waiting', { operation_count: commands.length })
+      await this.traceEvent('request.waiting', {
+        operation_count: commands.length,
+        task_board: visibleTaskBoard(stateResult?.state?.task_board),
+      })
     }
 
+    const canonicalPlan = stateResult?.state?.plan ?? plan.plan
+    const canonicalStep = stateResult?.state?.current_step ?? plan.currentStep
+    this.planUpdateReason = 'continuation'
     return {
       chatMessage: planProgress(plan, stateResult),
-      plan: plan.plan,
-      currentStep: plan.currentStep,
+      plan: canonicalPlan,
+      currentStep: canonicalStep,
       operations: plan.operations,
       epoch: before.epoch,
       actorId: before.actor_id,
       goalId: stateResult?.state?.goal_id,
       goalStatus: stateResult?.state?.status,
+      taskBoard: visibleTaskBoard(stateResult?.state?.task_board),
       persistentRuntime: stateResult?.state?.persistent_runtime,
     }
   }
