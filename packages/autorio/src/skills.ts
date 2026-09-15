@@ -1,4 +1,11 @@
 import type { LuaGuiElement, LuaPlayer } from 'factorio:runtime'
+import { get_controlled_actor } from './actors/actor_controller'
+import {
+  analyze_factory_area,
+  latest_factory_area_analysis,
+  list_analyzed_blocks,
+  skill_candidate_definition_from_block,
+} from './factory_area_learning'
 
 export const SKILL_SCHEMA_VERSION = 1
 
@@ -148,9 +155,12 @@ const MAX_TOPOLOGY_NODES = 128
 const MAX_TOPOLOGY_RELATIONS = 256
 const SAFE_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789-'
 const SKILL_EXPORT_BUTTON_PREFIX = 'airi_skill_export__'
-const SKILL_SECTION_WIDTH = 868
-const SKILL_SECTION_HEIGHT = 145
+const FACTORY_ANALYZE_BUTTON_NAME = 'airi_skill_learn_area'
+const FACTORY_SAVE_BUTTON_PREFIX = 'airi_skill_save_block__'
+const FACTORY_DEFAULT_RADIUS = 12
+const SKILL_SECTION_PADDING = 10
 const MAX_UI_SKILLS = 6
+const MAX_UI_BLOCKS = 4
 
 function plain_object(value: any) {
   return value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -668,6 +678,13 @@ function error_message(error: unknown) {
   return 'invalid skill definition'
 }
 
+export function create_skill_candidate_from_factory_block(analysis_id: string, block_id: string) {
+  let candidate = skill_candidate_definition_from_block(analysis_id, block_id, 1)
+  const previous = get_skill_definition(candidate.id)
+  if (previous !== undefined) candidate = skill_candidate_definition_from_block(analysis_id, block_id, previous.revision + 1)
+  return create_skill_candidate(candidate)
+}
+
 export function create_skill_remote_interface() {
   remote.add_interface('autorio_skills', {
     put_definition: (value: unknown) => {
@@ -693,6 +710,21 @@ export function create_skill_remote_interface() {
       catch { return undefined }
     },
     list: () => list_skill_definitions(),
+    analyze_area: (request: unknown = {}) => {
+      const actor = get_controlled_actor()
+      if (!actor || !actor.is_valid) return { ok: false, error: 'controlled actor is unavailable' }
+      return analyze_factory_area(actor, plain_object(request) ? request as any : {})
+    },
+    list_analyzed_blocks: (analysis_id?: string) => list_analyzed_blocks(analysis_id),
+    create_candidate_from_block: (analysis_id: string, block_id: string) => {
+      try {
+        const skill = create_skill_candidate_from_factory_block(analysis_id, block_id)
+        return [true, skill.id, skill.revision]
+      }
+      catch (error) {
+        return [false, error_message(error)]
+      }
+    },
     export: (id: string) => {
       try {
         const result = export_skill(id)
@@ -705,24 +737,77 @@ export function create_skill_remote_interface() {
   })
 }
 
+// Sized by the console column that hosts it. A fixed size here would widen the
+// whole window and clip its own content once the skill list grows.
 function add_skill_section(parent: LuaGuiElement) {
-  const section = parent.add({ type: 'flow', direction: 'vertical' })
-  section.style.width = SKILL_SECTION_WIDTH
-  section.style.height = SKILL_SECTION_HEIGHT
+  const section = parent.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame' })
+  section.style.horizontally_stretchable = true
+  section.style.vertically_stretchable = true
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
   header.style.horizontally_stretchable = true
+  header.style.vertical_align = 'center'
   header.add({ type: 'label', caption: 'Learned / Candidate Skills', style: 'subheader_caption_label' })
-  const body = section.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame_with_padding' })
+  const body = section.add({ type: 'flow', direction: 'vertical' })
   body.style.horizontally_stretchable = true
   body.style.vertically_stretchable = true
+  body.style.padding = SKILL_SECTION_PADDING
+  body.style.vertical_spacing = 6
   return body
+}
+
+function render_factory_learning(body: LuaGuiElement) {
+  const controls = body.add({ type: 'flow', direction: 'horizontal' })
+  controls.style.horizontally_stretchable = true
+  const analyze = controls.add({
+    type: 'button',
+    name: FACTORY_ANALYZE_BUTTON_NAME,
+    caption: 'LEARN AREA',
+    style: 'dialog_button',
+    tooltip: `Deterministically inspect a ${FACTORY_DEFAULT_RADIUS * 2}x${FACTORY_DEFAULT_RADIUS * 2} factory area around your current position. No provider call is used.`,
+  })
+  analyze.style.minimal_width = 130
+  controls.add({ type: 'label', caption: 'Engine scan → factory graph → choose block → SkillCandidate. Observation is not verification.', style: 'grey_label' })
+
+  const analysis = latest_factory_area_analysis()
+  if (!analysis) {
+    body.add({ type: 'label', caption: 'No factory area has been analyzed yet.' })
+    return
+  }
+  body.add({ type: 'label', caption: `Latest analysis ${analysis.id}: ${analysis.entities.length} entities, ${analysis.relations.length} proven relations, ${analysis.blocks.length} production block(s).` })
+  const blocks = list_analyzed_blocks(analysis.id).slice(0, MAX_UI_BLOCKS)
+  if (blocks.length === 0) {
+    body.add({ type: 'label', caption: 'No connected production block with a recipe or mining source was found in the selected area.' })
+    return
+  }
+  const scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame' })
+  scroll.style.maximal_height = 135
+  scroll.style.horizontally_stretchable = true
+  for (const block of blocks) {
+    const row = scroll.add({ type: 'flow', direction: 'horizontal' })
+    row.style.horizontally_stretchable = true
+    const title = row.add({ type: 'label', caption: `Detected Block: ${block.title}`, style: 'semibold_label' })
+    title.style.width = 430
+    const save = row.add({
+      type: 'button',
+      name: `${FACTORY_SAVE_BUTTON_PREFIX}${analysis.id}__${block.block_id}`,
+      caption: 'SAVE SKILL CANDIDATE',
+      style: 'confirm_button',
+      tooltip: 'Convert this deterministic observed block through the existing create_skill_candidate path. It remains candidate, not verified.',
+    })
+    save.style.minimal_width = 190
+    scroll.add({ type: 'label', caption: `Inputs: ${block.inputs.join(', ') || 'unknown'} · Intermediates: ${block.intermediates.join(', ') || 'none'} · Outputs: ${block.outputs.join(', ') || 'unknown'}` })
+    scroll.add({ type: 'label', caption: `Machines: ${block.machines.join(', ') || 'none'} · Relationships: ${block.relation_count}` })
+    scroll.add({ type: 'label', caption: 'Validation: structural=passed · recipe graph=passed when recipes exist · rebuild=not tested · sustained throughput=unvalidated', style: 'grey_label' })
+    if (block.ambiguities.length > 0) scroll.add({ type: 'label', caption: `Ambiguous: ${block.ambiguities.slice(0, 2).join('; ')}`, style: 'grey_label' })
+  }
 }
 
 export function render_skill_export_section(parent: LuaGuiElement) {
   const body = add_skill_section(parent)
+  render_factory_learning(body)
   const skills = list_skill_ui_summaries()
   if (skills.length === 0) {
-    body.add({ type: 'label', caption: 'No explicit skill candidates are registered yet. Observation alone is not treated as a verified skill.' })
+    body.add({ type: 'label', caption: 'No saved skill candidates yet. Analyze an area, choose a detected block, then save it as a candidate.' })
     return
   }
   const scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame' })
@@ -749,6 +834,43 @@ export function render_skill_export_section(parent: LuaGuiElement) {
 }
 
 export function handle_skill_export_click(player: LuaPlayer, element_name: string) {
+  if (element_name === FACTORY_ANALYZE_BUTTON_NAME) {
+    const actor = get_controlled_actor()
+    if (!actor || !actor.is_valid) {
+      player.print('[AIRI] Factory learning failed: controlled actor is unavailable.')
+      return true
+    }
+    if (actor.surface.index !== player.surface.index) {
+      player.print('[AIRI] Factory learning failed: player and AIRI actor are on different surfaces.')
+      return true
+    }
+    const result = analyze_factory_area(actor, {
+      surface_index: player.surface.index,
+      position: player.position,
+      radius: FACTORY_DEFAULT_RADIUS,
+    })
+    if (!result.ok) player.print(`[AIRI] Factory learning failed: ${result.error}`)
+    else player.print(`[AIRI] Analyzed ${result.analysis_id}: ${result.entity_count} relevant entities, ${result.blocks.length} candidate production block(s). Choose a block to save as a SkillCandidate.`)
+    return true
+  }
+
+  if (element_name.startsWith(FACTORY_SAVE_BUTTON_PREFIX)) {
+    const raw = element_name.slice(FACTORY_SAVE_BUTTON_PREFIX.length)
+    const parts = raw.split('__')
+    if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
+      player.print('[AIRI] Factory learning failed: malformed block selection.')
+      return true
+    }
+    try {
+      const skill = create_skill_candidate_from_factory_block(parts[0], parts[1])
+      player.print(`[AIRI] Saved ${skill.name} r${skill.revision} as a candidate. Review validation warnings, then use EXPORT SKILL if desired.`)
+    }
+    catch (error) {
+      player.print(`[AIRI] Factory learning failed: ${error_message(error)}`)
+    }
+    return true
+  }
+
   if (!element_name.startsWith(SKILL_EXPORT_BUTTON_PREFIX)) return false
   const skill_id = element_name.slice(SKILL_EXPORT_BUTTON_PREFIX.length)
   try {
