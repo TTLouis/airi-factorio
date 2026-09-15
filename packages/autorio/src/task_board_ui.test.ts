@@ -4,6 +4,7 @@ import {
   sanitize_task_board_ui_snapshot,
   task_board_activity_for_display,
   task_board_ui_is_open,
+  task_board_ui_prompt_draft,
   task_board_ui_terminate_is_armed,
   toggle_task_board_ui_open,
 } from './task_board_ui'
@@ -112,10 +113,19 @@ describe('in-game task board UI projection', () => {
     expect(task_board_ui_terminate_is_armed(2, 1)).toBe(false)
   })
 
+  it('keeps unsent prompt drafts scoped per player', () => {
+    ;(globalThis as any).storage.airi_task_board_prompt_draft = { 1: 'build power', 2: 'follow me' }
+    expect(task_board_ui_prompt_draft(1)).toBe('build power')
+    expect(task_board_ui_prompt_draft(2)).toBe('follow me')
+    expect(task_board_ui_prompt_draft(3)).toBe('')
+  })
+
   it('does not erase Factorio GUI element types before chained add calls', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).not.toMatch(/const\s+\w+\s*:\s*any\s*=\s*player\.gui/)
     expect(source).not.toContain('const root: any')
+    expect(source).toContain('as FrameGuiElement')
+    expect(source).toContain("surface_index: LuaSurface['index']")
   })
 
   it('uses a movable screen window with native Factorio title, content, section, and control styles', () => {
@@ -142,6 +152,17 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('surface_index: preview.surface_index')
     expect(source).toContain('camera.entity = preview.entity')
     expect(source).toContain('WORLD_PREVIEW_SECTION_HEIGHT')
+  })
+
+  it('provides a direct AIRI prompt field that preserves drafts and emits a fixed structured prompt event', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("type: 'textfield'")
+    expect(source).toContain("name: PROMPT_FIELD_NAME")
+    expect(source).toContain("name: PROMPT_SEND_BUTTON_NAME")
+    expect(source).toContain('[AIRI_UI_PROMPT]')
+    expect(source).toContain('defines.events.on_gui_text_changed')
+    expect(source).toContain('defines.events.on_gui_confirmed')
+    expect(source).toContain('task_board_ui_prompt_draft(player.index).length === 0')
   })
 
   it('only emits fixed UI control actions instead of arbitrary console commands', () => {

@@ -44,6 +44,28 @@ test('chat sender identity is passed into the NPC request context', async () => 
   })
 })
 
+test('UI prompt sender identity enters the same NPC request path without an !airi prefix', async () => {
+  const { session } = sessionFixture()
+  let request
+  session.agent = {
+    active: false,
+    request: async (text, options) => {
+      request = { text, options }
+      return { chatMessage: '' }
+    },
+    completed: async () => null,
+    cancel: () => {},
+  }
+
+  session.onGameLine('[AIRI_UI_PROMPT] {"version":1,"player_index":1,"player_name":"TTLouis","text":"build a steam power block","tick":42}')
+  await session.eventQueue
+
+  assert.deepEqual(request, {
+    text: 'build a steam power block',
+    options: { sender: 'TTLouis' },
+  })
+})
+
 test('stop pauses durable plan state before cancelling Autorio work', async () => {
   const { session, commands } = sessionFixture()
   let pausedReason

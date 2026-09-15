@@ -1,5 +1,5 @@
 import type { MapPositionStruct } from 'factorio:prototype'
-import type { LuaEntity, LuaGuiElement, LuaPlayer } from 'factorio:runtime'
+import type { FrameGuiElement, LuaEntity, LuaGuiElement, LuaPlayer, LuaSurface } from 'factorio:runtime'
 
 import { get_controlled_actor } from './actors/actor_controller'
 import { get_actor_inventory_items } from './utils/inventory'
@@ -10,11 +10,14 @@ const CLOSE_BUTTON_NAME = 'airi_task_board_close'
 const PAUSE_BUTTON_NAME = 'airi_task_board_pause'
 const TERMINATE_BUTTON_NAME = 'airi_task_board_terminate'
 const FOLLOW_BUTTON_NAME = 'airi_task_board_follow'
+const PROMPT_FIELD_NAME = 'airi_task_board_prompt'
+const PROMPT_SEND_BUTTON_NAME = 'airi_task_board_prompt_send'
 const MAX_STEPS = 24
 const MAX_ACTIVITY = 12
 const MAX_INVENTORY_ITEMS = 24
 const MAX_WANTED_ITEMS = 16
 const MAX_TEXT = 500
+const MAX_PROMPT_TEXT = 4000
 const TERMINATE_CONFIRM_TICKS = 5 * 60
 const WINDOW_WIDTH = 900
 const CONTENT_WIDTH = 868
@@ -24,6 +27,7 @@ const WORLD_PREVIEW_SECTION_HEIGHT = 150
 const STEPS_SECTION_HEIGHT = 120
 const ACTIVITY_SECTION_HEIGHT = 115
 const RESOURCE_SECTION_HEIGHT = 110
+const PROMPT_SECTION_HEIGHT = 76
 
 type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow'
 type TaskBoardUiActivityKind = 'observation' | 'decision' | 'action' | 'result' | 'blocker' | 'system' | 'note'
@@ -70,7 +74,7 @@ interface TaskBoardUiFollowStatus {
 
 interface TaskBoardUiWorldPreview {
   position: MapPositionStruct
-  surface_index: number
+  surface_index: LuaSurface['index']
   entity?: LuaEntity
 }
 
@@ -86,6 +90,7 @@ declare const storage: {
   airi_task_board_ui?: TaskBoardUiSnapshot
   airi_task_board_ui_open?: Record<number, boolean>
   airi_task_board_terminate_confirm_until?: Record<number, number>
+  airi_task_board_prompt_draft?: Record<number, string>
 }
 
 function text(value: unknown, max = MAX_TEXT) {
@@ -158,6 +163,19 @@ function open_state() {
 function terminate_confirm_state() {
   if (storage.airi_task_board_terminate_confirm_until === undefined) storage.airi_task_board_terminate_confirm_until = {}
   return storage.airi_task_board_terminate_confirm_until
+}
+
+function prompt_draft_state() {
+  if (storage.airi_task_board_prompt_draft === undefined) storage.airi_task_board_prompt_draft = {}
+  return storage.airi_task_board_prompt_draft
+}
+
+export function task_board_ui_prompt_draft(player_index: number) {
+  return prompt_draft_state()[player_index] ?? ''
+}
+
+function set_prompt_draft(player_index: number, value: unknown) {
+  prompt_draft_state()[player_index] = text(value, MAX_PROMPT_TEXT)
 }
 
 export function task_board_ui_is_open(player_index: number) {
@@ -276,6 +294,21 @@ function emit_control(player: LuaPlayer, action: TaskBoardUiControlAction) {
     tick: game.tick,
   })
   log(`[AIRI_UI_CONTROL] ${payload}`)
+}
+
+function emit_prompt(player: LuaPlayer, raw: unknown) {
+  const prompt = text(raw, MAX_PROMPT_TEXT)
+  if (prompt.length === 0) return false
+  const payload = helpers.table_to_json({
+    version: 1,
+    player_index: player.index,
+    player_name: player.name,
+    text: prompt,
+    tick: game.tick,
+  })
+  log(`[AIRI_UI_PROMPT] ${payload}`)
+  set_prompt_draft(player.index, '')
+  return true
 }
 
 function create_section(parent: LuaGuiElement, title: string, width: number, height: number) {
@@ -498,7 +531,29 @@ function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   }
 }
 
-function render_titlebar(root: LuaGuiElement) {
+function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
+  const body = create_section(parent, 'Prompt AIRI', CONTENT_WIDTH, PROMPT_SECTION_HEIGHT)
+  const row = body.add({ type: 'flow', direction: 'horizontal' })
+  row.style.horizontally_stretchable = true
+  const field = row.add({
+    type: 'textfield',
+    name: PROMPT_FIELD_NAME,
+    text: task_board_ui_prompt_draft(player.index),
+    tooltip: 'Send a prompt directly to AIRI without typing !airi in chat. Press Enter to send.',
+  })
+  field.style.horizontally_stretchable = true
+  field.style.width = 690
+  const send = row.add({
+    type: 'button',
+    name: PROMPT_SEND_BUTTON_NAME,
+    caption: 'SEND',
+    style: 'confirm_button',
+    tooltip: 'Send this prompt to AIRI',
+  })
+  send.style.minimal_width = 120
+}
+
+function render_titlebar(root: FrameGuiElement) {
   const titlebar = root.add({ type: 'flow', direction: 'horizontal' })
   titlebar.style.horizontally_stretchable = true
   titlebar.drag_target = root
@@ -534,7 +589,7 @@ function render_panel(player: LuaPlayer) {
     type: 'frame',
     name: ROOT_NAME,
     direction: 'vertical',
-  })
+  }) as FrameGuiElement
   root.style.width = WINDOW_WIDTH
   render_titlebar(root)
 
@@ -558,6 +613,7 @@ function render_panel(player: LuaPlayer) {
   const resources = content.add({ type: 'flow', direction: 'horizontal' })
   render_inventory(resources, runtime)
   render_wanted_items(resources, board)
+  render_prompt(content, player)
 
   if (previous_location !== undefined) root.location = previous_location
   else root.force_auto_center()
@@ -570,7 +626,16 @@ function render(player: LuaPlayer) {
 }
 
 function render_all() {
-  for (const player of game.connected_players) render(player)
+  for (const player of game.connected_players) {
+    ensure_button(player)
+    if (task_board_ui_prompt_draft(player.index).length === 0) render_panel(player)
+  }
+}
+
+function submit_prompt(player: LuaPlayer, raw: unknown) {
+  if (!emit_prompt(player, raw)) return false
+  render_panel(player)
+  return true
 }
 
 function handle_control_click(player: LuaPlayer, element_name: string) {
@@ -594,6 +659,10 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
     clear_terminate_confirmation(player.index)
     const follow = read_follow_status()
     emit_control(player, follow?.active ? 'stop_follow' : 'follow')
+    return true
+  }
+  if (element_name === PROMPT_SEND_BUTTON_NAME) {
+    submit_prompt(player, task_board_ui_prompt_draft(player.index))
     return true
   }
   return false
@@ -640,9 +709,23 @@ export function create_task_board_ui_remote_interface() {
     handle_control_click(player, element.name)
   })
 
+  script.on_event(defines.events.on_gui_text_changed, (event: any) => {
+    const element = event.element
+    if (!element?.valid || element.name !== PROMPT_FIELD_NAME) return
+    set_prompt_draft(event.player_index, element.text)
+  })
+
+  script.on_event(defines.events.on_gui_confirmed, (event: any) => {
+    const element = event.element
+    if (!element?.valid || element.name !== PROMPT_FIELD_NAME) return
+    const player = game.get_player(event.player_index)
+    if (!player?.valid) return
+    submit_prompt(player, element.text)
+  })
+
   script.on_nth_tick(60, () => {
     for (const player of game.connected_players) {
-      if (task_board_ui_is_open(player.index)) render_panel(player)
+      if (task_board_ui_is_open(player.index) && task_board_ui_prompt_draft(player.index).length === 0) render_panel(player)
     }
   })
 }
