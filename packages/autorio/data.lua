@@ -29,8 +29,16 @@ radar.energy_per_sector = "1J"
 radar.energy_per_nearby_scan = "1J"
 radar.max_distance_of_sector_revealed = 0
 radar.max_distance_of_nearby_sector_revealed = 1
+
+-- The companion radar is intentionally world-invisible. The base radar stores
+-- its rotating dish/shadow in pictures and its ground decal separately as an
+-- integration patch, so clear every inherited world visual explicitly.
 radar.pictures = nil
 radar.frozen_patch = nil
+radar.integration_patch = nil
+radar.integration_patch_render_layer = nil
+radar.water_reflection = nil
+radar.graphics_set = nil
 radar.rotation_speed = 0
 radar.connects_to_other_radars = false
 
