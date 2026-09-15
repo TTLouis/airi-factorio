@@ -37,6 +37,7 @@ describe('agent observation tools', () => {
       'findNearestEnemy',
       'getEntityStatus',
       'getEntityGeometry',
+      'getLogisticsTopology',
       'getNavigationStatus',
       'getFollowStatus',
       'getDefenseStatus',
@@ -162,6 +163,26 @@ describe('agent observation tools', () => {
     await expect(getTool('getEntityGeometry').fn({ parameters: { unit_number: 42, radius: 8 } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
   })
+
+  it('renders bounded exact logistics topology and rejects invalid bounds', async () => {
+    await getTool('getLogisticsTopology').fn({ parameters: { unit_number: 4242 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "logistics_topology", 4242, 8)))',
+    } })
+
+    mocks.raw.mockClear()
+    await getTool('getLogisticsTopology').fn({ parameters: { unit_number: 4242, radius: 16 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "logistics_topology", 4242, 16)))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('getLogisticsTopology').fn({ parameters: { unit_number: 0 } })).rejects.toThrow()
+    await expect(getTool('getLogisticsTopology').fn({ parameters: { unit_number: 1.5 } })).rejects.toThrow()
+    await expect(getTool('getLogisticsTopology').fn({ parameters: { unit_number: 42, radius: 17 } })).rejects.toThrow()
+    await expect(getTool('getLogisticsTopology').fn({ parameters: { unit_number: 42, radius: 8, name: 'steel-chest' } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
 })
 
 describe('navigation and follow observation tools', () => {
@@ -217,8 +238,8 @@ describe('crafting, research, and combat observation tools', () => {
 })
 
 describe('prompt contract', () => {
-  it('documents equipment, discovery, recipe knowledge, geometry, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
-    for (const name of ['getEquipmentStatus', 'getRecipeDetails', 'getEntityGeometry', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+  it('documents equipment, discovery, recipe knowledge, geometry, topology, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
+    for (const name of ['getEquipmentStatus', 'getRecipeDetails', 'getEntityGeometry', 'getLogisticsTopology', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }
