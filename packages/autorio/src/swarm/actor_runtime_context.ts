@@ -3,6 +3,7 @@ import type { ControlledActor } from '../actors/types'
 import { new_basic_operation_runtime } from '../basic_operation_runtime'
 import { new_basic_operation_controller } from '../basic_operations'
 import { new_crafting_controller } from '../crafting'
+import { new_interaction_recovery } from '../interaction_recovery'
 import { new_recipe_configuration_runtime } from '../recipe_configuration'
 import { new_task_manager } from '../task_manager'
 import { TaskStates } from '../types'
@@ -20,6 +21,7 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
   const basic = new_basic_operation_controller(get_actor, manager, { persistenceKey: actorId })
   const basicRuntime = new_basic_operation_runtime(manager, basic)
   const recipeConfiguration = new_recipe_configuration_runtime(manager, basic)
+  const interactionRecovery = new_interaction_recovery(manager)
   const navigation = new_actor_scoped_navigation_controller(actorId, get_actor, manager)
   const crafting = new_crafting_controller(get_actor, manager, { persistenceKey: actorId })
   const combat = new_actor_scoped_combat_controller(actorId, get_actor, manager)
@@ -57,6 +59,8 @@ export function new_actor_runtime_context(actorId: ActorId, registry: ActorRegis
       discard_volatile_work_after_actor_loss()
       return false
     }
+
+    if (manager.player_state.task_state !== TaskStates.IDLE && interactionRecovery.tick(actor)) return true
 
     switch (manager.player_state.task_state) {
       case TaskStates.IDLE:

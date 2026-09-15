@@ -12,17 +12,23 @@ export const SWARM_NPC_NAME_POOL = [
 ] as const
 
 function numeric_agent_ordinal(agentId: AgentId) {
-  const match = /^agent-(\d+)$/.exec(agentId)
-  if (!match) return undefined
-  const value = Number(match[1])
-  return Number.isSafeInteger(value) && value > 0 ? value : undefined
+  if (!agentId.startsWith('agent-')) return undefined
+  const suffix = agentId.slice(6)
+  if (suffix.length === 0) return undefined
+  let value = 0
+  for (let index = 0; index < suffix.length; index += 1) {
+    const digit = suffix.charCodeAt(index) - 48
+    if (digit < 0 || digit > 9) return undefined
+    value = value * 10 + digit
+    if (value > 1000000000) return undefined
+  }
+  return value > 0 ? value : undefined
 }
 
 function stable_text_hash(value: string) {
-  let hash = 2166136261
+  let hash = 0
   for (let index = 0; index < value.length; index += 1) {
-    hash = (hash ^ value.charCodeAt(index)) * 16777619
-    hash = hash >>> 0
+    hash = (hash * 131 + value.charCodeAt(index)) % 2147483647
   }
   return hash
 }

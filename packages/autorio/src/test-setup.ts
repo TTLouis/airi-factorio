@@ -9,7 +9,9 @@ import { event_handlers, set_load_handler } from './test-event-registry'
 ;(globalThis as any).pairs = Object.entries
 
 ;(globalThis as any).remote = {
+  interfaces: {},
   add_interface: () => {},
+  call: () => undefined,
 }
 
 ;(globalThis as any).script = {
@@ -24,6 +26,7 @@ import { event_handlers, set_load_handler } from './test-event-registry'
 
 ;(globalThis as any).game = {
   connected_players: [],
+  get_player: () => undefined,
   surfaces: {
     1: { find_entities_filtered: () => [] },
   },
@@ -58,6 +61,13 @@ import { event_handlers, set_load_handler } from './test-event-registry'
     'steel-chest': {},
     'gun-turret': {},
   },
+  item: {
+    'iron-plate': {},
+    'copper-plate': {},
+    boiler: {},
+    pipe: {},
+    'assembling-machine-1': {},
+  },
 }
 
 // Factorio 2.0's per-save persistence table. Real shape is declared locally
@@ -73,6 +83,8 @@ import { event_handlers, set_load_handler } from './test-event-registry'
     on_tick: 'on_tick',
     on_player_crafted_item: 'on_player_crafted_item',
     on_research_finished: 'on_research_finished',
+    on_player_joined_game: 'on_player_joined_game',
+    on_gui_click: 'on_gui_click',
   },
   direction: {
     north: 'north',
