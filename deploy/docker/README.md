@@ -34,11 +34,15 @@ During early development, `.env.example` defaults to:
 AIRI_SOURCE_REF=feat/npc-transition-work
 ```
 
-The Docker build resolves that ref to an exact SHA and bakes that exact AIRI runtime into the local image. Restarting the container does not update code. To move to a newer commit, rebuild:
+The Docker build resolves that ref to an exact SHA and bakes that exact AIRI runtime into the local image. Restarting the container does not update code.
+
+Because the default points at a moving development branch, the WIP Compose file intentionally disables the Docker build cache. Running:
 
 ```bash
 docker compose up -d --build
 ```
+
+therefore resolves the branch again and installs its current exact SHA. This is deliberately slower while the project is changing quickly; once images are published, this can be replaced with normal tagged image pulls.
 
 An exact 40-character commit SHA can also be used for reproducible builds. When the NPC runtime is promoted to `main`, the default can change to `main` without changing the Compose/runtime configuration contract.
 
