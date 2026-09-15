@@ -42,7 +42,7 @@ function acknowledgement(raw, marker, context) {
   return parsed
 }
 
-export async function deploymentStatus(rcon, { requireAllowed = true } = {}) {
+export async function deploymentStatus(rcon, { requireAllowed = false } = {}) {
   const raw = await rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("airi_deployment","status")))')
   const status = parseJson(raw, 'airi_deployment.status')
   check(status.revision === 'airi-deploy-v8-npc-staging', 'Unexpected deployment guard revision')
@@ -72,7 +72,7 @@ export async function configureNpcSession(rcon, session, marker = `AIRI_CONFIG_$
   check(parsed.data.ok === true, `Game command failed; configure retry exhausted: ${JSON.stringify(parsed.data.result)}`)
   check(parsed.data.result === session, `NPC deployment configure handshake failed: ${JSON.stringify(parsed.data.result)}`)
 
-  const status = await deploymentStatus(rcon)
+  const status = await deploymentStatus(rcon, { requireAllowed: true })
   check(status.session === session, 'Deployment status session does not match configure token')
   return status
 }
