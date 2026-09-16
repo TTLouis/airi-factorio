@@ -155,6 +155,16 @@ remote.add_interface('autorio_operations', {
     log(`[AUTORIO] New walk_to_entity task: ${entity_name}, radius: ${search_radius}`)
     return navigation_controller.submit(entity_name, search_radius)
   },
+  walk_to_entity_exact: (unit_number: number, reach_distance: number = 2.5): [boolean, string] => {
+    const result = navigation_controller.submit_exact(unit_number, reach_distance)
+    if (result[0]) log(`[AUTORIO] New walk_to_entity_exact task: unit=${unit_number}, reach=${reach_distance}`)
+    return result
+  },
+  walk_to_position: (x: number, y: number, reach_distance: number = 0.75): [boolean, string] => {
+    const result = navigation_controller.submit_position(x, y, reach_distance)
+    if (result[0]) log(`[AUTORIO] New walk_to_position task: (${x}, ${y}), reach=${reach_distance}`)
+    return result
+  },
   walk_to_player: (player_name: string): [boolean, string] => {
     const result = navigation_controller.submit_player(player_name)
     if (result[0]) log(`[AUTORIO] New walk_to_player task: ${player_name}`)
