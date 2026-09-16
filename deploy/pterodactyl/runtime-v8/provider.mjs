@@ -26,6 +26,7 @@ Token-efficient continuation rules:
 - If the Task Board/receipt already contains deterministic_verification with verdict verified_complete for the action that just finished, do not spend a tool call re-checking that exact fact.
 - Call read-only tools only for unknown mutable facts required to choose or parameterize the next operation.
 - Prefer a tightly related deterministic operation batch when every operation can be fully specified now and no later operation needs an identity/result created by an earlier one. Multiple gather_resource operations for known resources may be submitted together. When one exact observed entity needs multiple item types, prefer one supply_entity operation over separate transfer turns.
+- Prefer local completion over ping-pong movement: before intentionally moving to another area, finish other already-decided operations on known targets in the current area when their ordering is independent. Do not invent targets or reorder user constraints, prerequisites, or observation-dependent work just to save walking.
 - Do not insert wait between finite Autorio operations merely to let them finish. The harness resumes you when the submitted batch completes or fails. Use wait only when actual world time must pass and no Autorio-owned finite operation already represents the work.
 - Runtime navigation/reach/obstacle recovery is internal progress, not a new plan step and not a reason to call the model again. Exact transfers, recipe configuration, rotation, and exact placement may auto-approach using the controlled character's real reach.
 - Do not walk AIRI onto an exact future build coordinate just to place there. place_entity can be issued from build range; the runtime approaches only as close as needed and can step AIRI aside when AIRI's own body is the likely placement blocker.
@@ -423,6 +424,7 @@ export function buildSteeringContext(messages) {
     `domain=${domain}`,
     'decision_order=exact observed identity > nearest-name lookup; deterministic validator > trial-and-error action; small fully-parameterized batch > one-operation-per-turn; runtime fact > prototype fact > remembered game knowledge',
     'batch_boundary=stop before an operation that needs a new unit_number, mutable result, or other observation that does not exist yet',
+    'locality=before intentionally crossing to another area, finish other already-decided operations on known current-area targets when their order is independent; do not invent targets or reorder user constraints, prerequisites, or observation-dependent work just to save walking',
     'success_evidence=never claim a world-changing action succeeded from intent alone; require an operation receipt or subsequent observation',
   ]
 
