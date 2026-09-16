@@ -241,7 +241,7 @@ export function assess_skill_reusability(skill: SkillDefinition) {
 }
 
 function contains_any(value: string, needles: string[]) {
-  const lowered = string.lower(value)
+  const lowered = value.toLowerCase()
   for (const needle of needles) if (lowered.includes(needle)) return true
   return false
 }
