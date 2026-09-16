@@ -2,6 +2,30 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { toolCommand, toolDefinitions } from './structured-policy.mjs'
 
+test('Pterodactyl exposes getProductionScope as a facts-only bounded observation', () => {
+  const tool = toolDefinitions.find(tool => tool.function.name === 'getProductionScope')
+  assert.ok(tool)
+  assert.equal(tool.function.parameters.additionalProperties, false)
+  assert.deepEqual(tool.function.parameters.required, ['calculation_id', 'target'])
+  assert.equal(tool.function.parameters.properties.max_depth.maximum, 6)
+  assert.equal(tool.function.parameters.properties.max_materials.maximum, 32)
+  assert.equal(tool.function.parameters.properties.target.properties.rate_per_second, undefined)
+  assert.match(tool.function.description, /model must choose the intended production scope/i)
+})
+
+test('Pterodactyl renders getProductionScope without accepting a target rate', () => {
+  assert.equal(toolCommand('getProductionScope', {
+    calculation_id: 'green-scope',
+    target: { type: 'item', name: 'electronic-circuit' },
+    max_depth: 3,
+    max_materials: 16,
+  }), "/silent-command rcon.print(helpers.table_to_json(remote.call(\"autorio_planning\",\"scope_context\",{calculation_id='green-scope',target={type='item',name='electronic-circuit'},max_depth=3,max_materials=16})))")
+  assert.throws(() => toolCommand('getProductionScope', {
+    calculation_id: 'bad',
+    target: { type: 'item', name: 'electronic-circuit', rate_per_second: 5 },
+  }))
+})
+
 test('Pterodactyl exposes solveProduction with a strict bounded schema', () => {
   const tool = toolDefinitions.find(tool => tool.function.name === 'solveProduction')
   assert.ok(tool)

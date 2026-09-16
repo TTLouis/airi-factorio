@@ -40,6 +40,30 @@ function side(value, label) {
   return value
 }
 
+function parseProductionScope(args) {
+  exactKeys(args, ['calculation_id', 'target', 'max_depth', 'max_materials'])
+  exactKeys(args.target, ['type', 'name'])
+  check(args.target.type === 'item' || args.target.type === 'fluid', 'target.type must be item or fluid')
+  const parsed = {
+    calculation_id: base.factorioName(args.calculation_id),
+    target: { type: args.target.type, name: base.factorioName(args.target.name) },
+  }
+  if (args.max_depth !== undefined) parsed.max_depth = optionalInteger(args.max_depth, 'max_depth', 0, 6)
+  if (args.max_materials !== undefined) parsed.max_materials = optionalInteger(args.max_materials, 'max_materials', 1, 32)
+  return parsed
+}
+
+function renderProductionScope(args) {
+  const parsed = parseProductionScope(args)
+  const fields = [
+    `calculation_id=${base.luaString(parsed.calculation_id)}`,
+    `target={type=${base.luaString(parsed.target.type)},name=${base.luaString(parsed.target.name)}}`,
+  ]
+  if (parsed.max_depth !== undefined) fields.push(`max_depth=${parsed.max_depth}`)
+  if (parsed.max_materials !== undefined) fields.push(`max_materials=${parsed.max_materials}`)
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","scope_context",{${fields.join(',')}})))`
+}
+
 function parseSolveProduction(args) {
   exactKeys(args, ['calculation_id', 'target', 'included_recipe_names', 'machine_selections'])
   exactKeys(args.target, ['type', 'name', 'rate_per_second'])
@@ -221,6 +245,29 @@ function renderResearchPath(args) {
   return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","research_path",${base.luaString(parsed.name)},${parsed.max_nodes})))`
 }
 
+const productionScopeDefinition = {
+  type: 'function',
+  function: {
+    name: 'getProductionScope',
+    description: 'Read bounded current-surface observed production, consumption, and net flow for one target and relevant upstream materials over 1m and 10m windows. Use this before solveProduction when the user did not specify a production rate. Facts only: this tool never recommends a target rate; the model must choose the intended production scope. If the user already provided an explicit rate or scope, skip this extra observation.',
+    parameters: {
+      type: 'object', additionalProperties: false, required: ['calculation_id', 'target'],
+      properties: {
+        calculation_id: { type: 'string', minLength: 1, maxLength: 200 },
+        target: {
+          type: 'object', additionalProperties: false, required: ['type', 'name'],
+          properties: {
+            type: { type: 'string', enum: ['item', 'fluid'] },
+            name: { type: 'string', minLength: 1, maxLength: 200 },
+          },
+        },
+        max_depth: { type: 'integer', minimum: 0, maximum: 6, default: 3 },
+        max_materials: { type: 'integer', minimum: 1, maximum: 32, default: 16 },
+      },
+    },
+  },
+}
+
 const solveProductionDefinition = {
   type: 'function',
   function: {
@@ -376,6 +423,7 @@ const researchPathDefinition = {
 
 export const toolDefinitions = [
   ...base.toolDefinitions,
+  productionScopeDefinition,
   solveProductionDefinition,
   transportCapacityDefinition,
   localSpatialObservationDefinition,
@@ -385,6 +433,7 @@ export const toolDefinitions = [
   researchPathDefinition,
 ]
 export function toolCommand(name, args) {
+  if (name === 'getProductionScope') return renderProductionScope(args)
   if (name === 'solveProduction') return renderSolveProduction(args)
   if (name === 'getTransportCapacity') return renderTransportCapacity(args)
   if (name === 'getLocalSpatialObservation') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","spatial_observation",${luaTable(parseSpatialObservation(args))})))`
