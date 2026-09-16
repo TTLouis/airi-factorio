@@ -27,6 +27,8 @@ jobs:
           bash -n deploy/pterodactyl/package-smoke.sh
 
       - name: Install and boot packaged zero-player NPC
+        env:
+          AIRI_SMOKE_SOURCE_REF: ${{ github.sha }}
         run: bash deploy/pterodactyl/package-smoke.sh
 
   npc-factorio-integration:

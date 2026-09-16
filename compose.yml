@@ -5,9 +5,9 @@ services:
       dockerfile: deploy/docker/Dockerfile
       no_cache: true
       args:
-        AIRI_SOURCE_REF: ${AIRI_SOURCE_REF:-feat/npc-transition-work}
+        AIRI_SOURCE_REF: ${AIRI_SOURCE_REF:-main}
         FACTORIO_VERSION: ${FACTORIO_VERSION:-latest}
-    image: airi-factorio:wip
+    image: airi-factorio:local
     platform: linux/amd64
     restart: unless-stopped
     stdin_open: true
