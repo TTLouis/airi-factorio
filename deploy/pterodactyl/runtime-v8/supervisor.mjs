@@ -661,6 +661,7 @@ export class Session {
     this.npcName = 'AIRI'
     this.npcId = 'airi'
     this.agentLive = { phase: 'idle', detail: '', objective: '', at: 0, activity: [] }
+    this.activitySequence = 0
     this.uiSyncDirty = false
     this.uiSyncRunning = null
     this.uiInputPoll = null
@@ -675,7 +676,10 @@ export class Session {
     if (!update) return
     if (update.phase) Object.assign(this.agentLive, { phase: update.phase, detail: update.detail ?? '', at: Date.now() })
     if (update.objective) this.agentLive.objective = update.objective
-    if (update.activity) this.agentLive.activity = [...this.agentLive.activity, update.activity].slice(-UI_LIVE_ACTIVITY_LIMIT)
+    if (update.activity) {
+      const activity = { ...update.activity, id: `live_${++this.activitySequence}` }
+      this.agentLive.activity = [...this.agentLive.activity, activity].slice(-UI_LIVE_ACTIVITY_LIMIT)
+    }
     this.requestTaskBoardUiSync()
   }
 
@@ -1191,7 +1195,7 @@ export class Session {
       }
       if (this.rcon && this.gameChild?.alive()) {
         this.rcon.timeout = Math.min(this.config.stopMs, 30000)
-        try { await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")') }
+        try { await this.rcon.command('/silent-command remote.call("autorio_operations","cancel")') }
         catch (error) { clean = false; this.log(`Shutdown cancel command failed: ${error instanceof Error ? error.message : error}`) }
 
         this.log('Requesting Factorio graceful /quit shutdown')
