@@ -18,6 +18,8 @@ const RIGHT_COLUMN_NAME = 'airi_task_board_right_column'
 const RIGHT_RESOURCES_NAME = 'airi_task_board_right_resources'
 const PROMPT_SECTION_NAME = 'airi_task_board_prompt_section'
 const PROMPT_FLOW_NAME = 'airi_task_board_prompt_flow'
+const ACTIVITY_FILTER_NAME = 'airi_task_board_activity_filter'
+const ACTIVITY_FILTER_ITEMS = ['ALL', 'PLAN', 'OBS', 'ACTIONS', 'RESULTS', 'ISSUES']
 // The preview is refreshed in place rather than rebuilt, so every element the
 // refresh has to find needs a stable name.
 const PREVIEW_SECTION_NAME = 'airi_task_board_preview_section'
@@ -42,8 +44,8 @@ const PROMPT_FIELD_NAME = 'airi_task_board_prompt'
 const PROMPT_SEND_BUTTON_NAME = 'airi_task_board_prompt_send'
 const MAX_STEPS = 24
 const MAX_ACTIVITY = 12
-const MAX_INVENTORY_ITEMS = 24
-const MAX_WANTED_ITEMS = 16
+const MAX_INVENTORY_ITEMS = 48
+const MAX_WANTED_ITEMS = 48
 const MAX_TEXT = 500
 const MAX_PROMPT_TEXT = 4000
 const UI_INPUT_QUEUE_LIMIT = 32
@@ -65,7 +67,9 @@ const KEY_COLUMN_WIDTH = 64
 const HALF_VALUE_WIDTH = HALF_SECTION_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12
 const SLOT_SIZE = 40
 const SLOT_COLUMNS = 6
-const SLOT_ROWS = 2
+const SLOT_ROWS_MIN = 5
+const SLOT_ROWS_MID = 6
+const SLOT_ROWS_MAX = 8
 const SCROLLBAR_WIDTH = 12
 // The console is exactly as tall as its left column, because the world preview
 // stretches to match it. So the two tracker scroll panes and the camera's floor
@@ -76,7 +80,7 @@ const SCROLLBAR_WIDTH = 12
 const CONSOLE_SCREEN_FRACTION = 0.92
 // Deliberately generous estimate of everything in the left column that is not a
 // tracker list: titlebar, the status/controls row, section headers, progress
-// bar, divider, the inventory row and the prompt. Overestimating costs a little
+// bar, divider, the resource row and the prompt. Overestimating costs a little
 // height; underestimating would push the window past the bottom of the screen.
 const CONSOLE_FIXED_HEIGHT = 620
 const TRACKER_LIST_MIN_TOTAL = 306
@@ -168,6 +172,7 @@ declare const storage: {
   airi_task_board_prompt_draft?: Record<number, string>
   airi_task_board_ui_inputs?: TaskBoardUiInput[]
   airi_task_board_preview_zoom?: Record<number, number>
+  airi_task_board_activity_filter?: Record<number, number>
 }
 
 let world_task_provider: ((this: void) => unknown) | undefined
@@ -263,6 +268,7 @@ function ensure_terminate_confirm_state() { if (storage.airi_task_board_terminat
 function ensure_prompt_draft_state() { if (storage.airi_task_board_prompt_draft === undefined) storage.airi_task_board_prompt_draft = {}; return storage.airi_task_board_prompt_draft }
 function ensure_ui_input_queue() { if (storage.airi_task_board_ui_inputs === undefined) storage.airi_task_board_ui_inputs = []; return storage.airi_task_board_ui_inputs }
 function ensure_preview_zoom_state() { if (storage.airi_task_board_preview_zoom === undefined) storage.airi_task_board_preview_zoom = {}; return storage.airi_task_board_preview_zoom }
+function ensure_activity_filter_state() { if (storage.airi_task_board_activity_filter === undefined) storage.airi_task_board_activity_filter = {}; return storage.airi_task_board_activity_filter }
 function normalize_preview_zoom(value: unknown) {
   if (typeof value !== 'number') return PREVIEW_ZOOM_DEFAULT
   const clamped = math.max(PREVIEW_ZOOM_MIN, math.min(PREVIEW_ZOOM_MAX, value))
@@ -272,6 +278,8 @@ function normalize_preview_zoom(value: unknown) {
 export function task_board_preview_zoom(player_index: number) { return normalize_preview_zoom(storage.airi_task_board_preview_zoom?.[player_index] ?? PREVIEW_ZOOM_DEFAULT) }
 function set_preview_zoom(player_index: number, value: unknown) { const zoom = normalize_preview_zoom(value); ensure_preview_zoom_state()[player_index] = zoom; return zoom }
 function preview_zoom_caption(zoom: number) { return `${zoom}×` }
+function activity_filter_index(player_index: number) { return math.max(1, math.min(ACTIVITY_FILTER_ITEMS.length, integer(storage.airi_task_board_activity_filter?.[player_index], 1))) }
+function set_activity_filter(player_index: number, value: unknown) { const selected = math.max(1, math.min(ACTIVITY_FILTER_ITEMS.length, integer(value, 1))); ensure_activity_filter_state()[player_index] = selected; return selected }
 function enqueue_ui_input(input: TaskBoardUiInput) { const queue = ensure_ui_input_queue(); queue.push(input); while (queue.length > UI_INPUT_QUEUE_LIMIT) queue.shift() }
 function any_console_open() { for (const player of game.connected_players) { if (task_board_ui_is_open(player.index)) return true } return false }
 
@@ -334,6 +342,7 @@ function destroy_panel(player: LuaPlayer) {
 function step_tone(step: TaskBoardUiStep): Tone { if (step.status === 'completed') return 'good'; if (step.status === 'active') return 'info'; if (step.status === 'blocked') return 'bad'; if (step.status === 'paused') return 'warn'; return 'muted' }
 function activity_prefix(kind: TaskBoardUiActivityKind) { if (kind === 'observation') return 'OBS'; if (kind === 'decision') return 'PLAN'; if (kind === 'action') return 'ACT'; if (kind === 'result') return 'RESULT'; if (kind === 'blocker') return 'BLOCK'; if (kind === 'system') return 'SYS'; return 'NOTE' }
 function activity_tone(kind: TaskBoardUiActivityKind): Tone { if (kind === 'decision' || kind === 'observation') return 'info'; if (kind === 'action' || kind === 'result') return 'good'; if (kind === 'blocker') return 'bad'; if (kind === 'system') return 'warn'; return 'muted' }
+function activity_matches_filter(kind: TaskBoardUiActivityKind, filter: number) { if (filter === 2) return kind === 'decision'; if (filter === 3) return kind === 'observation' || kind === 'note'; if (filter === 4) return kind === 'action'; if (filter === 5) return kind === 'result'; if (filter === 6) return kind === 'blocker' || kind === 'system'; return true }
 function board_tone(board_status: TaskBoardUiSnapshot['status']): Tone { if (board_status === 'active') return 'good'; if (board_status === 'completed') return 'info'; if (board_status === 'paused') return 'warn'; if (board_status === 'blocked') return 'bad'; return 'muted' }
 function agent_tone(phase: TaskBoardUiAgentPhase): Tone { if (phase === 'thinking' || phase === 'observing') return 'info'; if (phase === 'executing') return 'good'; if (phase === 'waiting') return 'warn'; if (phase === 'error') return 'bad'; return 'muted' }
 function agent_caption(phase: TaskBoardUiAgentPhase) { if (phase === 'thinking') return 'THINKING'; if (phase === 'observing') return 'OBSERVING'; if (phase === 'executing') return 'EXECUTING'; if (phase === 'waiting') return 'WORKING'; if (phase === 'error') return 'ERROR'; return 'IDLE' }
@@ -360,6 +369,7 @@ function runtime_snapshot(): TaskBoardUiRuntimeSnapshot {
   return { actor_name: text(identity?.name ?? 'AIRI', 128), actor_kind: text(identity?.kind ?? '', 64), inventory: inventory.slice(0, MAX_INVENTORY_ITEMS), follow: read_follow_status(), preview, world_task: read_world_task() }
 }
 function emit_control(player: LuaPlayer, action: TaskBoardUiControlAction) { enqueue_ui_input({ kind: 'control', version: 1, action, player_index: player.index, player_name: player.name, tick: game.tick }) }
+function emit_resume(player: LuaPlayer) { enqueue_ui_input({ kind: 'prompt', version: 1, player_index: player.index, player_name: player.name, text: 'continue', tick: game.tick }) }
 function emit_prompt(player: LuaPlayer, raw: unknown) {
   const prompt = text(raw, MAX_PROMPT_TEXT)
   if (prompt.length === 0) return false
@@ -438,20 +448,20 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
 // button every tick and overran a fixed-width control.
 function follow_button_caption(follow: TaskBoardUiFollowStatus | undefined) { return follow?.active ? 'FOLLOWING' : 'FOLLOW ME' }
 function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Pause current work and follow this player'; const details = ['Click to stop following.']; if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
-function compact_button(button: LuaGuiElement) { button.style.width = COMPACT_BUTTON_WIDTH; button.style.height = COMPACT_BUTTON_HEIGHT; button.style.minimal_width = 0; button.style.maximal_width = COMPACT_BUTTON_WIDTH; return button }
+function compact_button(button: LuaGuiElement) { button.style.width = COMPACT_BUTTON_WIDTH; button.style.height = COMPACT_BUTTON_HEIGHT; button.style.minimal_width = COMPACT_BUTTON_WIDTH; button.style.maximal_width = COMPACT_BUTTON_WIDTH; button.style.minimal_height = COMPACT_BUTTON_HEIGHT; button.style.maximal_height = COMPACT_BUTTON_HEIGHT; return button }
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const { body } = create_section(parent, 'Controls', HALF_SECTION_WIDTH, undefined, false)
   body.style.vertical_spacing = COMPACT_BUTTON_SPACING
   const follow = runtime.follow
   const has_open_goal = board !== undefined && board.status !== 'idle' && board.status !== 'completed'
+  const paused = board?.status === 'paused'
   const controls = body.add({ type: 'table', column_count: 2 })
   controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING
   controls.style.vertical_spacing = COMPACT_BUTTON_SPACING
-  // PAUSE and TERMINATE stay clickable even with no durable goal. They also stop
-  // the current world work, which is exactly what a player needs when the
-  // runtime is offline and the body is still mining; disabling them left the
-  // console with no way to intervene at the moment intervention matters most.
-  compact_button(controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: 'PAUSE', style: 'dialog_button', tooltip: has_open_goal && board.status !== 'paused' ? 'Pause the durable AIRI goal and stop current world work' : 'Stop the current world work. There is no durable AIRI goal to pause.' }))
+  // The button becomes UNPAUSE for a durable paused goal. Resuming deliberately
+  // rides the same "continue" request path as chat so the model re-observes
+  // mutable world state instead of blindly replaying the last operation.
+  compact_button(controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: paused ? 'UNPAUSE' : 'PAUSE', style: 'dialog_button', tooltip: paused ? 'Resume this durable AIRI goal. AIRI will re-observe mutable state before acting.' : has_open_goal ? 'Pause the durable AIRI goal and stop current world work' : 'Stop the current world work. There is no durable AIRI goal to pause.' }))
   const armed = task_board_ui_terminate_is_armed(player.index, game.tick)
   compact_button(controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: armed ? 'CONFIRM' : 'TERMINATE', style: 'red_button', tooltip: armed ? 'Click again within 5 seconds to discard the goal permanently' : has_open_goal ? 'Discard the current durable AIRI goal permanently' : 'Stop the current world work. There is no durable AIRI goal to discard.' }))
   compact_button(controls.add({ type: 'button', name: FOLLOW_BUTTON_NAME, caption: follow_button_caption(follow), style: follow?.active ? 'confirm_button' : 'dialog_button', tooltip: follow_button_tooltip(follow) }))
@@ -483,6 +493,18 @@ export function task_board_tracker_heights(gui_height: number) {
   const budget = math.max(TRACKER_LIST_MIN_TOTAL, math.min(TRACKER_LIST_MAX_TOTAL, math.floor(gui_height * CONSOLE_SCREEN_FRACTION) - CONSOLE_FIXED_HEIGHT))
   const steps = math.floor(budget * TRACKER_STEPS_SHARE)
   return { steps, activity: budget - steps }
+}
+
+/**
+ * The right-side resource panes always expose at least a 6×5 viewport. Taller
+ * displays spend some of their extra vertical room on a 6×6 or 6×8 viewport,
+ * while shorter displays still get the five rows requested for useful inventory
+ * inspection without forcing a fixed giant window on every UI scale.
+ */
+export function task_board_resource_rows(gui_height: number) {
+  if (gui_height >= 1200) return SLOT_ROWS_MAX
+  if (gui_height >= 900) return SLOT_ROWS_MID
+  return SLOT_ROWS_MIN
 }
 
 /**
@@ -565,7 +587,11 @@ export function task_board_activity_for_display(board: TaskBoardUiSnapshot | und
 function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) {
   const tracker_heights = task_board_tracker_heights(player_gui_height(player))
   const { header, body } = create_section(parent, 'Plan Tracker / Activity', undefined, 'Canonical plan progress plus timestamped auditable observations, actions, results, blockers, and system events.')
-  const activity = task_board_activity_for_display(board); const has_steps = board !== undefined && board.steps.length > 0
+  const all_activity = task_board_activity_for_display(board)
+  const selected_filter = activity_filter_index(player.index)
+  const activity: TaskBoardUiActivity[] = []
+  for (const entry of all_activity) if (activity_matches_filter(entry.kind, selected_filter)) activity.push(entry)
+  const has_steps = board !== undefined && board.steps.length > 0
   if (has_steps) {
     const active_number = board.status === 'completed' ? board.total_steps : math.min(board.active_index + 1, board.total_steps)
     const summary = header.add({ type: 'label', caption: `STEP ${active_number}/${board.total_steps} · ${board.completed_count} done`, style: 'semibold_label' }); summary.style.right_padding = 4
@@ -585,27 +611,34 @@ function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | unde
     if (active_label !== undefined) steps_scroll.scroll_to_element(active_label, 'top-third')
     if (board.blocker.length > 0 || board.pause_reason.length > 0) { const attention = create_key_value_table(body); const width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12; if (board.blocker.length > 0) add_key_value(attention, 'BLOCKED', board.blocker, { tone: 'bad', width }); if (board.pause_reason.length > 0) add_key_value(attention, 'PAUSED', board.pause_reason, { tone: 'warn', width }) }
   }
-  else if (activity.length === 0) { add_empty_state(body, 'No active plan or recent AIRI activity.'); return }
+  else if (all_activity.length === 0) { add_empty_state(body, 'No active plan or recent AIRI activity.'); return }
   const divider = body.add({ type: 'line', direction: 'horizontal' }); divider.style.horizontally_stretchable = true
-  const activity_header = body.add({ type: 'flow', direction: 'horizontal' }); activity_header.style.horizontally_stretchable = true; activity_header.add({ type: 'label', caption: 'Recent activity', style: 'bold_label' }); const header_filler = activity_header.add({ type: 'empty-widget' }); header_filler.style.horizontally_stretchable = true; activity_header.add({ type: 'label', caption: `${activity.length} event${activity.length === 1 ? '' : 's'}`, style: 'semibold_label' })
-  if (activity.length === 0) { add_empty_state(body, 'No recent AIRI activity yet.'); return }
+  const activity_header = body.add({ type: 'flow', direction: 'horizontal' }); activity_header.style.horizontally_stretchable = true; activity_header.style.vertical_align = 'center'; activity_header.style.horizontal_spacing = 8
+  activity_header.add({ type: 'label', caption: 'Recent activity', style: 'bold_label' })
+  const header_filler = activity_header.add({ type: 'empty-widget' }); header_filler.style.horizontally_stretchable = true
+  const filter = activity_header.add({ type: 'drop-down', name: ACTIVITY_FILTER_NAME, items: ACTIVITY_FILTER_ITEMS, selected_index: selected_filter, tooltip: 'Filter the recent activity feed without changing the canonical Task Board.' }); filter.style.width = 104; filter.style.minimal_width = 104; filter.style.maximal_width = 104
+  activity_header.add({ type: 'label', caption: selected_filter === 1 ? `${all_activity.length} event${all_activity.length === 1 ? '' : 's'}` : `${activity.length}/${all_activity.length}`, style: 'semibold_label' })
+  if (activity.length === 0) { add_empty_state(body, 'No recent activity matches this filter.'); return }
   const activity_scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' }); activity_scroll.style.maximal_height = tracker_heights.activity; activity_scroll.style.horizontally_stretchable = true
   const activity_grid = activity_scroll.add({ type: 'table', column_count: 3 }); activity_grid.style.horizontal_spacing = 10; activity_grid.style.vertical_spacing = 4
-  for (const entry of activity) { const timestamp = activity_grid.add({ type: 'label', caption: entry.timestamp ?? '--:--:--', tooltip: entry.timestamp ? 'Factorio game time when this activity was first observed' : 'No timestamp recorded yet' }); timestamp.style.minimal_width = 66; timestamp.style.font_color = TONE_COLORS.muted; const tag = activity_grid.add({ type: 'label', caption: activity_prefix(entry.kind), style: 'bold_label' }); tag.style.minimal_width = 52; tag.style.font_color = TONE_COLORS[activity_tone(entry.kind)]; const line = activity_grid.add({ type: 'label', caption: entry.text }); line.style.single_line = false; line.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 160 }
-  activity_scroll.scroll_to_bottom()
+  let latest_line: LuaGuiElement | undefined
+  for (const entry of activity) { const timestamp = activity_grid.add({ type: 'label', caption: entry.timestamp ?? '--:--:--', tooltip: entry.timestamp ? 'Factorio game time when this activity was first observed' : 'No timestamp recorded yet' }); timestamp.style.minimal_width = 66; timestamp.style.font_color = TONE_COLORS.muted; const tag = activity_grid.add({ type: 'label', caption: activity_prefix(entry.kind), style: 'bold_label' }); tag.style.minimal_width = 52; tag.style.font_color = TONE_COLORS[activity_tone(entry.kind)]; const line = activity_grid.add({ type: 'label', caption: entry.text }); line.style.single_line = false; line.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 160; latest_line = line }
+  if (latest_line !== undefined) activity_scroll.scroll_to_element(latest_line, 'bottom-third')
+  else activity_scroll.scroll_to_bottom()
 }
-function add_slot_grid(parent: LuaGuiElement, slots: Array<{ name: string, count: number, tooltip: string }>, style: 'slot_button' | 'yellow_slot_button') {
-  const scroll = parent.add({ type: 'scroll-pane', style: 'deep_slots_scroll_pane', horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' }); scroll.style.width = SLOT_COLUMNS * SLOT_SIZE + SCROLLBAR_WIDTH; scroll.style.height = SLOT_ROWS * SLOT_SIZE
+function add_slot_grid(parent: LuaGuiElement, slots: Array<{ name: string, count: number, tooltip: string }>, style: 'slot_button' | 'yellow_slot_button', rows: number) {
+  const height = rows * SLOT_SIZE
+  const scroll = parent.add({ type: 'scroll-pane', style: 'deep_slots_scroll_pane', horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' }); scroll.style.width = SLOT_COLUMNS * SLOT_SIZE + SCROLLBAR_WIDTH; scroll.style.height = height; scroll.style.minimal_height = height; scroll.style.maximal_height = height
   const grid = scroll.add({ type: 'table', column_count: SLOT_COLUMNS, style: 'slot_table' }); for (const slot of slots) grid.add({ type: 'sprite-button', sprite: item_sprite(slot.name), number: slot.count, style, tooltip: slot.tooltip })
 }
-function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) { const { header, body } = create_section(parent, 'NPC Inventory', HALF_SECTION_WIDTH, undefined, false); if (runtime.inventory.length === 0) { add_empty_state(body, 'Inventory is empty.'); return }; header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: `${item_caption(item.name)} × ${item.count}` })), 'slot_button') }
-function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined) { const { header, body } = create_section(parent, 'Wanted / Needed', HALF_SECTION_WIDTH, undefined, false); if (board === undefined || board.wanted_items.length === 0) { add_empty_state(body, 'Nothing currently requested.'); return }; header.add({ type: 'label', caption: `${board.wanted_items.length} items`, style: 'semibold_label' }); add_slot_grid(body, board.wanted_items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: item.reason.length > 0 ? `${item_caption(item.name)} × ${item.count} — ${item.reason}` : `${item_caption(item.name)} × ${item.count}` })), 'yellow_slot_button') }
+function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) { const { header, body } = create_section(parent, 'NPC Inventory', HALF_SECTION_WIDTH, undefined, false); header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: `${item_caption(item.name)} × ${item.count}` })), 'slot_button', task_board_resource_rows(player_gui_height(player))) }
+function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) { const { header, body } = create_section(parent, 'Wanted / Needed', HALF_SECTION_WIDTH, undefined, false); const items = board?.wanted_items ?? []; header.add({ type: 'label', caption: `${items.length} items`, style: 'semibold_label' }); add_slot_grid(body, items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: item.reason.length > 0 ? `${item_caption(item.name)} × ${item.count} — ${item.reason}` : `${item_caption(item.name)} × ${item.count}` })), 'yellow_slot_button', task_board_resource_rows(player_gui_height(player))) }
 function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   const section = parent.add({ type: 'frame', name: PROMPT_SECTION_NAME, direction: 'vertical', style: 'inside_shallow_frame' }); section.style.width = LEFT_COLUMN_WIDTH; section.style.horizontally_stretchable = false
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'; header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
   const row = section.add({ type: 'flow', name: PROMPT_FLOW_NAME, direction: 'horizontal' }); row.style.padding = SECTION_PADDING; row.style.horizontally_stretchable = true; row.style.vertical_align = 'center'; row.style.horizontal_spacing = 8
-  const field = row.add({ type: 'textfield', name: PROMPT_FIELD_NAME, text: task_board_ui_prompt_draft(player.index), tooltip: 'Send a prompt directly to AIRI without typing !airi in chat. Press Enter to send.' }); field.style.width = PROMPT_FIELD_WIDTH; field.style.minimal_width = 0; field.style.maximal_width = PROMPT_FIELD_WIDTH
-  const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: 'Send this prompt directly to AIRI' }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
+  const field = row.add({ type: 'textfield', name: PROMPT_FIELD_NAME, text: task_board_ui_prompt_draft(player.index), tooltip: 'Send a prompt directly to AIRI without typing !airi in chat. Press Enter to send.' }); field.style.width = PROMPT_FIELD_WIDTH; field.style.minimal_width = PROMPT_FIELD_WIDTH; field.style.maximal_width = PROMPT_FIELD_WIDTH
+  const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: 'Send this prompt directly to AIRI' }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.maximal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
 }
 function render_titlebar(root: FrameGuiElement, caption = 'AIRI NPC Console', close_name = CLOSE_BUTTON_NAME) {
   const titlebar = root.add({ type: 'flow', direction: 'horizontal' }); titlebar.style.horizontally_stretchable = true; titlebar.style.horizontal_spacing = 8; titlebar.drag_target = root
@@ -621,7 +654,7 @@ function build_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const left = columns.add({ type: 'flow', name: LEFT_COLUMN_NAME, direction: 'vertical' }); left.style.width = LEFT_COLUMN_WIDTH; left.style.vertical_spacing = COLUMN_SPACING
   const dynamic = left.add({ type: 'flow', name: LEFT_DYNAMIC_NAME, direction: 'vertical' }); dynamic.style.width = LEFT_COLUMN_WIDTH; dynamic.style.vertical_spacing = COLUMN_SPACING; build_left_dynamic(dynamic, player, board, synced_tick, runtime); render_prompt(left, player)
   const right = columns.add({ type: 'flow', name: RIGHT_COLUMN_NAME, direction: 'vertical' }); right.style.width = PREVIEW_COLUMN_WIDTH; right.style.vertical_spacing = COLUMN_SPACING; right.style.vertically_stretchable = true; render_world_preview(right, runtime, player)
-  const resources = right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' }); resources.style.horizontal_spacing = COLUMN_SPACING; render_inventory(resources, runtime); render_wanted_items(resources, board)
+  const resources = right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' }); resources.style.horizontal_spacing = COLUMN_SPACING; render_inventory(resources, runtime, player); render_wanted_items(resources, board, player)
 }
 function refresh_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const left = columns[LEFT_COLUMN_NAME]; const dynamic = left?.valid ? left[LEFT_DYNAMIC_NAME] : undefined; const right = columns[RIGHT_COLUMN_NAME]
@@ -633,10 +666,10 @@ function refresh_columns(columns: LuaGuiElement, player: LuaPlayer) {
   if (!refresh_world_preview(right, runtime, player) || !resources?.valid) {
     right.clear()
     render_world_preview(right, runtime, player)
-    const rebuilt_resources = right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' }); rebuilt_resources.style.horizontal_spacing = COLUMN_SPACING; render_inventory(rebuilt_resources, runtime); render_wanted_items(rebuilt_resources, board)
+    const rebuilt_resources = right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' }); rebuilt_resources.style.horizontal_spacing = COLUMN_SPACING; render_inventory(rebuilt_resources, runtime, player); render_wanted_items(rebuilt_resources, board, player)
     return true
   }
-  resources.clear(); render_inventory(resources, runtime); render_wanted_items(resources, board)
+  resources.clear(); render_inventory(resources, runtime, player); render_wanted_items(resources, board, player)
   return true
 }
 function build_panel(player: LuaPlayer) {
@@ -669,7 +702,7 @@ function render_all() { for (const player of game.connected_players) { ensure_bu
 function prompt_field(player: LuaPlayer) { const root = player.gui.screen[ROOT_NAME]; const columns = root?.valid ? root[COLUMNS_NAME] : undefined; const left = columns?.valid ? columns[LEFT_COLUMN_NAME] : undefined; const section = left?.valid ? left[PROMPT_SECTION_NAME] : undefined; const row = section?.valid ? section[PROMPT_FLOW_NAME] : undefined; const field = row?.valid ? row[PROMPT_FIELD_NAME] : undefined; return field?.valid ? field as TextFieldGuiElement : undefined }
 function submit_prompt(player: LuaPlayer, raw: unknown) { if (!emit_prompt(player, raw)) return false; const field = prompt_field(player); if (field !== undefined) field.text = ''; render_panel(player); return true }
 function handle_control_click(player: LuaPlayer, element_name: string) {
-  if (element_name === PAUSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); emit_control(player, 'pause'); return true }
+  if (element_name === PAUSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); if (storage.airi_task_board_ui?.status === 'paused') emit_resume(player); else emit_control(player, 'pause'); return true }
   if (element_name === TERMINATE_BUTTON_NAME) { if (task_board_ui_terminate_is_armed(player.index, game.tick)) { clear_terminate_confirmation(player.index); emit_control(player, 'terminate') } else { arm_terminate(player.index); render_panel(player) }; return true }
   if (element_name === FOLLOW_BUTTON_NAME) { clear_terminate_confirmation(player.index); const follow = read_follow_status(); emit_control(player, follow?.active ? 'stop_follow' : 'follow'); return true }
   if (element_name === PROMPT_SEND_BUTTON_NAME) { submit_prompt(player, task_board_ui_prompt_draft(player.index)); return true }
@@ -697,6 +730,7 @@ export function create_task_board_ui_remote_interface() {
   })
   script.on_event(defines.events.on_gui_text_changed, (event: any) => { const element = event.element; if (!element?.valid || element.name !== PROMPT_FIELD_NAME) return; set_prompt_draft(event.player_index, element.text) })
   script.on_event(defines.events.on_gui_confirmed, (event: any) => { const element = event.element; if (!element?.valid || element.name !== PROMPT_FIELD_NAME) return; const player = game.get_player(event.player_index); if (!player?.valid) return; submit_prompt(player, element.text) })
+  script.on_event(defines.events.on_gui_selection_state_changed, (event: any) => { const element = event.element; if (!element?.valid || element.name !== ACTIVITY_FILTER_NAME) return; const player = game.get_player(event.player_index); if (!player?.valid) return; set_activity_filter(player.index, element.selected_index); render_panel(player) })
   script.on_event(defines.events.on_gui_value_changed, (event: any) => {
     const element = event.element; if (!element?.valid || element.name !== PREVIEW_ZOOM_SLIDER_NAME) return; const player = game.get_player(event.player_index); if (!player?.valid) return
     const zoom = set_preview_zoom(player.index, element.slider_value); element.slider_value = zoom
