@@ -103,6 +103,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     player_state.parameters_walking_direct = undefined
     player_state.parameters_mine_entity = undefined
     player_state.parameters_place_entity = undefined
+    player_state.parameters_rotate_entity = undefined
     player_state.parameters_move_items = undefined
     player_state.parameters_set_recipe = undefined
     player_state.parameters_craft_item = undefined
@@ -148,6 +149,9 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
         break
       case TaskStates.PLACING:
         player_state.parameters_place_entity = task
+        break
+      case TaskStates.ROTATING:
+        player_state.parameters_rotate_entity = task
         break
       case TaskStates.MOVING_ITEMS:
         player_state.parameters_move_items = task
@@ -222,7 +226,11 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       }
       case TaskStates.PLACING: {
         const task = player_state.parameters_place_entity
-        return task ? { type: task.type, entity_name: task.entity_name, position: task.position } : { type: player_state.task_state }
+        return task ? { type: task.type, entity_name: task.entity_name, position: task.position, direction: task.direction } : { type: player_state.task_state }
+      }
+      case TaskStates.ROTATING: {
+        const task = player_state.parameters_rotate_entity
+        return task ? { type: task.type, target_unit_number: task.target_unit_number, reverse: task.reverse } : { type: player_state.task_state }
       }
       case TaskStates.MOVING_ITEMS: {
         const task = player_state.parameters_move_items
