@@ -65,6 +65,40 @@ def run(client, results: Path) -> None:
     assert_true(observer.get('body_revision') == before_revision, f'map context has stale body revision: {context!r}')
     assert_true((context.get('policy') or {}).get('actor_scoped') is True, f'map context lacks actor-scoped policy: {context!r}')
 
+    # A zero-player test save intentionally starts with no charted map. First
+    # prove the production map service fails closed, then explicitly chart a
+    # bounded test area using Factorio's own LuaForce.chart API. The product
+    # interface itself never bypasses chart/visibility policy.
+    prechart_query = call(
+        'autorio_swarm_map',
+        'query_area',
+        repr(actor_id),
+        '1',
+        repr(position['x']),
+        repr(position['y']),
+        '4',
+        '16',
+    )
+    assert_true(
+        prechart_query.get('ok') is False and prechart_query.get('code') == 'area_uncharted',
+        f'uncharted map query did not fail closed: {prechart_query!r}',
+    )
+    prechart_observer = prechart_query.get('observer') or {}
+    assert_true(prechart_observer.get('actor_id') == actor_id, f'uncharted query lost actor provenance: {prechart_query!r}')
+    assert_true(prechart_observer.get('body_revision') == before_revision, f'uncharted query lost body revision: {prechart_query!r}')
+
+    chart_radius = 64
+    left = position['x'] - chart_radius
+    top = position['y'] - chart_radius
+    right = position['x'] + chart_radius
+    bottom = position['y'] + chart_radius
+    chart_command = (
+        '/silent-command '
+        f'game.forces["player"].chart(game.surfaces[1], '
+        f'{{{{x={left}, y={top}}}, {{x={right}, y={bottom}}}}})'
+    )
+    command(chart_command)
+
     query = call(
         'autorio_swarm_map',
         'query_area',
@@ -75,7 +109,7 @@ def run(client, results: Path) -> None:
         '4',
         '16',
     )
-    assert_true(query.get('ok') is True, f'live actor-local map query failed: {query!r}')
+    assert_true(query.get('ok') is True, f'live actor-local map query failed after explicit charting: {query!r}')
     query_observer = query.get('observer') or {}
     assert_true(query_observer.get('actor_id') == actor_id, f'map query lost actor provenance: {query!r}')
     assert_true(query_observer.get('body_revision') == before_revision, f'map query lost body revision: {query!r}')
@@ -129,6 +163,7 @@ def run(client, results: Path) -> None:
         'after_body_revision': after_revision,
         'before_physical_actor_id': before_physical,
         'after_physical_actor_id': after_physical,
+        'prechart_code': prechart_query.get('code'),
         'query_returned_count': query.get('returned_count'),
         'rebound_query_returned_count': rebound_query.get('returned_count'),
         'learning_policy': learning.get('policy'),
@@ -136,8 +171,8 @@ def run(client, results: Path) -> None:
     }
     (results / 'swarm-map-remote.json').write_text(json.dumps(result, indent=2))
     print(
-        'PASS: actor-scoped map remote preserved logical provenance, rejected a missing body, '
-        f'and rebound {actor_id} from body revision {before_revision} to {after_revision}; '
+        'PASS: actor-scoped map remote rejected uncharted access, preserved logical provenance, '
+        f'rejected a missing body, and rebound {actor_id} from body revision {before_revision} to {after_revision}; '
         'swarm learning pipeline remote is live'
     )
 
