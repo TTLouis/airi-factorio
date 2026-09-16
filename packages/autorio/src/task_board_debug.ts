@@ -7,6 +7,7 @@ const DEBUG_BODY_NAME = 'airi_task_board_debug_body'
 const DEBUG_WIDTH = 720
 const DEBUG_KEY_WIDTH = 118
 const DEBUG_VALUE_WIDTH = DEBUG_WIDTH - DEBUG_KEY_WIDTH - 54
+const CONVERSATION_HEIGHT = 170
 
 declare const storage: {
   airi_task_board_debug_open?: Record<number, boolean>
@@ -16,6 +17,9 @@ declare const storage: {
   airi_task_board_ui_suppressed?: { goal_id: string, objective: string }
   airi_task_board_ui_last_seen?: { goal_id: string, objective: string }
   airi_task_board_ui_inputs?: any[]
+  airi_task_board_activity_history?: any[]
+  airi_task_board_conversation_goal_id?: string
+  airi_task_board_conversation_start_key?: string
 }
 
 export interface TaskBoardUiDebugSnapshot {
@@ -34,6 +38,14 @@ export interface TaskBoardUiDebugSnapshot {
   last_error: string
   actor_id: number
   actor_epoch: number
+}
+
+export interface TaskConversationMessage {
+  key: string
+  role: 'user' | 'assistant'
+  sender: string
+  text: string
+  timestamp: string
 }
 
 function clean_text(value: unknown, max = 500) {
@@ -155,9 +167,93 @@ export function close_debug_ui(player_index: number) { ensure_debug_open_state()
 export function debug_button_caption(player_index: number) { return debug_ui_is_open(player_index) ? 'DEBUG ON' : 'DEBUG' }
 export function follow_button_caption(active: boolean) { return active ? 'FOLLOWING' : 'FOLLOW' }
 
+function task_activity_key(entry: any) {
+  const id = clean_text(entry?.id, 120)
+  if (id.length > 0) return `id:${id}`
+  return `${clean_text(entry?.kind, 32)}|${clean_text(entry?.timestamp, 16)}|${clean_text(entry?.text, 2000)}`
+}
+
+function activity_conversation_message(entry: any): TaskConversationMessage | undefined {
+  const kind = clean_text(entry?.kind, 32)
+  const line = clean_text(entry?.text, 2000)
+  if (line.length === 0) return undefined
+  const timestamp = clean_text(entry?.timestamp, 16)
+  const key = task_activity_key(entry)
+  if (kind === 'decision') return { key, role: 'assistant', sender: 'AIRI', text: line, timestamp }
+  if (kind !== 'observation') return undefined
+  const id = clean_text(entry?.id, 120)
+  if (!id.startsWith('live_') || line.startsWith('Tool ')) return undefined
+  const separator = line.indexOf(': ')
+  if (separator < 1) return undefined
+  const sender = clean_text(line.substring(0, separator), 128)
+  const text = clean_text(line.substring(separator + 2), 2000)
+  if (sender.length === 0 || text.length === 0) return undefined
+  return { key, role: 'user', sender, text, timestamp }
+}
+
+function objective_matches_message(objective: string, message: string) {
+  const left = clean_text(objective, 500)
+  const right = clean_text(message, 500)
+  if (left.length === 0 || right.length === 0) return false
+  if (left === right) return true
+  const length = math.min(220, math.min(left.length, right.length))
+  return length >= 24 && left.substring(0, length) === right.substring(0, length)
+}
+
+/**
+ * Conversation is a player-facing projection of the already-retained activity
+ * history, not hidden model reasoning. A new durable goal establishes a new
+ * start cursor, while pause/follow/continue keep using the same goal and cursor.
+ */
+export function task_conversation_messages(board: any): TaskConversationMessage[] {
+  if (board === undefined || board === null) return []
+  const raw_history = Array.isArray(storage.airi_task_board_activity_history)
+    ? storage.airi_task_board_activity_history as any[]
+    : Array.isArray(board.activity) ? board.activity as any[] : []
+  const messages: TaskConversationMessage[] = []
+  for (const entry of raw_history) {
+    const message = activity_conversation_message(entry)
+    if (message !== undefined) messages.push(message)
+  }
+  if (messages.length === 0) return []
+
+  const goal_id = clean_text(board.goal_id, 100)
+  const previous_goal = storage.airi_task_board_conversation_goal_id ?? ''
+  if (goal_id.length > 0 && goal_id !== previous_goal) {
+    let start_key = ''
+    const objective = clean_text(board.objective, 500)
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index]
+      if (message.role !== 'user' || !objective_matches_message(objective, message.text)) continue
+      start_key = message.key
+      break
+    }
+    if (start_key.length === 0) {
+      for (let index = messages.length - 1; index >= 0; index--) {
+        if (messages[index].role !== 'user') continue
+        start_key = messages[index].key
+        break
+      }
+    }
+    storage.airi_task_board_conversation_goal_id = goal_id
+    storage.airi_task_board_conversation_start_key = start_key
+  }
+
+  const start_key = storage.airi_task_board_conversation_start_key ?? ''
+  if (start_key.length === 0) return messages
+  for (let index = 0; index < messages.length; index++) {
+    if (messages[index].key === start_key) return messages.slice(index)
+  }
+  return messages
+}
+
 export function latest_ai_reply(board: any) {
   const direct = clean_text(board?.response, 2000)
   if (direct.length > 0) return direct
+  const messages = task_conversation_messages(board)
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === 'assistant') return messages[index].text
+  }
   const activity = Array.isArray(board?.activity) ? board.activity as any[] : []
   for (let index = activity.length - 1; index >= 0; index--) {
     if (activity[index]?.kind !== 'decision') continue
@@ -173,16 +269,38 @@ export function render_ai_reply(parent: LuaGuiElement, response: string, width: 
   section.style.horizontally_stretchable = false
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
   header.style.horizontally_stretchable = true
-  header.add({ type: 'label', caption: 'AIRI Reply', style: 'subheader_caption_label' })
+  header.add({ type: 'label', caption: 'Current Task Conversation', style: 'subheader_caption_label' })
   const body = section.add({ type: 'flow', direction: 'vertical' })
   body.style.padding = 10
   body.style.horizontally_stretchable = true
+  const messages = task_conversation_messages(storage.airi_task_board_ui)
   const explicit = clean_text(response, 2000)
-  const clean = explicit.length > 0 ? explicit : latest_ai_reply(storage.airi_task_board_ui)
-  const label = body.add({ type: 'label', caption: clean.length > 0 ? clean : 'No AIRI reply yet.' })
-  label.style.single_line = false
-  label.style.maximal_width = width - 20
-  if (clean.length === 0) label.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
+  if (messages.length === 0 && explicit.length === 0) {
+    const empty = body.add({ type: 'label', caption: storage.airi_task_board_ui === undefined ? 'No current task conversation.' : 'No player/AIRI messages recorded for this task yet.' })
+    empty.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
+    return
+  }
+  const visible = [...messages]
+  if (explicit.length > 0 && (visible.length === 0 || visible[visible.length - 1].role !== 'assistant' || visible[visible.length - 1].text !== explicit)) {
+    visible.push({ key: 'explicit-response', role: 'assistant', sender: 'AIRI', text: explicit, timestamp: '' })
+  }
+  const scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' })
+  scroll.style.horizontally_stretchable = true
+  scroll.style.maximal_height = CONVERSATION_HEIGHT
+  const table = scroll.add({ type: 'table', column_count: 3 })
+  table.style.horizontal_spacing = 8
+  table.style.vertical_spacing = 5
+  for (const message of visible) {
+    const timestamp = table.add({ type: 'label', caption: message.timestamp || '--:--:--' })
+    timestamp.style.minimal_width = 66
+    timestamp.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
+    const speaker = table.add({ type: 'label', caption: message.role === 'assistant' ? 'AIRI' : message.sender, style: 'semibold_label' })
+    speaker.style.minimal_width = 72
+    const line = table.add({ type: 'label', caption: message.text })
+    line.style.single_line = false
+    line.style.maximal_width = width - 190
+  }
+  scroll.scroll_to_bottom()
 }
 
 function destroy_debug_popout(player: LuaPlayer) {
