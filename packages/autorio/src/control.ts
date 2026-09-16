@@ -24,6 +24,7 @@ import { new_interaction_recovery } from './interaction_recovery'
 import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
 import { new_navigation_obstacle_recovery } from './navigation_obstacle_recovery'
+import { new_orientation_runtime } from './orientation_runtime'
 import { create_production_planning_remote_interface } from './production_planning_remote'
 import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
 import { new_recipe_configuration_runtime } from './recipe_configuration'
@@ -50,6 +51,7 @@ set_task_board_world_task_provider(() => task_manager.get_status_snapshot())
 const awareness_controller = new_awareness_controller()
 const basic_operation_controller = new_basic_operation_controller(get_controlled_actor, task_manager)
 const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_operation_controller)
+const orientation_runtime = new_orientation_runtime(task_manager, basic_operation_controller)
 const recipe_configuration_runtime = new_recipe_configuration_runtime(task_manager, basic_operation_controller)
 const interaction_recovery = new_interaction_recovery(task_manager)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
@@ -205,6 +207,11 @@ remote.add_interface('autorio_operations', {
       log(`[AUTORIO] New place_entity task: ${entity_name}${position}${facing}`)
     }
     return accepted
+  },
+  rotate_entity: (unit_number: number, reverse: boolean = false): [boolean, string] => {
+    const result = basic_operation_controller.submit_rotate_exact(unit_number, reverse)
+    if (result[0]) log(`[AUTORIO] New rotate_entity task: unit=${unit_number}, reverse=${reverse}`)
+    return result
   },
   move_items: (item_name: string, entity_name: string, max_count: number, to_entity: boolean): [boolean, string] => {
     const result = basic_operation_controller.submit_move(item_name, entity_name, max_count, to_entity)
@@ -367,6 +374,9 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     }
     else if (task_manager.player_state.task_state === TaskStates.PLACING) {
       basic_operation_runtime.state_placing(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.ROTATING) {
+      orientation_runtime.state_rotating(actor)
     }
     else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) {
       basic_operation_runtime.state_moving_items(actor)
