@@ -1,4 +1,4 @@
-import type { LuaEntity, OnScriptPathRequestFinishedEvent, PathfinderWaypoint } from 'factorio:runtime'
+import type { LuaEntity, OnScriptPathRequestFinishedEvent, PathfinderWaypoint, UnitNumber } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersWalkToEntity } from './types'
@@ -21,9 +21,13 @@ const TARGET_REACHED_DISTANCE = 2.5
 const TARGET_REPATH_DISTANCE = 4
 const PROGRESS_DISTANCE = 0.25
 const MAX_PLAYER_REACH_DISTANCE = 64
+const MIN_REACH_DISTANCE = 0.25
 const RECOVERY_REACHED_DISTANCE = 0.75
+const MAX_COORDINATE = 1000000
 
+type NavigationTargetKind = 'nearest_entity' | 'exact_entity' | 'position' | 'player'
 type NavigationCode = 'started' | 'reached' | 'cancelled' | 'no_actor' | 'invalid_radius' | 'invalid_entity_name'
+  | 'invalid_position' | 'invalid_unit_number' | 'invalid_reach_distance'
   | 'no_target' | 'actor_changed' | 'target_gone' | 'path_start_unavailable'
   | 'path_busy' | 'unreachable' | 'path_timeout' | 'stuck' | 'timeout'
   | 'player_unavailable' | 'different_surface'
@@ -36,6 +40,7 @@ interface NavigationResult {
   actor_id?: number
   actor_kind?: string
   force_index?: number
+  target_kind?: NavigationTargetKind
   entity_name?: string
   player_name?: string
   target_unit_number?: number
@@ -48,6 +53,8 @@ interface NavigationResult {
 }
 
 type NavigationTask = PlayerParametersWalkToEntity & {
+  target_kind?: NavigationTargetKind
+  requested_position?: { x: number, y: number }
   persistent_follow?: boolean
   recovery_position?: { x: number, y: number }
   recovery_stage?: 'escape' | 'repath'
@@ -72,6 +79,27 @@ function valid_radius(radius: number) {
     && radius === math.floor(radius)
     && radius >= 1
     && radius <= MAX_SEARCH_RADIUS
+}
+
+function valid_unit_number(unit_number: number) {
+  return typeof unit_number === 'number'
+    && unit_number === math.floor(unit_number)
+    && unit_number >= 1
+    && unit_number <= 9007199254740991
+}
+
+function valid_coordinate(value: number) {
+  return typeof value === 'number'
+    && value === value
+    && value >= -MAX_COORDINATE
+    && value <= MAX_COORDINATE
+}
+
+function valid_reach_distance(value: number) {
+  return typeof value === 'number'
+    && value === value
+    && value >= MIN_REACH_DISTANCE
+    && value <= MAX_PLAYER_REACH_DISTANCE
 }
 
 function copy_position(position: { x: number, y: number }) {
@@ -113,9 +141,16 @@ function draw_path(actor: ControlledActor, path: PathfinderWaypoint[]) {
   }
 }
 
+function navigation_destination(task: NavigationTask) {
+  if (task.target?.valid) return task.target.position
+  if (task.target_kind === 'position' && task.requested_position) return task.requested_position
+  return task.target_position ?? undefined
+}
+
 function record(actor: ControlledActor | undefined, raw_task: PlayerParametersWalkToEntity | undefined, accepted: boolean, completed: boolean, code: NavigationCode): NavigationResult {
   const task = raw_task as NavigationTask | undefined
   const identity = actor?.is_valid ? actor.status_snapshot() : undefined
+  const destination = task ? navigation_destination(task) : undefined
   const result: NavigationResult = {
     accepted,
     completed,
@@ -124,10 +159,11 @@ function record(actor: ControlledActor | undefined, raw_task: PlayerParametersWa
     actor_id: identity?.actor_id,
     actor_kind: identity?.kind,
     force_index: actor?.is_valid ? actor.force.index : undefined,
-    entity_name: task?.entity_name,
+    target_kind: task?.target_kind,
+    entity_name: task?.entity_name || undefined,
     player_name: task?.target_player_name,
     target_unit_number: task?.target_unit_number,
-    target_position: task?.target_position ? copy_position(task.target_position) : undefined,
+    target_position: destination ? copy_position(destination) : undefined,
     path_request_id: task?.path_request_id,
     path_attempts: task?.path_attempts,
     blocked_reason: !completed && ['unreachable', 'path_timeout', 'stuck', 'path_busy'].indexOf(code) >= 0 ? code : undefined,
@@ -154,7 +190,11 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     rendering.clear()
     manager.reset_task_state()
     manager.next_task()
-    log(`[AUTORIO] Navigation task complete: reached ${task.target_player_name ?? task.entity_name}`)
+    const destination = navigation_destination(task)
+    const label = task.target_player_name
+      ?? (task.target_kind === 'position' && destination ? serpent.line(destination) : task.entity_name)
+      ?? 'target'
+    log(`[AUTORIO] Navigation task complete: reached ${label}`)
   }
 
   function cancel_follow_navigation(actor: ControlledActor, task: NavigationTask) {
@@ -176,13 +216,22 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     return { actor, identity }
   }
 
-  function make_task(actor: ControlledActor, identity: ReturnType<ControlledActor['status_snapshot']>, entity_name: string, search_radius: number, target_player_name?: string, reach_distance?: number): NavigationTask {
+  function make_task(
+    actor: ControlledActor,
+    identity: ReturnType<ControlledActor['status_snapshot']>,
+    entity_name: string,
+    search_radius: number,
+    target_player_name?: string,
+    reach_distance?: number,
+    target_kind: NavigationTargetKind = 'nearest_entity',
+  ): NavigationTask {
     return {
       type: TaskStates.WALKING_TO_ENTITY,
       entity_name,
       search_radius,
       target_player_name,
       reach_distance,
+      target_kind,
       path: null,
       path_drawn: false,
       path_index: 1,
@@ -211,13 +260,57 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
 
     const resolved = actor_for_submission()
     if (!resolved || resolved.identity.actor_id === undefined) return false
-    manager.add_task(make_task(resolved.actor, resolved.identity, entity_name, search_radius))
+    manager.add_task(make_task(resolved.actor, resolved.identity, entity_name, search_radius, undefined, undefined, 'nearest_entity'))
     return true
+  }
+
+  function submit_exact(unit_number: number, reach_distance: number = TARGET_REACHED_DISTANCE): [boolean, string] {
+    if (!valid_unit_number(unit_number)) {
+      record(get_actor(), undefined, false, false, 'invalid_unit_number')
+      return [false, 'unit_number must be a positive safe integer']
+    }
+    if (!valid_reach_distance(reach_distance)) {
+      record(get_actor(), undefined, false, false, 'invalid_reach_distance')
+      return [false, 'reach_distance must be from 0.25 to 64']
+    }
+    const resolved = actor_for_submission()
+    if (!resolved || resolved.identity.actor_id === undefined) return [false, 'No controlled actor']
+    const entity = game.get_entity_by_unit_number(unit_number as UnitNumber)
+    if (!entity || !entity.valid) {
+      record(resolved.actor, undefined, false, false, 'target_gone')
+      return [false, `Entity unit ${unit_number} not found`]
+    }
+    if (entity.surface.index !== resolved.actor.surface.index) {
+      record(resolved.actor, undefined, false, false, 'different_surface')
+      return [false, 'Entity is on a different surface']
+    }
+    const task = make_task(resolved.actor, resolved.identity, entity.name, 1, undefined, reach_distance, 'exact_entity')
+    task.target_unit_number = unit_number
+    manager.add_task(task)
+    return [true, 'Task started']
+  }
+
+  function submit_position(x: number, y: number, reach_distance: number = RECOVERY_REACHED_DISTANCE): [boolean, string] {
+    if (!valid_coordinate(x) || !valid_coordinate(y)) {
+      record(get_actor(), undefined, false, false, 'invalid_position')
+      return [false, 'x and y must be finite map coordinates']
+    }
+    if (!valid_reach_distance(reach_distance)) {
+      record(get_actor(), undefined, false, false, 'invalid_reach_distance')
+      return [false, 'reach_distance must be from 0.25 to 64']
+    }
+    const resolved = actor_for_submission()
+    if (!resolved || resolved.identity.actor_id === undefined) return [false, 'No controlled actor']
+    const task = make_task(resolved.actor, resolved.identity, '', 1, undefined, reach_distance, 'position')
+    task.requested_position = { x, y }
+    task.target_position = { x, y }
+    manager.add_task(task)
+    return [true, 'Task started']
   }
 
   function submit_player(player_name: string, reach_distance: number = TARGET_REACHED_DISTANCE): [boolean, string] {
     if (typeof player_name !== 'string' || player_name.length === 0) return [false, 'player_name is required']
-    if (typeof reach_distance !== 'number' || reach_distance !== reach_distance || reach_distance < 1 || reach_distance > MAX_PLAYER_REACH_DISTANCE) {
+    if (!valid_reach_distance(reach_distance) || reach_distance < 1) {
       return [false, 'reach_distance must be from 1 to 64']
     }
     const resolved = actor_for_submission()
@@ -231,7 +324,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       record(resolved.actor, undefined, false, false, 'different_surface')
       return [false, 'Player is on a different surface']
     }
-    const task = make_task(resolved.actor, resolved.identity, player.character.name, MAX_SEARCH_RADIUS, player_name, reach_distance)
+    const task = make_task(resolved.actor, resolved.identity, player.character.name, MAX_SEARCH_RADIUS, player_name, reach_distance, 'player')
     const follow = storage.airi_follow_state
     task.persistent_follow = follow?.active === true && follow.player_name === player_name
     manager.add_task(task)
@@ -246,7 +339,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
 
   function maybe_prepare_escape(actor: ControlledActor, task: NavigationTask, reason: string) {
     if ((task.path_attempts ?? 0) < 2 || task.recovery_position) return false
-    const target_position = task.target?.valid ? task.target.position : task.target_position
+    const target_position = navigation_destination(task)
     if (!target_position) return false
     const recovery = select_navigation_escape_point(actor, target_position, (task.path_attempts ?? 0) >= 3 ? 8 : 6)
     task.last_spatial_observation = recovery.spatial_observation
@@ -271,19 +364,27 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
 
     const start = copy_position(character.position)
     const target = task.target
-    if (!target || !target.valid) {
+    if (task.target_kind !== 'position' && (!target || !target.valid)) {
       fail(actor, task, 'target_gone')
+      return false
+    }
+    const destination = navigation_destination(task)
+    if (!destination) {
+      fail(actor, task, 'no_target')
       return false
     }
 
     const character_prototype = character.prototype
     task.path_attempts = (task.path_attempts ?? 0) + 1
-    task.target_position = copy_position(target.position)
-    const goal = task.recovery_position ? copy_position(task.recovery_position) : copy_position(task.target_position)
+    task.target_position = copy_position(destination)
+    const goal = task.recovery_position ? copy_position(task.recovery_position) : copy_position(destination)
+    const arrival_radius = task.recovery_position
+      ? 0.5
+      : math.max(MIN_REACH_DISTANCE, math.min(task.reach_distance ?? TARGET_REACHED_DISTANCE, 2))
     task.path_request_id = actor.surface.request_path({
       bounding_box: character_prototype.collision_box,
       collision_mask: character_prototype.collision_mask,
-      radius: task.recovery_position ? 0.5 : 2,
+      radius: arrival_radius,
       start,
       goal,
       force: actor.force,
@@ -308,6 +409,21 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
   }
 
   function acquire(actor: ControlledActor, task: NavigationTask) {
+    if (task.target_kind === 'position') {
+      if (!task.requested_position) {
+        fail(actor, task, 'no_target')
+        return false
+      }
+      task.target = null
+      task.target_position = copy_position(task.requested_position)
+      task.started_tick = game.tick
+      task.last_progress_tick = game.tick
+      task.last_waypoint_distance = undefined
+      reset_physical_progress(actor, task)
+      record(actor, task, true, false, 'started')
+      return request_path(actor, task)
+    }
+
     let target: LuaEntity | undefined
     if (task.target_player_name) {
       const player = game.get_player(task.target_player_name)
@@ -320,6 +436,17 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
         return false
       }
       target = player.character
+    }
+    else if (task.target_kind === 'exact_entity' && task.target_unit_number !== undefined) {
+      target = game.get_entity_by_unit_number(task.target_unit_number as UnitNumber)
+      if (!target || !target.valid) {
+        fail(actor, task, 'target_gone')
+        return false
+      }
+      if (target.surface.index !== actor.surface.index) {
+        fail(actor, task, 'different_surface')
+        return false
+      }
     }
     else {
       target = nearest(actor, actor.surface.find_entities_filtered({ position: actor.position, radius: task.search_radius, name: task.entity_name }))
@@ -502,12 +629,17 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return
     }
 
-    if (!task.target && !acquire(actor, task)) return
+    if (task.started_tick === undefined && !acquire(actor, task)) return
     if (!refresh_player_target(actor, task)) return
 
     const target = task.target
-    if (!target || !target.valid) {
+    if (task.target_kind !== 'position' && (!target || !target.valid)) {
       fail(actor, task, 'target_gone')
+      return
+    }
+    const destination = navigation_destination(task)
+    if (!destination) {
+      fail(actor, task, 'no_target')
       return
     }
 
@@ -518,7 +650,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     }
 
     const reach_distance = task.reach_distance ?? TARGET_REACHED_DISTANCE
-    if (distance(actor.position, target.position) <= reach_distance) {
+    if (distance(actor.position, destination) <= reach_distance) {
       complete(actor, task)
       return
     }
@@ -535,7 +667,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       return
     }
 
-    if (!task.recovery_position && task.target_position && distance(task.target_position, target.position) >= TARGET_REPATH_DISTANCE) {
+    if (target?.valid && !task.recovery_position && task.target_position && distance(task.target_position, target.position) >= TARGET_REPATH_DISTANCE) {
       task.path_attempts = math.max(0, (task.path_attempts ?? 1) - 1)
       repath(actor, task, 'stuck', 'target_moved')
       return
@@ -565,6 +697,7 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     const raw_task = manager.player_state.parameters_walk_to_entity
     const task = raw_task as NavigationTask | undefined
     const target = task?.target
+    const destination = task ? navigation_destination(task) : undefined
     const active = manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY
     const last = storage.airi_last_navigation_result
     const blocked = !active && last !== undefined && ['unreachable', 'path_timeout', 'stuck', 'path_busy'].indexOf(last.code) >= 0
@@ -572,9 +705,16 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
       task_active: active,
       state: active ? (task?.recovery_position ? 'recovering' : task?.calculating_path ? 'pathfinding' : 'navigating') : blocked ? 'blocked' : last?.code === 'reached' ? 'reached' : 'idle',
       actor: actor?.status_snapshot(),
+      target_kind: task?.target_kind,
       player_name: task?.target_player_name,
       persistent_follow: task?.persistent_follow === true,
       reach_distance: task?.reach_distance,
+      destination: destination
+        ? {
+            position: copy_position(destination),
+            distance: actor ? distance(actor.position, destination) : undefined,
+          }
+        : undefined,
       target: target && target.valid
         ? {
             name: target.name,
@@ -607,5 +747,5 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     }
   }
 
-  return { submit, submit_player, tick, on_path_finished, status }
+  return { submit, submit_exact, submit_position, submit_player, tick, on_path_finished, status }
 }
