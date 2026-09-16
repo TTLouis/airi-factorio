@@ -623,8 +623,8 @@ function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | unde
   const activity_grid = activity_scroll.add({ type: 'table', column_count: 3 }); activity_grid.style.horizontal_spacing = 10; activity_grid.style.vertical_spacing = 4
   let latest_line: LuaGuiElement | undefined
   for (const entry of activity) { const timestamp = activity_grid.add({ type: 'label', caption: entry.timestamp ?? '--:--:--', tooltip: entry.timestamp ? 'Factorio game time when this activity was first observed' : 'No timestamp recorded yet' }); timestamp.style.minimal_width = 66; timestamp.style.font_color = TONE_COLORS.muted; const tag = activity_grid.add({ type: 'label', caption: activity_prefix(entry.kind), style: 'bold_label' }); tag.style.minimal_width = 52; tag.style.font_color = TONE_COLORS[activity_tone(entry.kind)]; const line = activity_grid.add({ type: 'label', caption: entry.text }); line.style.single_line = false; line.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 160; latest_line = line }
-  if (latest_line !== undefined) activity_scroll.scroll_to_element(latest_line, 'bottom-third')
-  else activity_scroll.scroll_to_bottom()
+  if (latest_line !== undefined) activity_scroll.scroll_to_element(latest_line, 'in-view')
+  activity_scroll.scroll_to_bottom()
 }
 function add_slot_grid(parent: LuaGuiElement, slots: Array<{ name: string, count: number, tooltip: string }>, style: 'slot_button' | 'yellow_slot_button', rows: number) {
   const height = rows * SLOT_SIZE
