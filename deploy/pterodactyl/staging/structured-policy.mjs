@@ -71,7 +71,7 @@ export function parseOperation(value) {
   exactKeys(value, ['name', 'args'])
   const { name, args } = value
   check(typeof name === 'string', 'Operation name must be a string')
-  check(Object.hasOwn(operationKeys, name), 'Unapproved operation')
+  check(Object.hasOwn(operationKeys, name), `Unapproved operation: ${name}`)
   exactKeys(args, operationKeys[name])
 
   switch (name) {
@@ -184,7 +184,7 @@ export function parseOperation(value) {
     case 'wait':
       return { name, args: { ticks: integer(args.ticks, 'ticks', 1, 360000) } }
     default:
-      throw new PolicyError('Unapproved operation')
+      throw new PolicyError(`Unapproved operation: ${name}`)
   }
 }
 
@@ -230,7 +230,7 @@ export function renderOperation(value) {
     case 'clear_enemy_area': return `remote.call('autorio_operations','clear_enemy_area',${operation.args.search_radius})`
     case 'research_technology': return `remote.call('autorio_operations','research_technology',${luaString(operation.args.technology_name)})`
     case 'wait': return `remote.call('autorio_operations','wait',${operation.args.ticks})`
-    default: throw new PolicyError('Unapproved operation')
+    default: throw new PolicyError(`Unapproved operation: ${operation.name}`)
   }
 }
 
@@ -499,6 +499,6 @@ export function toolCommand(name, rawArgs = {}) {
       noExtra(args, [])
       return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_combat","status")))'
     default:
-      throw new PolicyError('Unapproved tool')
+      throw new PolicyError(`Unapproved tool: ${name}`)
   }
 }
