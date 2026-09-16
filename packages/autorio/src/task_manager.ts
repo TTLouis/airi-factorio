@@ -199,8 +199,12 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
         return task
           ? {
               type: task.type,
-              entity_name: task.entity_name,
+              target_kind: task.target_kind,
+              entity_name: task.entity_name || undefined,
               player_name: task.target_player_name,
+              target_unit_number: task.target_unit_number,
+              requested_position: task.requested_position,
+              reach_distance: task.reach_distance,
               search_radius: task.search_radius,
               path_index: task.path_index,
               calculating_path: task.calculating_path,
