@@ -113,9 +113,43 @@ export function canonicalContinuationPlan(previousBoard, plan, { allowReplan = f
 }
 
 export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
+  retireCompletedPlan(key) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state || state.status !== 'completed') return state
+    this.planByNpc.delete(key)
+    return undefined
+  }
+
+  planContext(key) {
+    const state = this.retireCompletedPlan(key)
+    if (!state) {
+      return '[PLAN_STATE] No active durable goal. Completed goals are retired from the current task slot and remain only in bounded dialogue history. Do not resume or steer a completed goal merely because the human says continue; a new actionable instruction must start a new goal.'
+    }
+    return super.planContext(key)
+  }
+
+  currentPlan(key) {
+    this.retireCompletedPlan(key)
+    return super.currentPlan(key)
+  }
+
+  recordPlan(key, requestInfo, plan, options = {}) {
+    // A completed goal is history, not an active task. Older persisted state may
+    // still contain one from a previous runtime version, so retire it before a
+    // new request can accidentally inherit its goal_id/objective.
+    this.retireCompletedPlan(key)
+    return super.recordPlan(key, requestInfo, plan, options)
+  }
+
   reconcileTaskBoard(key, previousBoard, plan, stateResult, options = {}) {
     const guarded = canonicalContinuationPlan(previousBoard, plan, options)
-    return super.reconcileTaskBoard(key, previousBoard, guarded, stateResult, options)
+    const result = super.reconcileTaskBoard(key, previousBoard, guarded, stateResult, options)
+    // Return the completed state to the caller for the final response/receipt,
+    // but clear it from the current durable slot before UI sync and persistence.
+    // Conversation memory still retains the user/assistant exchange for follow-up
+    // references without making the finished goal steerable.
+    if (result?.state?.status === 'completed') this.planByNpc.delete(key)
+    return result
   }
 
   recordBoardEvidence(key, evidence) {
