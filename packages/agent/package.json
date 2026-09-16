@@ -1,14 +1,16 @@
 {
-  "name": "@proj-airi/factorio-agent",
+  "name": "@factorio-npc/agent",
   "type": "module",
   "version": "0.1.0",
-  "description": "An agent for Factorio written in TypeScript.",
-  "author": "LemonNekoGH",
+  "description": "Structured LLM agent and tool layer for the headless Factorio NPC runtime.",
+  "author": "TTLouis; originally derived from moeru-ai/airi-factorio by LemonNekoGH",
   "license": "MIT",
   "keywords": [
     "factorio",
+    "npc",
     "llm",
     "agent",
+    "headless",
     "typescript"
   ],
   "scripts": {
