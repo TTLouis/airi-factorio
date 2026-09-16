@@ -62,13 +62,16 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(task_board_preview_min_height(4320)).toBe(900)
   })
 
-  it('gives every control the same size and keeps pause and terminate usable', () => {
+  it('gives every control the same size and aligns all four buttons in a two-column grid', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     // One width for all four buttons: two of them plus the gap fill the section.
     expect(source).toContain('const COMPACT_BUTTON_WIDTH = (HALF_SECTION_WIDTH - 2 * SECTION_PADDING - COMPACT_BUTTON_SPACING) / 2')
     expect(source).toContain('function compact_button(button: LuaGuiElement)')
     expect(source).not.toContain('COMPACT_TASK_BUTTON_WIDTH')
     expect(source).not.toContain('COMPACT_ACTION_BUTTON_WIDTH')
+    expect(source).toContain("const controls = body.add({ type: 'table', column_count: 2 })")
+    expect(source).toContain('controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING')
+    expect(source).toContain('controls.style.vertical_spacing = COMPACT_BUTTON_SPACING')
 
     // Intervening matters most exactly when there is no plan, so neither task
     // button may be disabled by the absence of one.
@@ -84,12 +87,30 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(source).toContain('if (issue_text.length > 0)')
   })
 
+  it('keeps inventory and wanted items below the world preview and zoom row', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const build_columns = source.split('function build_columns(')[1]?.split('function refresh_columns(')[0] ?? ''
+    const preview_index = build_columns.indexOf('render_world_preview(right, runtime, player)')
+    const resources_index = build_columns.indexOf("right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' })")
+    expect(preview_index).toBeGreaterThanOrEqual(0)
+    expect(resources_index).toBeGreaterThan(preview_index)
+    expect(build_columns).toContain('render_inventory(resources, runtime)')
+    expect(build_columns).toContain('render_wanted_items(resources, board)')
+
+    const left_dynamic = source.split('function build_left_dynamic(')[1]?.split('function build_columns(')[0] ?? ''
+    expect(left_dynamic).not.toContain('render_inventory(')
+    expect(left_dynamic).not.toContain('render_wanted_items(')
+  })
+
   it('refreshes the world preview in place so dragging zoom is never cancelled', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain('function refresh_world_preview(')
-    // The once-a-second refresh must not destroy the column that owns the
-    // slider; a rebuild is reserved for a structural change.
-    expect(source).toContain('if (!refresh_world_preview(right, runtime, player)) { right.clear()')
+    // The once-a-second refresh preserves the preview/slider during normal
+    // updates. Only a missing preview structure or missing resources container
+    // may trigger a structural rebuild of the right column.
+    expect(source).toContain('const resources = right[RIGHT_RESOURCES_NAME]')
+    expect(source).toContain('if (!refresh_world_preview(right, runtime, player) || !resources?.valid) {')
+    expect(source).toContain('resources.clear(); render_inventory(resources, runtime); render_wanted_items(resources, board)')
 
     const refresh_body = source.split('function refresh_world_preview(')[1]?.split('function render_world_preview(')[0] ?? ''
     // Live data may be written to the camera...
