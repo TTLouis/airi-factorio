@@ -242,9 +242,9 @@ function sort_entities(values: LuaEntity[]) {
 }
 
 function recipe_summary(entity: LuaEntity) {
-  const raw: any = entity
-  if (typeof raw.get_recipe !== 'function') return undefined
-  const recipe = raw.get_recipe()
+  const get_recipe = (entity as any).get_recipe
+  if (typeof get_recipe !== 'function') return undefined
+  const recipe = get_recipe()
   if (!recipe) return undefined
   const ingredients: Array<{ type: string, name: string, amount?: number }> = []
   for (const ingredient of recipe.ingredients ?? []) {
@@ -258,8 +258,10 @@ function recipe_summary(entity: LuaEntity) {
 }
 
 function inventory_items(inventory: any) {
-  if (!inventory || inventory.valid === false || typeof inventory.get_contents !== 'function') return []
-  const contents: any = inventory.get_contents()
+  if (!inventory || inventory.valid === false) return []
+  const get_contents = inventory.get_contents
+  if (typeof get_contents !== 'function') return []
+  const contents: any = get_contents()
   const result: Array<{ name: string, count: number }> = []
   for (const key in contents) {
     if (result.length >= MAX_INVENTORY_ITEMS) break
@@ -271,8 +273,8 @@ function inventory_items(inventory: any) {
 }
 
 function inventory_snapshots(entity: LuaEntity) {
-  const raw: any = entity
-  if (typeof raw.get_inventory !== 'function') return []
+  const get_inventory = (entity as any).get_inventory
+  if (typeof get_inventory !== 'function') return []
   const slots: Array<{ role: string, id: any }> = []
   const inventory_defines = (defines.inventory as any)
   function add(role: string, id: any) { if (id !== undefined) slots.push({ role, id }) }
@@ -287,7 +289,7 @@ function inventory_snapshots(entity: LuaEntity) {
   else if (entity.type === 'container' || entity.type === 'logistic-container' || entity.type === 'infinity-container') add('storage', inventory_defines.chest)
   const result: FactoryInventorySnapshot[] = []
   for (const slot of slots) {
-    const items = inventory_items(raw.get_inventory(slot.id))
+    const items = inventory_items(get_inventory(slot.id))
     if (items.length > 0) result.push({ role: slot.role, items })
   }
   return result
@@ -314,9 +316,11 @@ function mining_resources(entity: LuaEntity) {
 function fluid_connections(entity: LuaEntity) {
   const result: FactoryEntityObservation['fluid_connections'] = []
   const fluidbox: any = (entity as any).fluidbox
-  if (!fluidbox || typeof fluidbox.length !== 'number' || typeof fluidbox.get_pipe_connections !== 'function') return result
+  if (!fluidbox || typeof fluidbox.length !== 'number') return result
+  const get_pipe_connections = fluidbox.get_pipe_connections
+  if (typeof get_pipe_connections !== 'function') return result
   for (let index = 1; index <= fluidbox.length && result.length < MAX_FLUID_CONNECTIONS; index++) {
-    const connections = fluidbox.get_pipe_connections(index) ?? []
+    const connections = get_pipe_connections(index) ?? []
     for (const connection of connections) {
       if (result.length >= MAX_FLUID_CONNECTIONS) break
       result.push({ fluidbox_index: index, target: target_id(connection.target?.owner), flow_direction: connection.flow_direction, connection_type: connection.connection_type })
@@ -429,9 +433,10 @@ function build_relations(live_entities: LuaEntity[], entities: FactoryEntityObse
       else add('boundary_output', id, drop_id, undefined, 'Mining drill engine drop target is outside the selected area.', mining_resources(entity))
     }
     const fluidbox: any = (entity as any).fluidbox
-    if (fluidbox && typeof fluidbox.length === 'number' && typeof fluidbox.get_pipe_connections === 'function') {
+    const get_pipe_connections = fluidbox?.get_pipe_connections
+    if (fluidbox && typeof fluidbox.length === 'number' && typeof get_pipe_connections === 'function') {
       for (let index = 1; index <= fluidbox.length; index++) {
-        for (const connection of fluidbox.get_pipe_connections(index) ?? []) {
+        for (const connection of get_pipe_connections(index) ?? []) {
           const target = connection.target?.owner as LuaEntity | undefined
           if (target?.valid && point_in_area(target.position, area) && find_observation(entities, entity_id(target))) add('fluid_connection', id, entity_id(target), undefined, 'Engine-confirmed fluidbox connection.')
         }
