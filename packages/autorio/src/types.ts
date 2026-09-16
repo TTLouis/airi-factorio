@@ -20,13 +20,17 @@ export enum TaskStates {
 
 export interface PlayerParametersWalkToEntity {
   type: TaskStates.WALKING_TO_ENTITY
+  /** Prototype name for nearest-name and entity-bound navigation. Position targets leave this empty. */
   entity_name: string
   search_radius: number
+  /** Explicit target semantics so observability can distinguish nearest-name, exact identity, coordinate, and player movement. */
+  target_kind?: 'nearest_entity' | 'exact_entity' | 'position' | 'player'
+  /** Fixed world coordinate selected by the caller. Unlike target_position, this remains authoritative across repaths. */
+  requested_position?: MapPositionStruct
   /** When set, navigation binds this exact connected player's character instead
    * of searching for a generic character prototype. */
   target_player_name?: string
-  /** Optional distance at which a player-target navigation task is considered
-   * complete. Persistent follow uses this to stop at its configured spacing. */
+  /** Arrival distance for this navigation task. */
   reach_distance?: number
   path: PathfinderWaypoint[] | null
   path_drawn: boolean
