@@ -2,6 +2,7 @@ import type { MapPositionStruct } from 'factorio:prototype'
 import type { FrameGuiElement, LuaEntity, LuaGuiElement, LuaPlayer, LuaSurface, SpriteButtonGuiElement, SpritePath, TextFieldGuiElement } from 'factorio:runtime'
 
 import { peek_controlled_actor } from './actors/actor_controller'
+import { create_learning_remote_interface, handle_learning_ui_click, handle_task_board_learning_transition, render_learning_status } from './learning_pipeline'
 import { create_skill_remote_interface, handle_skill_export_click, render_learn_area_button, render_skill_export_section } from './skills'
 import { get_actor_inventory_items } from './utils/inventory'
 
@@ -1064,6 +1065,7 @@ function destroy_skills_popout(player: LuaPlayer) {
 }
 
 function build_skills_body(body: LuaGuiElement) {
+  render_learning_status(body)
   const actions = body.add({ type: 'flow', direction: 'horizontal' })
   actions.style.horizontally_stretchable = true
   render_learn_area_button(actions)
@@ -1170,12 +1172,21 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
 
 export function create_task_board_ui_remote_interface() {
   create_skill_remote_interface()
+  create_learning_remote_interface()
   remote.add_interface('autorio_task_board', {
     set_snapshot: (value: unknown) => {
       const next = sanitize_task_board_ui_snapshot(value)
       if (next === undefined) return false
-      storage.airi_task_board_ui = stamp_activity_times(next, storage.airi_task_board_ui, game.tick)
+      const previous = storage.airi_task_board_ui
+      const stamped = stamp_activity_times(next, previous, game.tick)
+      storage.airi_task_board_ui = stamped
       storage.airi_task_board_ui_synced_tick = game.tick
+      try {
+        handle_task_board_learning_transition(previous, stamped)
+      }
+      catch (error) {
+        log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
       render_all()
       return true
     },
@@ -1224,6 +1235,10 @@ export function create_task_board_ui_remote_interface() {
       close_task_board_skills_ui(player.index)
       destroy_skills_popout(player)
       render_panel(player)
+      return
+    }
+    if (handle_learning_ui_click(player, element.name)) {
+      render_skills_popout(player)
       return
     }
     if (handle_skill_export_click(player, element.name)) {
