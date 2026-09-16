@@ -3,6 +3,9 @@ import { NpcAgentLoop as BaseNpcAgentLoop } from '../staging/npc-agent-loop.mjs'
 const ENTITY_STATUS_TOOL = 'getEntityStatus'
 const ENTITY_STATUS_BASELINE_LIMIT = 4
 const ENTITY_STATUS_CONTEXT_CHARS = 12000
+const NEARBY_ENTITIES_TOOL = 'getNearbyEntities'
+const NEARBY_ENTITIES_BASELINE_LIMIT = 4
+const NEARBY_ENTITIES_CONTEXT_CHARS = 18000
 const INSTALL_MARK = Symbol.for('airi.runtime-v8.entity-status-diff')
 
 function sameJson(left, right) {
@@ -158,7 +161,182 @@ function transformEntityStatus(loop, entry, resultMessage) {
   resultMessage.content = JSON.stringify(providerObservation)
 }
 
-function installEntityStatusDiffs(Base) {
+function boundedNearbyRadius(value) {
+  if (!Number.isFinite(value)) return 20
+  return Math.max(1, Math.min(64, Math.floor(value)))
+}
+
+function boundedNearbyLimit(value) {
+  if (!Number.isFinite(value)) return 50
+  return Math.max(1, Math.min(100, Math.floor(value)))
+}
+
+function nearbyQueryFor(args = {}) {
+  return {
+    radius: boundedNearbyRadius(args.radius),
+    ...(typeof args.name === 'string' ? { name: args.name.slice(0, 200) } : {}),
+    ...(typeof args.type === 'string' ? { type: args.type.slice(0, 200) } : {}),
+    limit: boundedNearbyLimit(args.limit),
+  }
+}
+
+function nearbyQueryKey(args) {
+  return JSON.stringify(nearbyQueryFor(args))
+}
+
+function nearbyEntityReference(entity) {
+  if (Number.isSafeInteger(entity?.unit_number)) return `entity:${entity.unit_number}`
+  const position = entity?.position
+  return `entity-fallback:${entity?.name ?? 'unknown'}:${entity?.type ?? 'unknown'}:${position?.x ?? '?'}:${position?.y ?? '?'}`
+}
+
+function canonicalNearbyEntity(entity) {
+  if (!entity || typeof entity !== 'object' || Array.isArray(entity)) return undefined
+  return {
+    ...entity,
+    reference: nearbyEntityReference(entity),
+  }
+}
+
+function nearbyDecisionView(status) {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return undefined
+  const entities = Array.isArray(status.entities)
+    ? status.entities.map(canonicalNearbyEntity).filter(Boolean).sort((left, right) => left.reference.localeCompare(right.reference))
+    : []
+  return {
+    ...(typeof status.error === 'string' ? { error: status.error } : {}),
+    actor_position: status.actor_position,
+    radius: status.radius,
+    matched_count: status.matched_count,
+    returned_count: status.returned_count,
+    truncated: status.truncated === true,
+    entities,
+  }
+}
+
+function nearbyIdentitySummary(entity) {
+  return {
+    reference: entity.reference,
+    name: entity.name,
+    type: entity.type,
+    position: entity.position,
+    ...(Number.isSafeInteger(entity.unit_number) ? { unit_number: entity.unit_number } : {}),
+  }
+}
+
+function nearbyFullObservation(view, query, unsafeReason) {
+  return {
+    observation_mode: 'full',
+    source: 'live_factorio_nearby_entities',
+    query,
+    ...(unsafeReason ? { diff_unsafe_reason: unsafeReason } : {}),
+    ...view,
+  }
+}
+
+function nearbyDiffObservation(previous, current, query) {
+  if (!previous) return nearbyFullObservation(current, query, current.truncated ? 'truncated_scan' : undefined)
+  if (previous.view.truncated || current.truncated) return nearbyFullObservation(current, query, 'truncated_scan')
+
+  const previousByRef = new Map(previous.view.entities.map(entity => [entity.reference, entity]))
+  const currentByRef = new Map(current.entities.map(entity => [entity.reference, entity]))
+  const added = []
+  const removed = []
+  const changed = []
+
+  for (const entity of current.entities) {
+    const before = previousByRef.get(entity.reference)
+    if (!before) {
+      added.push(entity)
+      continue
+    }
+    const changes = changedEntity(before, entity)
+    delete changes.reference
+    if (Object.keys(changes).length > 0) changed.push({ reference: entity.reference, changes })
+  }
+  for (const entity of previous.view.entities) {
+    if (!currentByRef.has(entity.reference)) removed.push(nearbyIdentitySummary(entity))
+  }
+
+  const metadataChanges = {}
+  for (const key of ['error', 'actor_position', 'radius', 'matched_count', 'returned_count']) {
+    if (!sameJson(previous.view[key], current[key])) metadataChanges[key] = current[key] ?? null
+  }
+
+  if (added.length === 0 && removed.length === 0 && changed.length === 0 && Object.keys(metadataChanges).length === 0) {
+    return {
+      observation_mode: 'unchanged',
+      source: 'live_factorio_nearby_entities',
+      query,
+    }
+  }
+
+  return {
+    observation_mode: 'diff',
+    source: 'live_factorio_nearby_entities',
+    query,
+    ...(Object.keys(metadataChanges).length > 0 ? { metadata_changes: metadataChanges } : {}),
+    added,
+    removed,
+    changed,
+  }
+}
+
+function ensureNearbyState(loop) {
+  loop.nearbyEntitiesBaselines ??= new Map()
+  loop.nearbyEntitiesBaselineOrder ??= []
+}
+
+function rememberNearbyBaseline(loop, key, entry) {
+  ensureNearbyState(loop)
+  loop.nearbyEntitiesBaselines.set(key, entry)
+  const previousIndex = loop.nearbyEntitiesBaselineOrder.indexOf(key)
+  if (previousIndex >= 0) loop.nearbyEntitiesBaselineOrder.splice(previousIndex, 1)
+  loop.nearbyEntitiesBaselineOrder.push(key)
+  while (loop.nearbyEntitiesBaselineOrder.length > NEARBY_ENTITIES_BASELINE_LIMIT) {
+    const oldest = loop.nearbyEntitiesBaselineOrder.shift()
+    if (oldest !== undefined) loop.nearbyEntitiesBaselines.delete(oldest)
+  }
+}
+
+function nearbyBaselineContext(loop) {
+  ensureNearbyState(loop)
+  const selected = []
+  let chars = 0
+  for (let index = loop.nearbyEntitiesBaselineOrder.length - 1; index >= 0; index--) {
+    const entry = loop.nearbyEntitiesBaselines.get(loop.nearbyEntitiesBaselineOrder[index])
+    if (!entry) continue
+    const visible = { query: entry.query, ...entry.view }
+    const candidateChars = JSON.stringify(visible).length
+    if (selected.length > 0 && chars + candidateChars > NEARBY_ENTITIES_CONTEXT_CHARS) break
+    selected.push(visible)
+    chars += candidateChars
+    if (selected.length >= NEARBY_ENTITIES_BASELINE_LIMIT) break
+  }
+  if (selected.length === 0) return ''
+  selected.reverse()
+  return `[NEARBY_ENTITIES_BASELINE] Last live nearby-entity snapshots for this request. These snapshots may now be stale; use them only to interpret later getNearbyEntities diff/unchanged responses. Re-observe live mutable state before depending on it.\n${JSON.stringify(selected)}`
+}
+
+function transformNearbyEntities(loop, entry, resultMessage) {
+  if (entry?.tool?.function?.name !== NEARBY_ENTITIES_TOOL) return
+  const raw = String(resultMessage?.content ?? '')
+  if (!raw || raw.startsWith('[HARNESS]')) return
+  let status
+  try { status = JSON.parse(raw) }
+  catch { return }
+  const view = nearbyDecisionView(status)
+  if (!view) return
+  const query = nearbyQueryFor(entry.args)
+  const key = nearbyQueryKey(entry.args)
+  ensureNearbyState(loop)
+  const previous = loop.nearbyEntitiesBaselines.get(key)
+  const providerObservation = nearbyDiffObservation(previous, view, query)
+  rememberNearbyBaseline(loop, key, { query, view })
+  resultMessage.content = JSON.stringify(providerObservation)
+}
+
+function installObservationDiffs(Base) {
   const prototype = Base.prototype
   if (prototype[INSTALL_MARK]) return
   Object.defineProperty(prototype, INSTALL_MARK, { value: true })
@@ -167,14 +345,18 @@ function installEntityStatusDiffs(Base) {
   prototype.request = async function (...args) {
     this.entityStatusBaselines = new Map()
     this.entityStatusBaselineOrder = []
+    this.nearbyEntitiesBaselines = new Map()
+    this.nearbyEntitiesBaselineOrder = []
     return originalRequest.apply(this, args)
   }
 
   const originalPrepareContinuationContext = prototype.prepareContinuationContext
   prototype.prepareContinuationContext = function (...args) {
     const result = originalPrepareContinuationContext.apply(this, args)
-    const context = baselineContext(this)
-    if (context) this.messages.push({ role: 'user', content: context })
+    const entityContext = baselineContext(this)
+    if (entityContext) this.messages.push({ role: 'user', content: entityContext })
+    const nearbyContext = nearbyBaselineContext(this)
+    if (nearbyContext) this.messages.push({ role: 'user', content: nearbyContext })
     return result
   }
 
@@ -185,12 +367,14 @@ function installEntityStatusDiffs(Base) {
     const results = this.messages.slice(beforeCount + 1).filter(item => item.role === 'tool')
     for (let index = 0; index < prepared.length; index++) {
       const result = results.find(item => item.tool_call_id === prepared[index]?.tool?.id)
-      if (result) transformEntityStatus(this, prepared[index], result)
+      if (!result) continue
+      transformEntityStatus(this, prepared[index], result)
+      transformNearbyEntities(this, prepared[index], result)
     }
     this.compactWorkingContext()
   }
 }
 
-installEntityStatusDiffs(BaseNpcAgentLoop)
+installObservationDiffs(BaseNpcAgentLoop)
 
 export * from '../staging/supervisor-adapter.mjs'
