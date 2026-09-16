@@ -117,6 +117,9 @@ export function create_tools_remote_interface() {
           position: entity.position,
           force: entity.force?.name,
           unit_number: entity.unit_number,
+          direction: entity.direction,
+          supports_direction: entity.supports_direction,
+          rotatable: entity.rotatable,
           amount: entity.type === 'resource' ? entity.amount : undefined,
         })
       }
@@ -219,6 +222,9 @@ export function create_tools_remote_interface() {
           position: entity.position,
           force: entity.force?.name,
           unit_number: entity.unit_number,
+          direction: entity.direction,
+          supports_direction: entity.supports_direction,
+          rotatable: entity.rotatable,
           amount: entity.type === 'resource' ? entity.amount : undefined,
           recipe: recipe_name,
           inventories,
