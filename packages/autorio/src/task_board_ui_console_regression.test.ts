@@ -1,22 +1,27 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { task_board_resource_rows } from './task_board_ui'
+import { task_board_resource_rows, task_board_wanted_rows } from './task_board_ui'
 
 describe('AIRI NPC console layout regressions', () => {
   const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
 
-  it('keeps a useful inventory viewport across display sizes', () => {
+  it('keeps a useful inventory viewport across display sizes while reserving sidebar room for equipment', () => {
     expect(task_board_resource_rows(720)).toBe(5)
     expect(task_board_resource_rows(1080)).toBe(6)
     expect(task_board_resource_rows(1440)).toBe(8)
+    expect(task_board_wanted_rows(720)).toBe(1)
+    expect(task_board_wanted_rows(1080)).toBe(2)
+    expect(task_board_wanted_rows(1440)).toBe(4)
     expect(source).toContain('const MAX_INVENTORY_ITEMS = 64')
     expect(source).toContain('const INVENTORY_SLOT_COLUMNS = 8')
     expect(source).toContain('const WANTED_SLOT_COLUMNS = 5')
+    expect(source).toContain('const EQUIPPED_SLOT_COLUMNS = 3')
     expect(source).toContain('const INVENTORY_SECTION_WIDTH = 424')
     expect(source).toContain('const WANTED_SECTION_WIDTH = PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - INVENTORY_SECTION_WIDTH')
     expect(source).toContain("add_slot_grid(body, runtime.inventory.map")
     expect(source).toContain("task_board_resource_rows(player_gui_height(player)), INVENTORY_SLOT_COLUMNS")
-    expect(source).toContain("task_board_resource_rows(player_gui_height(player)), WANTED_SLOT_COLUMNS")
+    expect(source).toContain("task_board_wanted_rows(player_gui_height(player)), WANTED_SLOT_COLUMNS")
+    expect(source).toContain("create_section(parent, 'Equipped', WANTED_SECTION_WIDTH")
   })
 
   it('locks control and prompt widths instead of shrinking to their captions', () => {
