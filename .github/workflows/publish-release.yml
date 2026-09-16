@@ -1,0 +1,212 @@
+name: Publish prerelease
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/release-version
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: airi-factorio-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Validate release version
+        id: version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          version="$(tr -d '\r\n' < .github/release-version)"
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-pre\.[0-9]+$ ]] || {
+            echo "release version must look like v0.1.0-pre.1" >&2
+            exit 1
+          }
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify generated Pterodactyl artifacts
+        run: |
+          node deploy/pterodactyl/build-payload.mjs --check
+          bash -n deploy/pterodactyl/package-smoke.sh
+
+      - name: Smoke exact release SHA through Pterodactyl egg
+        env:
+          AIRI_SMOKE_SOURCE_REF: ${{ github.sha }}
+        run: bash deploy/pterodactyl/package-smoke.sh
+
+      - name: Run zero-player Factorio integration harness
+        run: |
+          docker build -f tests/factorio/Dockerfile -t airi-factorio-release-test .
+          docker run --rm airi-factorio-release-test
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Prepare immutable Pterodactyl egg
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p release-out
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+
+          const version = process.env.VERSION
+          const sha = process.env.GITHUB_SHA
+          const input = 'deploy/pterodactyl/egg-airi-factorio-server.json'
+          const output = `release-out/egg-airi-factorio-${version}.json`
+          const egg = JSON.parse(fs.readFileSync(input, 'utf8'))
+          const sourceVariable = egg.variables?.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')
+          if (!sourceVariable) throw new Error('AIRI_SOURCE_REF variable is missing from the generated egg')
+          sourceVariable.default_value = sha
+          sourceVariable.description = `Exact source commit for ${version}. Change only if you intentionally want to leave this prerelease.`
+
+          const script = egg.scripts?.installation?.script
+          if (typeof script !== 'string') throw new Error('egg installation script is missing')
+          const expected = 'DEFAULT_SOURCE_REF="main"'
+          if (!script.includes(expected)) throw new Error('main source fallback contract changed')
+          egg.scripts.installation.script = script.replace(expected, `DEFAULT_SOURCE_REF="${sha}"`)
+          egg.name = `AIRI Factorio Server (${version})`
+          egg.description = `Immutable AIRI Factorio prerelease ${version}, pinned to ${sha}. Restart and reinstall stay on this release unless AIRI_SOURCE_REF is explicitly changed.`
+          fs.writeFileSync(output, `${JSON.stringify(egg, null, 4)}\n`)
+          NODE
+          sha256sum "release-out/egg-airi-factorio-${VERSION}.json" > release-out/SHA256SUMS
+
+      - name: Build and smoke Docker release image
+        id: docker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build --pull \
+            --build-arg AIRI_SOURCE_REF="$GITHUB_SHA" \
+            --build-arg FACTORIO_VERSION=latest \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            -t "$image:$VERSION" .
+
+          name="airi-release-smoke-${GITHUB_RUN_ID}"
+          cleanup() { docker rm -f -v "$name" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          docker run -d --name "$name" \
+            -e CONTAINER_ROOT=/data \
+            -e AIRI_ACTOR_MODE=npc \
+            -e OPENAI_API_KEY=release-smoke-secret \
+            -e OPENAI_API_BASEURL=https://api.example.invalid/v1 \
+            -e OPENAI_MODEL=release-smoke-model \
+            -e SERVER_PORT=34197 \
+            "$image:$VERSION" >/dev/null
+
+          ready=0
+          for _ in $(seq 1 180); do
+            logs="$(docker logs "$name" 2>&1 || true)"
+            if grep -q 'AIRI Factorio ready;' <<<"$logs"; then
+              ready=1
+              break
+            fi
+            if [[ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || echo false)" != true ]]; then
+              printf '%s\n' "$logs" >&2
+              echo 'Docker release image exited before readiness' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          [[ "$ready" == 1 ]] || { docker logs "$name" >&2; exit 1; }
+
+          docker stop --time=60 "$name" >/dev/null
+          docker logs "$name" > release-out/docker-smoke.log 2>&1 || true
+          grep -q 'Goodbye' release-out/docker-smoke.log
+          grep -q 'AIRI Factorio stopped cleanly' release-out/docker-smoke.log
+          cleanup
+          trap - EXIT
+
+      - name: Push Docker release image
+        shell: bash
+        env:
+          IMAGE: ${{ steps.docker.outputs.image }}
+        run: |
+          set -Eeuo pipefail
+          docker push "$IMAGE:$VERSION"
+          digest="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:$VERSION" 2>/dev/null || true)"
+          {
+            echo "image=$IMAGE:$VERSION"
+            echo "source_sha=$GITHUB_SHA"
+            if [[ -n "$digest" ]]; then echo "digest=$digest"; fi
+          } > release-out/docker-image.txt
+
+      - name: Write release notes
+        shell: bash
+        env:
+          IMAGE: ${{ steps.docker.outputs.image }}
+        run: |
+          cat > release-out/RELEASE_NOTES.md <<EOF
+          ## AIRI Factorio ${VERSION}
+
+          First packaged prerelease of the standalone-NPC fork. This is a prerelease baseline, not a feature-complete stable release.
+
+          ### Deployment artifacts
+
+          - **Pterodactyl:** `egg-airi-factorio-${VERSION}.json` is pinned to commit `${GITHUB_SHA}`. Reinstall stays on this release unless `AIRI_SOURCE_REF` is explicitly changed.
+          - **Docker:** `${IMAGE}:${VERSION}`, built from the same exact commit. No `latest` tag is moved by this prerelease.
+          - **Docker Compose:** the repository Compose deployment now defaults local builds to `main`; set `AIRI_SOURCE_REF=feat/npc-transition-work` explicitly for ongoing NPC development.
+
+          ### Validation
+
+          The release workflow must pass the generated-egg contract, packaged zero-player Pterodactyl install/boot/save/shutdown smoke, the real zero-player Factorio integration harness, and a boot/save/shutdown smoke of the final Docker image before publication.
+
+          ### Scope / known limits
+
+          - Standalone single-NPC baseline; ongoing NPC work continues on `feat/npc-transition-work`.
+          - Swarm work is not part of this prerelease.
+          - Current release image target is `linux/amd64`.
+          - Provider credentials are not bundled; configure `OPENAI_API_KEY`, `OPENAI_API_BASEURL`, and `OPENAI_MODEL` at deployment time.
+          EOF
+
+      - name: Publish GitHub prerelease
+        shell: bash
+        env:
+          IMAGE: ${{ steps.docker.outputs.image }}
+        run: |
+          set -Eeuo pipefail
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          gh release create "$VERSION" \
+            "release-out/egg-airi-factorio-${VERSION}.json#Pterodactyl egg (pinned)" \
+            "release-out/SHA256SUMS#Release asset checksums" \
+            "release-out/docker-image.txt#Docker image reference" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "AIRI Factorio $VERSION" \
+            --notes-file release-out/RELEASE_NOTES.md \
+            --prerelease
