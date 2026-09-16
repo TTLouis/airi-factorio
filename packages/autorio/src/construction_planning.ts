@@ -11,6 +11,8 @@ const MAX_CANDIDATES = 8
 const MAX_REJECTIONS = 32
 const MAX_ENTITIES = 160
 const MAX_BLOCKING_TILES = 192
+const MAX_TERRAIN_TYPES = 32
+const MAX_TERRAIN_RUNS = 256
 const MAX_PLACEMENT_DISTANCE = 10
 const MAX_CANDIDATE_EVALUATIONS = 384
 
@@ -124,23 +126,90 @@ function blocking_tile_kind(name: string) {
   return undefined
 }
 
-function blocking_tiles(actor: ControlledActor, center: Position, half_size: number) {
-  const result: Array<Record<string, unknown>> = []
-  let matched = 0
+function sort_tile_types(values: Array<{ name: string, count: number, kind?: string }>) {
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      const a = values[i]
+      const b = values[j]
+      if (b.count > a.count || (b.count === a.count && b.name < a.name)) {
+        const temp = values[i]
+        values[i] = values[j]
+        values[j] = temp
+      }
+    }
+  }
+}
+
+function terrain_snapshot(actor: ControlledActor, center: Position, half_size: number) {
+  const blocking: Array<Record<string, unknown>> = []
+  const counts: Record<string, number> = {}
+  const names: string[] = []
+  const runs: Array<Record<string, unknown>> = []
+  let blocking_count = 0
+  let run_count = 0
   const min_x = math.floor(center.x - half_size)
   const max_x = math.floor(center.x + half_size - 0.001)
   const min_y = math.floor(center.y - half_size)
   const max_y = math.floor(center.y + half_size - 0.001)
-  for (let x = min_x; x <= max_x; x++) {
-    for (let y = min_y; y <= max_y; y++) {
+
+  for (let y = min_y; y <= max_y; y++) {
+    let run_name: string | undefined
+    let run_start = min_x
+    for (let x = min_x; x <= max_x; x++) {
       const tile = actor.surface.get_tile(x, y)
-      const kind = blocking_tile_kind(tile.name)
-      if (!kind) continue
-      matched++
-      if (result.length < MAX_BLOCKING_TILES) result.push({ name: tile.name, kind, position: { x, y } })
+      const name = tile.name
+      if (counts[name] === undefined) {
+        counts[name] = 0
+        names.push(name)
+      }
+      counts[name]++
+
+      const kind = blocking_tile_kind(name)
+      if (kind) {
+        blocking_count++
+        if (blocking.length < MAX_BLOCKING_TILES) blocking.push({ name, kind, position: { x, y } })
+      }
+
+      if (run_name === undefined) {
+        run_name = name
+        run_start = x
+      }
+      else if (name !== run_name) {
+        run_count++
+        if (runs.length < MAX_TERRAIN_RUNS) {
+          runs.push({ y, x_start: run_start, x_end: x - 1, name: run_name, kind: blocking_tile_kind(run_name) })
+        }
+        run_name = name
+        run_start = x
+      }
+    }
+    if (run_name !== undefined) {
+      run_count++
+      if (runs.length < MAX_TERRAIN_RUNS) {
+        runs.push({ y, x_start: run_start, x_end: max_x, name: run_name, kind: blocking_tile_kind(run_name) })
+      }
     }
   }
-  return { matched_count: matched, truncated: matched > result.length, tiles: result }
+
+  const types = names.map(name => ({ name, count: counts[name], kind: blocking_tile_kind(name) }))
+  sort_tile_types(types)
+  return {
+    blocking: {
+      matched_count: blocking_count,
+      truncated: blocking_count > blocking.length,
+      tiles: blocking,
+    },
+    tiles: {
+      tile_count: (max_x - min_x + 1) * (max_y - min_y + 1),
+      type_count: types.length,
+      types: types.slice(0, MAX_TERRAIN_TYPES),
+      types_truncated: types.length > MAX_TERRAIN_TYPES,
+      run_count,
+      runs: runs,
+      runs_truncated: run_count > runs.length,
+      encoding: 'row_runs_inclusive',
+    },
+  }
 }
 
 function requested_prototype(name: string | undefined) {
@@ -190,7 +259,7 @@ export function local_spatial_observation(actor: ControlledActor, request: Const
   sort_entities(matches)
   const entities = matches.slice(0, MAX_ENTITIES).map(entity => entity_summary(entity, actor))
   const prototype = requested_prototype(request.requested_entity_name)
-  const terrain = blocking_tiles(actor, anchor.position, half_size)
+  const terrain = terrain_snapshot(actor, anchor.position, half_size)
   return {
     ok: true,
     tick: game.tick,
@@ -209,7 +278,8 @@ export function local_spatial_observation(actor: ControlledActor, request: Const
     entities,
     entity_count: matches.length,
     entities_truncated: matches.length > entities.length,
-    blocking_terrain: terrain,
+    blocking_terrain: terrain.blocking,
+    terrain_tiles: terrain.tiles,
   }
 }
 
