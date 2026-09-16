@@ -6,14 +6,15 @@ import { assistant, composeAgent, defineToolFunction, system, toolFunction, user
 import { openaiConfig } from '../config'
 import { parseLLMMessage } from '../parser'
 import prompt from './prompt.md?raw'
-import { tools } from './tools'
+import productionPlanningPrompt from './production-planning-prompt.md?raw'
+import { agentTools } from './tool-set'
 
 const logger = createLogg('agent').useGlobalConfig()
 
 export async function createMessageHandler() {
   const toolFunctions: DefinedTool<any, any>[] = []
 
-  for (const tool of tools) {
+  for (const tool of agentTools) {
     toolFunctions.push(defineToolFunction(await toolFunction(tool.name, tool.description, tool.schema), tool.fn))
   }
 
@@ -25,19 +26,21 @@ export async function createMessageHandler() {
     tools: toolFunctions,
   })
 
-  const messages: Message[] = [system(prompt)]
+  const messages: Message[] = [system(`${prompt}\n\n${productionPlanningPrompt}`)]
 
   async function handleMessage(message: StdoutMessage) {
     logger.withFields({ message }).debug('Handling message')
 
     if (message.type === 'chat') {
-      messages.push(user(`[CHAT] ${message.message}`))
+      messages.push(user(`[CHAT] ${message.username}: ${message.message}`))
     }
     else if (message.type === 'modError') {
       messages.push(user(`[MOD] Error: ${message.error}`))
     }
     else if (message.type === 'operationsCompleted') {
-      messages.push(user(`[MOD] All operations completed`))
+      messages.push(user(message.details
+        ? `[MOD] All operations completed. Batch receipt: ${message.details}`
+        : `[MOD] All operations completed`))
     }
 
     const response = await agent.call(messages, {
@@ -62,10 +65,6 @@ export async function createMessageHandler() {
     }
 
     const parsedMessage = parseLLMMessage(messageFromLLM)
-    // Preserve the model's original validated JSON in history. The parser may
-    // normalize structured operations into legacy command strings for the
-    // executor, but those implementation details should not be taught back to
-    // the model on the next turn.
     messages.push(assistant(messageFromLLM))
 
     return parsedMessage

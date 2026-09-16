@@ -2,8 +2,8 @@
   "name": "autorio",
   "version": "0.1.0",
   "title": "autorio",
-  "author": "LemonNekoGH",
+  "author": "TTLouis (fork; original autorio by LemonNekoGH)",
   "factorio_version": "2.0",
   "dependencies": ["base >= 2.0"],
-  "description": "An automation mod for factorio."
+  "description": "A heavily modified AIRI Factorio fork of the original autorio mod by LemonNekoGH, focused on standalone NPC automation."
 }

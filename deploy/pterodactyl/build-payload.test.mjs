@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { buildArtifacts, channelInstaller, installerLoader, verifyGeneratedArtifacts } from './build-payload.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const PAYLOAD_REF = '92afd659485f5cb47a912615e669332c85ef9d12'
+const PAYLOAD_REF = '9ef5bc6cdfb8fbf3c5a2e52b82bc3ad41c856f3e'
+const PAYLOAD_SHA256 = '40537a476eb189a613a7d0ed6cd8ffb1fee36a1c34aa6dcb136172659edd0fbf'
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
 REVISION="test"
@@ -83,13 +84,23 @@ test('generated artifact verifier rejects source or channel drift', () => {
   )
 })
 
-test('committed Pterodactyl artifacts are internally valid', () => {
+test('committed Pterodactyl artifacts are internally valid and reinstall stays deployment-only', () => {
   const committedSource = readFileSync(join(here, 'payload-src', 'installer.sh'))
   const committedInstall = readFileSync(join(here, 'install.sh'), 'utf8')
   const committedMainEgg = readFileSync(join(here, 'egg-airi-factorio-server.json'), 'utf8')
   const committedE2eEgg = readFileSync(join(here, 'egg-airi-factorio-npc-e2e.json'), 'utf8')
+  const sourceText = committedSource.toString('utf8')
 
   assert.equal(verifyGeneratedArtifacts(committedSource, committedInstall, committedMainEgg, committedE2eEgg), true)
   assert.match(committedInstall, new RegExp(PAYLOAD_REF))
-  assert.match(committedInstall, /EXPECTED_SOURCE_SHA256="7bcddbab0e959d505a156269340fa2de2fe4c837bc83b0fc9d9f7b6df58dfff1"/)
+  assert.match(committedInstall, new RegExp(`EXPECTED_SOURCE_SHA256="${PAYLOAD_SHA256}"`))
+  assert.doesNotMatch(sourceText, /node --test deploy\/pterodactyl\/staging/)
+  assert.doesNotMatch(sourceText, /pnpm --filter autorio\.ts run test/)
+  assert.match(sourceText, /pnpm --filter autorio\.ts run typecheck/)
+  assert.match(sourceText, /pnpm --filter autorio\.ts run build/)
+  assert.match(sourceText, /packages\/autorio\/dist\/data\.lua/)
+  assert.match(sourceText, /canonical-task-board-memory\.mjs/)
+  assert.match(sourceText, /AIRI_SUPERVISOR_VERIFY=/)
+  assert.match(sourceText, /await import\(pathToFileURL\(process\.env\.AIRI_SUPERVISOR_VERIFY\)\.href\)/)
+  assert.match(sourceText, /src\/runtime-v8\/canonical-task-board-memory\.mjs/)
 })

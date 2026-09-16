@@ -7,6 +7,7 @@ import { TaskStates } from './types'
 beforeEach(() => {
   ;(globalThis as any).game.connected_players = []
   ;(globalThis as any).storage.airi_actor_mode = 'player'
+  ;(globalThis as any).storage.airi_awareness_chunk = undefined
   task_manager.cancel_all_tasks()
   ;(globalThis as any).storage.standalone_character_unit_number = undefined
   ;(globalThis as any).serpent = {
@@ -24,6 +25,7 @@ function configureNpcWorld(resource?: Record<string, any>) {
     current_research: undefined,
     research_progress: 0,
     get_spawn_position: () => ({ x: 0, y: 0 }),
+    chart: vi.fn(),
   }
 
   let character_created = false
@@ -56,6 +58,9 @@ function configureNpcWorld(resource?: Record<string, any>) {
     wind_speed: 0,
     wind_orientation: 0,
     find_non_colliding_position: vi.fn(() => ({ x: 0, y: 0 })),
+    is_chunk_generated: vi.fn(() => true),
+    request_to_generate_chunks: vi.fn(),
+    force_generate_chunk_requests: vi.fn(),
     create_entity: vi.fn(({ name }: { name: string }) => {
       if (name !== 'character') return undefined
       character_created = true
@@ -92,7 +97,7 @@ function add_owned_npc_mining(count: number) {
 }
 
 describe('standalone NPC completion polling', () => {
-  it('counts real resource depletion and restarts mining when character progress resets without selection loss', () => {
+  it('counts real resource depletion without restarting mining when progress resets and selection remains valid', () => {
     const resource: Record<string, any> = {
       valid: true,
       name: 'iron-ore',
@@ -119,7 +124,7 @@ describe('standalone NPC completion polling', () => {
     expect(task_manager.player_state.task_state).toBe(TaskStates.MINING)
     expect(character.mining_state.mining).toBe(true)
     expect(character.selected).toBe(resource)
-    expect(character.update_selected_entity.mock.calls.length).toBeGreaterThan(selections_after_start)
+    expect(character.update_selected_entity.mock.calls.length).toBe(selections_after_start)
 
     resource.amount = 8
     character.character_mining_progress = 0

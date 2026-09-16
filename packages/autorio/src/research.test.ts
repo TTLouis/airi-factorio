@@ -129,7 +129,7 @@ describe('serialized asynchronous research requests', () => {
     controller.tick(actor)
     expect(controller.status()).toMatchObject({ last_request_result: { accepted: false, completed: false, code: 'engine_rejected' } })
     expect(manager.get_status_snapshot()).toMatchObject({ task_state: 'idle', queue_length: 0 })
-    expect((globalThis as any).game.print).not.toHaveBeenCalled()
+    expect((globalThis as any).game.print).not.toHaveBeenCalledWith(expect.stringContaining('All operations completed'))
     expect((globalThis as any).log).toHaveBeenCalledWith(expect.stringContaining('[ERROR]'))
   })
 

@@ -1,0 +1,365 @@
+import { readFileSync } from 'node:fs'
+import { beforeEach, describe, expect, it } from 'vitest'
+import {
+  sanitize_task_board_ui_snapshot,
+  task_board_activity_for_display,
+  task_board_preview_zoom,
+  task_board_skills_ui_is_open,
+  task_board_sync_freshness,
+  task_board_ui_is_open,
+  task_board_ui_prompt_draft,
+  task_board_ui_terminate_is_armed,
+  toggle_task_board_skills_ui_open,
+  toggle_task_board_ui_open,
+} from './task_board_ui'
+
+beforeEach(() => {
+  ;(globalThis as any).storage = {}
+})
+
+describe('in-game task board UI projection', () => {
+  it('keeps bounded canonical progress, activity, and wanted-item fields', () => {
+    const board = sanitize_task_board_ui_snapshot({
+      goal_id: 'goal_1',
+      objective: 'Climb the technology tree',
+      status: 'blocked',
+      blocker: 'provider recovery exhausted',
+      pause_reason: '',
+      completed_count: 2,
+      total_steps: 5,
+      active_index: 2,
+      steps: [
+        { id: 'step_1', description: 'Find stone', status: 'completed' },
+        { id: 'step_2', description: 'Mine stone', status: 'completed' },
+        { id: 'step_3', description: 'Trigger steam power', status: 'blocked' },
+        { id: 'step_4', description: 'Build power', status: 'pending' },
+        { id: 'step_5', description: 'Start research', status: 'pending' },
+      ],
+      activity: [
+        { kind: 'observation', text: 'No boiler in inventory.' },
+        { kind: 'decision', text: 'Craft a boiler before continuing.' },
+        { kind: 'action', text: 'craft_item boiler x1' },
+      ],
+      wanted_items: [
+        { name: 'boiler', count: 1, reason: 'planned craft' },
+        { name: 'pipe', count: 5, reason: 'steam connection' },
+      ],
+    })
+    expect(board).toMatchObject({
+      status: 'blocked',
+      completed_count: 2,
+      total_steps: 5,
+      active_index: 2,
+      steps: [{ id: 'step_1' }, { id: 'step_2' }, { id: 'step_3' }, { id: 'step_4' }, { id: 'step_5' }],
+      activity: [
+        { kind: 'observation', text: 'No boiler in inventory.' },
+        { kind: 'decision', text: 'Craft a boiler before continuing.' },
+        { kind: 'action', text: 'craft_item boiler x1' },
+      ],
+      wanted_items: [
+        { name: 'boiler', count: 1 },
+        { name: 'pipe', count: 5 },
+      ],
+    })
+  })
+
+  it('bounds malformed optional UI detail fields instead of trusting them', () => {
+    const board = sanitize_task_board_ui_snapshot({
+      goal_id: 'goal', objective: 'test', status: 'active', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 1, active_index: 0,
+      steps: [{ id: 'step_1', description: 'Test', status: 'active' }],
+      activity: [{ kind: 'private-chain-of-thought', text: 'Visible summary only' }],
+      wanted_items: [{ name: 'iron-plate', count: -50, reason: 'test' }],
+    })
+    expect(board?.activity).toEqual([{ kind: 'note', text: 'Visible summary only' }])
+    expect(board?.wanted_items).toEqual([{ name: 'iron-plate', count: 1, reason: 'test' }])
+  })
+
+  it('rejects malformed snapshots instead of creating a second source of truth', () => {
+    expect(sanitize_task_board_ui_snapshot(undefined)).toBeUndefined()
+    expect(sanitize_task_board_ui_snapshot({ status: 'active' })).toBeUndefined()
+  })
+
+  it('falls back to the canonical current step when an active task has no activity entries yet', () => {
+    const board = sanitize_task_board_ui_snapshot({
+      goal_id: 'goal_1', objective: 'Gather stone', status: 'active', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 2, active_index: 0,
+      steps: [
+        { id: 'step_1', description: 'Walk to stone patch', status: 'active' },
+        { id: 'step_2', description: 'Mine stone', status: 'pending' },
+      ],
+      activity: [], wanted_items: [],
+    })
+    expect(task_board_activity_for_display(board)).toEqual([
+      {
+        kind: 'system',
+        text: 'Current canonical step 1/2: Walk to stone patch (active). Waiting for the next auditable observation, action, or result.',
+      },
+    ])
+  })
+
+  it('keeps the task board window closed by default and toggles per player', () => {
+    expect(task_board_ui_is_open(1)).toBe(false)
+    expect(task_board_ui_is_open(2)).toBe(false)
+
+    expect(toggle_task_board_ui_open(1)).toBe(true)
+    expect(task_board_ui_is_open(1)).toBe(true)
+    expect(task_board_ui_is_open(2)).toBe(false)
+
+    expect(toggle_task_board_ui_open(1)).toBe(false)
+    expect(task_board_ui_is_open(1)).toBe(false)
+  })
+
+  it('keeps terminate confirmation scoped to one player and a short tick window', () => {
+    ;(globalThis as any).storage.airi_task_board_terminate_confirm_until = { 1: 600, 2: 0 }
+    expect(task_board_ui_terminate_is_armed(1, 599)).toBe(true)
+    expect(task_board_ui_terminate_is_armed(1, 601)).toBe(false)
+    expect(task_board_ui_terminate_is_armed(2, 1)).toBe(false)
+  })
+
+  it('keeps unsent prompt drafts scoped per player', () => {
+    ;(globalThis as any).storage.airi_task_board_prompt_draft = { 1: 'build power', 2: 'follow me' }
+    expect(task_board_ui_prompt_draft(1)).toBe('build power')
+    expect(task_board_ui_prompt_draft(2)).toBe('follow me')
+    expect(task_board_ui_prompt_draft(3)).toBe('')
+  })
+
+  it('keeps preview zoom scoped per player without writing from render reads', () => {
+    expect(task_board_preview_zoom(1)).toBe(0.75)
+    expect((globalThis as any).storage).toEqual({})
+    ;(globalThis as any).storage.airi_task_board_preview_zoom = { 1: 1.25, 2: 0.5 }
+    expect(task_board_preview_zoom(1)).toBe(1.25)
+    expect(task_board_preview_zoom(2)).toBe(0.5)
+  })
+
+  it('does not erase Factorio GUI element types before chained add calls', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).not.toMatch(/const\s+\w+\s*:\s*any\s*=\s*player\.gui/)
+    expect(source).not.toContain('const root: any')
+    expect(source).toContain('as FrameGuiElement')
+    expect(source).toContain("surface_index: LuaSurface['index']")
+  })
+
+  it('accepts plan-less live agent snapshots and bounds the agent phase', () => {
+    const idle = sanitize_task_board_ui_snapshot({
+      goal_id: '', objective: 'build power', status: 'idle', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 0, active_index: 0, steps: [], activity: [], wanted_items: [],
+      agent: { phase: 'observing', detail: 'Checking getInventory' },
+    })
+    expect(idle).toMatchObject({ status: 'idle', steps: [], agent: { phase: 'observing', detail: 'Checking getInventory' } })
+    expect(task_board_activity_for_display(idle)).toEqual([])
+
+    const legacy = sanitize_task_board_ui_snapshot({
+      goal_id: 'goal', objective: 'test', status: 'active', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 1, active_index: 0,
+      steps: [{ id: 'step_1', description: 'Test', status: 'active' }],
+      agent: { phase: 'plotting', detail: 'x' },
+    })
+    expect(legacy?.agent.phase).toBe('idle')
+    expect(sanitize_task_board_ui_snapshot({ steps: [] })?.agent).toEqual({ phase: 'idle', detail: '' })
+  })
+
+  it('uses a vanilla square mod-gui button instead of a text button in gui.top', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("const MOD_GUI_TOP_FRAME_NAME = 'mod_gui_top_frame'")
+    expect(source).toContain("style: 'slot_window_frame'")
+    expect(source).toContain("style: 'mod_gui_inside_deep_frame'")
+    expect(source).toMatch(/type: 'sprite-button',\s+name: BUTTON_NAME,\s+sprite: BUTTON_SPRITE/)
+    expect(source).not.toContain("'entity/character'")
+    expect(source).toContain("style: 'slot_button'")
+    expect(source).toContain('button.toggled = task_board_ui_is_open(player.index)')
+    expect(source).not.toContain("caption: 'AIRI',")
+  })
+
+  it('uses a movable screen window with native Factorio title, section, and control styles', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain('player.gui.screen.add')
+    expect(source).toContain("style: 'frame_title'")
+    expect(source).toContain("style: 'draggable_space_header'")
+    expect(source).toContain("style: 'frame_action_button'")
+    expect(source).toContain("style: 'subheader_frame'")
+    expect(source).toContain("style: 'inside_shallow_frame'")
+    expect(source).toContain("style: 'dialog_button'")
+    expect(source).toContain("style: 'red_button'")
+    expect(source).toContain("style: follow?.active ? 'confirm_button' : 'dialog_button'")
+    expect(source).toContain("style: 'deep_slots_scroll_pane'")
+    expect(source).toContain("type: 'progressbar'")
+    expect(source).toContain('root.location = previous_location')
+    expect(source).toContain('STATUS_SECTION_WIDTH')
+    expect(source).not.toContain('TOP_SECTION_HEIGHT')
+    expect(source).not.toContain('RESOURCE_SECTION_HEIGHT')
+  })
+
+  it('aligns the two columns, keeps section spacing uniform, and lets status/controls hug their content', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain('left.style.vertical_spacing = COLUMN_SPACING')
+    expect(source).toContain('dynamic.style.vertical_spacing = COLUMN_SPACING')
+    expect(source).toContain('top.style.horizontal_spacing = COLUMN_SPACING')
+    expect(source).toContain('resources.style.horizontal_spacing = COLUMN_SPACING')
+    // Status wraps prose and Controls holds fixed-width buttons, so they are
+    // sized separately rather than splitting the left column down the middle.
+    expect(source).toContain("create_section(parent, 'Status', STATUS_SECTION_WIDTH, undefined, false)")
+    expect(source).toContain("create_section(parent, 'Controls', CONTROLS_SECTION_WIDTH, undefined, false)")
+    expect(source).not.toContain('HALF_SECTION_WIDTH')
+    expect(source).toContain('right.style.vertically_stretchable = true')
+    expect(source).toMatch(/build_left_dynamic\(dynamic,[\s\S]*render_prompt\(left, player\)[\s\S]*render_world_preview\(right, runtime, player\)/)
+  })
+
+  it('puts a native Factorio camera preview in the right column with an interactive zoom slider', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("type: 'camera'")
+    expect(source).toContain('position: preview.position')
+    expect(source).toContain('surface_index: preview.surface_index')
+    expect(source).toContain('camera.entity = preview.entity')
+    expect(source).toContain('PREVIEW_COLUMN_WIDTH')
+    expect(source).toContain("type: 'slider'")
+    expect(source).toContain('name: PREVIEW_ZOOM_SLIDER_NAME')
+    expect(source).toContain('defines.events.on_gui_value_changed')
+    expect(source).toContain('camera.zoom = zoom')
+    expect(source).toContain('CONSOLE_LAYOUT.preview_min_height')
+  })
+
+  it('shows live mod task state and when AIRI last synced', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const control = readFileSync(new URL('./control.ts', import.meta.url), 'utf8')
+    expect(source).toContain('storage.airi_task_board_ui_synced_tick = game.tick')
+    expect(source).toContain("add_key_value(table, 'WORLD', world_task_summary(runtime.world_task)")
+    expect(control).toContain('set_task_board_world_task_provider(() => task_manager.get_status_snapshot())')
+  })
+
+  it('provides a direct AIRI prompt field that preserves drafts and queues structured input', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("type: 'textfield'")
+    expect(source).toContain("name: PROMPT_FIELD_NAME")
+    expect(source).toContain("name: PROMPT_SEND_BUTTON_NAME")
+    expect(source).toContain("kind: 'prompt'")
+    expect(source).toContain('enqueue_ui_input({')
+    expect(source).toContain('defines.events.on_gui_text_changed')
+    expect(source).toContain('defines.events.on_gui_confirmed')
+  })
+
+  it('refreshes live content without destroying the prompt field being typed into', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain('dynamic.clear()')
+    expect(source).toContain('build_left_dynamic(dynamic, player, board, synced_tick, runtime)')
+    expect(source).toContain('right.clear()')
+    expect(source).toContain('render_prompt(left, player)')
+    expect(source).not.toMatch(/left\.clear\(\)/)
+    expect(source).not.toContain('task_board_ui_prompt_draft(player.index).length === 0')
+  })
+
+  it('places the window before building content so it never opens in the corner', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toMatch(/root\.auto_center = true[\s\S]*render_titlebar\(root\)/)
+    expect(source).not.toContain('root.force_auto_center()')
+  })
+
+  it('does not create storage tables from the render path', () => {
+    ;(globalThis as any).storage = {}
+    expect(task_board_ui_is_open(1)).toBe(false)
+    expect(task_board_ui_prompt_draft(1)).toBe('')
+    expect(task_board_ui_terminate_is_armed(1, 10)).toBe(false)
+    expect(task_board_preview_zoom(1)).toBe(0.75)
+    expect((globalThis as any).storage).toEqual({})
+
+    expect(toggle_task_board_ui_open(1)).toBe(true)
+    expect((globalThis as any).storage.airi_task_board_ui_open).toEqual({ 1: true })
+  })
+
+  it('keeps rendering read-only so drawing the console cannot desync multiplayer', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const controller = readFileSync(new URL('./actors/actor_controller.ts', import.meta.url), 'utf8')
+    expect(source).toContain('peek_controlled_actor()')
+    expect(source).not.toContain('get_controlled_actor()')
+    expect(controller).toContain('export function peek_controlled_actor()')
+
+    const skills = readFileSync(new URL('./skills.ts', import.meta.url), 'utf8')
+    const learning = readFileSync(new URL('./factory_area_learning.ts', import.meta.url), 'utf8')
+    expect(skills).toContain('return storage.airi_skill_definitions ?? {}')
+    expect(skills).toContain('ensure_definitions()[skill.id] = skill')
+    expect(learning).toContain('return storage.airi_factory_area_analyses ?? {}')
+    expect(learning).toContain('return storage.airi_factory_area_order ?? []')
+  })
+
+  it('opens area learning in its own window instead of consuming console space', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const skills = readFileSync(new URL('./skills.ts', import.meta.url), 'utf8')
+    expect(source).toContain('name: SKILLS_BUTTON_NAME')
+    expect(source).not.toContain('render_skill_export_section(left)')
+    expect(source).toContain('render_learn_area_button(actions)')
+    expect(source).toContain('render_skill_export_section(body)')
+    expect(skills).toContain('export function render_learn_area_button(')
+
+    expect(source).toContain('player.gui.screen.add')
+    expect(source).toContain('render_titlebar(root, SKILLS_POPOUT_TITLE, SKILLS_CLOSE_BUTTON_NAME)')
+    expect(source).toContain('build_skills_body(body)')
+    expect(source).toContain('body.clear()')
+    // Guard the ordering, not the line breaks: the console source is formatted
+    // both one-call-per-line and semicolon-separated in different places.
+    expect(source).toMatch(/close_task_board_skills_ui\(player\.index\)[\s;]*destroy_skills_popout\(player\)/)
+  })
+
+  it('keeps the area learning window closed by default and scoped per player', () => {
+    ;(globalThis as any).storage = {}
+    expect(task_board_skills_ui_is_open(1)).toBe(false)
+    expect((globalThis as any).storage).toEqual({})
+
+    expect(toggle_task_board_skills_ui_open(1)).toBe(true)
+    expect(task_board_skills_ui_is_open(1)).toBe(true)
+    expect(task_board_skills_ui_is_open(2)).toBe(false)
+    expect(toggle_task_board_skills_ui_open(1)).toBe(false)
+    expect(task_board_skills_ui_is_open(1)).toBe(false)
+  })
+
+  it('treats a snapshot as current only while the runtime keeps answering', () => {
+    // offline and stale are different diagnoses: one means AIRI never spoke, the
+    // other means it stopped, and the console must not merge them.
+    expect(task_board_sync_freshness(undefined, 5000)).toBe('offline')
+    expect(task_board_sync_freshness(4000, 4000)).toBe('live')
+    expect(task_board_sync_freshness(4000, 4000 + 10 * 60)).toBe('live')
+    expect(task_board_sync_freshness(4000, 4000 + 10 * 60 + 1)).toBe('stale')
+    // A snapshot stamped after the current tick is a clock oddity, not freshness
+    // running backwards into a permanently stale console.
+    expect(task_board_sync_freshness(9000, 4000)).toBe('live')
+  })
+
+  it('stops presenting a stale snapshot as the current AIRI state', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("if (freshness === 'offline') return { tone: 'muted', caption: 'OFFLINE' }")
+    expect(source).toContain("if (freshness === 'stale') return { tone: 'bad', caption: 'STALE' }")
+    // The AIRI row follows the same rule as the badge rather than replaying the
+    // last phase it happened to be told about.
+    expect(source).toContain("freshness === 'live' ? live_caption : stale_caption")
+    expect(source).toContain('polls unanswered')
+  })
+
+  it('asks the runtime for a snapshot over the drain the runtime already performs', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("return { kind: 'poll', version: 1, tick: game.tick }")
+    expect(source).toContain('const poll = poll_request()')
+    // Nobody looking, or a snapshot that is still fresh, means no request.
+    expect(source).toContain('if (!any_console_open()) return undefined')
+    expect(source).toContain('if (synced !== undefined && math.max(0, game.tick - synced) < POLL_REQUEST_TICKS) return undefined')
+    // Polls are produced, never queued, so they cannot displace player input.
+    expect(source).toContain('function enqueue_ui_input(input: TaskBoardUiInput)')
+  })
+
+  it('drains queued input before appending a poll so a request cannot evict player input', () => {
+    ;(globalThis as any).game.tick = 100000
+    ;(globalThis as any).game.connected_players = []
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    // The queue is detached from storage before the poll is appended, so the
+    // poll is never persisted and never counts against the queue limit.
+    const drain = source.split('function drain_ui_inputs() {')[1]?.split('function task_board_ui_prompt_draft')[0] ?? ''
+    expect(drain).toContain('storage.airi_task_board_ui_inputs = []')
+    expect(drain.indexOf('storage.airi_task_board_ui_inputs = []')).toBeLessThan(drain.indexOf('drained.push(poll)'))
+  })
+
+  it('only emits fixed UI control actions instead of arbitrary console commands', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow'")
+    expect(source).toContain("kind: 'control'")
+    expect(source).toContain('drain_inputs: () => drain_ui_inputs()')
+    expect(source).not.toContain('rcon.print')
+  })
+})

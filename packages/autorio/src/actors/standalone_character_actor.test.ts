@@ -33,7 +33,7 @@ beforeEach(() => {
 })
 
 describe('StandaloneCharacterActor.create', () => {
-  it('creates a character entity and persists its unit_number in storage', () => {
+  it('creates a character entity and persists its physical and logical identity', () => {
     const character = fake_character()
     const surface = fake_surface()
     surface.create_entity.mockReturnValue(character)
@@ -45,6 +45,23 @@ describe('StandaloneCharacterActor.create', () => {
     expect(actor).toBeDefined()
     expect(actor!.character).toBe(character)
     expect((globalThis as any).storage.standalone_character_unit_number).toBe(42)
+    expect((globalThis as any).storage.standalone_npc_identity).toEqual({ id: 'npc-1', name: 'Aster-1' })
+  })
+
+  it('keeps the same logical name when a replacement body is created', () => {
+    const surface = fake_surface()
+    surface.create_entity
+      .mockReturnValueOnce(fake_character({ unit_number: 42 }))
+      .mockReturnValueOnce(fake_character({ unit_number: 99 }))
+
+    const first = StandaloneCharacterActor.create(surface, {} as any, { x: 0, y: 0 })!
+    const identity = first.status_snapshot()
+    const replacement = StandaloneCharacterActor.create(surface, {} as any, { x: 5, y: 5 })!
+
+    expect(replacement.status_snapshot().npc_id).toBe(identity.npc_id)
+    expect(replacement.status_snapshot().name).toBe(identity.name)
+    expect(replacement.status_snapshot().actor_id).toBe(99)
+    expect((globalThis as any).storage.standalone_npc_identity_serial).toBe(2)
   })
 
   it('returns undefined when the engine refuses to create the entity', () => {
@@ -75,6 +92,7 @@ describe('StandaloneCharacterActor.reacquire', () => {
 
     expect(actor).toBeDefined()
     expect(actor!.character).toBe(character)
+    expect(actor!.status_snapshot()).toMatchObject({ npc_id: 'npc-1', name: 'Aster-1' })
   })
 
   it('returns undefined when the persisted unit_number no longer exists (e.g. it died)', () => {
@@ -155,14 +173,14 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
     expect(actor.get_mining_state()).toEqual({ mining: false })
   })
 
-  it('reports mining as effectively stopped when character mining progress returns to zero', () => {
+  it('preserves freshly started mining while Factorio progress is still zero', () => {
     const { actor } = create_actor({
       selected: { name: 'iron-ore' },
       character_mining_progress: 0,
       mining_state: { mining: true, position: { x: 1, y: 1 } },
     })
 
-    expect(actor.get_mining_state()).toEqual({ mining: false })
+    expect(actor.get_mining_state()).toEqual({ mining: true, position: { x: 1, y: 1 } })
   })
 
   it('never claims a LuaPlayer-sourced event, since it has no LuaPlayer behind it', () => {
@@ -178,13 +196,14 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
     expect(actor.entity_build_args()).toEqual({ force: character.force })
   })
 
-  it('produces a status snapshot identifying itself as a standalone_character with bounded mining diagnostics', () => {
+  it('produces a status snapshot with persistent logical identity and bounded mining diagnostics', () => {
     const { actor } = create_actor()
 
     expect(actor.status_snapshot()).toEqual({
       kind: 'standalone_character',
       valid: true,
-      name: 'AIRI',
+      name: 'Aster-1',
+      npc_id: 'npc-1',
       position: { x: 10, y: 20 },
       has_character: true,
       actor_id: 42,

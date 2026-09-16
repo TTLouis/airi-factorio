@@ -6,15 +6,19 @@ import { event_handlers, set_load_handler } from './test-event-registry'
 // vitest import production modules under Node without a real Factorio runtime; it
 // does not attempt to emulate game state.
 (globalThis as any).log = () => {}
+;(globalThis as any).pairs = Object.entries
 
 ;(globalThis as any).remote = {
+  interfaces: {},
   add_interface: () => {},
+  call: () => undefined,
 }
 
 ;(globalThis as any).script = {
   on_event: (event_key: unknown, handler: (event: any) => void) => {
     event_handlers.set(event_key, handler)
   },
+  on_nth_tick: (_tick: number, _handler: ((event: any) => void) | undefined) => {},
   on_load: (handler: (() => void) | undefined) => {
     set_load_handler(handler)
   },
@@ -22,11 +26,13 @@ import { event_handlers, set_load_handler } from './test-event-registry'
 
 ;(globalThis as any).game = {
   connected_players: [],
+  get_player: () => undefined,
   surfaces: {
     1: { find_entities_filtered: () => [] },
   },
   print: () => {},
   tick: 0,
+  is_multiplayer: () => false,
 }
 
 ;(globalThis as any).rendering = {
@@ -37,6 +43,14 @@ import { event_handlers, set_load_handler } from './test-event-registry'
 ;(globalThis as any).serpent = {
   line: (value: unknown) => String(value),
   block: (value: unknown) => String(value),
+}
+
+;(globalThis as any).helpers = {
+  table_to_json: (value: unknown) => JSON.stringify(value),
+}
+
+;(globalThis as any).string = {
+  lower: (value: string) => value.toLowerCase(),
 }
 
 // Factorio 2.0 exposes prototype tables globally. Production runtime guards use
@@ -50,6 +64,14 @@ import { event_handlers, set_load_handler } from './test-event-registry'
     'iron-chest': {},
     'wooden-chest': {},
     'steel-chest': {},
+    'gun-turret': {},
+  },
+  item: {
+    'iron-plate': {},
+    'copper-plate': {},
+    boiler: {},
+    pipe: {},
+    'assembling-machine-1': {},
   },
 }
 
@@ -66,6 +88,8 @@ import { event_handlers, set_load_handler } from './test-event-registry'
     on_tick: 'on_tick',
     on_player_crafted_item: 'on_player_crafted_item',
     on_research_finished: 'on_research_finished',
+    on_player_joined_game: 'on_player_joined_game',
+    on_gui_click: 'on_gui_click',
   },
   direction: {
     north: 'north',
@@ -85,6 +109,12 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   inventory: {
     character_guns: 'character_guns',
     character_ammo: 'character_ammo',
+    character_armor: 'character_armor',
+    turret_ammo: 'turret_ammo',
+    crafter_input: 'crafter_input',
+    crafter_output: 'crafter_output',
+    crafter_trash: 'crafter_trash',
+    assembling_machine_dump: 'assembling_machine_dump',
   },
 }
 
@@ -99,4 +129,5 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   abs: Math.abs,
   floor: Math.floor,
   ceil: Math.ceil,
+  random: (min: number, _max: number) => min,
 }

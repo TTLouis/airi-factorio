@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feat/npc-transition-work
 
   pull_request:
     branches:
@@ -33,6 +34,19 @@ jobs:
       - name: Typecheck
         run: pnpm run build && pnpm run typecheck
 
+      - name: Parse generated Lua with LuaJIT
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq luajit
+          luajit -b packages/autorio/dist/control.lua /tmp/autorio-control.luac
+
+      - name: Reject raw JavaScript slice calls in generated Lua
+        run: |
+          if grep -n ':slice(' packages/autorio/dist/control.lua; then
+            echo 'Generated Lua contains a raw JavaScript .slice() method call; use typed/Lua-safe iteration instead.'
+            exit 1
+          fi
+
       - name: Compile native NPC Pterodactyl guard
         run: |
           node deploy/pterodactyl/staging/source-preparer.mjs . deploy/pterodactyl/staging/guard.ts
@@ -56,7 +70,7 @@ jobs:
       - name: Test
         run: pnpm run test
 
-  pterodactyl-staging:
+  pterodactyl-npc-staging:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -66,10 +80,12 @@ jobs:
           node-version: '24'
 
       - name: Check generated egg artifacts
-        run: node deploy/pterodactyl/build-payload.mjs --check
+        run: |
+          sha256sum deploy/pterodactyl/payload-src/installer.sh
+          node deploy/pterodactyl/build-payload.mjs --check
 
       - name: Test payload verifier portability
         run: node --test deploy/pterodactyl/build-payload.test.mjs
 
-      - name: Test deployment protocol and production runtime
-        run: node --test deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
+      - name: Test standalone-NPC deployment protocol and production runtime
+        run: node --test --test-force-exit deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs

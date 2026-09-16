@@ -15,12 +15,9 @@
   "tstl": {
     "luaTarget": "JIT",
     "buildMode": "default",
-    "luaLibImport": "inline",
+    "luaLibImport": "require",
     "luaBundle": "control.lua",
-    "luaBundleEntry": "src/control.ts",
-    "luaPlugins": [
-      { "name": "@proj-airi/tstl-plugin-reload-factorio-mod/dist/index.mjs" }
-    ]
+    "luaBundleEntry": "src/control.ts"
   },
   "include": [
     "src/**/*.ts"

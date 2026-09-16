@@ -238,20 +238,32 @@ function encodePacket(id, type, text) {
   return packet
 }
 
+function taskBoardUiRconCommand(text) {
+  const command = String(text)
+  return command.includes('remote.call("autorio_task_board"') || command.includes("remote.call('autorio_task_board'")
+}
+
+const UI_RCON_READY_COMMAND = '/silent-command rcon.print("AIRI_UI_RCON_READY")'
+
 export class Rcon {
-  constructor(port, password, timeout = 5000) {
+  constructor(port, password, timeout = 5000, { auxiliary = false } = {}) {
     this.port = port
     this.password = password
     this.timeout = timeout
+    this.auxiliary = auxiliary
     this.socket = null
     this.buffer = Buffer.alloc(0)
     this.sequence = 10
     this.pending = new Map()
     this.queue = Promise.resolve()
+    this.uiRcon = null
+    this.uiConnect = null
+    this.closed = false
   }
 
   async connect() {
     check(!this.socket, 'RCON is already connected')
+    this.closed = false
     const socket = net.createConnection({ host: '127.0.0.1', port: this.port })
     this.socket = socket
     socket.on('data', chunk => this.receive(chunk))
@@ -266,6 +278,14 @@ export class Rcon {
   }
 
   close() {
+    this.closed = true
+    const uiRcon = this.uiRcon
+    const uiConnect = this.uiConnect
+    this.uiRcon = null
+    this.uiConnect = null
+    if (uiRcon) uiRcon.close()
+    else if (uiConnect) uiConnect.then(lane => lane.close()).catch(() => {})
+
     const socket = this.socket
     this.socket = null
     if (socket) socket.destroy()
@@ -315,7 +335,59 @@ export class Rcon {
     })
   }
 
-  command(text) {
+  async taskBoardLane() {
+    check(!this.auxiliary, 'Auxiliary RCON cannot create another Task Board lane')
+    check(this.socket && !this.socket.destroyed && !this.closed, 'RCON is not connected')
+
+    if (this.uiRcon?.socket && !this.uiRcon.socket.destroyed) {
+      this.uiRcon.timeout = this.timeout
+      return this.uiRcon
+    }
+    if (this.uiRcon) {
+      this.uiRcon.close()
+      this.uiRcon = null
+    }
+
+    if (!this.uiConnect) {
+      const lane = new Rcon(this.port, this.password, this.timeout, { auxiliary: true })
+      this.uiConnect = (async () => {
+        await lane.connect()
+        let ready = String(await lane.command(UI_RCON_READY_COMMAND) ?? '').trim()
+        // Factorio asks for the first Lua console command to be repeated exactly
+        // before enabling it. Prime that confirmation on the dedicated UI socket
+        // so a changing set_snapshot payload cannot get stuck behind the prompt.
+        if (ready !== 'AIRI_UI_RCON_READY') ready = String(await lane.command(UI_RCON_READY_COMMAND) ?? '').trim()
+        check(ready === 'AIRI_UI_RCON_READY', 'Task Board RCON handshake failed')
+        if (this.closed || !this.socket || this.socket.destroyed) {
+          lane.close()
+          throw new DeploymentError('RCON is not connected')
+        }
+        lane.timeout = this.timeout
+        this.uiRcon = lane
+        return lane
+      })().finally(() => {
+        this.uiConnect = null
+      })
+    }
+    return this.uiConnect
+  }
+
+  async taskBoardCommand(text) {
+    const lane = await this.taskBoardLane()
+    try {
+      lane.timeout = this.timeout
+      return await lane.command(text)
+    }
+    catch (error) {
+      if (!lane.socket || lane.socket.destroyed) {
+        if (this.uiRcon === lane) this.uiRcon = null
+        lane.close()
+      }
+      throw error
+    }
+  }
+
+  queuedCommand(text) {
     const command = this.queue.catch(() => {}).then(async () => {
       check(this.socket && !this.socket.destroyed, 'RCON is not connected')
       const id = ++this.sequence
@@ -325,6 +397,11 @@ export class Rcon {
     })
     this.queue = command.catch(() => {})
     return command
+  }
+
+  command(text) {
+    if (!this.auxiliary && taskBoardUiRconCommand(text)) return this.taskBoardCommand(text)
+    return this.queuedCommand(text)
   }
 }
 
@@ -354,4 +431,262 @@ export async function runProcess(command, args, { cwd, env = process.env, timeou
   }
   check(result.code === 0, `${label} failed with exit code ${result.code ?? 'signal'}`)
   return result
+}
+
+const TASK_BOARD_MAX_STEPS = 30
+const TASK_BOARD_MAX_EVENTS = 64
+const TASK_BOARD_MAX_EVIDENCE = 32
+
+function taskBoardText(value, max = 500) {
+  const text = String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (text.length <= max) return text
+  return `${text.slice(0, Math.max(0, max - 1))}…`
+}
+
+function normalizeTaskBoardStep(value) {
+  return taskBoardText(value, 500).toLocaleLowerCase()
+}
+
+function boundedTaskBoardPlan(plan) {
+  return Array.isArray(plan) ? plan.slice(0, TASK_BOARD_MAX_STEPS).map(step => taskBoardText(step, 500)).filter(Boolean) : []
+}
+
+function clampTaskBoardIndex(value, length) {
+  if (length <= 0) return 0
+  if (!Number.isSafeInteger(value)) return 0
+  return Math.min(Math.max(value, 0), length - 1)
+}
+
+function taskBoardEvent(board, type, now, details = {}) {
+  const events = [...(board.events ?? []), {
+    seq: (board.event_sequence ?? 0) + 1,
+    type,
+    at: now,
+    revision: board.revision,
+    ...details,
+  }].slice(-TASK_BOARD_MAX_EVENTS)
+  return { ...board, event_sequence: (board.event_sequence ?? 0) + 1, events }
+}
+
+function taskBoardStepId(index) {
+  return `step_${index + 1}`
+}
+
+function taskBoardStepStatus(index, activeIndex, boardStatus) {
+  if (index < activeIndex || boardStatus === 'completed') return 'completed'
+  if (index > activeIndex) return 'pending'
+  if (boardStatus === 'blocked') return 'blocked'
+  if (boardStatus === 'paused') return 'paused'
+  return 'active'
+}
+
+function applyTaskBoardStatuses(board, activeIndex = board.active_index ?? 0) {
+  const safeIndex = clampTaskBoardIndex(activeIndex, board.steps.length)
+  return {
+    ...board,
+    active_index: safeIndex,
+    active_step_id: board.status === 'completed' || board.steps.length === 0 ? undefined : board.steps[safeIndex]?.id,
+    completed_count: board.status === 'completed' ? board.steps.length : safeIndex,
+    total_steps: board.steps.length,
+    steps: board.steps.map((step, index) => ({ ...step, status: taskBoardStepStatus(index, safeIndex, board.status) })),
+  }
+}
+
+export function createTaskBoard(plan, currentStep, { goalId = '', now = Date.now() } = {}) {
+  const descriptions = boundedTaskBoardPlan(plan)
+  const activeIndex = clampTaskBoardIndex(currentStep, descriptions.length)
+  let board = {
+    kind: 'task_board_lite',
+    goal_id: taskBoardText(goalId, 100),
+    status: descriptions.length ? 'active' : 'completed',
+    blocker: '',
+    pause_reason: '',
+    revision: 1,
+    event_sequence: 0,
+    active_index: activeIndex,
+    active_step_id: undefined,
+    completed_count: descriptions.length ? activeIndex : 0,
+    total_steps: descriptions.length,
+    steps: descriptions.map((description, index) => ({ id: taskBoardStepId(index), description, status: 'pending', revision: 1 })),
+    evidence: [],
+    events: [],
+    created_at: now,
+    updated_at: now,
+  }
+  board = applyTaskBoardStatuses(board, activeIndex)
+  return taskBoardEvent(board, 'created', now, { active_step_id: board.active_step_id, total_steps: board.total_steps })
+}
+
+function findTaskBoardStep(board, description) {
+  const target = normalizeTaskBoardStep(description)
+  if (!target) return -1
+  return board.steps.findIndex(step => normalizeTaskBoardStep(step.description) === target)
+}
+
+function taskBoardCompletedPrefixMatches(board, incoming) {
+  const count = board.completed_count ?? 0
+  if (count <= 0 || incoming.length < count) return false
+  for (let index = 0; index < count; index++) {
+    if (normalizeTaskBoardStep(board.steps[index]?.description) !== normalizeTaskBoardStep(incoming[index])) return false
+  }
+  return true
+}
+
+function replanTaskBoardRemaining(board, incoming, incomingIndex, now) {
+  const completed = board.steps.slice(0, board.completed_count).map(step => ({ ...step, status: 'completed' }))
+  const remainingDescriptions = incoming.slice(Math.max(incomingIndex, board.completed_count))
+  if (remainingDescriptions.length === 0) return board
+  const steps = [
+    ...completed,
+    ...remainingDescriptions.map((description, offset) => ({
+      id: taskBoardStepId(completed.length + offset),
+      description,
+      status: 'pending',
+      revision: 1,
+    })),
+  ].slice(0, TASK_BOARD_MAX_STEPS)
+  let next = {
+    ...board,
+    status: 'active',
+    blocker: '',
+    pause_reason: '',
+    revision: board.revision + 1,
+    steps,
+    active_index: completed.length,
+    updated_at: now,
+  }
+  next = applyTaskBoardStatuses(next, completed.length)
+  return taskBoardEvent(next, 'replanned', now, { preserved_completed: completed.length, total_steps: next.total_steps })
+}
+
+export function reconcileTaskBoard(board, plan, currentStep, { now = Date.now(), allowReplan = false } = {}) {
+  const incoming = boundedTaskBoardPlan(plan)
+  if (!board || board.kind !== 'task_board_lite') return createTaskBoard(incoming, currentStep, { now })
+  if (incoming.length === 0) return board
+
+  const incomingIndex = clampTaskBoardIndex(currentStep, incoming.length)
+  const incomingActive = incoming[incomingIndex]
+  const matchedIndex = findTaskBoardStep(board, incomingActive)
+  const currentIndex = board.active_index ?? 0
+
+  if (matchedIndex >= currentIndex) {
+    if (matchedIndex === currentIndex) return board
+    let next = {
+      ...board,
+      status: 'active',
+      blocker: '',
+      pause_reason: '',
+      revision: board.revision + 1,
+      updated_at: now,
+    }
+    next = applyTaskBoardStatuses(next, matchedIndex)
+    return taskBoardEvent(next, 'advanced', now, { from_step: board.active_step_id, to_step: next.active_step_id })
+  }
+
+  const exactSamePlan = incoming.length === board.steps.length
+    && incoming.every((description, index) => normalizeTaskBoardStep(description) === normalizeTaskBoardStep(board.steps[index]?.description))
+  if (exactSamePlan && incomingIndex > currentIndex) {
+    let next = { ...board, status: 'active', blocker: '', pause_reason: '', revision: board.revision + 1, updated_at: now }
+    next = applyTaskBoardStatuses(next, incomingIndex)
+    return taskBoardEvent(next, 'advanced', now, { from_step: board.active_step_id, to_step: next.active_step_id })
+  }
+
+  if ((allowReplan || taskBoardCompletedPrefixMatches(board, incoming)) && incomingActive && normalizeTaskBoardStep(incomingActive) !== normalizeTaskBoardStep(board.steps[currentIndex]?.description)) {
+    return replanTaskBoardRemaining(board, incoming, incomingIndex, now)
+  }
+
+  return board
+}
+
+export function setTaskBoardStatus(board, status, { blocker = '', pauseReason = '', now = Date.now() } = {}) {
+  if (!board || board.kind !== 'task_board_lite') return board
+  if (!['active', 'blocked', 'paused', 'completed'].includes(status)) return board
+  if (board.status === status && board.blocker === blocker && board.pause_reason === pauseReason) return board
+  let next = {
+    ...board,
+    status,
+    blocker: taskBoardText(blocker, 500),
+    pause_reason: taskBoardText(pauseReason, 300),
+    revision: board.revision + 1,
+    updated_at: now,
+  }
+  next = applyTaskBoardStatuses(next, next.active_index)
+  return taskBoardEvent(next, status, now, { active_step_id: next.active_step_id })
+}
+
+export function addTaskBoardEvidence(board, { kind = 'operation_receipt', summary = '', ref = '', now = Date.now() } = {}) {
+  if (!board || board.kind !== 'task_board_lite') return board
+  const record = {
+    id: `evidence_${(board.evidence_sequence ?? 0) + 1}`,
+    kind: taskBoardText(kind, 64),
+    summary: taskBoardText(summary, 1200),
+    ref: taskBoardText(ref, 160),
+    at: now,
+    step_id: board.active_step_id,
+  }
+  const next = {
+    ...board,
+    evidence_sequence: (board.evidence_sequence ?? 0) + 1,
+    evidence: [...(board.evidence ?? []), record].slice(-TASK_BOARD_MAX_EVIDENCE),
+    revision: board.revision + 1,
+    updated_at: now,
+  }
+  return taskBoardEvent(next, 'evidence', now, { evidence_id: record.id, step_id: record.step_id })
+}
+
+export function taskBoardProgress(board) {
+  if (!board || board.kind !== 'task_board_lite') return undefined
+  const active = board.steps[board.active_index ?? 0]
+  return {
+    status: board.status,
+    completed: board.completed_count ?? 0,
+    total: board.total_steps ?? board.steps.length,
+    index: board.status === 'completed' ? board.steps.length : (board.active_index ?? 0) + 1,
+    step_id: board.active_step_id,
+    step: active?.description ?? '',
+    blocker: board.blocker ?? '',
+    pause_reason: board.pause_reason ?? '',
+    revision: board.revision,
+  }
+}
+
+export function sanitizeTaskBoard(value, { fallbackPlan = [], fallbackCurrentStep = 0, goalId = '', now = Date.now() } = {}) {
+  if (!value || value.kind !== 'task_board_lite' || !Array.isArray(value.steps)) {
+    return createTaskBoard(fallbackPlan, fallbackCurrentStep, { goalId, now })
+  }
+  const descriptions = value.steps.slice(0, TASK_BOARD_MAX_STEPS).map(step => taskBoardText(step?.description, 500)).filter(Boolean)
+  let board = createTaskBoard(descriptions, value.active_index, { goalId: value.goal_id ?? goalId, now: Number.isFinite(value.created_at) ? value.created_at : now })
+  board = {
+    ...board,
+    status: ['active', 'blocked', 'paused', 'completed'].includes(value.status) ? value.status : board.status,
+    blocker: taskBoardText(value.blocker, 500),
+    pause_reason: taskBoardText(value.pause_reason, 300),
+    revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : board.revision,
+    event_sequence: Number.isSafeInteger(value.event_sequence) && value.event_sequence >= 0 ? value.event_sequence : board.event_sequence,
+    evidence_sequence: Number.isSafeInteger(value.evidence_sequence) && value.evidence_sequence >= 0 ? value.evidence_sequence : 0,
+    evidence: (Array.isArray(value.evidence) ? value.evidence : []).slice(-TASK_BOARD_MAX_EVIDENCE).map(item => ({
+      id: taskBoardText(item?.id, 80),
+      kind: taskBoardText(item?.kind, 64),
+      summary: taskBoardText(item?.summary, 1200),
+      ref: taskBoardText(item?.ref, 160),
+      at: Number.isFinite(item?.at) ? item.at : now,
+      step_id: taskBoardText(item?.step_id, 80) || undefined,
+    })),
+    events: (Array.isArray(value.events) ? value.events : []).slice(-TASK_BOARD_MAX_EVENTS).map(item => ({
+      seq: Number.isSafeInteger(item?.seq) ? item.seq : 0,
+      type: taskBoardText(item?.type, 64),
+      at: Number.isFinite(item?.at) ? item.at : now,
+      revision: Number.isSafeInteger(item?.revision) ? item.revision : 0,
+      active_step_id: taskBoardText(item?.active_step_id, 80) || undefined,
+      total_steps: Number.isSafeInteger(item?.total_steps) ? item.total_steps : undefined,
+      preserved_completed: Number.isSafeInteger(item?.preserved_completed) ? item.preserved_completed : undefined,
+      from_step: taskBoardText(item?.from_step, 80) || undefined,
+      to_step: taskBoardText(item?.to_step, 80) || undefined,
+      evidence_id: taskBoardText(item?.evidence_id, 80) || undefined,
+      step_id: taskBoardText(item?.step_id, 80) || undefined,
+    })),
+    created_at: Number.isFinite(value.created_at) ? value.created_at : now,
+    updated_at: Number.isFinite(value.updated_at) ? value.updated_at : now,
+  }
+  return applyTaskBoardStatuses(board, value.active_index)
 }

@@ -1,4 +1,5 @@
 import { create_actor_remote_interface, get_controlled_actor } from './actors/actor_controller'
+import { remember_entity_reference } from './entity_reference'
 import { get_actor_inventory_items } from './utils/inventory'
 
 const MAX_NEARBY_RADIUS = 64
@@ -53,6 +54,34 @@ export function create_tools_remote_interface() {
       rcon.print(serpent.block(ingredients))
       return true
     },
+    get_player_status: (player_name: string) => {
+      const actor = get_controlled_actor()
+      const player = game.get_player(player_name)
+      if (!player || !player.valid) {
+        return {
+          found: false,
+          player_name,
+          error: 'player not found',
+        }
+      }
+      const same_surface = !!actor && actor.surface.index === player.surface.index
+      const player_position = player.character ? player.position : undefined
+      return {
+        found: true,
+        player: {
+          name: player.name,
+          connected: player.connected,
+          has_character: !!player.character,
+          surface: player.surface.name,
+          position: player_position,
+        },
+        actor: actor?.status_snapshot(),
+        same_surface,
+        distance: actor && player_position && same_surface
+          ? math.sqrt(squared_distance(actor.position, player_position))
+          : undefined,
+      }
+    },
     get_nearby_entities: (radius: number = 20, name?: string, entity_type?: string, limit: number = 50) => {
       const actor = get_controlled_actor()
       if (!actor) {
@@ -81,12 +110,16 @@ export function create_tools_remote_interface() {
       const returned = math.min(matches.length, bounded_limit)
       for (let i = 0; i < returned; i++) {
         const entity = matches[i]
+        remember_entity_reference(entity)
         entities.push({
           name: entity.name,
           type: entity.type,
           position: entity.position,
           force: entity.force?.name,
           unit_number: entity.unit_number,
+          direction: entity.direction,
+          supports_direction: entity.supports_direction,
+          rotatable: entity.rotatable,
           amount: entity.type === 'resource' ? entity.amount : undefined,
         })
       }
@@ -117,7 +150,7 @@ export function create_tools_remote_interface() {
       })
 
       let entity = matches[0]
-      let nearest_distance = entity ? squared_distance(actor.position, entity.position) : math.huge
+      let nearest_distance = entity !== undefined ? squared_distance(actor.position, entity.position) : math.huge
       for (let i = 1; i < matches.length; i++) {
         const candidate = matches[i]
         const candidate_distance = squared_distance(actor.position, candidate.position)
@@ -135,6 +168,8 @@ export function create_tools_remote_interface() {
           name,
         }
       }
+
+      remember_entity_reference(entity)
 
       const inventories: Array<Record<string, unknown>> = []
       const max_inventory_index = math.min(entity.get_max_inventory_index(), MAX_ENTITY_INVENTORIES)
@@ -171,6 +206,12 @@ export function create_tools_remote_interface() {
         }
       }
 
+      let recipe_name: string | undefined
+      if (entity.type === 'assembling-machine') {
+        const [recipe] = entity.get_recipe()
+        recipe_name = recipe?.name
+      }
+
       return {
         found: true,
         actor_position: actor.position,
@@ -181,7 +222,11 @@ export function create_tools_remote_interface() {
           position: entity.position,
           force: entity.force?.name,
           unit_number: entity.unit_number,
+          direction: entity.direction,
+          supports_direction: entity.supports_direction,
+          rotatable: entity.rotatable,
           amount: entity.type === 'resource' ? entity.amount : undefined,
+          recipe: recipe_name,
           inventories,
           inventories_truncated: entity.get_max_inventory_index() > MAX_ENTITY_INVENTORIES,
           inventory_items_truncated,
