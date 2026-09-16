@@ -1,7 +1,7 @@
 FROM --platform=linux/amd64 debian:bookworm-slim
 
 ARG AIRI_REPO=TTLouis/airi-factorio
-ARG AIRI_SOURCE_REF=feat/npc-transition-work
+ARG AIRI_SOURCE_REF=main
 ARG FACTORIO_VERSION=latest
 
 ENV DEBIAN_FRONTEND=noninteractive
