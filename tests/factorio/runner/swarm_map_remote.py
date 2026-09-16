@@ -96,16 +96,20 @@ def run(client, results: Path) -> None:
         'r.energy=100000000; return {ok=true,unit_number=r.unit_number,position=r.position} end)()'
     )
     radar = decode_json(command(lua_json(radar_create_expr)), 'temporary radar creation')
-    assert_true(radar.get('ok') is True and radar.get('unit_number') is not None, f'could not create temporary powered radar: {radar!r}')
-    radar_unit = int(radar['unit_number'])
+    assert_true(radar.get('ok') is True and radar.get('position') is not None, f'could not create temporary powered radar: {radar!r}')
+    radar_position = radar['position']
+    radar_x = radar_position['x']
+    radar_y = radar_position['y']
 
     chunk_x = int(position['x'] // 32)
     chunk_y = int(position['y'] // 32)
     chart_state_expr = (
         '(function() local f=game.forces["player"]; local s=game.surfaces[1]; '
-        f'local r=game.get_entity_by_unit_number({radar_unit}); if r and r.valid then r.energy=100000000 end; '
+        f'local r=s.find_entity("radar",{{x={radar_x},y={radar_y}}}); '
+        'if r and r.valid then r.energy=100000000 end; '
         f'local c={{x={chunk_x},y={chunk_y}}}; '
-        'return {radar_valid=(r and r.valid) or false, radar_energy=(r and r.valid and r.energy) or 0, '
+        'return {radar_found=(r~=nil), radar_valid=(r and r.valid) or false, '
+        'radar_energy=(r and r.valid and r.energy) or 0, '
         'charted=f.is_chunk_charted(s,c), visible=f.is_chunk_visible(s,c), '
         'requested=f.is_chunk_requested_for_charting(s,c)} end)()'
     )
@@ -178,7 +182,7 @@ def run(client, results: Path) -> None:
     assert_true((rebound_query.get('observer') or {}).get('body_revision') == after_revision, f'post-replacement query used stale provenance: {rebound_query!r}')
 
     cleanup_expr = (
-        f'(function() local r=game.get_entity_by_unit_number({radar_unit}); '
+        f'(function() local s=game.surfaces[1]; local r=s.find_entity("radar",{{x={radar_x},y={radar_y}}}); '
         'if r and r.valid then r.destroy{raise_destroy=false} end; return true end)()'
     )
     decode_json(command(lua_json(cleanup_expr)), 'temporary radar cleanup')
