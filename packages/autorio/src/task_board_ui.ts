@@ -40,6 +40,14 @@ const MAX_WANTED_ITEMS = 16
 const MAX_TEXT = 500
 const MAX_PROMPT_TEXT = 4000
 const UI_INPUT_QUEUE_LIMIT = 32
+// The console asks for a snapshot rather than only waiting to be handed one: a
+// push-only feed leaves `storage.airi_task_board_ui` untouched whether AIRI is
+// idle or gone, so the two are indistinguishable. The request rides the input
+// drain the runtime already performs, so it costs no extra round trip.
+const POLL_REQUEST_TICKS = 60
+// Roughly forty unanswered drains. Past this the last snapshot is history, not
+// status, and the console has to say so instead of repeating it as current.
+const SYNC_STALE_TICKS = 10 * 60
 const TERMINATE_CONFIRM_TICKS = 5 * 60
 const LEFT_COLUMN_WIDTH = 640
 const PREVIEW_COLUMN_WIDTH = 640
@@ -110,7 +118,11 @@ export interface TaskBoardUiSnapshot {
 interface TaskBoardUiFollowStatus { active: boolean, state: string, target_player: string, current_distance?: number, desired_distance?: number, last_failure: string }
 interface TaskBoardUiControlInput { kind: 'control', version: 1, action: TaskBoardUiControlAction, player_index: number, player_name: string, tick: number }
 interface TaskBoardUiPromptInput { kind: 'prompt', version: 1, player_index: number, player_name: string, text: string, tick: number }
+interface TaskBoardUiPollInput { kind: 'poll', version: 1, tick: number }
 type TaskBoardUiInput = TaskBoardUiControlInput | TaskBoardUiPromptInput
+// Polls are produced while draining, never queued, so enqueue stays typed to
+// the player-originated inputs only.
+type TaskBoardUiDrainedInput = TaskBoardUiInput | TaskBoardUiPollInput
 interface TaskBoardUiWorldPreview { position: MapPositionStruct, surface_index: LuaSurface['index'], entity?: LuaEntity }
 interface TaskBoardUiWorldTask { task_state: string, queue_length: number }
 interface TaskBoardUiRuntimeSnapshot {
@@ -206,7 +218,26 @@ export function task_board_preview_zoom(player_index: number) { return normalize
 function set_preview_zoom(player_index: number, value: unknown) { const zoom = normalize_preview_zoom(value); ensure_preview_zoom_state()[player_index] = zoom; return zoom }
 function preview_zoom_caption(zoom: number) { return `${zoom}×` }
 function enqueue_ui_input(input: TaskBoardUiInput) { const queue = ensure_ui_input_queue(); queue.push(input); while (queue.length > UI_INPUT_QUEUE_LIMIT) queue.shift() }
-function drain_ui_inputs() { const queued = storage.airi_task_board_ui_inputs ?? []; storage.airi_task_board_ui_inputs = []; return queued }
+function any_console_open() { for (const player of game.connected_players) { if (task_board_ui_is_open(player.index)) return true } return false }
+
+// Only ask when somebody is looking, and no faster than the console refreshes.
+// A dead runtime never drains, so the request simply goes unanswered and the
+// status panel degrades on its own.
+function poll_request(): TaskBoardUiPollInput | undefined {
+  if (!any_console_open()) return undefined
+  const synced = storage.airi_task_board_ui_synced_tick
+  if (synced !== undefined && math.max(0, game.tick - synced) < POLL_REQUEST_TICKS) return undefined
+  return { kind: 'poll', version: 1, tick: game.tick }
+}
+
+function drain_ui_inputs() {
+  const queued = storage.airi_task_board_ui_inputs ?? []
+  storage.airi_task_board_ui_inputs = []
+  const drained: TaskBoardUiDrainedInput[] = queued
+  const poll = poll_request()
+  if (poll !== undefined) drained.push(poll)
+  return drained
+}
 export function task_board_ui_prompt_draft(player_index: number) { return storage.airi_task_board_prompt_draft?.[player_index] ?? '' }
 function set_prompt_draft(player_index: number, value: unknown) { ensure_prompt_draft_state()[player_index] = text(value, MAX_PROMPT_TEXT) }
 export function task_board_ui_is_open(player_index: number) { return storage.airi_task_board_ui_open?.[player_index] === true }
@@ -304,17 +335,42 @@ function create_key_value_table(parent: LuaGuiElement) { const table = parent.ad
 function add_key_value(table: LuaGuiElement, key: string, value: string, options: { tone?: Tone, tooltip?: string, width?: number } = {}) { const key_label = table.add({ type: 'label', caption: key, style: 'semibold_label' }); key_label.style.minimal_width = KEY_COLUMN_WIDTH; const value_label = table.add({ type: 'label', caption: value, tooltip: options.tooltip }); value_label.style.single_line = false; if (options.width !== undefined) value_label.style.maximal_width = options.width; if (options.tone !== undefined) value_label.style.font_color = TONE_COLORS[options.tone]; return value_label }
 function add_empty_state(parent: LuaGuiElement, caption: string) { const label = parent.add({ type: 'label', caption }); label.style.font_color = TONE_COLORS.muted; return label }
 function board_goal(board: TaskBoardUiSnapshot) { if (board.objective.length > 0) return board.objective; if (board.goal_id.length > 0) return board.goal_id; return board.status === 'idle' ? 'No active AIRI task.' : 'Current task' }
-function sync_summary(synced_tick: number | undefined) { if (synced_tick === undefined) return 'Never — AIRI runtime not connected'; const seconds = math.floor(math.max(0, game.tick - synced_tick) / 60); return seconds < 60 ? `${seconds}s ago` : `${math.floor(seconds / 60)}m ago` }
+/**
+ * How much the last snapshot is still worth believing.
+ *
+ * Tick-explicit and pure so the console never has to guess: `offline` means the
+ * runtime has never answered, `stale` means it answered once and has since
+ * stopped, and only `live` means the displayed phase is current.
+ */
+export function task_board_sync_freshness(synced_tick: number | undefined, tick: number): 'offline' | 'stale' | 'live' {
+  if (synced_tick === undefined) return 'offline'
+  return math.max(0, tick - synced_tick) > SYNC_STALE_TICKS ? 'stale' : 'live'
+}
+
+function sync_summary(synced_tick: number | undefined) { if (synced_tick === undefined) return 'Never — AIRI runtime not connected'; const seconds = math.floor(math.max(0, game.tick - synced_tick) / 60); const age = seconds < 60 ? `${seconds}s ago` : `${math.floor(seconds / 60)}m ago`; return task_board_sync_freshness(synced_tick, game.tick) === 'stale' ? `${age} — polls unanswered` : age }
 function world_task_summary(task: TaskBoardUiWorldTask | undefined) { if (task === undefined) return 'UNKNOWN'; const state = task.task_state.length > 0 ? task.task_state.split('_').join(' ').toUpperCase() : 'IDLE'; return task.queue_length > 0 ? `${state} · ${task.queue_length} queued` : state }
-function overall_state(board: TaskBoardUiSnapshot | undefined, synced_tick: number | undefined): { tone: Tone, caption: string } { if (board === undefined) return { tone: 'muted', caption: synced_tick === undefined ? 'OFFLINE' : 'IDLE' }; if (board.status === 'idle') return { tone: agent_tone(board.agent.phase), caption: agent_caption(board.agent.phase) }; return { tone: board_tone(board.status), caption: board.status.toUpperCase() } }
+function overall_state(board: TaskBoardUiSnapshot | undefined, synced_tick: number | undefined): { tone: Tone, caption: string } {
+  const freshness = task_board_sync_freshness(synced_tick, game.tick)
+  if (freshness === 'offline') return { tone: 'muted', caption: 'OFFLINE' }
+  // A snapshot only ever describes the tick it was pushed at. Once the runtime
+  // stops answering polls, repeating its last phase would claim AIRI is still
+  // doing work that nothing is driving any more.
+  if (freshness === 'stale') return { tone: 'bad', caption: 'STALE' }
+  if (board === undefined) return { tone: 'muted', caption: 'IDLE' }
+  if (board.status === 'idle') return { tone: agent_tone(board.agent.phase), caption: agent_caption(board.agent.phase) }
+  return { tone: board_tone(board.status), caption: board.status.toUpperCase() }
+}
 
 function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot, synced_tick: number | undefined) {
   const { header, body } = create_section(parent, 'Status', HALF_SECTION_WIDTH, undefined, false)
   const overall = overall_state(board, synced_tick); add_status_badge(header, overall.tone, overall.caption)
   const table = create_key_value_table(body)
   add_key_value(table, 'NPC', runtime.actor_name || 'AIRI', { tooltip: runtime.actor_kind.length > 0 ? runtime.actor_kind.split('_').join(' ') : undefined, width: HALF_VALUE_WIDTH })
+  const freshness = task_board_sync_freshness(synced_tick, game.tick)
   const phase = board?.agent.phase ?? 'idle'; const detail = board?.agent.detail ?? ''
-  add_key_value(table, 'AIRI', detail.length > 0 ? `${agent_caption(phase)} · ${text(detail, 90)}` : agent_caption(phase), { tone: agent_tone(phase), tooltip: detail.length > 0 ? detail : undefined, width: HALF_VALUE_WIDTH })
+  const live_caption = detail.length > 0 ? `${agent_caption(phase)} · ${text(detail, 90)}` : agent_caption(phase)
+  const stale_caption = freshness === 'offline' ? 'NOT CONNECTED' : `NO ANSWER — last seen ${agent_caption(phase)}`
+  add_key_value(table, 'AIRI', freshness === 'live' ? live_caption : stale_caption, { tone: freshness === 'live' ? agent_tone(phase) : 'bad', tooltip: freshness === 'live' && detail.length > 0 ? detail : 'The console polls the AIRI runtime; this row reports the answer, not a guess.', width: HALF_VALUE_WIDTH })
   add_key_value(table, 'WORLD', world_task_summary(runtime.world_task), { width: HALF_VALUE_WIDTH })
   const goal = board === undefined ? 'No active AIRI task.' : board_goal(board)
   add_key_value(table, 'GOAL', text(goal, 110), { tooltip: goal, width: HALF_VALUE_WIDTH })

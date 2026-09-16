@@ -5,6 +5,7 @@ import {
   task_board_activity_for_display,
   task_board_preview_zoom,
   task_board_skills_ui_is_open,
+  task_board_sync_freshness,
   task_board_ui_is_open,
   task_board_ui_prompt_draft,
   task_board_ui_terminate_is_armed,
@@ -303,6 +304,50 @@ describe('in-game task board UI projection', () => {
     expect(task_board_skills_ui_is_open(2)).toBe(false)
     expect(toggle_task_board_skills_ui_open(1)).toBe(false)
     expect(task_board_skills_ui_is_open(1)).toBe(false)
+  })
+
+  it('treats a snapshot as current only while the runtime keeps answering', () => {
+    // offline and stale are different diagnoses: one means AIRI never spoke, the
+    // other means it stopped, and the console must not merge them.
+    expect(task_board_sync_freshness(undefined, 5000)).toBe('offline')
+    expect(task_board_sync_freshness(4000, 4000)).toBe('live')
+    expect(task_board_sync_freshness(4000, 4000 + 10 * 60)).toBe('live')
+    expect(task_board_sync_freshness(4000, 4000 + 10 * 60 + 1)).toBe('stale')
+    // A snapshot stamped after the current tick is a clock oddity, not freshness
+    // running backwards into a permanently stale console.
+    expect(task_board_sync_freshness(9000, 4000)).toBe('live')
+  })
+
+  it('stops presenting a stale snapshot as the current AIRI state', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("if (freshness === 'offline') return { tone: 'muted', caption: 'OFFLINE' }")
+    expect(source).toContain("if (freshness === 'stale') return { tone: 'bad', caption: 'STALE' }")
+    // The AIRI row follows the same rule as the badge rather than replaying the
+    // last phase it happened to be told about.
+    expect(source).toContain("freshness === 'live' ? live_caption : stale_caption")
+    expect(source).toContain('polls unanswered')
+  })
+
+  it('asks the runtime for a snapshot over the drain the runtime already performs', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("return { kind: 'poll', version: 1, tick: game.tick }")
+    expect(source).toContain('const poll = poll_request()')
+    // Nobody looking, or a snapshot that is still fresh, means no request.
+    expect(source).toContain('if (!any_console_open()) return undefined')
+    expect(source).toContain('if (synced !== undefined && math.max(0, game.tick - synced) < POLL_REQUEST_TICKS) return undefined')
+    // Polls are produced, never queued, so they cannot displace player input.
+    expect(source).toContain('function enqueue_ui_input(input: TaskBoardUiInput)')
+  })
+
+  it('drains queued input before appending a poll so a request cannot evict player input', () => {
+    ;(globalThis as any).game.tick = 100000
+    ;(globalThis as any).game.connected_players = []
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    // The queue is detached from storage before the poll is appended, so the
+    // poll is never persisted and never counts against the queue limit.
+    const drain = source.split('function drain_ui_inputs() {')[1]?.split('function task_board_ui_prompt_draft')[0] ?? ''
+    expect(drain).toContain('storage.airi_task_board_ui_inputs = []')
+    expect(drain.indexOf('storage.airi_task_board_ui_inputs = []')).toBeLessThan(drain.indexOf('drained.push(poll)'))
   })
 
   it('only emits fixed UI control actions instead of arbitrary console commands', () => {

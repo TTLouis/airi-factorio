@@ -38,6 +38,13 @@ const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow
 const UI_PROMPT_MARKER = '[AIRI_UI_PROMPT]'
 const UI_PROMPT_MAX_CHARS = 4000
 const UI_INPUT_POLL_MS = 250
+// luaString refuses payloads past 16 KiB. That refusal used to surface only as a
+// generic caught failure, so one long plan froze the console for as long as the
+// plan stayed long. Stay under the limit by trimming instead of sending nothing.
+const UI_SNAPSHOT_MAX_BYTES = 15360
+// The console is drained four times a second, so a persistent fault would
+// otherwise repeat the same line forever.
+const UI_FAILURE_LOG_INTERVAL_MS = 60000
 const SYSTEM_RECOVERY_PAUSE_REASONS = new Set(['npc_identity_or_session_changed', 'actor_replaced'])
 const UI_AGENT_PHASES = new Set(['idle', 'thinking', 'observing', 'executing', 'waiting', 'error'])
 const UI_LIVE_ACTIVITY_LIMIT = 8
@@ -261,6 +268,16 @@ export function parseUiInputBatch(raw) {
     if (kind === 'prompt') {
       const event = parseUiPromptLine(`${UI_PROMPT_MARKER} ${JSON.stringify(payload)}`)
       if (event) parsed.push({ kind: 'prompt', ...event })
+      continue
+    }
+    // A poll asks for a snapshot. It carries no player identity and causes a
+    // read plus a push, never a state change, so unlike controls and prompts it
+    // is not attributable to a player and needs no authorization.
+    if (kind === 'poll') {
+      if (!exactUiObjectKeys(payload, ['version', 'tick'])) continue
+      if (payload.version !== 1) continue
+      if (!Number.isSafeInteger(payload.tick) || payload.tick < 0) continue
+      parsed.push({ kind: 'poll', tick: payload.tick })
     }
   }
   return parsed
@@ -461,6 +478,28 @@ export function taskBoardUiSnapshot(state, live) {
   }
 }
 
+/**
+ * Serialises a snapshot small enough to survive the RCON command path.
+ *
+ * Activity goes first because the oldest lines have already scrolled out of the
+ * console, then step text, which the console truncates for display anyway. A
+ * shortened board beats the previous behaviour of silently sending nothing.
+ */
+export function taskBoardUiJson(snapshot) {
+  let candidate = snapshot
+  let json = JSON.stringify(candidate)
+  while (Buffer.byteLength(json) > UI_SNAPSHOT_MAX_BYTES && candidate.activity.length > 0) {
+    candidate = { ...candidate, activity: candidate.activity.slice(1) }
+    json = JSON.stringify(candidate)
+  }
+  for (const limit of [240, 120, 60]) {
+    if (Buffer.byteLength(json) <= UI_SNAPSHOT_MAX_BYTES) break
+    candidate = { ...candidate, steps: candidate.steps.map(step => ({ ...step, description: uiText(step.description, limit) })) }
+    json = JSON.stringify(candidate)
+  }
+  return Buffer.byteLength(json) <= UI_SNAPSHOT_MAX_BYTES ? json : undefined
+}
+
 async function stopWorldWork(session) {
   await session.ensureAuthorization()
   await session.rcon.command('/silent-command remote.call("autorio_operations","stop_follow_player")')
@@ -619,6 +658,8 @@ export class Session {
     this.uiSyncRunning = null
     this.uiInputPoll = null
     this.uiInputPollRunning = false
+    this.lastUiFailure = ''
+    this.lastUiFailureAt = 0
   }
 
   onAgentActivity(event, data) {
@@ -788,31 +829,58 @@ export class Session {
     }
   }
 
-  async clearTaskBoardUi() {
+  /**
+   * Writes one console update and confirms the mod actually accepted it.
+   *
+   * `/silent-command` reports a Lua error in the RCON response body instead of
+   * failing the command, and the mod answers a rejected snapshot with `false`.
+   * An unchecked write therefore reports success even when the console never saw
+   * it, which is exactly how this path could sit broken while looking healthy.
+   */
+  async writeTaskBoardUi(command, label) {
     if (!this.rcon) return false
     try {
-      await this.rcon.command('/silent-command remote.call("autorio_task_board","clear")')
-      return true
-    }
-    catch (error) {
-      this.log(`Task Board UI clear failed: ${error instanceof Error ? error.message : error}`)
+      const response = String(await this.rcon.command(command) ?? '').trim()
+      if (response === 'true') {
+        this.lastUiFailure = ''
+        return true
+      }
+      this.logTaskBoardUiFailure(`Task Board UI ${label} was not accepted by Autorio: ${response || 'empty RCON response'}`)
       return false
     }
+    catch (error) {
+      this.logTaskBoardUiFailure(`Task Board UI ${label} failed: ${error instanceof Error ? error.message : error}`)
+      return false
+    }
+  }
+
+  // Report a new fault at once, then stay quiet about it until it changes or the
+  // interval elapses, so a real diagnostic cannot drown out the log.
+  logTaskBoardUiFailure(message) {
+    const now = Date.now()
+    if (this.lastUiFailure === message && now - this.lastUiFailureAt < UI_FAILURE_LOG_INTERVAL_MS) return
+    this.lastUiFailure = message
+    this.lastUiFailureAt = now
+    this.log(message)
+  }
+
+  async clearTaskBoardUi() {
+    return this.writeTaskBoardUi('/silent-command rcon.print(tostring(remote.call("autorio_task_board","clear")))', 'clear')
   }
 
   async syncTaskBoardUi(state = this.currentPlanState()) {
     if (!this.rcon) return false
     const snapshot = taskBoardUiSnapshot(state, this.liveAgentStatus())
     if (!snapshot) return this.clearTaskBoardUi()
-    try {
-      const json = JSON.stringify(snapshot)
-      await this.rcon.command(`/silent-command remote.call("autorio_task_board","set_snapshot",helpers.json_to_table(${luaString(json)}))`)
-      return true
-    }
-    catch (error) {
-      this.log(`Task Board UI sync failed: ${error instanceof Error ? error.message : error}`)
+    const json = taskBoardUiJson(snapshot)
+    if (json === undefined) {
+      this.logTaskBoardUiFailure(`Task Board UI sync skipped: snapshot exceeds ${UI_SNAPSHOT_MAX_BYTES} bytes even after trimming`)
       return false
     }
+    return this.writeTaskBoardUi(
+      `/silent-command rcon.print(tostring(remote.call("autorio_task_board","set_snapshot",helpers.json_to_table(${luaString(json)}))))`,
+      'sync',
+    )
   }
 
   async drainTaskBoardUiInputs() {
@@ -822,6 +890,12 @@ export class Session {
       const raw = await this.rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_task_board","drain_inputs")))')
       const inputs = parseUiInputBatch(raw)
       for (const input of inputs) {
+        // Answer every poll, even when nothing changed: a refreshed synced_tick
+        // is what lets the console tell a quiet AIRI from a dead one.
+        if (input.kind === 'poll') {
+          this.requestTaskBoardUiSync()
+          continue
+        }
         if (!chatAuthorized(this.config.chatPlayers, input.player_name)) {
           this.log(`[AIRI UI] Ignored unauthorized ${input.kind} player=${input.player_name}${input.action ? ` action=${input.action}` : ''}`)
           continue
