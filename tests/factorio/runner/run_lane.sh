@@ -174,6 +174,8 @@ case "$LANE" in
     run_py swarm_production.py
     printf '[npc-test][swarm] Running actor-scoped factory learning/shared skill gate...\n'
     run_py swarm_factory_learning.py
+    printf '[npc-test][swarm] Running actor-scoped map/learning remote gate...\n'
+    run_py swarm_map_remote.py
     ;;
 
   *)
