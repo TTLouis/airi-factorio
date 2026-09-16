@@ -22,6 +22,17 @@ describe('production planning prompt contract', () => {
     expect(prompt).toContain('successful construction validation returns `placement_geometry`')
   })
 
+  it('gives the latest human steering precedence over stale remaining-plan intent', () => {
+    expect(prompt).toContain('## User steering and decision priority')
+    expect(prompt).toContain('latest direct human instruction is authoritative for pending intent')
+    expect(prompt).toContain('refine, reorder, replace, or drop the remaining work')
+    expect(prompt).toContain('Preserve verified completed evidence')
+    expect(prompt).toContain('never let an older durable objective or stale plan text override the latest human steering')
+    expect(prompt).toContain('A bare `continue`/`resume`/`继续` means resume the existing durable goal')
+    expect(prompt).toContain('User steering changes future decisions; it does not rewrite history')
+    expect(prompt).toContain('Never claim a world-changing action succeeded from intent alone')
+  })
+
   it('treats model turns as observation boundaries and keeps deterministic micro-recovery in runtime', () => {
     expect(prompt).toContain('Treat a model turn as an observation/decision boundary, not as an operation boundary')
     expect(prompt).toContain('next 2-4 operations are already fully parameterized')
