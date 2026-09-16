@@ -1,5 +1,8 @@
 const MAX_PLACE_ITEMS = 16
 const MAX_FLUIDBOX_PROTOTYPES = 16
+const MAX_PIPE_CONNECTIONS = 16
+const MAX_PIPE_POSITIONS = 8
+const MAX_CONNECTION_CATEGORIES = 8
 
 function sort_strings(values: string[]) {
   for (let i = 0; i < values.length; i++) {
@@ -26,18 +29,66 @@ function place_items(prototype: any) {
   return values.slice(0, MAX_PLACE_ITEMS).map((item: any) => ({ name: item.name, count: item.count }))
 }
 
+function position_details(value: any) {
+  if (!value || typeof value.x !== 'number' || typeof value.y !== 'number') return undefined
+  return { x: value.x, y: value.y }
+}
+
+function connection_categories(value: any) {
+  if (typeof value === 'string') return { categories: [value], truncated: false }
+  if (!value) return { categories: [], truncated: false }
+  const categories: string[] = []
+  const count = math.min(value.length ?? 0, MAX_CONNECTION_CATEGORIES)
+  for (let index = 0; index < count; index++) {
+    if (typeof value[index] === 'string') categories.push(value[index])
+  }
+  return { categories, truncated: (value.length ?? 0) > MAX_CONNECTION_CATEGORIES }
+}
+
+function pipe_connection_details(connection: any) {
+  const raw_positions = connection?.positions ?? []
+  const positions: Array<{ x: number, y: number }> = []
+  const position_count = math.min(raw_positions.length ?? 0, MAX_PIPE_POSITIONS)
+  for (let index = 0; index < position_count; index++) {
+    const position = position_details(raw_positions[index])
+    if (position) positions.push(position)
+  }
+  const categories = connection_categories(connection?.connection_category)
+  return {
+    connection_type: connection?.connection_type,
+    flow_direction: connection?.flow_direction,
+    direction: connection?.direction,
+    positions,
+    positions_truncated: (raw_positions.length ?? 0) > MAX_PIPE_POSITIONS,
+    max_underground_distance: connection?.max_underground_distance,
+    connection_categories: categories.categories,
+    connection_categories_truncated: categories.truncated,
+    linked_connection_id: connection?.linked_connection_id,
+    alt_direction: connection?.alt_direction,
+    alt_position: position_details(connection?.alt_position),
+  }
+}
+
 function fluidbox_details(prototype: any) {
   const values = prototype?.fluidbox_prototypes ?? []
   return {
     truncated: values.length > MAX_FLUIDBOX_PROTOTYPES,
-    fluidboxes: values.slice(0, MAX_FLUIDBOX_PROTOTYPES).map((fluidbox: any) => ({
-      index: fluidbox.index,
-      production_type: fluidbox.production_type,
-      filter: fluidbox.filter?.name,
-      minimum_temperature: fluidbox.minimum_temperature,
-      maximum_temperature: fluidbox.maximum_temperature,
-      pipe_connection_count: fluidbox.pipe_connections?.length ?? 0,
-    })),
+    fluidboxes: values.slice(0, MAX_FLUIDBOX_PROTOTYPES).map((fluidbox: any) => {
+      const raw_connections = fluidbox.pipe_connections ?? []
+      const pipe_connections: Array<Record<string, unknown>> = []
+      const connection_count = math.min(raw_connections.length ?? 0, MAX_PIPE_CONNECTIONS)
+      for (let index = 0; index < connection_count; index++) pipe_connections.push(pipe_connection_details(raw_connections[index]))
+      return {
+        index: fluidbox.index,
+        production_type: fluidbox.production_type,
+        filter: fluidbox.filter?.name,
+        minimum_temperature: fluidbox.minimum_temperature,
+        maximum_temperature: fluidbox.maximum_temperature,
+        pipe_connection_count: raw_connections.length ?? 0,
+        pipe_connections_truncated: (raw_connections.length ?? 0) > MAX_PIPE_CONNECTIONS,
+        pipe_connections,
+      }
+    }),
   }
 }
 
