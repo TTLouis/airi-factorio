@@ -162,7 +162,7 @@ const TONE_SPRITES: Record<Tone, SpritePath> = {
 }
 
 export interface TaskBoardUiStep { id: string, description: string, status: 'pending' | 'active' | 'completed' | 'blocked' | 'paused' }
-export interface TaskBoardUiActivity { kind: TaskBoardUiActivityKind, text: string, timestamp?: string }
+export interface TaskBoardUiActivity { id?: string, kind: TaskBoardUiActivityKind, text: string, timestamp?: string }
 export interface TaskBoardUiWantedItem { name: string, count: number, reason: string }
 export interface TaskBoardUiAgentStatus { phase: TaskBoardUiAgentPhase, detail: string }
 export interface TaskBoardUiSnapshot {
@@ -252,8 +252,10 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
     const entry = raw_activity[index]
     const entry_text = text(entry?.text, 1000)
     if (entry_text.length === 0) continue
+    const id = text(entry?.id, 120)
     const timestamp = text(entry?.timestamp, 16)
     const next: TaskBoardUiActivity = { kind: activity_kind(entry?.kind), text: entry_text }
+    if (id.length > 0) next.id = id
     if (timestamp.length > 0) next.timestamp = timestamp
     activity.push(next)
   }
@@ -285,15 +287,23 @@ export function task_board_game_time(tick: number) {
   const seconds = total_seconds % 60
   return `${two_digits(hours)}:${two_digits(minutes)}:${two_digits(seconds)}`
 }
-function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBoardUiSnapshot | undefined, tick: number) {
+export function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBoardUiSnapshot | undefined, tick: number) {
   const previous_activity = previous?.activity ?? []
   const used: boolean[] = []
   const now = task_board_game_time(tick)
   return { ...next, activity: next.activity.map(entry => {
     if (entry.timestamp !== undefined && entry.timestamp.length > 0) return entry
+    if (entry.id !== undefined && entry.id.length > 0) {
+      for (let index = 0; index < previous_activity.length; index++) {
+        const old = previous_activity[index]
+        if (old.id !== entry.id || !old.timestamp) continue
+        return { ...entry, timestamp: old.timestamp }
+      }
+      return { ...entry, timestamp: now }
+    }
     for (let index = 0; index < previous_activity.length; index++) {
       const old = previous_activity[index]
-      if (used[index] === true || old.kind !== entry.kind || old.text !== entry.text || !old.timestamp) continue
+      if ((old.id !== undefined && old.id.length > 0) || used[index] === true || old.kind !== entry.kind || old.text !== entry.text || !old.timestamp) continue
       used[index] = true
       return { ...entry, timestamp: old.timestamp }
     }
