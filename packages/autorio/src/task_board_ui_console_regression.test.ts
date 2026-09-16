@@ -9,8 +9,14 @@ describe('AIRI NPC console layout regressions', () => {
     expect(task_board_resource_rows(720)).toBe(5)
     expect(task_board_resource_rows(1080)).toBe(6)
     expect(task_board_resource_rows(1440)).toBe(8)
-    expect(source).toContain('const MAX_INVENTORY_ITEMS = 48')
-    expect(source).toContain('const SLOT_COLUMNS = 6')
+    expect(source).toContain('const MAX_INVENTORY_ITEMS = 64')
+    expect(source).toContain('const INVENTORY_SLOT_COLUMNS = 8')
+    expect(source).toContain('const WANTED_SLOT_COLUMNS = 5')
+    expect(source).toContain('const INVENTORY_SECTION_WIDTH = 424')
+    expect(source).toContain('const WANTED_SECTION_WIDTH = PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - INVENTORY_SECTION_WIDTH')
+    expect(source).toContain("add_slot_grid(body, runtime.inventory.map")
+    expect(source).toContain("task_board_resource_rows(player_gui_height(player)), INVENTORY_SLOT_COLUMNS")
+    expect(source).toContain("task_board_resource_rows(player_gui_height(player)), WANTED_SLOT_COLUMNS")
   })
 
   it('locks control and prompt widths instead of shrinking to their captions', () => {
