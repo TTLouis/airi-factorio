@@ -1,4 +1,4 @@
-import type { LuaEntity } from 'factorio:runtime'
+import type { LuaEntity, LuaInventory } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import type { SkillDefinition } from './skills'
 import { local_spatial_observation } from './construction_planning'
@@ -242,9 +242,8 @@ function sort_entities(values: LuaEntity[]) {
 }
 
 function recipe_summary(entity: LuaEntity) {
-  const get_recipe = (entity as any).get_recipe
-  if (typeof get_recipe !== 'function') return undefined
-  const recipe = get_recipe()
+  if (entity.type !== 'assembling-machine' && entity.type !== 'furnace' && entity.type !== 'rocket-silo') return undefined
+  const recipe = entity.get_recipe()
   if (!recipe) return undefined
   const ingredients: Array<{ type: string, name: string, amount?: number }> = []
   for (const ingredient of recipe.ingredients ?? []) {
@@ -257,11 +256,9 @@ function recipe_summary(entity: LuaEntity) {
   return { name: recipe.name, ingredients, products }
 }
 
-function inventory_items(inventory: any) {
+function inventory_items(inventory: LuaInventory | undefined) {
   if (!inventory || inventory.valid === false) return []
-  const get_contents = inventory.get_contents
-  if (typeof get_contents !== 'function') return []
-  const contents: any = get_contents()
+  const contents: any = inventory.get_contents()
   const result: Array<{ name: string, count: number }> = []
   for (const key in contents) {
     if (result.length >= MAX_INVENTORY_ITEMS) break
@@ -273,8 +270,6 @@ function inventory_items(inventory: any) {
 }
 
 function inventory_snapshots(entity: LuaEntity) {
-  const get_inventory = (entity as any).get_inventory
-  if (typeof get_inventory !== 'function') return []
   const slots: Array<{ role: string, id: any }> = []
   const inventory_defines = (defines.inventory as any)
   function add(role: string, id: any) { if (id !== undefined) slots.push({ role, id }) }
@@ -289,7 +284,7 @@ function inventory_snapshots(entity: LuaEntity) {
   else if (entity.type === 'container' || entity.type === 'logistic-container' || entity.type === 'infinity-container') add('storage', inventory_defines.chest)
   const result: FactoryInventorySnapshot[] = []
   for (const slot of slots) {
-    const items = inventory_items(get_inventory(slot.id))
+    const items = inventory_items(entity.get_inventory(slot.id))
     if (items.length > 0) result.push({ role: slot.role, items })
   }
   return result
@@ -315,12 +310,10 @@ function mining_resources(entity: LuaEntity) {
 
 function fluid_connections(entity: LuaEntity) {
   const result: FactoryEntityObservation['fluid_connections'] = []
-  const fluidbox: any = (entity as any).fluidbox
-  if (!fluidbox || typeof fluidbox.length !== 'number') return result
-  const get_pipe_connections = fluidbox.get_pipe_connections
-  if (typeof get_pipe_connections !== 'function') return result
+  const fluidbox = entity.fluidbox
+  if (fluidbox.length === 0) return result
   for (let index = 1; index <= fluidbox.length && result.length < MAX_FLUID_CONNECTIONS; index++) {
-    const connections = get_pipe_connections(index) ?? []
+    const connections = fluidbox.get_pipe_connections(index) ?? []
     for (const connection of connections) {
       if (result.length >= MAX_FLUID_CONNECTIONS) break
       result.push({ fluidbox_index: index, target: target_id(connection.target?.owner), flow_direction: connection.flow_direction, connection_type: connection.connection_type })
@@ -432,11 +425,10 @@ function build_relations(live_entities: LuaEntity[], entities: FactoryEntityObse
       if (point_in_area(entity.drop_target.position, area) && find_observation(entities, drop_id)) add('direct_item_output', id, drop_id, undefined, 'Mining drill engine drop target is inside the selected area.', mining_resources(entity))
       else add('boundary_output', id, drop_id, undefined, 'Mining drill engine drop target is outside the selected area.', mining_resources(entity))
     }
-    const fluidbox: any = (entity as any).fluidbox
-    const get_pipe_connections = fluidbox?.get_pipe_connections
-    if (fluidbox && typeof fluidbox.length === 'number' && typeof get_pipe_connections === 'function') {
+    const fluidbox = entity.fluidbox
+    if (fluidbox.length > 0) {
       for (let index = 1; index <= fluidbox.length; index++) {
-        for (const connection of get_pipe_connections(index) ?? []) {
+        for (const connection of fluidbox.get_pipe_connections(index) ?? []) {
           const target = connection.target?.owner as LuaEntity | undefined
           if (target?.valid && point_in_area(target.position, area) && find_observation(entities, entity_id(target))) add('fluid_connection', id, entity_id(target), undefined, 'Engine-confirmed fluidbox connection.')
         }
