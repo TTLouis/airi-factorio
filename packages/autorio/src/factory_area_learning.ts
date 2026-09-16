@@ -242,9 +242,9 @@ function sort_entities(values: LuaEntity[]) {
 }
 
 function recipe_summary(entity: LuaEntity) {
-  const get_recipe = (entity as any).get_recipe
-  if (typeof get_recipe !== 'function') return undefined
-  const recipe = get_recipe(entity)
+  const raw: any = entity
+  if (typeof raw.get_recipe !== 'function') return undefined
+  const recipe = raw.get_recipe()
   if (!recipe) return undefined
   const ingredients: Array<{ type: string, name: string, amount?: number }> = []
   for (const ingredient of recipe.ingredients ?? []) {
@@ -271,8 +271,8 @@ function inventory_items(inventory: any) {
 }
 
 function inventory_snapshots(entity: LuaEntity) {
-  const get_inventory = (entity as any).get_inventory
-  if (typeof get_inventory !== 'function') return []
+  const raw: any = entity
+  if (typeof raw.get_inventory !== 'function') return []
   const slots: Array<{ role: string, id: any }> = []
   const inventory_defines = (defines.inventory as any)
   function add(role: string, id: any) { if (id !== undefined) slots.push({ role, id }) }
@@ -287,7 +287,7 @@ function inventory_snapshots(entity: LuaEntity) {
   else if (entity.type === 'container' || entity.type === 'logistic-container' || entity.type === 'infinity-container') add('storage', inventory_defines.chest)
   const result: FactoryInventorySnapshot[] = []
   for (const slot of slots) {
-    const items = inventory_items(get_inventory(entity, slot.id))
+    const items = inventory_items(raw.get_inventory(slot.id))
     if (items.length > 0) result.push({ role: slot.role, items })
   }
   return result
