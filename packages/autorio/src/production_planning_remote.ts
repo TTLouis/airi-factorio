@@ -1,6 +1,7 @@
 import type { ControlledActor } from './actors/types'
 import type { ConstructionExecutionValidationRequest } from './construction_execution'
 import type { ConstructionObservationRequest, PlacementPlanRequest } from './construction_planning'
+import type { ConstructionSiteRequest } from './construction_site_planning'
 import type { LiveProductionCandidateSolveResult } from './production_planning_candidates_live'
 import type { LiveProductionSolveRequest } from './production_planning_live'
 import type { ProductionScopeRequest } from './production_scope'
@@ -8,6 +9,7 @@ import type { ThroughputCapacityRequest } from './throughput_capacity'
 import type { ThroughputMeasurementRequest } from './throughput_measurement'
 import { validate_construction_execution_plan } from './construction_execution'
 import { local_spatial_observation, plan_placement, select_navigation_escape_point } from './construction_planning'
+import { find_construction_sites } from './construction_site_planning'
 import { solve_live_production_candidates } from './production_planning_candidates_live'
 import { production_scope_context } from './production_scope'
 import { plan_research_path } from './research_path'
@@ -49,6 +51,11 @@ export function create_production_planning_remote_interface(
     throughput_measurement_start: (request: ThroughputMeasurementRequest) => throughput_measurement.start(request),
     throughput_measurement_status: (measurement_id: number) => throughput_measurement.status(measurement_id),
     throughput_measurement_cancel: (measurement_id: number) => throughput_measurement.cancel(measurement_id),
+    find_construction_sites: (request: ConstructionSiteRequest) => {
+      const actor = get_actor()
+      if (!actor) return { ok: false, error: { code: 'INVALID_REQUEST', message: 'controlled actor is unavailable' } }
+      return find_construction_sites(actor, request)
+    },
     spatial_observation: (request: ConstructionObservationRequest = {}) => {
       const actor = get_actor()
       if (!actor) return { ok: false, error: 'controlled actor is unavailable' }
