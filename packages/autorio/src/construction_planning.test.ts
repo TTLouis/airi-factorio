@@ -84,6 +84,19 @@ describe('shared local spatial observation', () => {
     expect(result.blocking_terrain.tiles).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'water', position: { x: -1, y: 0 } }),
     ]))
+    expect(result.terrain_tiles).toMatchObject({
+      tile_count: 64,
+      type_count: 2,
+      encoding: 'row_runs_inclusive',
+      runs_truncated: false,
+    })
+    expect(result.terrain_tiles.types).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'grass-1', count: 63 }),
+      expect.objectContaining({ name: 'water', count: 1, kind: 'water' }),
+    ]))
+    expect(result.terrain_tiles.runs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ y: 0, x_start: -1, x_end: -1, name: 'water', kind: 'water' }),
+    ]))
   })
 
   it('keeps a mining drill physical footprint separate from its mining working area', () => {
