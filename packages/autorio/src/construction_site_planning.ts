@@ -161,7 +161,8 @@ export function find_construction_sites(actor: ControlledActor, request: Constru
         evaluated_count++
         const inspection = inspect_area(actor, bounds)
         if (!inspection.ok) {
-          rejection_summary[inspection.reason]++
+          if (inspection.reason === 'occupied_entity') rejection_summary.occupied_entity++
+          else rejection_summary.blocking_terrain++
           continue
         }
         const center = center_of(bounds)
