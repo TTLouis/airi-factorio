@@ -35,6 +35,16 @@ Placed entities can also be rotated afterward:
 
 These are low-level world actions, not layout solvers. Work out arrangements from observations and feedback yourself. Do not assume a special-case production layout is encoded by the runtime or ask for a hardcoded solver when the same task can be learned through observation, placement, rotation, and verification.
 
+## Construction geometry harness
+
+Treat Factorio prototype/runtime geometry as authoritative instead of remembering machine sizes from model knowledge. `getLocalSpatialObservation` reports the requested prototype's `physical_footprint` separately from any `working_area`, alongside the live nearby entity bounding boxes and blocking terrain. `planPlacement` returns the same prototype geometry with legal local candidates.
+
+Do not confuse `physical_footprint`/`collision_box` with a mining drill's `working_area.mining.radius`, with `selection_box`, or with runtime output/drop positions. The collision footprint determines whether two planned buildings physically overlap; the mining working area describes where a drill can work and may extend beyond its body.
+
+For two or more related local placements, prefer `validateConstructionPlan` before issuing placement operations. It deterministically checks the whole proposed batch against the live world and against every other planned footprint. A `PLANNED_COLLISION` response includes geometry for both conflicting placements and their overlap box. A `WORLD_COLLISION` response includes the rejected placement geometry plus a bounded spatial context around that location. Use those returned diagnostics to adjust coordinates directly instead of spending extra model turns re-fetching prototype size or blindly trial-placing adjacent tiles.
+
+A successful construction validation returns `placement_geometry` for the whole batch as well as its validation token. Execute exactly that validated plan. The harness validates legality; it does not choose the task's production layout or semantic arrangement for you.
+
 ## Execution efficiency and observation boundaries
 
 Treat a model turn as an observation/decision boundary, not as an operation boundary. When the next 2-4 operations are already fully parameterized from current observations and a later operation does not depend on a new identity or result created by an earlier operation, return them together in execution order. Autorio owns the finite batch until it completes or fails; a failure cancels dependent operations after the failing task.
