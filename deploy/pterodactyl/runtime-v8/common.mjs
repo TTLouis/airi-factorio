@@ -238,20 +238,32 @@ function encodePacket(id, type, text) {
   return packet
 }
 
+function taskBoardUiRconCommand(text) {
+  const command = String(text)
+  return command.includes('remote.call("autorio_task_board"') || command.includes("remote.call('autorio_task_board'")
+}
+
+const UI_RCON_READY_COMMAND = '/silent-command rcon.print("AIRI_UI_RCON_READY")'
+
 export class Rcon {
-  constructor(port, password, timeout = 5000) {
+  constructor(port, password, timeout = 5000, { auxiliary = false } = {}) {
     this.port = port
     this.password = password
     this.timeout = timeout
+    this.auxiliary = auxiliary
     this.socket = null
     this.buffer = Buffer.alloc(0)
     this.sequence = 10
     this.pending = new Map()
     this.queue = Promise.resolve()
+    this.uiRcon = null
+    this.uiConnect = null
+    this.closed = false
   }
 
   async connect() {
     check(!this.socket, 'RCON is already connected')
+    this.closed = false
     const socket = net.createConnection({ host: '127.0.0.1', port: this.port })
     this.socket = socket
     socket.on('data', chunk => this.receive(chunk))
@@ -266,6 +278,14 @@ export class Rcon {
   }
 
   close() {
+    this.closed = true
+    const uiRcon = this.uiRcon
+    const uiConnect = this.uiConnect
+    this.uiRcon = null
+    this.uiConnect = null
+    if (uiRcon) uiRcon.close()
+    else if (uiConnect) uiConnect.then(lane => lane.close()).catch(() => {})
+
     const socket = this.socket
     this.socket = null
     if (socket) socket.destroy()
@@ -315,7 +335,59 @@ export class Rcon {
     })
   }
 
-  command(text) {
+  async taskBoardLane() {
+    check(!this.auxiliary, 'Auxiliary RCON cannot create another Task Board lane')
+    check(this.socket && !this.socket.destroyed && !this.closed, 'RCON is not connected')
+
+    if (this.uiRcon?.socket && !this.uiRcon.socket.destroyed) {
+      this.uiRcon.timeout = this.timeout
+      return this.uiRcon
+    }
+    if (this.uiRcon) {
+      this.uiRcon.close()
+      this.uiRcon = null
+    }
+
+    if (!this.uiConnect) {
+      const lane = new Rcon(this.port, this.password, this.timeout, { auxiliary: true })
+      this.uiConnect = (async () => {
+        await lane.connect()
+        let ready = String(await lane.command(UI_RCON_READY_COMMAND) ?? '').trim()
+        // Factorio asks for the first Lua console command to be repeated exactly
+        // before enabling it. Prime that confirmation on the dedicated UI socket
+        // so a changing set_snapshot payload cannot get stuck behind the prompt.
+        if (ready !== 'AIRI_UI_RCON_READY') ready = String(await lane.command(UI_RCON_READY_COMMAND) ?? '').trim()
+        check(ready === 'AIRI_UI_RCON_READY', 'Task Board RCON handshake failed')
+        if (this.closed || !this.socket || this.socket.destroyed) {
+          lane.close()
+          throw new DeploymentError('RCON is not connected')
+        }
+        lane.timeout = this.timeout
+        this.uiRcon = lane
+        return lane
+      })().finally(() => {
+        this.uiConnect = null
+      })
+    }
+    return this.uiConnect
+  }
+
+  async taskBoardCommand(text) {
+    const lane = await this.taskBoardLane()
+    try {
+      lane.timeout = this.timeout
+      return await lane.command(text)
+    }
+    catch (error) {
+      if (!lane.socket || lane.socket.destroyed) {
+        if (this.uiRcon === lane) this.uiRcon = null
+        lane.close()
+      }
+      throw error
+    }
+  }
+
+  queuedCommand(text) {
     const command = this.queue.catch(() => {}).then(async () => {
       check(this.socket && !this.socket.destroyed, 'RCON is not connected')
       const id = ++this.sequence
@@ -325,6 +397,11 @@ export class Rcon {
     })
     this.queue = command.catch(() => {})
     return command
+  }
+
+  command(text) {
+    if (!this.auxiliary && taskBoardUiRconCommand(text)) return this.taskBoardCommand(text)
+    return this.queuedCommand(text)
   }
 }
 
