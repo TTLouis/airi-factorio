@@ -78,7 +78,7 @@ function entity_snapshot(entity: LuaEntity) {
 
 function surface_by_index(surface_index: number) {
   if (!valid_integer(surface_index, 1, 4294967295)) return undefined
-  return game.get_surface(surface_index)
+  return game.get_surface(surface_index as LuaSurface['index'])
 }
 
 export function query_charted_entities(

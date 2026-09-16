@@ -16,7 +16,7 @@ function valid_coordinate(value: number) {
 
 function surface_by_index(surface_index: number) {
   if (!valid_integer(surface_index, 1, MAX_SURFACE_INDEX)) return undefined
-  return game.get_surface(surface_index)
+  return game.get_surface(surface_index as LuaSurface['index'])
 }
 
 function position_charted(actor: ControlledActor, surface: LuaSurface, position: Position) {
