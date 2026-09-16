@@ -2,7 +2,7 @@
 # https://code.visualstudio.com/remote/advancedcontainers/connect-multiple-containers
 
 services:
-  airi-factorio:
+  factorio-npc:
     build:
       context: ../
       dockerfile: ./.devcontainer/Dockerfile
