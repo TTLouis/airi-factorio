@@ -37,6 +37,8 @@ function exactKeys(value, allowed) {
 
 const operationKeys = {
   walk_to_entity: ['entity_name', 'search_radius'],
+  walk_to_entity_exact: ['unit_number', 'reach_distance'],
+  walk_to_position: ['x', 'y', 'reach_distance'],
   walk_to_player: ['player_name'],
   follow_player: ['player_name', 'follow_distance'],
   stop_follow_player: [],
@@ -46,10 +48,13 @@ const operationKeys = {
   equip_armor: ['item_name'],
   select_weapon_slot: ['slot'],
   mine_entity: ['entity_name', 'count'],
+  mine_entity_exact: ['unit_number'],
+  mine_resource_at: ['resource_name', 'x', 'y', 'count'],
   gather_resource: ['resource_name', 'count', 'search_radius'],
   supply_entity: ['unit_number', 'items'],
   execute_construction_plan: ['validation_id', 'placement_count'],
   place_entity: ['entity_name', 'x', 'y', 'direction'],
+  rotate_entity: ['unit_number', 'reverse'],
   move_items: ['item_name', 'entity_name', 'max_count', 'to_entity'],
   move_items_exact: ['item_name', 'unit_number', 'max_count', 'to_entity'],
   set_machine_recipe: ['unit_number', 'recipe_name'],
@@ -72,6 +77,10 @@ export function parseOperation(value) {
   switch (name) {
     case 'walk_to_entity':
       return { name, args: { entity_name: factorioName(args.entity_name), search_radius: integer(args.search_radius, 'search_radius', 1, 4096) } }
+    case 'walk_to_entity_exact':
+      return { name, args: { unit_number: integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER), reach_distance: finiteNumber(args.reach_distance ?? 2.5, 'reach_distance', 0.25, 64) } }
+    case 'walk_to_position':
+      return { name, args: { x: finiteNumber(args.x, 'x', -1000000, 1000000), y: finiteNumber(args.y, 'y', -1000000, 1000000), reach_distance: finiteNumber(args.reach_distance ?? 0.75, 'reach_distance', 0.25, 64) } }
     case 'walk_to_player':
       return { name, args: { player_name: factorioName(args.player_name) } }
     case 'follow_player':
@@ -91,6 +100,18 @@ export function parseOperation(value) {
       return { name, args: { slot: integer(args.slot, 'slot', 1, 64) } }
     case 'mine_entity':
       return { name, args: { entity_name: factorioName(args.entity_name), count: integer(args.count ?? 1, 'count', 1, 1000) } }
+    case 'mine_entity_exact':
+      return { name, args: { unit_number: integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER) } }
+    case 'mine_resource_at':
+      return {
+        name,
+        args: {
+          resource_name: factorioName(args.resource_name),
+          x: finiteNumber(args.x, 'x', -1000000, 1000000),
+          y: finiteNumber(args.y, 'y', -1000000, 1000000),
+          count: integer(args.count ?? 1, 'count', 1, 1000),
+        },
+      }
     case 'gather_resource':
       return {
         name,
@@ -138,6 +159,9 @@ export function parseOperation(value) {
       if (args.direction !== undefined) parsed.direction = integer(args.direction, 'direction', 0, 15)
       return { name, args: parsed }
     }
+    case 'rotate_entity':
+      check(args.reverse === undefined || typeof args.reverse === 'boolean', 'reverse must be boolean')
+      return { name, args: { unit_number: integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER), reverse: args.reverse ?? false } }
     case 'move_items':
       check(typeof args.to_entity === 'boolean', 'to_entity must be boolean')
       return { name, args: { item_name: factorioName(args.item_name), entity_name: factorioName(args.entity_name), max_count: integer(args.max_count, 'max_count', 1, 100000), to_entity: args.to_entity } }
@@ -168,6 +192,8 @@ export function renderOperation(value) {
   const operation = parseOperation(value)
   switch (operation.name) {
     case 'walk_to_entity': return `remote.call('autorio_operations','walk_to_entity',${luaString(operation.args.entity_name)},${operation.args.search_radius})`
+    case 'walk_to_entity_exact': return `remote.call('autorio_operations','walk_to_entity_exact',${operation.args.unit_number},${operation.args.reach_distance})`
+    case 'walk_to_position': return `remote.call('autorio_operations','walk_to_position',${operation.args.x},${operation.args.y},${operation.args.reach_distance})`
     case 'walk_to_player': return `remote.call('autorio_operations','walk_to_player',${luaString(operation.args.player_name)})`
     case 'follow_player': return `remote.call('autorio_operations','follow_player',${luaString(operation.args.player_name)},${operation.args.follow_distance})`
     case 'stop_follow_player': return `remote.call('autorio_operations','stop_follow_player')`
@@ -177,6 +203,8 @@ export function renderOperation(value) {
     case 'equip_armor': return `remote.call('autorio_operations','equip_armor',${luaString(operation.args.item_name)})`
     case 'select_weapon_slot': return `remote.call('autorio_operations','select_weapon_slot',${operation.args.slot})`
     case 'mine_entity': return `remote.call('autorio_operations','mine_entity',${luaString(operation.args.entity_name)},${operation.args.count})`
+    case 'mine_entity_exact': return `remote.call('autorio_operations','mine_entity_exact',${operation.args.unit_number})`
+    case 'mine_resource_at': return `remote.call('autorio_operations','mine_resource_at',${luaString(operation.args.resource_name)},${operation.args.x},${operation.args.y},${operation.args.count})`
     case 'gather_resource': return `remote.call('autorio_operations','gather_resource',${luaString(operation.args.resource_name)},${operation.args.count},${operation.args.search_radius})`
     case 'supply_entity': {
       const items = operation.args.items.map(item => `{item_name=${luaString(item.item_name)},count=${item.count}}`).join(',')
@@ -192,6 +220,7 @@ export function renderOperation(value) {
       if (operation.args.direction !== undefined) return `remote.call('autorio_operations','place_entity',${name},nil,nil,${operation.args.direction})`
       return `remote.call('autorio_operations','place_entity',${name})`
     }
+    case 'rotate_entity': return `remote.call('autorio_operations','rotate_entity',${operation.args.unit_number},${operation.args.reverse})`
     case 'move_items': return `remote.call('autorio_operations','move_items',${luaString(operation.args.item_name)},${luaString(operation.args.entity_name)},${operation.args.max_count},${operation.args.to_entity})`
     case 'move_items_exact': return `remote.call('autorio_operations','move_items_exact',${luaString(operation.args.item_name)},${operation.args.unit_number},${operation.args.max_count},${operation.args.to_entity})`
     case 'set_machine_recipe': return `remote.call('autorio_operations','set_machine_recipe',${operation.args.unit_number},${luaString(operation.args.recipe_name)})`
