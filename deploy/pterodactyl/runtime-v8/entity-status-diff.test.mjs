@@ -121,7 +121,7 @@ async function runTwoObservations(statuses) {
   await agent.request('observe the assembler twice', { sender: 'TTLouis' })
   assert.equal(rcon.entityReads, 1)
   const final = await agent.completed()
-  assert.equal(final.chatMessage, 'Done.')
+  assert.equal(final.chatMessage, '[Plan complete] Done.')
   assert.equal(rcon.entityReads, 2)
   return { providerInputs, rcon }
 }
