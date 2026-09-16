@@ -8,18 +8,35 @@ import {
 import { new_task_manager } from './task_manager'
 import { TaskStates } from './types'
 
-function fixture(items: Record<string, number> = { 'stone-furnace': 2 }) {
+function fixture(
+  items: Record<string, number> = { 'stone-furnace': 2, 'burner-mining-drill': 2 },
+  actorPosition = { x: 0, y: 0 },
+) {
+  const actorCharacter: any = {
+    valid: true,
+    name: 'character',
+    type: 'character',
+    position: actorPosition,
+    bounding_box: {
+      left_top: { x: actorPosition.x - 0.3, y: actorPosition.y - 0.3 },
+      right_bottom: { x: actorPosition.x + 0.3, y: actorPosition.y + 0.3 },
+    },
+    force: { name: 'player' },
+  }
   const surface: any = {
     index: 1,
+    name: 'nauvis',
     can_place_entity: vi.fn(() => true),
+    find_entities_filtered: vi.fn(() => [actorCharacter]),
+    get_tile: vi.fn(() => ({ name: 'grass-1' })),
   }
   const inventory: any = {
     get_contents: vi.fn(() => Object.entries(items).map(([name, count]) => ({ name, quality: 'normal', count }))),
   }
   const actor = {
     is_valid: true,
-    character: { valid: true },
-    position: { x: 0, y: 0 },
+    character: actorCharacter,
+    position: actorPosition,
     surface,
     force: { index: 1, name: 'player' },
     get_main_inventory: vi.fn(() => inventory),
@@ -29,29 +46,53 @@ function fixture(items: Record<string, number> = { 'stone-furnace': 2 }) {
       valid: true,
       has_character: true,
       name: 'AIRI',
-      position: { x: 0, y: 0 },
+      position: actorPosition,
     })),
   } as unknown as ControlledActor
-  const get_actor = () => actor
+  return { actor, surface, inventory, manager: new_task_manager(() => actor), actorCharacter }
+}
+
+function fixture_with_controller(
+  items: Record<string, number> = { 'stone-furnace': 2, 'burner-mining-drill': 2 },
+  actorPosition = { x: 0, y: 0 },
+) {
+  const f = fixture(items, actorPosition)
+  const get_actor = () => f.actor
   const manager = new_task_manager(get_actor)
   const basic = new_basic_operation_controller(get_actor, manager)
-  return { actor, surface, inventory, manager, basic }
+  return { ...f, manager, basic }
 }
 
 beforeEach(() => {
   ;(globalThis as any).storage = {}
   ;(globalThis as any).game.tick = 100
   ;(globalThis as any).prototypes.entity['stone-furnace'] = {
+    type: 'furnace',
+    tile_width: 2,
+    tile_height: 2,
     collision_box: { left_top: { x: -0.7, y: -0.7 }, right_bottom: { x: 0.7, y: 0.7 } },
+    selection_box: { left_top: { x: -1, y: -1 }, right_bottom: { x: 1, y: 1 } },
+  }
+  ;(globalThis as any).prototypes.entity['burner-mining-drill'] = {
+    type: 'mining-drill',
+    tile_width: 2,
+    tile_height: 2,
+    collision_box: { left_top: { x: -0.9, y: -0.9 }, right_bottom: { x: 0.9, y: 0.9 } },
+    selection_box: { left_top: { x: -1, y: -1 }, right_bottom: { x: 1, y: 1 } },
+    mining_drill_radius: 1.49,
   }
   ;(globalThis as any).prototypes.entity['assembling-machine-1'] = {
+    type: 'assembling-machine',
+    tile_width: 3,
+    tile_height: 3,
     collision_box: { left_top: { x: -1.4, y: -1.4 }, right_bottom: { x: 1.4, y: 1.4 } },
+    selection_box: { left_top: { x: -1.5, y: -1.5 }, right_bottom: { x: 1.5, y: 1.5 } },
   }
 })
 
 describe('validated construction execution', () => {
   it('validates a bounded collision-free batch and queues exact placement tasks without another model turn', () => {
-    const f = fixture()
+    const f = fixture_with_controller()
     const validation: any = validate_construction_execution_plan(f.actor, {
       plan_id: 'two-furnaces',
       placements: [
@@ -66,6 +107,15 @@ describe('validated construction execution', () => {
       plan_id: 'two-furnaces',
       placement_count: 2,
       created_tick: 100,
+      placement_geometry: [
+        expect.objectContaining({
+          index: 0,
+          prototype: expect.objectContaining({
+            physical_footprint: expect.objectContaining({ tile_width: 2, tile_height: 2 }),
+          }),
+        }),
+        expect.objectContaining({ index: 1 }),
+      ],
     })
     expect(f.surface.can_place_entity).toHaveBeenCalledTimes(2)
 
@@ -94,7 +144,7 @@ describe('validated construction execution', () => {
   })
 
   it('rejects collisions between planned placements even when the live world says each coordinate is individually placeable', () => {
-    const f = fixture()
+    const f = fixture_with_controller()
     const result: any = validate_construction_execution_plan(f.actor, {
       plan_id: 'overlap',
       placements: [
@@ -105,13 +155,55 @@ describe('validated construction execution', () => {
 
     expect(result).toMatchObject({
       ok: false,
-      error: { code: 'PLANNED_COLLISION', indices: [0, 1] },
+      error: {
+        code: 'PLANNED_COLLISION',
+        indices: [0, 1],
+        placements: [
+          expect.objectContaining({ index: 0, entity_name: 'stone-furnace' }),
+          expect.objectContaining({ index: 1, entity_name: 'stone-furnace' }),
+        ],
+      },
     })
+    expect(result.error.overlap_box).toBeDefined()
     expect(f.manager.get_status_snapshot().task_state).toBe(TaskStates.IDLE)
   })
 
-  it('rejects missing inventory and live world collisions before creating a validation token', () => {
-    const missing = fixture({ 'stone-furnace': 1 })
+  it('explains the miner-plus-furnace overlap without confusing mining working area with physical collision', () => {
+    const f = fixture_with_controller(undefined, { x: 51, y: 49 })
+    const result: any = validate_construction_execution_plan(f.actor, {
+      plan_id: 'miner-furnace-pair',
+      placements: [
+        { entity_name: 'burner-mining-drill', x: 51, y: 49, direction: 8 },
+        { entity_name: 'stone-furnace', x: 51, y: 50 },
+      ],
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'PLANNED_COLLISION',
+        indices: [0, 1],
+        placements: [
+          expect.objectContaining({
+            entity_name: 'burner-mining-drill',
+            prototype: expect.objectContaining({
+              physical_footprint: expect.objectContaining({ tile_width: 2, tile_height: 2 }),
+              working_area: { kind: 'mining', radius: 1.49 },
+            }),
+          }),
+          expect.objectContaining({
+            entity_name: 'stone-furnace',
+            prototype: expect.objectContaining({
+              physical_footprint: expect.objectContaining({ tile_width: 2, tile_height: 2 }),
+            }),
+          }),
+        ],
+      },
+    })
+  })
+
+  it('rejects missing inventory and enriches live world collisions before creating a validation token', () => {
+    const missing = fixture_with_controller({ 'stone-furnace': 1 })
     const inventoryResult: any = validate_construction_execution_plan(missing.actor, {
       plan_id: 'missing-items',
       placements: [
@@ -124,7 +216,7 @@ describe('validated construction execution', () => {
       error: { code: 'ITEMS_MISSING', item_name: 'stone-furnace', required_count: 2, available_count: 1 },
     })
 
-    const blocked = fixture()
+    const blocked = fixture_with_controller()
     blocked.surface.can_place_entity.mockReturnValueOnce(false)
     const worldResult: any = validate_construction_execution_plan(blocked.actor, {
       plan_id: 'blocked',
@@ -132,12 +224,25 @@ describe('validated construction execution', () => {
     })
     expect(worldResult).toMatchObject({
       ok: false,
-      error: { code: 'WORLD_COLLISION', index: 0 },
+      error: {
+        code: 'WORLD_COLLISION',
+        index: 0,
+        placement: expect.objectContaining({
+          entity_name: 'stone-furnace',
+          prototype: expect.objectContaining({
+            physical_footprint: expect.objectContaining({ tile_width: 2, tile_height: 2 }),
+          }),
+        }),
+        spatial_context: expect.objectContaining({
+          ok: true,
+          requested_entity: expect.objectContaining({ name: 'stone-furnace', exists: true }),
+        }),
+      },
     })
   })
 
   it('fails closed when a validation is expired, superseded, or has the wrong placement count', () => {
-    const f = fixture()
+    const f = fixture_with_controller()
     const first: any = validate_construction_execution_plan(f.actor, {
       plan_id: 'first',
       placements: [{ entity_name: 'stone-furnace', x: -2, y: 0 }],
