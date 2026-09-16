@@ -9,8 +9,8 @@ interface QueryArea {
   right_bottom: { x: number, y: number }
 }
 
-type MapObservationCode = 'ok' | 'no_actor' | 'invalid_surface' | 'invalid_position' | 'invalid_radius' | 'invalid_limit' | 'invalid_entity_name' | 'area_uncharted' | 'entity_not_found'
-type MapMutationCode = 'completed' | 'already_configured' | 'no_actor' | 'entity_not_found' | 'area_uncharted' | 'wrong_force' | 'not_operable' | 'not_recipe_machine' | 'invalid_recipe' | 'recipe_disabled' | 'incompatible_recipe' | 'set_recipe_failed'
+type MapObservationCode = 'ok' | 'no_actor' | 'invalid_surface' | 'invalid_position' | 'invalid_radius' | 'invalid_limit' | 'invalid_entity_name' | 'area_uncharted' | 'area_not_visible' | 'entity_not_found'
+type MapMutationCode = 'completed' | 'already_configured' | 'no_actor' | 'entity_not_found' | 'area_uncharted' | 'area_not_visible' | 'wrong_force' | 'not_operable' | 'not_recipe_machine' | 'invalid_recipe' | 'recipe_disabled' | 'incompatible_recipe' | 'recipe_change_unsafe' | 'set_recipe_failed'
 
 function valid_number(value: number) {
   return typeof value === 'number' && value === value && value >= -1000000 && value <= 1000000
@@ -31,27 +31,74 @@ export function is_position_charted(actor: ControlledActor, surface: LuaSurface,
   return actor.force.is_chunk_charted(surface, chunk_position(position))
 }
 
-function chart_coverage(actor: ControlledActor, surface: LuaSurface, area: QueryArea) {
+export function is_position_visible(actor: ControlledActor, surface: LuaSurface, position: { x: number, y: number }) {
+  return actor.force.is_chunk_visible(surface, chunk_position(position))
+}
+
+function map_coverage(actor: ControlledActor, surface: LuaSurface, area: QueryArea) {
   const min_chunk_x = math.floor(area.left_top.x / 32)
   const min_chunk_y = math.floor(area.left_top.y / 32)
   const max_chunk_x = math.floor(area.right_bottom.x / 32)
   const max_chunk_y = math.floor(area.right_bottom.y / 32)
   let charted_chunks = 0
+  let visible_chunks = 0
   let total_chunks = 0
 
   for (let chunk_x = min_chunk_x; chunk_x <= max_chunk_x; chunk_x++) {
     for (let chunk_y = min_chunk_y; chunk_y <= max_chunk_y; chunk_y++) {
       total_chunks++
-      if (actor.force.is_chunk_charted(surface, { x: chunk_x, y: chunk_y })) charted_chunks++
+      const chunk = { x: chunk_x, y: chunk_y }
+      if (actor.force.is_chunk_charted(surface, chunk)) charted_chunks++
+      if (actor.force.is_chunk_visible(surface, chunk)) visible_chunks++
     }
   }
 
   return {
     charted_chunks,
     uncharted_chunks: total_chunks - charted_chunks,
+    visible_chunks,
+    fogged_chunks: charted_chunks - visible_chunks,
     total_chunks,
     partial: charted_chunks > 0 && charted_chunks < total_chunks,
+    visibility_partial: visible_chunks > 0 && visible_chunks < total_chunks,
   }
+}
+
+function visible_query_areas(actor: ControlledActor, surface: LuaSurface, area: QueryArea) {
+  const min_chunk_x = math.floor(area.left_top.x / 32)
+  const min_chunk_y = math.floor(area.left_top.y / 32)
+  const max_chunk_x = math.floor(area.right_bottom.x / 32)
+  const max_chunk_y = math.floor(area.right_bottom.y / 32)
+  const areas: QueryArea[] = []
+
+  for (let chunk_x = min_chunk_x; chunk_x <= max_chunk_x; chunk_x++) {
+    for (let chunk_y = min_chunk_y; chunk_y <= max_chunk_y; chunk_y++) {
+      const chunk = { x: chunk_x, y: chunk_y }
+      if (!actor.force.is_chunk_visible(surface, chunk)) continue
+
+      const chunk_left = chunk_x * 32
+      const chunk_top = chunk_y * 32
+      const chunk_right = chunk_left + 32
+      const chunk_bottom = chunk_top + 32
+      areas.push({
+        left_top: {
+          x: area.left_top.x > chunk_left ? area.left_top.x : chunk_left,
+          y: area.left_top.y > chunk_top ? area.left_top.y : chunk_top,
+        },
+        right_bottom: {
+          x: area.right_bottom.x < chunk_right ? area.right_bottom.x : chunk_right,
+          y: area.right_bottom.y < chunk_bottom ? area.right_bottom.y : chunk_bottom,
+        },
+      })
+    }
+  }
+
+  return areas
+}
+
+function entity_identity(entity: LuaEntity) {
+  if (entity.unit_number !== undefined) return `unit:${entity.unit_number}`
+  return `${entity.name}|${entity.type}|${entity.surface.index}|${entity.position.x}|${entity.position.y}|${entity.direction}`
 }
 
 function entity_snapshot(entity: LuaEntity) {
@@ -112,7 +159,7 @@ export function query_charted_entities(
     left_top: { x: x - radius, y: y - radius },
     right_bottom: { x: x + radius, y: y + radius },
   }
-  const coverage = chart_coverage(actor, surface, area)
+  const coverage = map_coverage(actor, surface, area)
   if (coverage.charted_chunks === 0) {
     return {
       ok: false,
@@ -125,15 +172,35 @@ export function query_charted_entities(
       entities: [],
     }
   }
+  if (coverage.visible_chunks === 0) {
+    return {
+      ok: false,
+      code: 'area_not_visible' as MapObservationCode,
+      surface_index,
+      surface_name: surface.name,
+      center: { x, y },
+      radius,
+      ...coverage,
+      entities: [],
+    }
+  }
 
-  const filters: any = { area }
-  if (name !== undefined) filters.name = name
-  const candidates = surface.find_entities_filtered(filters)
   const entities: Array<ReturnType<typeof entity_snapshot>> = []
-  for (const entity of candidates) {
-    if (!entity.valid) continue
-    if (!is_position_charted(actor, surface, entity.position)) continue
-    entities.push(entity_snapshot(entity))
+  const seen: Record<string, boolean> = {}
+  const query_areas = visible_query_areas(actor, surface, area)
+  for (const visible_area of query_areas) {
+    const filters: any = { area: visible_area }
+    if (name !== undefined) filters.name = name
+    const candidates = surface.find_entities_filtered(filters)
+    for (const entity of candidates) {
+      if (!entity.valid) continue
+      if (!is_position_visible(actor, surface, entity.position)) continue
+      const identity = entity_identity(entity)
+      if (seen[identity]) continue
+      seen[identity] = true
+      entities.push(entity_snapshot(entity))
+      if (entities.length >= limit) break
+    }
     if (entities.length >= limit) break
   }
 
@@ -150,7 +217,7 @@ export function query_charted_entities(
   }
 }
 
-function resolve_charted_entity(actor: ControlledActor, unit_number: number) {
+function resolve_visible_entity(actor: ControlledActor, unit_number: number) {
   if (!valid_integer(unit_number, 1, 9007199254740991)) {
     return { code: 'entity_not_found' as MapObservationCode, entity: undefined }
   }
@@ -161,11 +228,14 @@ function resolve_charted_entity(actor: ControlledActor, unit_number: number) {
   if (!is_position_charted(actor, entity.surface, entity.position)) {
     return { code: 'area_uncharted' as MapObservationCode, entity: undefined }
   }
+  if (!is_position_visible(actor, entity.surface, entity.position)) {
+    return { code: 'area_not_visible' as MapObservationCode, entity: undefined }
+  }
   return { code: 'ok' as MapObservationCode, entity }
 }
 
 export function inspect_charted_entity(actor: ControlledActor, unit_number: number) {
-  const resolved = resolve_charted_entity(actor, unit_number)
+  const resolved = resolve_visible_entity(actor, unit_number)
   if (!resolved.entity) {
     return { ok: false, code: resolved.code, unit_number }
   }
@@ -185,6 +255,27 @@ function supports_recipe_category(target: LuaEntity, recipe: any) {
   return false
 }
 
+function nonempty_inventory(target: LuaEntity, inventory: any) {
+  const contents = target.get_inventory(inventory)
+  return contents !== undefined && contents !== null && !contents.is_empty()
+}
+
+function recipe_change_is_safe(target: LuaEntity) {
+  if (target.is_crafting()) return false
+  if (target.get_fluid_count() > 0) return false
+
+  const recipe_sensitive_inventories = [
+    defines.inventory.crafter_input,
+    defines.inventory.crafter_output,
+    defines.inventory.crafter_trash,
+    defines.inventory.assembling_machine_dump,
+  ]
+  for (const inventory of recipe_sensitive_inventories) {
+    if (nonempty_inventory(target, inventory)) return false
+  }
+  return true
+}
+
 function mutation_result(accepted: boolean, completed: boolean, code: MapMutationCode, details: Record<string, unknown> = {}) {
   return {
     accepted,
@@ -197,10 +288,12 @@ function mutation_result(accepted: boolean, completed: boolean, code: MapMutatio
 }
 
 export function set_charted_machine_recipe(actor: ControlledActor, unit_number: number, recipe_name: string) {
-  const resolved = resolve_charted_entity(actor, unit_number)
+  const resolved = resolve_visible_entity(actor, unit_number)
   const target = resolved.entity
   if (!target) {
-    const code: MapMutationCode = resolved.code === 'area_uncharted' ? 'area_uncharted' : 'entity_not_found'
+    let code: MapMutationCode = 'entity_not_found'
+    if (resolved.code === 'area_uncharted') code = 'area_uncharted'
+    else if (resolved.code === 'area_not_visible') code = 'area_not_visible'
     return mutation_result(false, false, code, { unit_number, recipe_name })
   }
   if (target.force.index !== actor.force.index) {
@@ -235,19 +328,33 @@ export function set_charted_machine_recipe(actor: ControlledActor, unit_number: 
       surface_index: target.surface.index,
     })
   }
+  if (!recipe_change_is_safe(target)) {
+    return mutation_result(false, false, 'recipe_change_unsafe', {
+      unit_number,
+      recipe_name,
+      previous_recipe_name: current_recipe?.name,
+      reason: 'recipe-dependent machine contents or active crafting would be displaced by LuaEntity.set_recipe',
+    })
+  }
 
-  target.set_recipe(recipe_name)
+  const removed_items = target.set_recipe(recipe_name)
+  const removed_item_count = removed_items?.length ?? 0
   const [verified_recipe] = target.get_recipe()
   if (verified_recipe?.name !== recipe_name) {
     return mutation_result(false, false, 'set_recipe_failed', { unit_number, recipe_name })
   }
 
-  return mutation_result(true, true, 'completed', {
+  const details: Record<string, unknown> = {
     unit_number,
     recipe_name,
     previous_recipe_name: current_recipe?.name,
     surface_index: target.surface.index,
-  })
+    removed_item_count,
+  }
+  if (removed_item_count > 0) {
+    details.warning = 'unexpected_recipe_displacement_after_safe_preflight'
+  }
+  return mutation_result(true, true, 'completed', details)
 }
 
 export function create_map_remote_interface(get_actor: () => ControlledActor | undefined) {
@@ -263,6 +370,7 @@ export function create_map_remote_interface(get_actor: () => ControlledActor | u
         policy: {
           map_first: true,
           charted_only: true,
+          live_operations_require_visibility: true,
           physical_fallback_only_when_required: true,
         },
         actor: actor.status_snapshot(),

@@ -19,11 +19,19 @@ function surface_by_index(surface_index: number) {
   return game.get_surface(surface_index as LuaSurface['index'])
 }
 
-function position_charted(actor: ControlledActor, surface: LuaSurface, position: Position) {
-  return actor.force.is_chunk_charted(surface, {
+function chunk_position(position: Position) {
+  return {
     x: math.floor(position.x / 32),
     y: math.floor(position.y / 32),
-  })
+  }
+}
+
+function position_charted(actor: ControlledActor, surface: LuaSurface, position: Position) {
+  return actor.force.is_chunk_charted(surface, chunk_position(position))
+}
+
+function position_visible(actor: ControlledActor, surface: LuaSurface, position: Position) {
+  return actor.force.is_chunk_visible(surface, chunk_position(position))
 }
 
 function construction_item(entity_name: string) {
@@ -34,11 +42,16 @@ function construction_item(entity_name: string) {
   return { name: first.name, count: first.count }
 }
 
-function fulfillment_status(network_count: number, robot_count: number, item_count: number, required_item_count: number) {
+function fulfillment_status(network_count: number, total_robot_count: number, available_robot_count: number, item_count: number, required_item_count: number) {
   if (network_count === 0) return 'blocked_no_construction_network'
-  if (robot_count === 0) return 'blocked_no_construction_robots'
+  if (total_robot_count === 0) return 'blocked_no_construction_robots'
   if (item_count < required_item_count) return 'blocked_item_missing'
+  if (available_robot_count === 0) return 'queued_no_available_construction_robots'
   return 'ready'
+}
+
+function remotely_fulfillable(fulfillment: string) {
+  return fulfillment === 'ready' || fulfillment === 'queued_no_available_construction_robots'
 }
 
 export function inspect_remote_construction(
@@ -66,6 +79,9 @@ export function inspect_remote_construction(
   const position = { x, y }
   if (!position_charted(actor, surface, position)) {
     return { ok: false, code: 'area_uncharted', surface_index, position }
+  }
+  if (!position_visible(actor, surface, position)) {
+    return { ok: false, code: 'area_not_visible', surface_index, position }
   }
 
   const item = construction_item(entity_name)
@@ -106,7 +122,7 @@ export function inspect_remote_construction(
     })
   }
 
-  const fulfillment = fulfillment_status(network_summaries.length, total_robots, available_items, item.count)
+  const fulfillment = fulfillment_status(network_summaries.length, total_robots, available_robots, available_items, item.count)
   return {
     ok: true,
     code: 'ok',
@@ -119,7 +135,7 @@ export function inspect_remote_construction(
     can_place_ghost,
     construction_item: item,
     fulfillment,
-    remotely_fulfillable: can_place_ghost && fulfillment === 'ready',
+    remotely_fulfillable: can_place_ghost && remotely_fulfillable(fulfillment),
     network_count: network_summaries.length,
     all_construction_robots: total_robots,
     available_construction_robots: available_robots,

@@ -5,18 +5,27 @@ function valid_unit_number(value: number) {
   return typeof value === 'number' && value === math.floor(value) && value >= 1 && value <= 9007199254740991
 }
 
-function is_charted(actor: ControlledActor, entity: LuaEntity) {
-  return actor.force.is_chunk_charted(entity.surface, {
+function chunk_position(entity: LuaEntity) {
+  return {
     x: math.floor(entity.position.x / 32),
     y: math.floor(entity.position.y / 32),
-  })
+  }
 }
 
-function resolve_charted_entity(actor: ControlledActor, unit_number: number) {
+function is_charted(actor: ControlledActor, entity: LuaEntity) {
+  return actor.force.is_chunk_charted(entity.surface, chunk_position(entity))
+}
+
+function is_visible(actor: ControlledActor, entity: LuaEntity) {
+  return actor.force.is_chunk_visible(entity.surface, chunk_position(entity))
+}
+
+function resolve_visible_entity(actor: ControlledActor, unit_number: number) {
   if (!valid_unit_number(unit_number)) return { code: 'entity_not_found', entity: undefined }
   const entity = game.get_entity_by_unit_number(unit_number as UnitNumber)
   if (!entity || !entity.valid) return { code: 'entity_not_found', entity: undefined }
   if (!is_charted(actor, entity)) return { code: 'area_uncharted', entity: undefined }
+  if (!is_visible(actor, entity)) return { code: 'area_not_visible', entity: undefined }
   return { code: 'ok', entity }
 }
 
@@ -69,6 +78,7 @@ function network_status(actor: ControlledActor, entity: LuaEntity, item: { name:
   if (summaries.length === 0) fulfillment = 'blocked_no_construction_network'
   else if (all_robots === 0) fulfillment = 'blocked_no_construction_robots'
   else if (available_items < item.count) fulfillment = 'blocked_upgrade_item_missing'
+  else if (available_robots === 0) fulfillment = 'queued_no_available_construction_robots'
 
   return {
     network_count: summaries.length,
@@ -77,7 +87,7 @@ function network_status(actor: ControlledActor, entity: LuaEntity, item: { name:
     available_upgrade_items: available_items,
     required_upgrade_items: item.count,
     fulfillment,
-    remotely_fulfillable: fulfillment === 'ready',
+    remotely_fulfillable: fulfillment === 'ready' || fulfillment === 'queued_no_available_construction_robots',
     completion_guaranteed: false,
     completion_uncertainty: 'robot pathing and storage capacity are not prevalidated',
     networks: summaries,
@@ -85,7 +95,7 @@ function network_status(actor: ControlledActor, entity: LuaEntity, item: { name:
 }
 
 export function inspect_remote_upgrade(actor: ControlledActor, unit_number: number, target_name?: string) {
-  const resolved = resolve_charted_entity(actor, unit_number)
+  const resolved = resolve_visible_entity(actor, unit_number)
   const entity = resolved.entity
   if (!entity) return { ok: false, code: resolved.code, unit_number }
   if (entity.force.index !== actor.force.index) return { ok: false, code: 'wrong_force', unit_number }
@@ -183,7 +193,7 @@ export function mark_remote_upgrade(actor: ControlledActor, unit_number: number,
 }
 
 export function cancel_remote_upgrade(actor: ControlledActor, unit_number: number) {
-  const resolved = resolve_charted_entity(actor, unit_number)
+  const resolved = resolve_visible_entity(actor, unit_number)
   const entity = resolved.entity
   if (!entity) {
     return { accepted: false, completed: false, execution_mode: 'remote', code: resolved.code, unit_number }

@@ -22,7 +22,7 @@ function make_surface(networks: LuaLogisticNetwork[] = []) {
   } as unknown as LuaSurface
 }
 
-function make_actor(surface: LuaSurface, charted = true) {
+function make_actor(surface: LuaSurface, charted = true, visible = charted) {
   return {
     is_valid: true,
     surface,
@@ -30,6 +30,7 @@ function make_actor(surface: LuaSurface, charted = true) {
       index: 1,
       name: 'player',
       is_chunk_charted: vi.fn(() => charted),
+      is_chunk_visible: vi.fn(() => visible),
     },
   } as unknown as ControlledActor
 }
@@ -72,6 +73,18 @@ describe('map remote deconstruction', () => {
     expect(surface.find_logistic_networks_by_construction_area).not.toHaveBeenCalled()
   })
 
+  it('does not inspect network state for charted entities hidden by fog', () => {
+    const surface = make_surface([make_network()])
+    const actor = make_actor(surface, true, false)
+    const entity = make_entity(surface)
+    ;(globalThis as any).game.get_entity_by_unit_number.mockReturnValue(entity)
+
+    const result = inspect_remote_deconstruction(actor, 42)
+
+    expect(result).toEqual({ ok: false, code: 'area_not_visible', unit_number: 42 })
+    expect(surface.find_logistic_networks_by_construction_area).not.toHaveBeenCalled()
+  })
+
   it('reports robot dispatch readiness without claiming guaranteed completion', () => {
     const network = make_network()
     const surface = make_surface([network])
@@ -95,7 +108,25 @@ describe('map remote deconstruction', () => {
     })
   })
 
-  it('marks an exact charted entity for robot deconstruction', () => {
+  it('reports all-busy construction robots as queued and still remotely fulfillable', () => {
+    const network = make_network({ available_construction_robots: 0 })
+    const surface = make_surface([network])
+    const actor = make_actor(surface)
+    const entity = make_entity(surface)
+    ;(globalThis as any).game.get_entity_by_unit_number.mockReturnValue(entity)
+
+    const result = inspect_remote_deconstruction(actor, 42)
+
+    expect(result).toMatchObject({
+      ok: true,
+      construction: {
+        dispatch_readiness: 'queued_no_available_construction_robots',
+        remotely_fulfillable: true,
+      },
+    })
+  })
+
+  it('marks an exact visible entity for robot deconstruction', () => {
     const surface = make_surface([make_network()])
     const actor = make_actor(surface)
     const entity = make_entity(surface)

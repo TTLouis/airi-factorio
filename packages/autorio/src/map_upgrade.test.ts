@@ -3,12 +3,12 @@ import type { ControlledActor } from './actors/types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cancel_remote_upgrade, inspect_remote_upgrade, mark_remote_upgrade } from './map_upgrade'
 
-function make_network(item_count = 2, robots = 2) {
+function make_network(item_count = 2, robots = 2, available_robots = robots) {
   return {
     valid: true,
     network_id: 9,
     all_construction_robots: robots,
-    available_construction_robots: robots,
+    available_construction_robots: available_robots,
     get_item_count: vi.fn(() => item_count),
   } as unknown as LuaLogisticNetwork
 }
@@ -22,7 +22,7 @@ function make_surface(networks: LuaLogisticNetwork[] = []) {
   } as unknown as LuaSurface
 }
 
-function make_actor(surface: LuaSurface, charted = true) {
+function make_actor(surface: LuaSurface, charted = true, visible = charted) {
   return {
     is_valid: true,
     surface,
@@ -30,6 +30,7 @@ function make_actor(surface: LuaSurface, charted = true) {
       index: 1,
       name: 'player',
       is_chunk_charted: vi.fn(() => charted),
+      is_chunk_visible: vi.fn(() => visible),
     },
   } as unknown as ControlledActor
 }
@@ -89,6 +90,19 @@ describe('map remote upgrade', () => {
     expect(inspect_remote_upgrade(actor, 42)).toEqual({ ok: false, code: 'area_uncharted', unit_number: 42 })
   })
 
+  it('does not read upgrade or robot state for charted entities hidden by fog', () => {
+    const surface = make_surface([make_network()])
+    const actor = make_actor(surface, true, false)
+    const source = (globalThis as any).prototypes.entity['transport-belt'] as LuaEntityPrototype
+    const target = (globalThis as any).prototypes.entity['fast-transport-belt'] as LuaEntityPrototype
+    const entity = make_entity(surface, source, target)
+    ;(globalThis as any).game.get_entity_by_unit_number.mockReturnValue(entity)
+
+    expect(inspect_remote_upgrade(actor, 42)).toEqual({ ok: false, code: 'area_not_visible', unit_number: 42 })
+    expect(surface.find_logistic_networks_by_construction_area).not.toHaveBeenCalled()
+    expect(entity.get_upgrade_target).not.toHaveBeenCalled()
+  })
+
   it('derives the normal next_upgrade and validates robot/item fulfillment', () => {
     const network = make_network(3, 2)
     const surface = make_surface([network])
@@ -113,7 +127,26 @@ describe('map remote upgrade', () => {
     expect(network.get_item_count).toHaveBeenCalledWith('fast-transport-belt')
   })
 
-  it('marks a charted entity for robot upgrade without replacing it directly', () => {
+  it('treats all-busy construction robots as queued, not blocked', () => {
+    const network = make_network(3, 2, 0)
+    const surface = make_surface([network])
+    const actor = make_actor(surface)
+    const source = (globalThis as any).prototypes.entity['transport-belt'] as LuaEntityPrototype
+    const target = (globalThis as any).prototypes.entity['fast-transport-belt'] as LuaEntityPrototype
+    const entity = make_entity(surface, source, target)
+    ;(globalThis as any).game.get_entity_by_unit_number.mockReturnValue(entity)
+
+    expect(inspect_remote_upgrade(actor, 42)).toMatchObject({
+      ok: true,
+      construction: {
+        fulfillment: 'queued_no_available_construction_robots',
+        remotely_fulfillable: true,
+        available_construction_robots: 0,
+      },
+    })
+  })
+
+  it('marks a visible entity for robot upgrade without replacing it directly', () => {
     const surface = make_surface([make_network()])
     const actor = make_actor(surface)
     const source = (globalThis as any).prototypes.entity['transport-belt'] as LuaEntityPrototype

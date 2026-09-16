@@ -26,7 +26,7 @@ function make_surface(networks: LuaLogisticNetwork[] = []) {
   return surface as LuaSurface
 }
 
-function make_actor(surface: LuaSurface, charted = true) {
+function make_actor(surface: LuaSurface, charted = true, visible = charted) {
   return {
     is_valid: true,
     surface,
@@ -34,6 +34,7 @@ function make_actor(surface: LuaSurface, charted = true) {
       index: 1,
       name: 'player',
       is_chunk_charted: vi.fn(() => charted),
+      is_chunk_visible: vi.fn(() => visible),
     },
   } as unknown as ControlledActor
 }
@@ -58,7 +59,19 @@ describe('map remote construction', () => {
     expect(surface.find_logistic_networks_by_construction_area).not.toHaveBeenCalled()
   })
 
-  it('reports when a charted ghost is placeable but no construction network can fulfill it', () => {
+  it('does not inspect collision or robot state in charted fog', () => {
+    const surface = make_surface([make_network()])
+    const actor = make_actor(surface, true, false)
+    ;(globalThis as any).game.get_surface.mockReturnValue(surface)
+
+    const result = inspect_remote_construction(actor, 1, 64, 64, 'assembling-machine-1')
+
+    expect(result).toMatchObject({ ok: false, code: 'area_not_visible' })
+    expect(surface.can_place_entity).not.toHaveBeenCalled()
+    expect(surface.find_logistic_networks_by_construction_area).not.toHaveBeenCalled()
+  })
+
+  it('reports when a visible ghost is placeable but no construction network can fulfill it', () => {
     const surface = make_surface([])
     const actor = make_actor(surface)
     ;(globalThis as any).game.get_surface.mockReturnValue(surface)
@@ -92,6 +105,23 @@ describe('map remote construction', () => {
       available_construction_items: 10,
     })
     expect(network.get_item_count).toHaveBeenCalledWith('assembling-machine-1')
+  })
+
+  it('reports all-busy construction robots as queued rather than ready or blocked', () => {
+    const network = make_network({ available_construction_robots: 0 })
+    const surface = make_surface([network])
+    const actor = make_actor(surface)
+    ;(globalThis as any).game.get_surface.mockReturnValue(surface)
+
+    const result = inspect_remote_construction(actor, 1, 64, 64, 'assembling-machine-1')
+
+    expect(result).toMatchObject({
+      ok: true,
+      fulfillment: 'queued_no_available_construction_robots',
+      remotely_fulfillable: true,
+      all_construction_robots: 4,
+      available_construction_robots: 0,
+    })
   })
 
   it('stages a ghost without pretending the building is already complete', () => {

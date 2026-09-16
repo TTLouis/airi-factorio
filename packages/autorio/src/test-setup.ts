@@ -111,6 +111,10 @@ import { event_handlers, set_load_handler } from './test-event-registry'
     character_ammo: 'character_ammo',
     character_armor: 'character_armor',
     turret_ammo: 'turret_ammo',
+    crafter_input: 'crafter_input',
+    crafter_output: 'crafter_output',
+    crafter_trash: 'crafter_trash',
+    assembling_machine_dump: 'assembling_machine_dump',
   },
 }
 
