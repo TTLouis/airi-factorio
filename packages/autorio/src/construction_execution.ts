@@ -1,5 +1,6 @@
 import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
+import { local_spatial_observation, prototype_spatial_geometry } from './construction_planning'
 import type { new_task_manager } from './task_manager'
 
 type BasicController = ReturnType<typeof new_basic_operation_controller>
@@ -134,6 +135,31 @@ function overlaps(a: WorldBox, b: WorldBox) {
     && a.right_bottom.y > b.left_top.y + OVERLAP_EPSILON
 }
 
+function overlap_box(a: WorldBox, b: WorldBox): WorldBox {
+  return {
+    left_top: {
+      x: math.max(a.left_top.x, b.left_top.x),
+      y: math.max(a.left_top.y, b.left_top.y),
+    },
+    right_bottom: {
+      x: math.min(a.right_bottom.x, b.right_bottom.x),
+      y: math.min(a.right_bottom.y, b.right_bottom.y),
+    },
+  }
+}
+
+function placement_geometry(placement: ConstructionExecutionPlacement, index: number) {
+  const position = { x: placement.x, y: placement.y }
+  return {
+    index,
+    entity_name: placement.entity_name,
+    position,
+    direction: placement.direction,
+    prototype: prototype_spatial_geometry(placement.entity_name),
+    world_collision_box: rotated_world_box(placement.entity_name, position, placement.direction),
+  }
+}
+
 function inventory_counts(actor: ControlledActor) {
   const inventory = actor.get_main_inventory()
   if (!inventory) return undefined
@@ -196,7 +222,20 @@ function evaluate_plan(actor: ControlledActor, placements: ConstructionExecution
       direction: placement.direction,
       force: actor.force,
     })) {
-      return { ok: false, error: { code: 'WORLD_COLLISION', message: `placement ${index} is not placeable in the current world`, index } }
+      return {
+        ok: false,
+        error: {
+          code: 'WORLD_COLLISION',
+          message: `placement ${index} is not placeable in the current world`,
+          index,
+          placement: placement_geometry(placement, index),
+          spatial_context: local_spatial_observation(actor, {
+            position,
+            half_size: 4,
+            requested_entity_name: placement.entity_name,
+          }),
+        },
+      }
     }
     required[placement.entity_name] = (required[placement.entity_name] ?? 0) + 1
     boxes.push(rotated_world_box(placement.entity_name, position, placement.direction))
@@ -215,6 +254,11 @@ function evaluate_plan(actor: ControlledActor, placements: ConstructionExecution
             code: 'PLANNED_COLLISION',
             message: `placements ${left} and ${right} overlap before construction begins`,
             indices: [left, right],
+            placements: [
+              placement_geometry(placements[left], left),
+              placement_geometry(placements[right], right),
+            ],
+            overlap_box: overlap_box(left_box, right_box),
           },
         }
       }
@@ -241,7 +285,10 @@ function evaluate_plan(actor: ControlledActor, placements: ConstructionExecution
     }
   }
 
-  return { ok: true }
+  return {
+    ok: true,
+    placement_geometry: placements.map((placement, index) => placement_geometry(placement, index)),
+  }
 }
 
 export function validate_construction_execution_plan(actor: ControlledActor, request: ConstructionExecutionValidationRequest) {
@@ -275,6 +322,7 @@ export function validate_construction_execution_plan(actor: ControlledActor, req
     created_tick: game.tick,
     expires_tick: game.tick + VALIDATION_MAX_AGE_TICKS,
     placements,
+    placement_geometry: evaluation.placement_geometry,
   }
 }
 
