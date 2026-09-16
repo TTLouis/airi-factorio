@@ -6,6 +6,7 @@ import { create_learning_remote_interface, handle_learning_ui_click, handle_task
 import { create_skill_remote_interface, handle_skill_export_click, render_learn_area_button, render_skill_export_section } from './skills'
 // Namespace import on purpose: one Lua local instead of one per helper.
 import * as activity_state from './task_board_activity'
+import * as debug_ui from './task_board_debug'
 import { get_actor_inventory_items } from './utils/inventory'
 
 const BUTTON_NAME = 'airi_task_board_button'
@@ -196,6 +197,7 @@ export interface TaskBoardUiAgentStatus { phase: TaskBoardUiAgentPhase, detail: 
 export interface TaskBoardUiSnapshot {
   goal_id: string
   objective: string
+  response: string
   status: 'idle' | 'active' | 'blocked' | 'paused' | 'completed'
   blocker: string
   pause_reason: string
@@ -206,12 +208,13 @@ export interface TaskBoardUiSnapshot {
   activity: TaskBoardUiActivity[]
   wanted_items: TaskBoardUiWantedItem[]
   agent: TaskBoardUiAgentStatus
+  debug?: debug_ui.TaskBoardUiDebugSnapshot
 }
 
 interface TaskBoardUiFollowStatus { active: boolean, state: string, target_player: string, current_distance?: number, desired_distance?: number, last_failure: string }
 interface TaskBoardUiControlInput { kind: 'control', version: 1, action: TaskBoardUiControlAction, player_index: number, player_name: string, tick: number }
 interface TaskBoardUiPromptInput { kind: 'prompt', version: 1, player_index: number, player_name: string, text: string, tick: number }
-interface TaskBoardUiPollInput { kind: 'poll', version: 1, tick: number }
+interface TaskBoardUiPollInput { kind: 'poll', version: 1, tick: number, debug: boolean }
 type TaskBoardUiInput = TaskBoardUiControlInput | TaskBoardUiPromptInput
 // Polls are produced while draining, never queued, so enqueue stays typed to
 // the player-originated inputs only.
@@ -299,10 +302,11 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
 
   const total = integer(value.total_steps, steps.length)
   const agent = value.agent !== null && typeof value.agent === 'object' ? value.agent : undefined
+  const debug = value.debug !== undefined ? debug_ui.sanitize_debug_snapshot(value.debug) : undefined
   return {
-    goal_id: text(value.goal_id, 100), objective: text(value.objective, 500), status: status(value.status), blocker: text(value.blocker, 500), pause_reason: text(value.pause_reason, 300),
+    goal_id: text(value.goal_id, 100), objective: text(value.objective, 500), response: text(value.response, 2000), status: status(value.status), blocker: text(value.blocker, 500), pause_reason: text(value.pause_reason, 300),
     completed_count: math.min(integer(value.completed_count), total), total_steps: total, active_index: math.min(integer(value.active_index), math.max(0, total - 1)), steps, activity, wanted_items,
-    agent: { phase: agent_phase(agent?.phase), detail: text(agent?.detail, 300) },
+    agent: { phase: agent_phase(agent?.phase), detail: text(agent?.detail, 300) }, debug,
   }
 }
 
@@ -362,7 +366,7 @@ function poll_request(): TaskBoardUiPollInput | undefined {
   if (!any_console_open()) return undefined
   const synced = storage.airi_task_board_ui_synced_tick
   if (synced !== undefined && math.max(0, game.tick - synced) < POLL_REQUEST_TICKS) return undefined
-  return { kind: 'poll', version: 1, tick: game.tick }
+  return { kind: 'poll', version: 1, tick: game.tick, debug: debug_ui.any_debug_ui_open() }
 }
 
 function drain_ui_inputs() {
@@ -541,10 +545,7 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   add_key_value(table, 'GOAL', text(goal, 110), { tooltip: goal, width: STATUS_VALUE_WIDTH })
   add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: STATUS_VALUE_WIDTH })
 }
-// The live distance belongs in the tooltip: in the caption it re-flowed the
-// button every tick and overran a fixed-width control.
-function follow_button_caption(follow: TaskBoardUiFollowStatus | undefined) { return follow?.active ? 'FOLLOWING' : 'FOLLOW ME' }
-function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Pause current work and follow this player'; const details = ['Click to stop following.']; if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
+function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Temporarily suspend current world work and follow this player. A goal paused by Follow automatically resumes when Follow stops.'; const details = ['Click to stop following. A goal paused by Follow will automatically resume.']; if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
 function compact_button(button: LuaGuiElement) { button.style.width = COMPACT_BUTTON_WIDTH; button.style.height = COMPACT_BUTTON_HEIGHT; button.style.minimal_width = COMPACT_BUTTON_WIDTH; button.style.maximal_width = COMPACT_BUTTON_WIDTH; button.style.minimal_height = COMPACT_BUTTON_HEIGHT; button.style.maximal_height = COMPACT_BUTTON_HEIGHT; return button }
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const { body } = create_section(parent, 'Controls', CONTROLS_SECTION_WIDTH, undefined, false)
@@ -561,9 +562,12 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   compact_button(controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: paused ? 'UNPAUSE' : 'PAUSE', style: 'dialog_button', tooltip: paused ? 'Resume this durable AIRI goal. AIRI will re-observe mutable state before acting.' : has_open_goal ? 'Pause the durable AIRI goal and stop current world work' : 'Stop the current world work. There is no durable AIRI goal to pause.' }))
   const armed = task_board_ui_terminate_is_armed(player.index, game.tick)
   compact_button(controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: armed ? 'CONFIRM' : 'TERMINATE', style: 'red_button', tooltip: armed ? 'Click again within 5 seconds to discard the goal permanently' : has_open_goal ? 'Discard the current durable AIRI goal permanently' : 'Stop the current world work. There is no durable AIRI goal to discard.' }))
-  compact_button(controls.add({ type: 'button', name: FOLLOW_BUTTON_NAME, caption: follow_button_caption(follow), style: follow?.active ? 'confirm_button' : 'dialog_button', tooltip: follow_button_tooltip(follow) }))
+  compact_button(controls.add({ type: 'button', name: FOLLOW_BUTTON_NAME, caption: debug_ui.follow_button_caption(follow?.active === true), style: follow?.active ? 'confirm_button' : 'dialog_button', tooltip: follow_button_tooltip(follow) }))
   const skills_open = task_board_skills_ui_is_open(player.index)
   compact_button(controls.add({ type: 'button', name: SKILLS_BUTTON_NAME, caption: skills_open ? 'CLOSE' : 'LEARN', style: 'dialog_button', tooltip: skills_open ? 'Close the area learning window.' : 'Open area learning and saved skill candidates in a separate movable window.' }))
+  const debug_open = debug_ui.debug_ui_is_open(player.index)
+  compact_button(controls.add({ type: 'button', name: debug_ui.DEBUG_BUTTON_NAME, caption: debug_ui.debug_button_caption(player.index), style: debug_open ? 'confirm_button' : 'dialog_button', tooltip: debug_open ? 'Close the AIRI runtime diagnostics window.' : 'Open structured AIRI runtime diagnostics, provider usage, actor state, and UI sync information.' }))
+  controls.add({ type: 'empty-widget' }).style.width = COMPACT_BUTTON_WIDTH
   // A blank last_failure is still truthy, which drew a lone warning triangle with
   // no message next to it. Render the row only when there is something to read.
   const issue_text = text(follow?.last_failure ?? '', 100)
@@ -879,6 +883,7 @@ function render_titlebar(root: FrameGuiElement, caption = 'AIRI NPC Console', cl
 }
 function build_left_dynamic(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, synced_tick: number | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const top = parent.add({ type: 'flow', direction: 'horizontal' }); top.style.horizontal_spacing = COLUMN_SPACING; top.style.vertical_align = 'top'; render_status_panel(top, board, runtime, synced_tick); render_controls_panel(top, player, board, runtime)
+  debug_ui.render_ai_reply(parent, board?.response ?? '', LEFT_COLUMN_WIDTH)
 }
 function build_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const board = storage.airi_task_board_ui; const synced_tick = storage.airi_task_board_ui_synced_tick; const runtime = runtime_snapshot()
@@ -931,8 +936,9 @@ function build_skills_popout(player: LuaPlayer) {
   const body = root.add({ type: 'flow', name: SKILLS_BODY_NAME, direction: 'vertical' }); body.style.width = SKILLS_POPOUT_WIDTH; body.style.vertical_spacing = 6; build_skills_body(body); root.bring_to_front()
 }
 function render_skills_popout(player: LuaPlayer) { if (!task_board_ui_is_open(player.index) || !task_board_skills_ui_is_open(player.index)) { destroy_skills_popout(player); return }; const root = player.gui.screen[SKILLS_ROOT_NAME]; const body = root?.valid ? root[SKILLS_BODY_NAME] : undefined; if (body?.valid) { body.clear(); build_skills_body(body); return }; build_skills_popout(player) }
-function render(player: LuaPlayer) { ensure_button(player); render_panel(player); render_skills_popout(player) }
-function render_all() { for (const player of game.connected_players) { ensure_button(player); render_panel(player); render_skills_popout(player) } }
+function render_debug_popout(player: LuaPlayer) { debug_ui.render_debug_popout(player, task_board_ui_is_open(player.index), storage.airi_task_board_ui, runtime_snapshot(), storage.airi_task_board_ui_synced_tick) }
+function render(player: LuaPlayer) { ensure_button(player); render_panel(player); render_skills_popout(player); render_debug_popout(player) }
+function render_all() { for (const player of game.connected_players) { ensure_button(player); render_panel(player); render_skills_popout(player); render_debug_popout(player) } }
 function prompt_field(player: LuaPlayer) { const root = player.gui.screen[ROOT_NAME]; const columns = root?.valid ? root[COLUMNS_NAME] : undefined; const left = columns?.valid ? columns[LEFT_COLUMN_NAME] : undefined; const section = left?.valid ? left[PROMPT_SECTION_NAME] : undefined; const row = section?.valid ? section[PROMPT_FLOW_NAME] : undefined; const field = row?.valid ? row[PROMPT_FIELD_NAME] : undefined; return field?.valid ? field as TextFieldGuiElement : undefined }
 function submit_prompt(player: LuaPlayer, raw: unknown) { if (!emit_prompt(player, raw)) return false; const field = prompt_field(player); if (field !== undefined) field.text = ''; render_panel(player); return true }
 function handle_control_click(player: LuaPlayer, element_name: string) {
@@ -946,8 +952,8 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
 export function create_task_board_ui_remote_interface() {
   create_skill_remote_interface(); create_learning_remote_interface()
   remote.add_interface('autorio_task_board', {
-    set_snapshot: (value: unknown) => { const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
-    clear: () => { storage.airi_task_board_ui = undefined; storage.airi_task_board_ui_synced_tick = game.tick; render_all(); return true },
+    set_snapshot: (value: unknown, generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
+    clear: (generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; storage.airi_task_board_ui = undefined; storage.airi_task_board_ui_synced_tick = game.tick; render_all(); return true },
     status: () => storage.airi_task_board_ui,
     drain_inputs: () => drain_ui_inputs(),
   })
@@ -955,9 +961,11 @@ export function create_task_board_ui_remote_interface() {
   script.on_event(defines.events.on_gui_click, (event: any) => {
     const element = event.element; if (!element?.valid) return; const player = game.get_player(event.player_index); if (!player?.valid) return
     if (element.name === BUTTON_NAME) { toggle_task_board_ui_open(player.index); render(player); return }
-    if (element.name === CLOSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); close_task_board_ui(player.index); close_task_board_skills_ui(player.index); destroy_skills_popout(player); destroy_panel(player); ensure_button(player); return }
+    if (element.name === CLOSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); close_task_board_ui(player.index); close_task_board_skills_ui(player.index); debug_ui.close_debug_ui(player.index); destroy_skills_popout(player); render_debug_popout(player); destroy_panel(player); ensure_button(player); return }
     if (element.name === SKILLS_BUTTON_NAME) { toggle_task_board_skills_ui_open(player.index); render_panel(player); render_skills_popout(player); return }
     if (element.name === SKILLS_CLOSE_BUTTON_NAME) { close_task_board_skills_ui(player.index); destroy_skills_popout(player); render_panel(player); return }
+    if (element.name === debug_ui.DEBUG_BUTTON_NAME) { debug_ui.toggle_debug_ui(player.index); render_panel(player); render_debug_popout(player); return }
+    if (element.name === debug_ui.DEBUG_CLOSE_BUTTON_NAME) { debug_ui.close_debug_ui(player.index); render_debug_popout(player); render_panel(player); return }
     if (element.name === TRACKER.live) {
       const scroll = activity_scroll_of(player); const view = activity_state.activity_view(player.index)
       if (view.follow) activity_state.stop_activity_follow(player.index, last_shown_activity_key(scroll))
@@ -998,5 +1006,5 @@ export function create_task_board_ui_remote_interface() {
     const row = element.parent; const value = row?.valid ? row[PREVIEW_ZOOM_VALUE_NAME] : undefined; if (value?.valid) value.caption = preview_zoom_caption(zoom)
     const body = row?.parent; const frame = body?.valid ? body[PREVIEW_CAMERA_FRAME_NAME] : undefined; const camera = frame?.valid ? frame[PREVIEW_CAMERA_NAME] : undefined; if (camera?.valid) camera.zoom = zoom
   })
-  script.on_nth_tick(60, () => { for (const player of game.connected_players) { if (!task_board_ui_is_open(player.index)) continue; render_panel(player); render_skills_popout(player) } })
+  script.on_nth_tick(60, () => { for (const player of game.connected_players) { if (!task_board_ui_is_open(player.index)) continue; render_panel(player); render_skills_popout(player); render_debug_popout(player) } })
 }
