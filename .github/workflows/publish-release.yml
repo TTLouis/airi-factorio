@@ -166,32 +166,9 @@ jobs:
           } > release-out/docker-image.txt
 
       - name: Write release notes
-        shell: bash
         env:
           IMAGE: ${{ steps.docker.outputs.image }}
-        run: |
-          cat > release-out/RELEASE_NOTES.md <<EOF
-          ## AIRI Factorio ${VERSION}
-
-          First packaged prerelease of the standalone-NPC fork. This is a prerelease baseline, not a feature-complete stable release.
-
-          ### Deployment artifacts
-
-          - **Pterodactyl:** `egg-airi-factorio-${VERSION}.json` is pinned to commit `${GITHUB_SHA}`. Reinstall stays on this release unless `AIRI_SOURCE_REF` is explicitly changed.
-          - **Docker:** `${IMAGE}:${VERSION}`, built from the same exact commit. No `latest` tag is moved by this prerelease.
-          - **Docker Compose:** the repository Compose deployment now defaults local builds to `main`; set `AIRI_SOURCE_REF=feat/npc-transition-work` explicitly for ongoing NPC development.
-
-          ### Validation
-
-          The release workflow must pass the generated-egg contract, packaged zero-player Pterodactyl install/boot/save/shutdown smoke, the real zero-player Factorio integration harness, and a boot/save/shutdown smoke of the final Docker image before publication.
-
-          ### Scope / known limits
-
-          - Standalone single-NPC baseline; ongoing NPC work continues on `feat/npc-transition-work`.
-          - Swarm work is not part of this prerelease.
-          - Current release image target is `linux/amd64`.
-          - Provider credentials are not bundled; configure `OPENAI_API_KEY`, `OPENAI_API_BASEURL`, and `OPENAI_MODEL` at deployment time.
-          EOF
+        run: SOURCE_SHA="$GITHUB_SHA" IMAGE_REF="$IMAGE:$VERSION" node deploy/release/write-release-notes.mjs
 
       - name: Publish GitHub prerelease
         shell: bash
