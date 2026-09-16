@@ -12,6 +12,16 @@ describe('production planning prompt contract', () => {
     expect(prompt).toContain('Never turn hand size, target pickup count, rotation speed, or extension speed into a guessed fixed throughput')
   })
 
+  it('uses deterministic construction geometry instead of remembered footprint guesses', () => {
+    expect(prompt).toContain('## Construction geometry harness')
+    expect(prompt).toContain('`physical_footprint` separately from any `working_area`')
+    expect(prompt).toContain('Do not confuse `physical_footprint`/`collision_box` with a mining drill\'s `working_area.mining.radius`')
+    expect(prompt).toContain('prefer `validateConstructionPlan` before issuing placement operations')
+    expect(prompt).toContain('A `PLANNED_COLLISION` response includes geometry for both conflicting placements')
+    expect(prompt).toContain('A `WORLD_COLLISION` response includes the rejected placement geometry plus a bounded spatial context')
+    expect(prompt).toContain('successful construction validation returns `placement_geometry`')
+  })
+
   it('treats model turns as observation boundaries and keeps deterministic micro-recovery in runtime', () => {
     expect(prompt).toContain('Treat a model turn as an observation/decision boundary, not as an operation boundary')
     expect(prompt).toContain('next 2-4 operations are already fully parameterized')
