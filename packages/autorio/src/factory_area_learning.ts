@@ -1,4 +1,4 @@
-import type { LuaEntity, LuaInventory, LuaRecipe } from 'factorio:runtime'
+import type { LuaEntity, LuaInventory } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import type { SkillDefinition } from './skills'
 import { local_spatial_observation } from './construction_planning'
@@ -243,7 +243,7 @@ function sort_entities(values: LuaEntity[]) {
 
 function recipe_summary(entity: LuaEntity) {
   if (entity.type !== 'assembling-machine' && entity.type !== 'furnace' && entity.type !== 'rocket-silo') return undefined
-  const recipe = entity.get_recipe() as unknown as LuaRecipe | undefined
+  const [recipe] = entity.get_recipe()
   if (!recipe) return undefined
   const ingredients: Array<{ type: string, name: string, amount?: number }> = []
   for (const ingredient of recipe.ingredients ?? []) {
