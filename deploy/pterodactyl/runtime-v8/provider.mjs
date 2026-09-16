@@ -195,9 +195,14 @@ export function classifyUserSteering(messages) {
   if (!chat) return undefined
   const state = currentPlanState(messages)
   const hasPendingGoal = state && state.status !== 'completed'
+  const sameAsDurableObjective = hasPendingGoal
+    && typeof state?.objective === 'string'
+    && state.objective.trim() === chat.text.trim()
   const mode = isResumeText(chat.text)
     ? (hasPendingGoal ? 'resume_existing_goal' : 'new_goal')
-    : (hasPendingGoal ? 'steer_existing_goal' : 'new_goal')
+    : sameAsDurableObjective
+      ? 'current_goal'
+      : (hasPendingGoal ? 'steer_existing_goal' : 'new_goal')
   return {
     mode,
     sender: chat.sender,
@@ -295,6 +300,9 @@ export function buildSteeringContext(messages) {
     }
     else if (user.mode === 'resume_existing_goal') {
       lines.push('user_steering=resume the existing durable goal; do not reinterpret a bare continue/resume as a new independent goal')
+    }
+    else if (user.mode === 'current_goal') {
+      lines.push('user_steering=this is the original current durable goal, not a new mid-plan steering event; preserve completed evidence and continue the canonical active plan unless live evidence requires a replan')
     }
     else {
       lines.push('user_steering=treat this as the current human goal; prior completed history is context, not an instruction to continue an older goal')
