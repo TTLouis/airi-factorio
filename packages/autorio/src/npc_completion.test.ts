@@ -97,7 +97,7 @@ function add_owned_npc_mining(count: number) {
 }
 
 describe('standalone NPC completion polling', () => {
-  it('counts real resource depletion and restarts mining when character progress resets without selection loss', () => {
+  it('counts real resource depletion without restarting mining when progress resets and selection remains valid', () => {
     const resource: Record<string, any> = {
       valid: true,
       name: 'iron-ore',
@@ -124,7 +124,7 @@ describe('standalone NPC completion polling', () => {
     expect(task_manager.player_state.task_state).toBe(TaskStates.MINING)
     expect(character.mining_state.mining).toBe(true)
     expect(character.selected).toBe(resource)
-    expect(character.update_selected_entity.mock.calls.length).toBeGreaterThan(selections_after_start)
+    expect(character.update_selected_entity.mock.calls.length).toBe(selections_after_start)
 
     resource.amount = 8
     character.character_mining_progress = 0
