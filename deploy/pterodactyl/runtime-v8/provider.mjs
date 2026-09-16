@@ -2,6 +2,9 @@ import { check, DeploymentError } from './common.mjs'
 import { toolDefinitions } from './structured-policy.mjs'
 
 const COMPLETION_MARKER = '[MOD] Autorio operation batch completed.'
+const FAILURE_MARKER = '[MOD] Autorio operation error:'
+const CHAT_MARKER = '[CHAT]'
+const STEERING_MARKER = '[STEERING]'
 const COMPLETION_MAX_TOKENS = 1000
 const DEFAULT_MAX_TOKENS = 2000
 const PLAN_STATE_MARKER = '[PLAN_STATE]'
@@ -137,6 +140,191 @@ function leanTaskBoard(board) {
   }
 }
 
+function parsePlanStateFromContent(content) {
+  const text = String(content ?? '')
+  const markerAt = text.lastIndexOf(PLAN_STATE_MARKER)
+  if (markerAt < 0) return undefined
+  const planText = text.slice(markerAt)
+  const newlineAt = planText.indexOf('\n')
+  if (newlineAt < 0) return undefined
+  try {
+    const state = JSON.parse(planText.slice(newlineAt + 1))
+    return state && typeof state === 'object' && !Array.isArray(state) ? state : undefined
+  }
+  catch {
+    return undefined
+  }
+}
+
+function currentPlanState(messages) {
+  if (!Array.isArray(messages)) return undefined
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.role !== 'user' || typeof message.content !== 'string' || !message.content.includes(PLAN_STATE_MARKER)) continue
+    const state = parsePlanStateFromContent(message.content)
+    if (state) return state
+  }
+  return undefined
+}
+
+function latestDirectChat(messages) {
+  if (!Array.isArray(messages)) return undefined
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.role !== 'user' || typeof message.content !== 'string') continue
+    const text = message.content.trim()
+    if (!text.startsWith(CHAT_MARKER)) continue
+    const body = text.slice(CHAT_MARKER.length).trim()
+    const separator = body.indexOf(':')
+    const sender = separator >= 0 ? body.slice(0, separator).trim() : 'unknown'
+    const request = (separator >= 0 ? body.slice(separator + 1) : body).trim()
+    return { sender: sender.slice(0, 128), text: request.slice(0, 1200) }
+  }
+  return undefined
+}
+
+function isResumeText(value) {
+  const text = String(value ?? '').trim().toLocaleLowerCase()
+  if (!text) return false
+  const prefixes = ['continue', 'resume', '继续', '继续吧', '继续做', '接着', '接着做']
+  return prefixes.some(prefix => text === prefix || text.startsWith(`${prefix} `) || text.startsWith(`${prefix}，`) || text.startsWith(`${prefix},`))
+}
+
+export function classifyUserSteering(messages) {
+  const chat = latestDirectChat(messages)
+  if (!chat) return undefined
+  const state = currentPlanState(messages)
+  const hasPendingGoal = state && state.status !== 'completed'
+  const mode = isResumeText(chat.text)
+    ? (hasPendingGoal ? 'resume_existing_goal' : 'new_goal')
+    : (hasPendingGoal ? 'steer_existing_goal' : 'new_goal')
+  return {
+    mode,
+    sender: chat.sender,
+    text: chat.text,
+    goal_id: state?.goal_id,
+    goal_status: state?.status,
+    active_step: state?.current_step_text,
+  }
+}
+
+function latestFailure(messages) {
+  if (!Array.isArray(messages)) return ''
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.role !== 'user' || typeof message.content !== 'string') continue
+    if (message.content.startsWith(FAILURE_MARKER)) return message.content.slice(0, 5000)
+  }
+  return ''
+}
+
+function failureRecoveryHint(failure) {
+  if (!failure) return ''
+  if (/PLANNED_COLLISION|WORLD_COLLISION|placing:not_placeable|not_placeable/i.test(failure)) {
+    return 'placement_failure: do not retry the same coordinate blindly; use returned footprint/blocker geometry or validate a revised local construction batch before execution'
+  }
+  if (/too_far/i.test(failure)) {
+    return 'range_failure: do not create a walk/action/model loop; use exact target identity when available and let runtime reach recovery handle deterministic approach, re-observing only if the target itself is stale'
+  }
+  if (/target[^\n]{0,80}(?:missing|not found)|entity[^\n]{0,80}not found/i.test(failure)) {
+    return 'stale_target: re-observe the exact entity identity instead of substituting an arbitrary same-name target'
+  }
+  if (/ITEMS_MISSING|missing items|insufficient inventory/i.test(failure)) {
+    return 'inventory_failure: satisfy the deterministic inventory deficit before retrying the blocked construction/action'
+  }
+  return 'operation_failure: the failed operation and dependent queued operations are not successful; use the receipt to choose the smallest necessary recovery'
+}
+
+function steeringDomain(state, failure) {
+  const haystack = JSON.stringify({
+    objective: state?.objective,
+    step: state?.current_step_text,
+    operations: state?.last_operations,
+    blocker: state?.blocker,
+    failure,
+  })
+  if (/place_entity|placing|construction|PLANNED_COLLISION|WORLD_COLLISION|execute_construction_plan|validateConstructionPlan/i.test(haystack)) return 'construction'
+  if (/gather_resource|mine_entity|mine_resource|mining/i.test(haystack)) return 'mining'
+  if (/move_items|supply_entity|moving_items|transfer/i.test(haystack)) return 'logistics'
+  return 'general'
+}
+
+function receiptDelta(messages) {
+  if (!Array.isArray(messages)) return ''
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.role !== 'user' || typeof message.content !== 'string') continue
+    const text = message.content
+    if (!text.startsWith(COMPLETION_MARKER)) continue
+    const receiptAt = text.indexOf('Detailed task receipt:')
+    if (receiptAt < 0) return 'last_receipt=completed; treat the completion receipt as authoritative evidence for the submitted batch'
+    try {
+      const status = JSON.parse(text.slice(receiptAt + 'Detailed task receipt:'.length).trim())
+      const batch = status?.last_completed_batch
+      const types = Array.isArray(batch?.task_types) ? batch.task_types.slice(0, 6).join(',') : ''
+      const resultCode = status?.basic_operation?.last_result?.code
+      return `last_receipt=completed${Number.isSafeInteger(batch?.batch_id) ? ` batch=${batch.batch_id}` : ''}${types ? ` tasks=${types}` : ''}${resultCode ? ` result=${resultCode}` : ''}; do not re-check deterministic facts already proven by this receipt`
+    }
+    catch {
+      return 'last_receipt=completed; treat the completion receipt as authoritative evidence for the submitted batch'
+    }
+  }
+  return ''
+}
+
+export function buildSteeringContext(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return ''
+  const state = currentPlanState(messages)
+  const user = classifyUserSteering(messages)
+  const failure = latestFailure(messages)
+  const failureHint = failureRecoveryHint(failure)
+  const domain = steeringDomain(state, failure)
+  const lines = [
+    `${STEERING_MARKER} Harness-generated decision guidance; this is not Factorio world state.`,
+    `domain=${domain}`,
+    'decision_order=exact observed identity > nearest-name lookup; deterministic validator > trial-and-error action; small fully-parameterized batch > one-operation-per-turn; runtime fact > prototype fact > remembered game knowledge',
+    'batch_boundary=stop before an operation that needs a new unit_number, mutable result, or other observation that does not exist yet',
+    'success_evidence=never claim a world-changing action succeeded from intent alone; require an operation receipt or subsequent observation',
+  ]
+
+  if (user) {
+    lines.push(`user_mode=${user.mode}${user.goal_id ? ` goal=${user.goal_id}` : ''}${user.goal_status ? ` status=${user.goal_status}` : ''}`)
+    lines.push(`latest_human=${JSON.stringify(user.text)}`)
+    if (user.mode === 'steer_existing_goal') {
+      lines.push('user_steering=the latest human instruction is authoritative for pending intent; preserve verified completed evidence, revise/reorder/drop remaining steps as needed, and do not treat the older durable objective as overriding this steering')
+    }
+    else if (user.mode === 'resume_existing_goal') {
+      lines.push('user_steering=resume the existing durable goal; do not reinterpret a bare continue/resume as a new independent goal')
+    }
+    else {
+      lines.push('user_steering=treat this as the current human goal; prior completed history is context, not an instruction to continue an older goal')
+    }
+  }
+
+  if (domain === 'construction') {
+    lines.push('construction=physical collision footprint != mining/working area != selection box != pickup/drop position; validate multiple exact placements together before executing them')
+  }
+  if (failureHint) lines.push(`recovery=${failureHint}`)
+  const delta = receiptDelta(messages)
+  if (delta) lines.push(delta)
+  return lines.join('\n').slice(0, 3600)
+}
+
+export function applySteeringMessages(messages, sourceMessages = messages) {
+  const output = Array.isArray(messages) ? messages.map(message => ({ ...message })) : []
+  const steering = buildSteeringContext(sourceMessages)
+  if (!steering) return output
+  const steeringMessage = { role: 'user', content: steering }
+  const last = output.at(-1)
+  if (last?.role === 'user' && typeof last.content === 'string' && last.content.startsWith('[MOD]')) {
+    output.splice(Math.max(0, output.length - 1), 0, steeringMessage)
+  }
+  else {
+    output.push(steeringMessage)
+  }
+  return output
+}
+
 export function compactPlanStateContent(content) {
   const text = String(content ?? '')
   const markerAt = text.lastIndexOf(PLAN_STATE_MARKER)
@@ -260,9 +448,10 @@ export async function providerRequest(config, messages, { fetchImpl = fetch, sig
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
   const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
   const compactContinuation = isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAttempt })
+  const compactedMessages = compactContinuation ? compactCompletionMessages(messages) : messages
   const body = {
     model: config.model,
-    messages: compactContinuation ? compactCompletionMessages(messages) : messages,
+    messages: applySteeringMessages(compactedMessages, messages),
     max_tokens: compactContinuation ? COMPLETION_MAX_TOKENS : DEFAULT_MAX_TOKENS,
   }
   if (allowTools) {
