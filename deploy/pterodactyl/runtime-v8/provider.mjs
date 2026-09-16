@@ -1,3 +1,6 @@
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+
 import { check, DeploymentError } from './common.mjs'
 import { toolDefinitions } from './structured-policy.mjs'
 
@@ -9,6 +12,10 @@ const COMPLETION_MAX_TOKENS = 1000
 const DEFAULT_MAX_TOKENS = 2000
 const PLAN_STATE_MARKER = '[PLAN_STATE]'
 const MEMORY_MARKER = '[MEMORY]'
+const PROMPT_TRACE_MAX_BYTES = 10 * 1024 * 1024
+const PROMPT_TRACE_FILES = 5
+const SENSITIVE_PROMPT_KEY = /^(?:authorization|api.?key|password|secret|cookie|session|token|access.?token|refresh.?token|factorio.?token|openai.?token|rcon.?token)$/i
+const promptTraceWriters = new Map()
 
 const COMPACT_CONTINUATION_PROMPT = `You are AIRI, an autonomous standalone Factorio NPC. This request is a successful Autorio batch-completion continuation for an existing user goal, not a new goal.
 
@@ -34,6 +41,131 @@ walk_to_entity {entity_name,search_radius}; walk_to_entity_exact {unit_number,re
 Return exactly one strict JSON object with exactly these fields:
 {"chatMessage":"","plan":["observable step"],"currentStep":0,"operations":[{"name":"approved_operation","args":{}}]}
 plan is the visible canonical checklist proposal, currentStep indexes it, and operations contains only approved structured operations. If the whole goal is verified complete, return plan:[], currentStep:0, operations:[] and a short completion chatMessage.`
+
+function sanitizePromptTraceValue(value, key = '') {
+  if (SENSITIVE_PROMPT_KEY.test(key)) return '[REDACTED]'
+  if (typeof value === 'string') {
+    return value
+      .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]')
+      .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
+      .replace(/\b(OPENAI_API_KEY|FACTORIO_TOKEN|API_KEY|PASSWORD|SECRET)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
+  }
+  if (Array.isArray(value)) return value.map(item => sanitizePromptTraceValue(item))
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, sanitizePromptTraceValue(childValue, childKey)]))
+}
+
+class PromptTraceWriter {
+  constructor(filename) {
+    this.filename = filename
+    this.queue = Promise.resolve()
+    this.bytes = null
+  }
+
+  async initialize() {
+    if (this.bytes !== null) return
+    await fsp.mkdir(path.dirname(this.filename), { recursive: true })
+    try { this.bytes = (await fsp.stat(this.filename)).size }
+    catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+      this.bytes = 0
+    }
+  }
+
+  async rotate(incomingBytes) {
+    await this.initialize()
+    if (this.bytes + incomingBytes <= PROMPT_TRACE_MAX_BYTES) return
+    await fsp.rm(`${this.filename}.${PROMPT_TRACE_FILES - 1}`, { force: true })
+    for (let index = PROMPT_TRACE_FILES - 2; index >= 1; index--) {
+      try { await fsp.rename(`${this.filename}.${index}`, `${this.filename}.${index + 1}`) }
+      catch (error) { if (error?.code !== 'ENOENT') throw error }
+    }
+    try { await fsp.rename(this.filename, `${this.filename}.1`) }
+    catch (error) { if (error?.code !== 'ENOENT') throw error }
+    this.bytes = 0
+  }
+
+  emit(event) {
+    const line = `${JSON.stringify(sanitizePromptTraceValue(event))}\n`
+    const bytes = Buffer.byteLength(line)
+    this.queue = this.queue.then(async () => {
+      await this.rotate(bytes)
+      await fsp.appendFile(this.filename, line, { encoding: 'utf8', mode: 0o600 })
+      this.bytes += bytes
+    })
+    return this.queue
+  }
+}
+
+function promptTraceFile(options = {}) {
+  if (options.promptTraceFile === null) return null
+  if (typeof options.promptTraceFile === 'string' && options.promptTraceFile.trim()) return path.resolve(options.promptTraceFile)
+  if (typeof process.env.AIRI_PROMPT_TRACE_FILE === 'string' && process.env.AIRI_PROMPT_TRACE_FILE.trim()) {
+    return path.resolve(process.env.AIRI_PROMPT_TRACE_FILE)
+  }
+  if (process.env.NODE_TEST_CONTEXT) return null
+  return path.resolve(process.cwd(), 'logs', 'airi-prompts.jsonl')
+}
+
+function promptTraceWriter(filename) {
+  let writer = promptTraceWriters.get(filename)
+  if (!writer) {
+    writer = new PromptTraceWriter(filename)
+    promptTraceWriters.set(filename, writer)
+  }
+  return writer
+}
+
+function promptTraceTrigger(messages, recoveryAttempt) {
+  if (Number.isSafeInteger(recoveryAttempt) && recoveryAttempt > 0) return 'recovery'
+  if (!Array.isArray(messages)) return 'continuation'
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.role !== 'user' || typeof message.content !== 'string') continue
+    if (message.content.startsWith(COMPLETION_MARKER)) return 'completion'
+    if (message.content.startsWith(FAILURE_MARKER)) return 'failure'
+    if (message.content.startsWith(CHAT_MARKER)) return 'request'
+    if (message.content.startsWith('[HARNESS]')) return 'recovery'
+  }
+  return 'continuation'
+}
+
+function promptTraceMessageChars(message) {
+  return String(message?.content ?? '').length + JSON.stringify(message?.tool_calls ?? '').length
+}
+
+async function traceProviderPayload(body, options = {}) {
+  const filename = promptTraceFile(options)
+  if (!filename) return false
+  try {
+    const rawBody = JSON.stringify(body)
+    const tools = Array.isArray(body?.tools) ? body.tools : []
+    await promptTraceWriter(filename).emit({
+      schema: 1,
+      ts: new Date().toISOString(),
+      request_id: typeof options.requestId === 'string' ? options.requestId : undefined,
+      round: Number.isSafeInteger(options.round) ? options.round : undefined,
+      actor_id: Number.isSafeInteger(options.actorId) ? options.actorId : undefined,
+      epoch: Number.isSafeInteger(options.epoch) ? options.epoch : undefined,
+      trigger_source: promptTraceTrigger(body?.messages, options.recoveryAttempt),
+      recovery_attempt: Number.isSafeInteger(options.recoveryAttempt) ? options.recoveryAttempt : 0,
+      allow_tools: options.allowTools !== false,
+      payload: body,
+      stats: {
+        body_chars: rawBody.length,
+        message_count: Array.isArray(body?.messages) ? body.messages.length : 0,
+        message_chars: Array.isArray(body?.messages) ? body.messages.reduce((total, message) => total + promptTraceMessageChars(message), 0) : 0,
+        tool_count: tools.length,
+        tool_schema_chars: tools.length > 0 ? JSON.stringify(tools).length : 0,
+      },
+    })
+    return true
+  }
+  catch {
+    // Observability must never turn a valid provider request into a runtime failure.
+    return false
+  }
+}
 
 function isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAttempt }) {
   if (!allowTools || recoveryAttempt > 0 || !Array.isArray(messages)) return false
@@ -452,7 +584,17 @@ export function providerEndpoint(base) {
   return url.toString()
 }
 
-export async function providerRequest(config, messages, { fetchImpl = fetch, signal, allowTools = true, recoveryAttempt = 0 } = {}) {
+export async function providerRequest(config, messages, {
+  fetchImpl = fetch,
+  signal,
+  allowTools = true,
+  recoveryAttempt = 0,
+  round,
+  epoch,
+  actorId,
+  requestId,
+  promptTraceFile: traceFile,
+} = {}) {
   check(typeof config.key === 'string' && config.key.trim().length > 0, 'OPENAI_API_KEY is missing')
   check(typeof config.model === 'string' && /^[a-zA-Z0-9._:/-]{1,200}$/.test(config.model), 'Invalid model identifier')
   check(Array.isArray(messages) && messages.length > 0 && messages.length <= 50, 'Invalid provider message history')
@@ -474,6 +616,16 @@ export async function providerRequest(config, messages, { fetchImpl = fetch, sig
     body.tools = compactContinuation ? compactCompletionTools(toolDefinitions) : toolDefinitions
     body.tool_choice = 'auto'
   }
+
+  await traceProviderPayload(body, {
+    round,
+    epoch,
+    actorId,
+    requestId,
+    recoveryAttempt,
+    allowTools,
+    promptTraceFile: traceFile,
+  })
 
   try {
     const response = await fetchImpl(providerEndpoint(config.base), {
