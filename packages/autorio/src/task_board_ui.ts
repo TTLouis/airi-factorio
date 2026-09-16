@@ -15,6 +15,7 @@ const COLUMNS_NAME = 'airi_task_board_columns'
 const LEFT_COLUMN_NAME = 'airi_task_board_left_column'
 const LEFT_DYNAMIC_NAME = 'airi_task_board_left_dynamic'
 const RIGHT_COLUMN_NAME = 'airi_task_board_right_column'
+const RIGHT_RESOURCES_NAME = 'airi_task_board_right_resources'
 const PROMPT_SECTION_NAME = 'airi_task_board_prompt_section'
 const PROMPT_FLOW_NAME = 'airi_task_board_prompt_flow'
 // The preview is refreshed in place rather than rebuilt, so every element the
@@ -440,21 +441,22 @@ function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if
 function compact_button(button: LuaGuiElement) { button.style.width = COMPACT_BUTTON_WIDTH; button.style.height = COMPACT_BUTTON_HEIGHT; button.style.minimal_width = 0; button.style.maximal_width = COMPACT_BUTTON_WIDTH; return button }
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const { body } = create_section(parent, 'Controls', HALF_SECTION_WIDTH, undefined, false)
-  body.style.vertical_spacing = 4
+  body.style.vertical_spacing = COMPACT_BUTTON_SPACING
   const follow = runtime.follow
   const has_open_goal = board !== undefined && board.status !== 'idle' && board.status !== 'completed'
-  const task_controls = body.add({ type: 'flow', direction: 'horizontal' }); task_controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING
+  const controls = body.add({ type: 'table', column_count: 2 })
+  controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING
+  controls.style.vertical_spacing = COMPACT_BUTTON_SPACING
   // PAUSE and TERMINATE stay clickable even with no durable goal. They also stop
   // the current world work, which is exactly what a player needs when the
   // runtime is offline and the body is still mining; disabling them left the
   // console with no way to intervene at the moment intervention matters most.
-  compact_button(task_controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: 'PAUSE', style: 'dialog_button', tooltip: has_open_goal && board.status !== 'paused' ? 'Pause the durable AIRI goal and stop current world work' : 'Stop the current world work. There is no durable AIRI goal to pause.' }))
+  compact_button(controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: 'PAUSE', style: 'dialog_button', tooltip: has_open_goal && board.status !== 'paused' ? 'Pause the durable AIRI goal and stop current world work' : 'Stop the current world work. There is no durable AIRI goal to pause.' }))
   const armed = task_board_ui_terminate_is_armed(player.index, game.tick)
-  compact_button(task_controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: armed ? 'CONFIRM' : 'TERMINATE', style: 'red_button', tooltip: armed ? 'Click again within 5 seconds to discard the goal permanently' : has_open_goal ? 'Discard the current durable AIRI goal permanently' : 'Stop the current world work. There is no durable AIRI goal to discard.' }))
-  const action_controls = body.add({ type: 'flow', direction: 'horizontal' }); action_controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING
-  compact_button(action_controls.add({ type: 'button', name: FOLLOW_BUTTON_NAME, caption: follow_button_caption(follow), style: follow?.active ? 'confirm_button' : 'dialog_button', tooltip: follow_button_tooltip(follow) }))
+  compact_button(controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: armed ? 'CONFIRM' : 'TERMINATE', style: 'red_button', tooltip: armed ? 'Click again within 5 seconds to discard the goal permanently' : has_open_goal ? 'Discard the current durable AIRI goal permanently' : 'Stop the current world work. There is no durable AIRI goal to discard.' }))
+  compact_button(controls.add({ type: 'button', name: FOLLOW_BUTTON_NAME, caption: follow_button_caption(follow), style: follow?.active ? 'confirm_button' : 'dialog_button', tooltip: follow_button_tooltip(follow) }))
   const skills_open = task_board_skills_ui_is_open(player.index)
-  compact_button(action_controls.add({ type: 'button', name: SKILLS_BUTTON_NAME, caption: skills_open ? 'CLOSE' : 'LEARN AREA', style: 'dialog_button', tooltip: skills_open ? 'Close the area learning window.' : 'Open area learning and saved skill candidates in a separate movable window.' }))
+  compact_button(controls.add({ type: 'button', name: SKILLS_BUTTON_NAME, caption: skills_open ? 'CLOSE' : 'LEARN AREA', style: 'dialog_button', tooltip: skills_open ? 'Close the area learning window.' : 'Open area learning and saved skill candidates in a separate movable window.' }))
   // A blank last_failure is still truthy, which drew a lone warning triangle with
   // no message next to it. Render the row only when there is something to read.
   const issue_text = text(follow?.last_failure ?? '', 100)
@@ -596,8 +598,8 @@ function add_slot_grid(parent: LuaGuiElement, slots: Array<{ name: string, count
   const scroll = parent.add({ type: 'scroll-pane', style: 'deep_slots_scroll_pane', horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' }); scroll.style.width = SLOT_COLUMNS * SLOT_SIZE + SCROLLBAR_WIDTH; scroll.style.height = SLOT_ROWS * SLOT_SIZE
   const grid = scroll.add({ type: 'table', column_count: SLOT_COLUMNS, style: 'slot_table' }); for (const slot of slots) grid.add({ type: 'sprite-button', sprite: item_sprite(slot.name), number: slot.count, style, tooltip: slot.tooltip })
 }
-function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) { const { header, body } = create_section(parent, 'NPC Inventory', HALF_SECTION_WIDTH); if (runtime.inventory.length === 0) { add_empty_state(body, 'Inventory is empty.'); return }; header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: `${item_caption(item.name)} × ${item.count}` })), 'slot_button') }
-function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined) { const { header, body } = create_section(parent, 'Wanted / Needed', HALF_SECTION_WIDTH); if (board === undefined || board.wanted_items.length === 0) { add_empty_state(body, 'Nothing currently requested.'); return }; header.add({ type: 'label', caption: `${board.wanted_items.length} items`, style: 'semibold_label' }); add_slot_grid(body, board.wanted_items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: item.reason.length > 0 ? `${item_caption(item.name)} × ${item.count} — ${item.reason}` : `${item_caption(item.name)} × ${item.count}` })), 'yellow_slot_button') }
+function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) { const { header, body } = create_section(parent, 'NPC Inventory', HALF_SECTION_WIDTH, undefined, false); if (runtime.inventory.length === 0) { add_empty_state(body, 'Inventory is empty.'); return }; header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: `${item_caption(item.name)} × ${item.count}` })), 'slot_button') }
+function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined) { const { header, body } = create_section(parent, 'Wanted / Needed', HALF_SECTION_WIDTH, undefined, false); if (board === undefined || board.wanted_items.length === 0) { add_empty_state(body, 'Nothing currently requested.'); return }; header.add({ type: 'label', caption: `${board.wanted_items.length} items`, style: 'semibold_label' }); add_slot_grid(body, board.wanted_items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: item.reason.length > 0 ? `${item_caption(item.name)} × ${item.count} — ${item.reason}` : `${item_caption(item.name)} × ${item.count}` })), 'yellow_slot_button') }
 function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   const section = parent.add({ type: 'frame', name: PROMPT_SECTION_NAME, direction: 'vertical', style: 'inside_shallow_frame' }); section.style.width = LEFT_COLUMN_WIDTH; section.style.horizontally_stretchable = false
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'; header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
@@ -613,13 +615,13 @@ function render_titlebar(root: FrameGuiElement, caption = 'AIRI NPC Console', cl
 function build_left_dynamic(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, synced_tick: number | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const top = parent.add({ type: 'flow', direction: 'horizontal' }); top.style.horizontal_spacing = COLUMN_SPACING; top.style.vertical_align = 'top'; render_status_panel(top, board, runtime, synced_tick); render_controls_panel(top, player, board, runtime)
   render_tracker(parent, board, player)
-  const resources = parent.add({ type: 'flow', direction: 'horizontal' }); resources.style.horizontal_spacing = COLUMN_SPACING; render_inventory(resources, runtime); render_wanted_items(resources, board)
 }
 function build_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const board = storage.airi_task_board_ui; const synced_tick = storage.airi_task_board_ui_synced_tick; const runtime = runtime_snapshot()
   const left = columns.add({ type: 'flow', name: LEFT_COLUMN_NAME, direction: 'vertical' }); left.style.width = LEFT_COLUMN_WIDTH; left.style.vertical_spacing = COLUMN_SPACING
   const dynamic = left.add({ type: 'flow', name: LEFT_DYNAMIC_NAME, direction: 'vertical' }); dynamic.style.width = LEFT_COLUMN_WIDTH; dynamic.style.vertical_spacing = COLUMN_SPACING; build_left_dynamic(dynamic, player, board, synced_tick, runtime); render_prompt(left, player)
-  const right = columns.add({ type: 'flow', name: RIGHT_COLUMN_NAME, direction: 'vertical' }); right.style.width = PREVIEW_COLUMN_WIDTH; right.style.vertically_stretchable = true; render_world_preview(right, runtime, player)
+  const right = columns.add({ type: 'flow', name: RIGHT_COLUMN_NAME, direction: 'vertical' }); right.style.width = PREVIEW_COLUMN_WIDTH; right.style.vertical_spacing = COLUMN_SPACING; right.style.vertically_stretchable = true; render_world_preview(right, runtime, player)
+  const resources = right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' }); resources.style.horizontal_spacing = COLUMN_SPACING; render_inventory(resources, runtime); render_wanted_items(resources, board)
 }
 function refresh_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const left = columns[LEFT_COLUMN_NAME]; const dynamic = left?.valid ? left[LEFT_DYNAMIC_NAME] : undefined; const right = columns[RIGHT_COLUMN_NAME]
@@ -627,7 +629,14 @@ function refresh_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const board = storage.airi_task_board_ui; const synced_tick = storage.airi_task_board_ui_synced_tick; const runtime = runtime_snapshot()
   dynamic.clear(); build_left_dynamic(dynamic, player, board, synced_tick, runtime)
   // Never clear the preview column on a routine refresh: it owns the zoom slider.
-  if (!refresh_world_preview(right, runtime, player)) { right.clear(); render_world_preview(right, runtime, player) }
+  const resources = right[RIGHT_RESOURCES_NAME]
+  if (!refresh_world_preview(right, runtime, player) || !resources?.valid) {
+    right.clear()
+    render_world_preview(right, runtime, player)
+    const rebuilt_resources = right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' }); rebuilt_resources.style.horizontal_spacing = COLUMN_SPACING; render_inventory(rebuilt_resources, runtime); render_wanted_items(rebuilt_resources, board)
+    return true
+  }
+  resources.clear(); render_inventory(resources, runtime); render_wanted_items(resources, board)
   return true
 }
 function build_panel(player: LuaPlayer) {
