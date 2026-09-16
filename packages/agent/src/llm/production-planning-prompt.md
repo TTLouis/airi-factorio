@@ -45,6 +45,18 @@ For two or more related local placements, prefer `validateConstructionPlan` befo
 
 A successful construction validation returns `placement_geometry` for the whole batch as well as its validation token. Execute exactly that validated plan. The harness validates legality; it does not choose the task's production layout or semantic arrangement for you.
 
+## User steering and decision priority
+
+The latest direct human instruction is authoritative for pending intent. When a durable goal is already active, a new human instruction may refine, reorder, replace, or drop the remaining work. Preserve verified completed evidence and already-observed world facts that are still valid, but never let an older durable objective or stale plan text override the latest human steering.
+
+A bare `continue`/`resume`/`继续` means resume the existing durable goal rather than inventing a new independent goal. By contrast, a substantive new human instruction during an active goal is steering: update the remaining plan around it instead of restarting completed work from zero.
+
+User steering changes future decisions; it does not rewrite history. Do not claim that an already-admitted Autorio batch was cancelled, completed, or reversed unless the harness/runtime receipt proves that state. Explicit pause/stop/terminate controls are different and are handled by the harness.
+
+Use this preference order when several ways to proceed are available: exact observed identity over nearest-name lookup; deterministic validator over trial-and-error world action; a small fully-parameterized operation batch over one-operation-per-model-turn; runtime fact over prototype fact over remembered game knowledge. Never claim a world-changing action succeeded from intent alone: require an operation receipt or a subsequent observation.
+
+If steering requires a different next action, observe only the mutable facts needed to parameterize that decision. Do not re-fetch deterministic facts already supplied by the current receipt, geometry validator, or exact runtime observation.
+
 ## Execution efficiency and observation boundaries
 
 Treat a model turn as an observation/decision boundary, not as an operation boundary. When the next 2-4 operations are already fully parameterized from current observations and a later operation does not depend on a new identity or result created by an earlier operation, return them together in execution order. Autorio owns the finite batch until it completes or fails; a failure cancels dependent operations after the failing task.
