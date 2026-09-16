@@ -38,6 +38,7 @@ const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow
 const UI_PROMPT_MARKER = '[AIRI_UI_PROMPT]'
 const UI_PROMPT_MAX_CHARS = 4000
 const UI_INPUT_POLL_MS = 250
+const UI_HEARTBEAT_MS = 2000
 // luaString refuses payloads past 16 KiB. That refusal used to surface only as a
 // generic caught failure, so one long plan froze the console for as long as the
 // plan stayed long. Stay under the limit by trimming instead of sending nothing.
@@ -657,6 +658,7 @@ export class Session {
     this.uiSyncDirty = false
     this.uiSyncRunning = null
     this.uiInputPoll = null
+    this.uiHeartbeat = null
     this.uiInputPollRunning = false
     this.lastUiFailure = ''
     this.lastUiFailureAt = 0
@@ -698,10 +700,24 @@ export class Session {
         }
       }
       finally {
+        const reschedule = this.uiSyncDirty && this.rcon && !this.stopping
         this.uiSyncRunning = null
+        // Do not lose a refresh that arrives after the loop decided it was clean
+        // but before the running promise is cleared. Poll/trace bursts can hit
+        // exactly that window and otherwise leave the console stale indefinitely.
+        if (reschedule) this.requestTaskBoardUiSync()
       }
     })()
     return this.uiSyncRunning
+  }
+
+  taskBoardUiHeartbeat() {
+    if (!this.rcon || !this.ready || this.stopping) return false
+    // Liveness must not depend on the game UI successfully producing/draining a
+    // poll. A small runtime-owned heartbeat keeps synced_tick current and also
+    // republishes canonical plan progress during long world operations.
+    this.requestTaskBoardUiSync()
+    return true
   }
 
   updateNpcIdentity(status) {
@@ -991,6 +1007,8 @@ export class Session {
     this.uiInputPoll = setInterval(() => {
       if (!this.stopping) this.drainTaskBoardUiInputs()
     }, UI_INPUT_POLL_MS)
+    this.uiHeartbeat = setInterval(() => this.taskBoardUiHeartbeat(), UI_HEARTBEAT_MS)
+    this.uiHeartbeat.unref?.()
     this.drainTaskBoardUiInputs()
     this.poll = setInterval(() => {
       if (!this.stopping) this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
@@ -1015,7 +1033,7 @@ export class Session {
           if (state) this.log('Canonical Task Board paused after provider response recovery exhaustion')
         }
         catch (pauseError) {
-          this.log(`Unable to pause Task Board after provider recovery exhaustion: ${pauseError instanceof Error ? pauseError.message : pauseError}`)
+          this.log(`Unable to pause Task Board after provider response recovery exhaustion: ${pauseError instanceof Error ? pauseError.message : pauseError}`)
         }
       }
       if (reportError && !expectedCancellation(error)) {
@@ -1147,6 +1165,7 @@ export class Session {
     this.stopping = true
     this.ready = false
     if (this.uiInputPoll) clearInterval(this.uiInputPoll)
+    if (this.uiHeartbeat) clearInterval(this.uiHeartbeat)
     if (this.poll) clearInterval(this.poll)
     this.stopPromise = (async () => {
       let clean = true
