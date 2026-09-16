@@ -44,7 +44,7 @@ const PROMPT_FIELD_NAME = 'airi_task_board_prompt'
 const PROMPT_SEND_BUTTON_NAME = 'airi_task_board_prompt_send'
 const MAX_STEPS = 24
 const MAX_ACTIVITY = 12
-const MAX_INVENTORY_ITEMS = 48
+const MAX_INVENTORY_ITEMS = 64
 const MAX_WANTED_ITEMS = 48
 const MAX_TEXT = 500
 const MAX_PROMPT_TEXT = 4000
@@ -59,14 +59,17 @@ const POLL_REQUEST_TICKS = 60
 const SYNC_STALE_TICKS = 10 * 60
 const TERMINATE_CONFIRM_TICKS = 5 * 60
 const LEFT_COLUMN_WIDTH = 640
-const PREVIEW_COLUMN_WIDTH = 640
+const PREVIEW_COLUMN_WIDTH = 680
 const COLUMN_SPACING = 12
 const HALF_SECTION_WIDTH = (LEFT_COLUMN_WIDTH - COLUMN_SPACING) / 2
 const SECTION_PADDING = 10
 const KEY_COLUMN_WIDTH = 64
 const HALF_VALUE_WIDTH = HALF_SECTION_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12
 const SLOT_SIZE = 40
-const SLOT_COLUMNS = 6
+const INVENTORY_SLOT_COLUMNS = 8
+const WANTED_SLOT_COLUMNS = 5
+const INVENTORY_SECTION_WIDTH = 424
+const WANTED_SECTION_WIDTH = PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - INVENTORY_SECTION_WIDTH
 const SLOT_ROWS_MIN = 5
 const SLOT_ROWS_MID = 6
 const SLOT_ROWS_MAX = 8
@@ -496,10 +499,9 @@ export function task_board_tracker_heights(gui_height: number) {
 }
 
 /**
- * The right-side resource panes always expose at least a 6×5 viewport. Taller
- * displays spend some of their extra vertical room on a 6×6 or 6×8 viewport,
- * while shorter displays still get the five rows requested for useful inventory
- * inspection without forcing a fixed giant window on every UI scale.
+ * The inventory pane always exposes at least an 8×5 viewport. Taller displays
+ * spend some of their extra vertical room on an 8×6 or full 8×8 inventory,
+ * while the narrower wanted pane uses the same row count with five columns.
  */
 export function task_board_resource_rows(gui_height: number) {
   if (gui_height >= 1200) return SLOT_ROWS_MAX
@@ -626,13 +628,13 @@ function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | unde
   if (latest_line !== undefined) activity_scroll.scroll_to_element(latest_line, 'in-view')
   activity_scroll.scroll_to_bottom()
 }
-function add_slot_grid(parent: LuaGuiElement, slots: Array<{ name: string, count: number, tooltip: string }>, style: 'slot_button' | 'yellow_slot_button', rows: number) {
+function add_slot_grid(parent: LuaGuiElement, slots: Array<{ name: string, count: number, tooltip: string }>, style: 'slot_button' | 'yellow_slot_button', rows: number, columns: number) {
   const height = rows * SLOT_SIZE
-  const scroll = parent.add({ type: 'scroll-pane', style: 'deep_slots_scroll_pane', horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' }); scroll.style.width = SLOT_COLUMNS * SLOT_SIZE + SCROLLBAR_WIDTH; scroll.style.height = height; scroll.style.minimal_height = height; scroll.style.maximal_height = height
-  const grid = scroll.add({ type: 'table', column_count: SLOT_COLUMNS, style: 'slot_table' }); for (const slot of slots) grid.add({ type: 'sprite-button', sprite: item_sprite(slot.name), number: slot.count, style, tooltip: slot.tooltip })
+  const scroll = parent.add({ type: 'scroll-pane', style: 'deep_slots_scroll_pane', horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' }); scroll.style.width = columns * SLOT_SIZE + SCROLLBAR_WIDTH; scroll.style.height = height; scroll.style.minimal_height = height; scroll.style.maximal_height = height
+  const grid = scroll.add({ type: 'table', column_count: columns, style: 'slot_table' }); for (const slot of slots) grid.add({ type: 'sprite-button', sprite: item_sprite(slot.name), number: slot.count, style, tooltip: slot.tooltip })
 }
-function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) { const { header, body } = create_section(parent, 'NPC Inventory', HALF_SECTION_WIDTH, undefined, false); header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: `${item_caption(item.name)} × ${item.count}` })), 'slot_button', task_board_resource_rows(player_gui_height(player))) }
-function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) { const { header, body } = create_section(parent, 'Wanted / Needed', HALF_SECTION_WIDTH, undefined, false); const items = board?.wanted_items ?? []; header.add({ type: 'label', caption: `${items.length} items`, style: 'semibold_label' }); add_slot_grid(body, items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: item.reason.length > 0 ? `${item_caption(item.name)} × ${item.count} — ${item.reason}` : `${item_caption(item.name)} × ${item.count}` })), 'yellow_slot_button', task_board_resource_rows(player_gui_height(player))) }
+function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) { const { header, body } = create_section(parent, 'NPC Inventory', INVENTORY_SECTION_WIDTH, undefined, false); header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: `${item_caption(item.name)} × ${item.count}` })), 'slot_button', task_board_resource_rows(player_gui_height(player)), INVENTORY_SLOT_COLUMNS) }
+function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) { const { header, body } = create_section(parent, 'Wanted / Needed', WANTED_SECTION_WIDTH, undefined, false); const items = board?.wanted_items ?? []; header.add({ type: 'label', caption: `${items.length} items`, style: 'semibold_label' }); add_slot_grid(body, items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: item.reason.length > 0 ? `${item_caption(item.name)} × ${item.count} — ${item.reason}` : `${item_caption(item.name)} × ${item.count}` })), 'yellow_slot_button', task_board_resource_rows(player_gui_height(player)), WANTED_SLOT_COLUMNS) }
 function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   const section = parent.add({ type: 'frame', name: PROMPT_SECTION_NAME, direction: 'vertical', style: 'inside_shallow_frame' }); section.style.width = LEFT_COLUMN_WIDTH; section.style.horizontally_stretchable = false
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'; header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
@@ -723,7 +725,7 @@ export function create_task_board_ui_remote_interface() {
     if (element.name === BUTTON_NAME) { toggle_task_board_ui_open(player.index); render(player); return }
     if (element.name === CLOSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); close_task_board_ui(player.index); close_task_board_skills_ui(player.index); destroy_skills_popout(player); destroy_panel(player); ensure_button(player); return }
     if (element.name === SKILLS_BUTTON_NAME) { toggle_task_board_skills_ui_open(player.index); render_panel(player); render_skills_popout(player); return }
-    if (element.name === SKILLS_CLOSE_BUTTON_NAME) { close_task_board_skills_ui(player.index); destroy_skills_popout(player); render_panel(player); return }
+    if (element.name === SKILLS_CLOSE_BUTTON_NAME) { close_task_board_skills_ui_open(player.index); destroy_skills_popout(player); render_panel(player); return }
     if (handle_learning_ui_click(player, element.name)) { render_skills_popout(player); return }
     if (handle_skill_export_click(player, element.name)) { render_skills_popout(player); return }
     handle_control_click(player, element.name)
