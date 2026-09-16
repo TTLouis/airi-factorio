@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - .github/release-version
+      - .github/release-request
 
 permissions:
   contents: write
@@ -107,6 +108,7 @@ jobs:
           echo "image=$image" >> "$GITHUB_OUTPUT"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker build --pull \
+            -f deploy/docker/Dockerfile \
             --build-arg AIRI_SOURCE_REF="$GITHUB_SHA" \
             --build-arg FACTORIO_VERSION=latest \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
