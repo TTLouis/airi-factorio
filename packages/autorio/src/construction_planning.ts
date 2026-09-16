@@ -147,10 +147,12 @@ function terrain_snapshot(actor: ControlledActor, center: Position, half_size: n
   const runs: Array<Record<string, unknown>> = []
   let blocking_count = 0
   let run_count = 0
-  const min_x = math.floor(center.x - half_size)
-  const max_x = math.floor(center.x + half_size - 0.001)
-  const min_y = math.floor(center.y - half_size)
-  const max_y = math.floor(center.y + half_size - 0.001)
+  const center_x = math.floor(center.x)
+  const center_y = math.floor(center.y)
+  const min_x = center_x - half_size
+  const max_x = center_x + half_size - 1
+  const min_y = center_y - half_size
+  const max_y = center_y + half_size - 1
 
   for (let y = min_y; y <= max_y; y++) {
     let run_name: string | undefined
