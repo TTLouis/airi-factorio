@@ -192,9 +192,21 @@ def run(client: Rcon, results: Path) -> None:
         'combat cancellation fixture',
     )
     command(lua_text(remote_call('autorio_operations', 'attack_nearest_enemy', '50')))
-    time.sleep(0.75)
-    moving = observe()
-    require(moving['task_state'] == 'attacking' and moving['walking'] is True, moving)
+
+    # Do not assume one fixed wall delay lands in a walking tick. Path requests
+    # and repaths can briefly leave the task active while walking_state is false.
+    # Prove we actually observed physical approach motion before cancelling it.
+    moving = None
+    approach_deadline = time.monotonic() + 5.0
+    while time.monotonic() < approach_deadline:
+        candidate = observe()
+        require(candidate['task_state'] == 'attacking', candidate)
+        if candidate['walking'] is True:
+            moving = candidate
+            break
+        time.sleep(0.05)
+    require(moving is not None, 'combat approach never engaged walking controls before cancellation')
+
     require(command(lua_text(remote_call('autorio_operations', 'cancel_all_tasks'))) == 'true', 'combat cancellation call failed')
     cancelled = observe()
     assert_stopped(cancelled, original_id)

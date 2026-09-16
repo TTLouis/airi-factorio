@@ -71,6 +71,19 @@ def run(client: Rcon, results: Path) -> None:
     original_id = before['actor_id']
     target_id = before['target_id']
 
+    # Production does not mutate synchronized game state from script.on_load.
+    # The supervisor's bindNpc() issues this replicated RCON repair command once
+    # the multiplayer server is ready. Mirror that exact startup boundary here
+    # before asserting that stale serialized walking/mining/shooting was cleared.
+    reconciliation = json_command(
+        lua_json(remote_call('autorio_actor', 'reconcile_after_load')),
+        'post-restart reconciliation',
+    )
+    require(reconciliation.get('reconciled') is True, reconciliation)
+    require(reconciliation.get('reason') == 'reconciled', reconciliation)
+    require(reconciliation.get('actor_id') == original_id, reconciliation)
+    require(isinstance(reconciliation.get('tick'), int), reconciliation)
+
     observation_command = (
         "/silent-command local s=game.surfaces[1]; local a=nil; "
         "for _,e in pairs(s.find_entities_filtered{name='character'}) do "
@@ -133,6 +146,7 @@ def run(client: Rcon, results: Path) -> None:
         'status': 'pass',
         'actor_id': original_id,
         'before': before,
+        'reconciliation': reconciliation,
         'after_restart': after,
         'quiet': quiet,
         'navigation': navigation,
