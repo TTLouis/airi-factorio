@@ -1,11 +1,12 @@
 {
   "name": "autorio.ts",
   "version": "0.1.0",
-  "description": "A heavily modified AIRI Factorio fork of the original autorio mod, focused on standalone NPC automation.",
-  "author": "TTLouis (fork; original autorio by LemonNekoGH)",
+  "description": "Factorio-side runtime for standalone NPC actors, deterministic observations, planning helpers, and validated operations.",
+  "author": "TTLouis; original autorio by LemonNekoGH",
   "license": "MIT",
   "keywords": [
     "factorio",
+    "npc",
     "automation",
     "mod",
     "typescript"
