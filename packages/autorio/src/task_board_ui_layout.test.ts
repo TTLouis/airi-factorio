@@ -98,15 +98,19 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(build_columns).toContain('render_resource_sidebar(resources, board, runtime, player)')
 
     const sidebar = source.split('function render_resource_sidebar(')[1]?.split('function render_prompt(')[0] ?? ''
-    expect(sidebar.indexOf('render_wanted_items(sidebar, board, player)')).toBeGreaterThanOrEqual(0)
-    expect(sidebar.indexOf('render_equipped(sidebar, runtime)')).toBeGreaterThan(sidebar.indexOf('render_wanted_items(sidebar, board, player)'))
+    const wanted_index = sidebar.indexOf('render_wanted_items(sidebar, board, player)')
+    const equipped_index = sidebar.indexOf("create_section(sidebar, 'Equipped'")
+    expect(wanted_index).toBeGreaterThanOrEqual(0)
+    expect(equipped_index).toBeGreaterThan(wanted_index)
+    expect(sidebar).toContain("add_equipped_row('GUN', runtime.guns)")
+    expect(sidebar).toContain("add_equipped_row('AMMO', runtime.ammo)")
     expect(source).toContain('defines.inventory.character_guns')
     expect(source).toContain('defines.inventory.character_ammo')
 
     const left_dynamic = source.split('function build_left_dynamic(')[1]?.split('function build_columns(')[0] ?? ''
     expect(left_dynamic).not.toContain('render_inventory(')
     expect(left_dynamic).not.toContain('render_wanted_items(')
-    expect(left_dynamic).not.toContain('render_equipped(')
+    expect(left_dynamic).not.toContain("create_section(sidebar, 'Equipped'")
   })
 
   it('refreshes the world preview in place so dragging zoom is never cancelled', () => {
