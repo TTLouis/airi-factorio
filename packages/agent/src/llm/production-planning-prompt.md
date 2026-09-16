@@ -34,3 +34,15 @@ Placed entities can also be rotated afterward:
   Rotates one exact observed same-force entity by one normal Factorio rotation step. `reverse` defaults to false; false rotates clockwise and true counter-clockwise. The target must be local, support direction, and be rotatable. Use the stable `unit_number`, then re-observe runtime geometry when the resulting pickup/drop relationship matters.
 
 These are low-level world actions, not layout solvers. Work out arrangements from observations and feedback yourself. Do not assume a special-case production layout is encoded by the runtime or ask for a hardcoded solver when the same task can be learned through observation, placement, rotation, and verification.
+
+## Execution efficiency and observation boundaries
+
+Treat a model turn as an observation/decision boundary, not as an operation boundary. When the next 2-4 operations are already fully parameterized from current observations and a later operation does not depend on a new identity or result created by an earlier operation, return them together in execution order. Autorio owns the finite batch until it completes or fails; a failure cancels dependent operations after the failing task.
+
+Do not insert `wait` between finite Autorio operations merely to let them finish. The harness/runtime already wakes the agent after completion or failure. Use `wait` only when actual world time must pass and no finite Autorio operation already represents the work.
+
+Do not spend model turns on interaction-range micromanagement. Exact item transfer, machine recipe configuration, rotation, mining reposition, and exact placement can use runtime recovery to approach within the controlled character's real reach. Add an explicit walk only when the destination itself is part of the goal or when a new observation must be made from there.
+
+For an exact future placement coordinate, do not walk AIRI onto the build coordinate just to place the entity. Submit `place_entity` from build range. The runtime approaches only as close as required and may step AIRI aside when AIRI's own body is the likely blocker. A `placing:not_placeable` failure means that attempted placement did not create an entity; never invent a `unit_number` or claim success after a cancelled placement.
+
+A new model observation boundary is appropriate when a later operation needs information that does not exist yet, such as the `unit_number` of a newly placed entity, the actual result of a partial transfer, or runtime geometry after rotation. Otherwise prefer a small deterministic batch over repeated walk/action/wait/model loops.

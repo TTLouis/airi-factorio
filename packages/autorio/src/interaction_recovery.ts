@@ -10,14 +10,17 @@ import type {
 import { TaskStates } from './types'
 
 const LEGACY_ENTITY_SEARCH_DISTANCE = 8
+const PLACEMENT_ESCAPE_REACH = 0.75
+const PLACEMENT_ESCAPE_MARGIN = 0.75
 
 type Manager = ReturnType<typeof new_task_manager>
+type Position = { x: number, y: number }
 type RecoveryNavigationTask = PlayerParametersWalkToEntity & {
   target_kind?: 'nearest_entity' | 'exact_entity' | 'position' | 'player'
-  requested_position?: { x: number, y: number }
+  requested_position?: Position
 }
 
-function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
+function squared_distance(a: Position, b: Position) {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
 
@@ -60,7 +63,7 @@ function entity_navigation(actor: ControlledActor, entity: LuaEntity, reach_dist
   }
 }
 
-function position_navigation(actor: ControlledActor, position: { x: number, y: number }, reach_distance: number): RecoveryNavigationTask | undefined {
+function position_navigation(actor: ControlledActor, position: Position, reach_distance: number): RecoveryNavigationTask | undefined {
   const identity = actor.status_snapshot()
   if (identity.actor_id === undefined) return undefined
   return {
@@ -84,10 +87,39 @@ function position_navigation(actor: ControlledActor, position: { x: number, y: n
   }
 }
 
+function placement_clearance(entity_name: string) {
+  const box = prototypes.entity[entity_name]?.collision_box
+  if (!box) return 1.75
+  const radius = math.max(
+    math.abs(box.left_top.x),
+    math.abs(box.left_top.y),
+    math.abs(box.right_bottom.x),
+    math.abs(box.right_bottom.y),
+  )
+  return radius + PLACEMENT_ESCAPE_MARGIN
+}
+
+function placement_escape_position(actor: ControlledActor, target: Position, clearance: number) {
+  const character_name = actor.character?.name ?? 'character'
+  const distance = clearance + PLACEMENT_ESCAPE_MARGIN
+  const offsets = [
+    { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 },
+    { x: 1, y: 1 }, { x: 1, y: -1 }, { x: -1, y: 1 }, { x: -1, y: -1 },
+  ]
+  for (const offset of offsets) {
+    const desired = { x: target.x + offset.x * distance, y: target.y + offset.y * distance }
+    const safe = actor.surface.find_non_colliding_position(character_name, desired, 1.5, 0.5, true)
+    if (!safe) continue
+    if (squared_distance(safe, target) <= clearance ** 2) continue
+    return { x: safe.x, y: safe.y }
+  }
+  return undefined
+}
+
 function interrupt(manager: Manager, recovery: PlayerParameters | undefined, resume: PlayerParameters, reason: string) {
   if (!recovery) return false
   if (!manager.interrupt_current_with(recovery, resume)) return false
-  log(`[AUTORIO] Interaction target is outside real reach; ${reason} recovery started before resuming ${resume.type}`)
+  log(`[AUTORIO] Interaction recovery started: ${reason}; resuming ${resume.type} afterwards`)
   return true
 }
 
@@ -99,8 +131,33 @@ export function new_interaction_recovery(manager: Manager) {
       const task = manager.player_state.parameters_place_entity
       if (!task?.position) return false
       const reach = build_interaction_reach(actor)
-      if (squared_distance(actor.position, task.position) <= reach ** 2) return false
-      return interrupt(manager, position_navigation(actor, task.position, reach), task, `placement approach to <=${reach} tiles`)
+      const distance_to_placement = squared_distance(actor.position, task.position)
+      if (distance_to_placement > reach ** 2) {
+        return interrupt(
+          manager,
+          position_navigation(actor, task.position, reach),
+          task,
+          `placement approach to <=${reach} tiles without walking onto the build coordinate`,
+        )
+      }
+
+      if (actor.surface.can_place_entity({
+        name: task.entity_name,
+        position: task.position,
+        direction: task.direction,
+        force: actor.force,
+      })) return false
+
+      const clearance = placement_clearance(task.entity_name)
+      if (distance_to_placement > clearance ** 2 || clearance >= reach) return false
+      const escape = placement_escape_position(actor, task.position, clearance)
+      if (!escape) return false
+      return interrupt(
+        manager,
+        position_navigation(actor, escape, PLACEMENT_ESCAPE_REACH),
+        task,
+        `AIRI occupies the requested build footprint; stepping aside to ${serpent.line(escape)}`,
+      )
     }
 
     if (manager.player_state.task_state === TaskStates.ROTATING) {

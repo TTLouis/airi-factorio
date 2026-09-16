@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { providerRequest } from './provider.mjs'
+import { normalizeProviderPlanContent, providerRequest } from './provider.mjs'
 
 const config = {
   base: 'https://api.example.test/v1',
@@ -28,6 +28,17 @@ function successfulFetch(captured) {
       headers: { 'content-type': 'application/json' },
     })
   }
+}
+
+function contentFetch(content) {
+  return async () => new Response(JSON.stringify({
+    id: 'resp-recovery',
+    model: 'test-model',
+    choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }],
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
 }
 
 test('provider timeout reports an explicit error instead of leaving the turn active', async () => {
@@ -57,4 +68,29 @@ test('recovery requests can disable the tool surface completely', async () => {
   await providerRequest(config, messages, { fetchImpl: successfulFetch(captured), allowTools: true })
   assert.ok(Array.isArray(captured[1].tools))
   assert.equal(captured[1].tool_choice, 'auto')
+})
+
+test('provider strips a single JSON markdown fence before strict plan parsing', async () => {
+  const plan = '{"chatMessage":"","plan":["continue"],"currentStep":0,"operations":[]}'
+  const message = await providerRequest(config, messages, {
+    fetchImpl: contentFetch(`\`\`\`json\n${plan}\n\`\`\``),
+    allowTools: false,
+    recoveryAttempt: 1,
+  })
+  assert.equal(message.content, plan)
+})
+
+test('provider extracts one unambiguous plan object from harmless prose', async () => {
+  const plan = '{"chatMessage":"继续","plan":["继续"],"currentStep":0,"operations":[]}'
+  const message = await providerRequest(config, messages, {
+    fetchImpl: contentFetch(`Here is the requested JSON:\n${plan}\n`),
+    allowTools: false,
+    recoveryAttempt: 1,
+  })
+  assert.equal(message.content, plan)
+})
+
+test('normalizer refuses to guess when provider content contains multiple top-level objects', () => {
+  const content = 'first {"a":1} second {"b":2}'
+  assert.equal(normalizeProviderPlanContent(content), content)
 })

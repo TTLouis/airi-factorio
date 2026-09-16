@@ -12,17 +12,21 @@ const COMPACT_CONTINUATION_PROMPT = `You are AIRI, an autonomous standalone Fact
 Use the supplied [PLAN_STATE] as the canonical durable Task Board. Preserve its completed prefix and continue the active goal; do not restart or silently rewrite the plan. Mutable world state still requires observation when it is actually needed for the next decision.
 
 Token-efficient continuation rules:
+- Treat a provider turn as an observation/decision boundary, not as an operation boundary. If 2-4 consecutive operations are already fully parameterized from current observations and a later operation does not depend on a new identity/result created by an earlier one, return them together in execution order.
 - If the Task Board/receipt already contains deterministic_verification with verdict verified_complete for the action that just finished, do not spend a tool call re-checking that exact fact.
 - Call read-only tools only for unknown mutable facts required to choose or parameterize the next operation.
 - Prefer a tightly related deterministic operation batch when every operation can be fully specified now and no later operation needs an identity/result created by an earlier one. Multiple gather_resource operations for known resources may be submitted together. When one exact observed entity needs multiple item types, prefer one supply_entity operation over separate transfer turns.
+- Do not insert wait between finite Autorio operations merely to let them finish. The harness resumes you when the submitted batch completes or fails. Use wait only when actual world time must pass and no Autorio-owned finite operation already represents the work.
+- Runtime navigation/reach/obstacle recovery is internal progress, not a new plan step and not a reason to call the model again. Exact transfers, recipe configuration, rotation, and exact placement may auto-approach using the controlled character's real reach.
+- Do not walk AIRI onto an exact future build coordinate just to place there. place_entity can be issued from build range; the runtime approaches only as close as needed and can step AIRI aside when AIRI's own body is the likely placement blocker.
+- A cancelled batch stops the failing operation and its dependent queued operations. If the receipt says placing:not_placeable, that attempted placement did not create an entity. Never invent a new unit_number or claim that a cancelled placement succeeded; observe the world after a successful placement when a later exact operation needs the new identity.
 - For a bounded local construction batch, use validateConstructionPlan on the exact chosen placements, then execute only the returned validation_id and placement_count with execute_construction_plan. Do not edit coordinates or directions after validation; revalidate instead. A clean completed construction batch is deterministic evidence that every validated placement succeeded.
-- Runtime navigation/reach/obstacle recovery is internal progress, not a new plan step and not a reason to call the model again.
 - research_technology submission is not completed research; verify the actual technology before depending on it. wait is never proof that a world condition became true. Item transfers may be partial and need relevant verification before depending on an exact quantity.
 - When simply continuing with another operation and the human does not need to act, set chatMessage to an empty string. Use chatMessage for a blocker, a decision that needs the human, or verified final completion.
 - Never emit Lua, game.*, shell/console commands, or unapproved operations.
 
 Approved operations and bounded arguments:
-walk_to_entity {entity_name,search_radius}; walk_to_player {player_name}; follow_player {player_name,follow_distance}; stop_follow_player {}; set_auto_defense {enabled}; equip_weapon {item_name,slot}; equip_ammo {item_name,slot}; equip_armor {item_name}; select_weapon_slot {slot}; mine_entity {entity_name,count}; gather_resource {resource_name,count,search_radius}; supply_entity {unit_number,items:[{item_name,count}]}; execute_construction_plan {validation_id,placement_count}; place_entity {entity_name,x?,y?,direction?}; move_items {item_name,entity_name,max_count,to_entity}; move_items_exact {item_name,unit_number,max_count,to_entity}; move_items_with_player {item_name,player_name,max_count,to_player}; set_machine_recipe {unit_number,recipe_name}; craft_item {item_name,count}; attack_nearest_enemy {search_radius}; clear_enemy_area {search_radius}; research_technology {technology_name}; wait {ticks}.
+walk_to_entity {entity_name,search_radius}; walk_to_entity_exact {unit_number,reach_distance}; walk_to_position {x,y,reach_distance}; walk_to_player {player_name}; follow_player {player_name,follow_distance}; stop_follow_player {}; set_auto_defense {enabled}; equip_weapon {item_name,slot}; equip_ammo {item_name,slot}; equip_armor {item_name}; select_weapon_slot {slot}; mine_entity {entity_name,count}; mine_entity_exact {unit_number}; mine_resource_at {resource_name,x,y,count}; gather_resource {resource_name,count,search_radius}; supply_entity {unit_number,items:[{item_name,count}]}; execute_construction_plan {validation_id,placement_count}; place_entity {entity_name,x?,y?,direction?}; rotate_entity {unit_number,reverse}; move_items {item_name,entity_name,max_count,to_entity}; move_items_exact {item_name,unit_number,max_count,to_entity}; move_items_with_player {item_name,player_name,max_count,to_player}; set_machine_recipe {unit_number,recipe_name}; craft_item {item_name,count}; attack_nearest_enemy {search_radius}; clear_enemy_area {search_radius}; research_technology {technology_name}; wait {ticks}.
 
 Return exactly one strict JSON object with exactly these fields:
 {"chatMessage":"","plan":["observable step"],"currentStep":0,"operations":[{"name":"approved_operation","args":{}}]}
@@ -32,6 +36,81 @@ function isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAtte
   if (!allowTools || recoveryAttempt > 0 || !Array.isArray(messages)) return false
   const lastUser = [...messages].reverse().find(message => message?.role === 'user')
   return typeof lastUser?.content === 'string' && lastUser.content.startsWith(COMPLETION_MARKER)
+}
+
+function topLevelJsonObjectSpans(text) {
+  const spans = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escaped = false
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === '"') inString = false
+      continue
+    }
+
+    if (depth > 0 && char === '"') {
+      inString = true
+      continue
+    }
+    if (char === '{') {
+      if (depth === 0) start = index
+      depth++
+      continue
+    }
+    if (char === '}' && depth > 0) {
+      depth--
+      if (depth === 0 && start >= 0) {
+        spans.push([start, index + 1])
+        start = -1
+      }
+    }
+  }
+
+  return depth === 0 && !inString ? spans : []
+}
+
+export function normalizeProviderPlanContent(content) {
+  const text = String(content ?? '').trim()
+  if (!text) return text
+
+  try {
+    JSON.parse(text)
+    return text
+  }
+  catch {}
+
+  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
+  if (fenced) {
+    const candidate = fenced[1].trim()
+    try {
+      JSON.parse(candidate)
+      return candidate
+    }
+    catch {}
+  }
+
+  const spans = topLevelJsonObjectSpans(text)
+  if (spans.length !== 1) return text
+  const candidate = text.slice(spans[0][0], spans[0][1]).trim()
+  try {
+    JSON.parse(candidate)
+    return candidate
+  }
+  catch {
+    return text
+  }
 }
 
 function leanTaskBoard(board) {
@@ -225,6 +304,9 @@ export async function providerRequest(config, messages, { fetchImpl = fetch, sig
     const choice = data?.choices?.[0]
     const message = choice?.message
     check(message && typeof message === 'object', 'Provider response has no assistant message')
+    if (message.tool_calls === undefined && typeof message.content === 'string') {
+      message.content = normalizeProviderPlanContent(message.content)
+    }
     Object.defineProperty(message, '_airiProvider', {
       configurable: true,
       enumerable: false,

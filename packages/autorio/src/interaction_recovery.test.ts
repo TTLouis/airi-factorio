@@ -22,11 +22,14 @@ function fixture() {
   const surface = {
     index: 1,
     find_entities_filtered: vi.fn(() => nearby),
+    can_place_entity: vi.fn(() => true),
+    find_non_colliding_position: vi.fn((_name: string, position: { x: number, y: number }) => position),
   }
   const actor = {
     is_valid: true,
     character: {
       valid: true,
+      name: 'character',
       reach_distance: 3,
       build_distance: 6,
     },
@@ -54,7 +57,12 @@ beforeEach(() => {
   ;(globalThis as any).game.tick = 100
   ;(globalThis as any).game.get_entity_by_unit_number = () => undefined
   ;(globalThis as any).game.get_player = () => undefined
-  ;(globalThis as any).prototypes.entity['steel-chest'] = {}
+  ;(globalThis as any).prototypes.entity['steel-chest'] = {
+    collision_box: {
+      left_top: { x: -0.8, y: -0.8 },
+      right_bottom: { x: 0.8, y: 0.8 },
+    },
+  }
   ;(globalThis as any).prototypes.entity['assembling-machine-1'] = {}
 })
 
@@ -147,7 +155,7 @@ describe('generic interaction range recovery', () => {
     expect(f.manager.get_status_snapshot().queued_task_types).toEqual([TaskStates.MOVING_ITEMS])
   })
 
-  it('pathfinds to an exact placement position using real build reach before resuming placement', () => {
+  it('pathfinds only into build reach instead of walking onto an exact placement coordinate', () => {
     const f = fixture()
 
     expect(f.controller.submit_placement('steel-chest', 8, 0, 2)).toBe(true)
@@ -169,6 +177,41 @@ describe('generic interaction range recovery', () => {
         task_types: [TaskStates.PLACING],
       },
     })
+  })
+
+  it('steps AIRI aside and resumes the same placement when its own body is the likely blocker', () => {
+    const f = fixture()
+    f.surface.can_place_entity.mockReturnValue(false)
+
+    expect(f.controller.submit_placement('steel-chest', 0, 0, 0)).toBe(true)
+    expect(f.recovery.tick(f.actor)).toBe(true)
+
+    expect(f.surface.can_place_entity).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'steel-chest',
+      position: { x: 0, y: 0 },
+      direction: 0,
+    }))
+    expect(f.surface.find_non_colliding_position).toHaveBeenCalled()
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      target_kind: 'position',
+      requested_position: { x: 2.3, y: 0 },
+      target_position: { x: 2.3, y: 0 },
+      reach_distance: 0.75,
+    })
+    expect(f.manager.get_status_snapshot().queued_task_types).toEqual([TaskStates.PLACING])
+  })
+
+  it('does not wander away for a blocked placement when AIRI is already outside the requested footprint', () => {
+    const f = fixture()
+    f.surface.can_place_entity.mockReturnValue(false)
+
+    expect(f.controller.submit_placement('steel-chest', 3, 0, 0)).toBe(true)
+    expect(f.recovery.tick(f.actor)).toBe(false)
+
+    expect(f.surface.find_non_colliding_position).not.toHaveBeenCalled()
+    expect(f.manager.player_state.task_state).toBe(TaskStates.PLACING)
+    expect(f.manager.get_status_snapshot().queue_length).toBe(0)
   })
 
   it('leaves already-reachable interactions untouched', () => {
