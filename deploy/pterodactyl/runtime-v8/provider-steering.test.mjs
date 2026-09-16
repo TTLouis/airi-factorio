@@ -89,6 +89,16 @@ test('too_far failures steer away from walk-action-model ping-pong', () => {
   assert.match(context, /do not create a walk\/action\/model loop/)
 })
 
+test('terrain goals steer the model toward live tile observations instead of entity guesses', () => {
+  const context = buildSteeringContext([
+    { role: 'user', content: '[CHAT] TTLouis: 你到水边了，沿着岸边看看' },
+  ])
+  assert.match(context, /domain=terrain/)
+  assert.match(context, /getLocalSpatialObservation/)
+  assert.match(context, /tile runs/)
+  assert.match(context, /water is a tile, not an entity/)
+})
+
 test('steering is inserted before a MOD receipt so completion remains the final observation', () => {
   const messages = [
     { role: 'system', content: 'system' },
@@ -99,6 +109,17 @@ test('steering is inserted before a MOD receipt so completion remains the final 
   const output = applySteeringMessages(messages)
   assert.match(output.at(-2).content, /^\[STEERING\]/)
   assert.match(output.at(-1).content, /^\[MOD\]/)
+})
+
+test('steering is inserted before a HARNESS recovery instruction so strict recovery remains final', () => {
+  const messages = [
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] TTLouis: 你到水边了' },
+    { role: 'user', content: '[HARNESS] Tool call rejected (1/2): Unapproved tool: getMapTiles. Retry using only an approved tool name and strict JSON arguments matching its schema. Do not repeat the rejected payload.' },
+  ]
+  const output = applySteeringMessages(messages)
+  assert.match(output.at(-2).content, /^\[STEERING\]/)
+  assert.match(output.at(-1).content, /^\[HARNESS\]/)
 })
 
 test('provider request injects steering while preserving compact completion behavior', async () => {
