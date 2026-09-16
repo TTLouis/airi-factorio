@@ -185,7 +185,7 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain("style: 'deep_slots_scroll_pane'")
     expect(source).toContain("type: 'progressbar'")
     expect(source).toContain('root.location = previous_location')
-    expect(source).toContain('HALF_SECTION_WIDTH')
+    expect(source).toContain('STATUS_SECTION_WIDTH')
     expect(source).not.toContain('TOP_SECTION_HEIGHT')
     expect(source).not.toContain('RESOURCE_SECTION_HEIGHT')
   })
@@ -196,8 +196,11 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('dynamic.style.vertical_spacing = COLUMN_SPACING')
     expect(source).toContain('top.style.horizontal_spacing = COLUMN_SPACING')
     expect(source).toContain('resources.style.horizontal_spacing = COLUMN_SPACING')
-    expect(source).toContain("create_section(parent, 'Status', HALF_SECTION_WIDTH, undefined, false)")
-    expect(source).toContain("create_section(parent, 'Controls', HALF_SECTION_WIDTH, undefined, false)")
+    // Status wraps prose and Controls holds fixed-width buttons, so they are
+    // sized separately rather than splitting the left column down the middle.
+    expect(source).toContain("create_section(parent, 'Status', STATUS_SECTION_WIDTH, undefined, false)")
+    expect(source).toContain("create_section(parent, 'Controls', CONTROLS_SECTION_WIDTH, undefined, false)")
+    expect(source).not.toContain('HALF_SECTION_WIDTH')
     expect(source).toContain('right.style.vertically_stretchable = true')
     expect(source).toMatch(/build_left_dynamic\(dynamic,[\s\S]*render_prompt\(left, player\)[\s\S]*render_world_preview\(right, runtime, player\)/)
   })

@@ -86,6 +86,19 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(no_plan.activity).toBe(long_plan.steps + long_plan.activity)
   })
 
+  it('spends the left column width on the panel that wraps text, not on the button grid', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    // Controls is the fixed number; Status takes whatever is left, so the two
+    // always add up to the left column exactly however Controls is retuned.
+    expect(source).toContain('const CONTROLS_SECTION_WIDTH = 264')
+    expect(source).toContain('const STATUS_SECTION_WIDTH = LEFT_COLUMN_WIDTH - COLUMN_SPACING - CONTROLS_SECTION_WIDTH')
+    expect(source).toContain('const STATUS_VALUE_WIDTH = STATUS_SECTION_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12')
+    // The follow warning sits inside Controls, so it wraps to that panel.
+    expect(source).toContain('issue.style.maximal_width = CONTROLS_SECTION_WIDTH - 2 * SECTION_PADDING')
+    expect(source).not.toContain('HALF_SECTION_WIDTH')
+    expect(source).not.toContain('HALF_VALUE_WIDTH')
+  })
+
   it('does not print the plan step number twice when the plan numbers itself', () => {
     expect(step_caption('1. Craft iron gear wheels')).toBe('Craft iron gear wheels')
     expect(step_caption('12) Connect the boiler')).toBe('Connect the boiler')
@@ -100,7 +113,7 @@ describe('AIRI NPC console compact tracker layout', () => {
   it('gives every control the same size and aligns all four buttons in a two-column grid', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     // One width for all four buttons: two of them plus the gap fill the section.
-    expect(source).toContain('const COMPACT_BUTTON_WIDTH = (HALF_SECTION_WIDTH - 2 * SECTION_PADDING - COMPACT_BUTTON_SPACING) / 2')
+    expect(source).toContain('const COMPACT_BUTTON_WIDTH = (CONTROLS_SECTION_WIDTH - 2 * SECTION_PADDING - COMPACT_BUTTON_SPACING) / 2')
     expect(source).toContain('function compact_button(button: LuaGuiElement)')
     expect(source).not.toContain('COMPACT_TASK_BUTTON_WIDTH')
     expect(source).not.toContain('COMPACT_ACTION_BUTTON_WIDTH')

@@ -44,7 +44,7 @@ const PROMPT_FIELD_NAME = 'airi_task_board_prompt'
 const PROMPT_SEND_BUTTON_NAME = 'airi_task_board_prompt_send'
 const MAX_STEPS = 24
 const MAX_ACTIVITY = 18
-const MAX_INVENTORY_ITEMS = 64
+const MAX_INVENTORY_ITEMS = 80
 const MAX_WANTED_ITEMS = 48
 const MAX_TEXT = 500
 const MAX_PROMPT_TEXT = 4000
@@ -61,26 +61,33 @@ const TERMINATE_CONFIRM_TICKS = 5 * 60
 const LEFT_COLUMN_WIDTH = 640
 const PREVIEW_COLUMN_WIDTH = 680
 const COLUMN_SPACING = 12
-const HALF_SECTION_WIDTH = (LEFT_COLUMN_WIDTH - COLUMN_SPACING) / 2
+// Status and Controls do not deserve the same width. Status carries wrapping
+// prose - the live phase and its detail, the goal, the sync age - and every unit
+// it lacks turns into another wrapped line. Controls carries fixed-width buttons
+// in a two-column grid that grows downward as controls are added, so it needs
+// enough width for two captions and nothing more.
+const CONTROLS_SECTION_WIDTH = 264
+const STATUS_SECTION_WIDTH = LEFT_COLUMN_WIDTH - COLUMN_SPACING - CONTROLS_SECTION_WIDTH
 const SECTION_PADDING = 10
 const KEY_COLUMN_WIDTH = 64
-const HALF_VALUE_WIDTH = HALF_SECTION_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12
+const STATUS_VALUE_WIDTH = STATUS_SECTION_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12
 // Keep the resource layout behind one table. TSTL turns module-scope constants
 // and helper functions into Lua locals, and Factorio's Lua parser has a hard
 // limit of 200 locals per function. One layout table leaves headroom for future
 // console work without changing the Inventory / Wanted / Equipped geometry.
 const RESOURCE_LAYOUT = {
   slot_size: 40,
-  inventory_slot_columns: 9,
-  wanted_slot_columns: 6,
+  inventory_slot_columns: 10,
+  wanted_slot_columns: 5,
   equipped_slot_columns: 3,
   equipped_label_width: 48,
   // Each pane is exactly as wide as the grid it holds - columns * slot_size,
   // plus the reserved scrollbar, plus the body padding. Any width beyond that
-  // is empty frame drawn to the right of the last slot, so the columns are
-  // chosen to spend the row's full width on slots instead.
-  inventory_section_width: 9 * 40 + 12 + 2 * SECTION_PADDING,
-  wanted_section_width: PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - (9 * 40 + 12 + 2 * SECTION_PADDING),
+  // is empty frame drawn to the right of the last slot. Inventory is the pane
+  // that actually fills up, so it takes ten columns and the sidebar keeps the
+  // five that still fit beside it.
+  inventory_section_width: 10 * 40 + 12 + 2 * SECTION_PADDING,
+  wanted_section_width: PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - (10 * 40 + 12 + 2 * SECTION_PADDING),
   slot_rows_min: 5,
   slot_rows_mid: 6,
   slot_rows_max: 8,
@@ -127,7 +134,7 @@ const COMPACT_BUTTON_SPACING = 6
 // Every control is the same size. Two sizes across two rows read as a ragged
 // grid, and sizing each button to its own caption made the panel look
 // accidental. Two of these plus the gap exactly fill the section's inner width.
-const COMPACT_BUTTON_WIDTH = (HALF_SECTION_WIDTH - 2 * SECTION_PADDING - COMPACT_BUTTON_SPACING) / 2
+const COMPACT_BUTTON_WIDTH = (CONTROLS_SECTION_WIDTH - 2 * SECTION_PADDING - COMPACT_BUTTON_SPACING) / 2
 const PROMPT_SEND_WIDTH = 84
 const PROMPT_FIELD_WIDTH = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 8 - PROMPT_SEND_WIDTH
 const SKILLS_POPOUT_WIDTH = 720
@@ -487,19 +494,19 @@ function overall_state(board: TaskBoardUiSnapshot | undefined, synced_tick: numb
 }
 
 function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot, synced_tick: number | undefined) {
-  const { header, body } = create_section(parent, 'Status', HALF_SECTION_WIDTH, undefined, false)
+  const { header, body } = create_section(parent, 'Status', STATUS_SECTION_WIDTH, undefined, false)
   const overall = overall_state(board, synced_tick); add_status_badge(header, overall.tone, overall.caption)
   const table = create_key_value_table(body)
-  add_key_value(table, 'NPC', runtime.actor_name || 'AIRI', { tooltip: runtime.actor_kind.length > 0 ? runtime.actor_kind.split('_').join(' ') : undefined, width: HALF_VALUE_WIDTH })
+  add_key_value(table, 'NPC', runtime.actor_name || 'AIRI', { tooltip: runtime.actor_kind.length > 0 ? runtime.actor_kind.split('_').join(' ') : undefined, width: STATUS_VALUE_WIDTH })
   const freshness = task_board_sync_freshness(synced_tick, game.tick)
   const phase = board?.agent.phase ?? 'idle'; const detail = board?.agent.detail ?? ''
   const live_caption = detail.length > 0 ? `${agent_caption(phase)} · ${text(detail, 90)}` : agent_caption(phase)
   const stale_caption = freshness === 'offline' ? 'NOT CONNECTED' : `NO ANSWER — last seen ${agent_caption(phase)}`
-  add_key_value(table, 'AIRI', freshness === 'live' ? live_caption : stale_caption, { tone: freshness === 'live' ? agent_tone(phase) : 'bad', tooltip: freshness === 'live' && detail.length > 0 ? detail : 'The console polls the AIRI runtime; this row reports the answer, not a guess.', width: HALF_VALUE_WIDTH })
-  add_key_value(table, 'WORLD', world_task_summary(runtime.world_task), { width: HALF_VALUE_WIDTH })
+  add_key_value(table, 'AIRI', freshness === 'live' ? live_caption : stale_caption, { tone: freshness === 'live' ? agent_tone(phase) : 'bad', tooltip: freshness === 'live' && detail.length > 0 ? detail : 'The console polls the AIRI runtime; this row reports the answer, not a guess.', width: STATUS_VALUE_WIDTH })
+  add_key_value(table, 'WORLD', world_task_summary(runtime.world_task), { width: STATUS_VALUE_WIDTH })
   const goal = board === undefined ? 'No active AIRI task.' : board_goal(board)
-  add_key_value(table, 'GOAL', text(goal, 110), { tooltip: goal, width: HALF_VALUE_WIDTH })
-  add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: HALF_VALUE_WIDTH })
+  add_key_value(table, 'GOAL', text(goal, 110), { tooltip: goal, width: STATUS_VALUE_WIDTH })
+  add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: STATUS_VALUE_WIDTH })
 }
 // The live distance belongs in the tooltip: in the caption it re-flowed the
 // button every tick and overran a fixed-width control.
@@ -507,7 +514,7 @@ function follow_button_caption(follow: TaskBoardUiFollowStatus | undefined) { re
 function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Pause current work and follow this player'; const details = ['Click to stop following.']; if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
 function compact_button(button: LuaGuiElement) { button.style.width = COMPACT_BUTTON_WIDTH; button.style.height = COMPACT_BUTTON_HEIGHT; button.style.minimal_width = COMPACT_BUTTON_WIDTH; button.style.maximal_width = COMPACT_BUTTON_WIDTH; button.style.minimal_height = COMPACT_BUTTON_HEIGHT; button.style.maximal_height = COMPACT_BUTTON_HEIGHT; return button }
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
-  const { body } = create_section(parent, 'Controls', HALF_SECTION_WIDTH, undefined, false)
+  const { body } = create_section(parent, 'Controls', CONTROLS_SECTION_WIDTH, undefined, false)
   body.style.vertical_spacing = COMPACT_BUTTON_SPACING
   const follow = runtime.follow
   const has_open_goal = board !== undefined && board.status !== 'idle' && board.status !== 'completed'
@@ -527,7 +534,7 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   // A blank last_failure is still truthy, which drew a lone warning triangle with
   // no message next to it. Render the row only when there is something to read.
   const issue_text = text(follow?.last_failure ?? '', 100)
-  if (issue_text.length > 0) { const issue = body.add({ type: 'label', caption: `⚠ ${issue_text}`, tooltip: follow?.last_failure }); issue.style.single_line = false; issue.style.maximal_width = HALF_SECTION_WIDTH - 2 * SECTION_PADDING; issue.style.font_color = TONE_COLORS.bad }
+  if (issue_text.length > 0) { const issue = body.add({ type: 'label', caption: `⚠ ${issue_text}`, tooltip: follow?.last_failure }); issue.style.single_line = false; issue.style.maximal_width = CONTROLS_SECTION_WIDTH - 2 * SECTION_PADDING; issue.style.font_color = TONE_COLORS.bad }
 }
 
 /**

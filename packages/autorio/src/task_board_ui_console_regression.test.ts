@@ -12,15 +12,17 @@ describe('AIRI NPC console layout regressions', () => {
     expect(task_board_wanted_rows(720)).toBe(1)
     expect(task_board_wanted_rows(1080)).toBe(2)
     expect(task_board_wanted_rows(1440)).toBe(4)
-    expect(source).toContain('const MAX_INVENTORY_ITEMS = 64')
+    // Ten columns times the tallest viewport is exactly a default Factorio
+    // character inventory, so the cap no longer cuts the grid short.
+    expect(source).toContain('const MAX_INVENTORY_ITEMS = 80')
     expect(source).toContain('const RESOURCE_LAYOUT = {')
-    expect(source).toContain('inventory_slot_columns: 9')
-    expect(source).toContain('wanted_slot_columns: 6')
+    expect(source).toContain('inventory_slot_columns: 10')
+    expect(source).toContain('wanted_slot_columns: 5')
     expect(source).toContain('equipped_slot_columns: 3')
     // Each pane is exactly its own grid wide, so no empty frame is drawn to the
     // right of the last slot and the resource row spends its full width on slots.
-    expect(source).toContain('inventory_section_width: 9 * 40 + 12 + 2 * SECTION_PADDING')
-    expect(source).toContain('wanted_section_width: PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - (9 * 40 + 12 + 2 * SECTION_PADDING)')
+    expect(source).toContain('inventory_section_width: 10 * 40 + 12 + 2 * SECTION_PADDING')
+    expect(source).toContain('wanted_section_width: PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - (10 * 40 + 12 + 2 * SECTION_PADDING)')
     expect(source).toContain("add_slot_grid(body, runtime.inventory.map")
     expect(source).toContain("task_board_resource_rows(player_gui_height(player)), RESOURCE_LAYOUT.inventory_slot_columns")
     expect(source).toContain("task_board_wanted_rows(player_gui_height(player)), RESOURCE_LAYOUT.wanted_slot_columns")
