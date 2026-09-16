@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   sanitize_task_board_ui_snapshot,
   task_board_activity_for_display,
+  task_board_preview_zoom,
   task_board_skills_ui_is_open,
   task_board_ui_is_open,
   task_board_ui_prompt_draft,
@@ -122,6 +123,14 @@ describe('in-game task board UI projection', () => {
     expect(task_board_ui_prompt_draft(3)).toBe('')
   })
 
+  it('keeps preview zoom scoped per player without writing from render reads', () => {
+    expect(task_board_preview_zoom(1)).toBe(0.75)
+    expect((globalThis as any).storage).toEqual({})
+    ;(globalThis as any).storage.airi_task_board_preview_zoom = { 1: 1.25, 2: 0.5 }
+    expect(task_board_preview_zoom(1)).toBe(1.25)
+    expect(task_board_preview_zoom(2)).toBe(0.5)
+  })
+
   it('does not erase Factorio GUI element types before chained add calls', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).not.toMatch(/const\s+\w+\s*:\s*any\s*=\s*player\.gui/)
@@ -155,14 +164,13 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain("style: 'slot_window_frame'")
     expect(source).toContain("style: 'mod_gui_inside_deep_frame'")
     expect(source).toMatch(/type: 'sprite-button',\s+name: BUTTON_NAME,\s+sprite: BUTTON_SPRITE/)
-    // A plain character icon reads as another player in the mod button bar.
     expect(source).not.toContain("'entity/character'")
     expect(source).toContain("style: 'slot_button'")
     expect(source).toContain('button.toggled = task_board_ui_is_open(player.index)')
     expect(source).not.toContain("caption: 'AIRI',")
   })
 
-  it('uses a movable screen window with native Factorio title, content, section, and control styles', () => {
+  it('uses a movable screen window with native Factorio title, section, and control styles', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain('player.gui.screen.add')
     expect(source).toContain("style: 'frame_title'")
@@ -172,24 +180,39 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain("style: 'inside_shallow_frame'")
     expect(source).toContain("style: 'dialog_button'")
     expect(source).toContain("style: 'red_button'")
-    expect(source).toContain("style: follow?.active ? 'red_button' : 'confirm_button'")
+    expect(source).toContain("style: follow?.active ? 'confirm_button' : 'dialog_button'")
     expect(source).toContain("style: 'deep_slots_scroll_pane'")
     expect(source).toContain("type: 'progressbar'")
     expect(source).toContain('root.location = previous_location')
     expect(source).toContain('HALF_SECTION_WIDTH')
-    // Fixed section heights clipped content; sections now stretch to their row.
     expect(source).not.toContain('TOP_SECTION_HEIGHT')
     expect(source).not.toContain('RESOURCE_SECTION_HEIGHT')
   })
 
-  it('puts a native Factorio camera preview in the right column bound to the current actor', () => {
+  it('aligns the two columns, keeps section spacing uniform, and lets status/controls hug their content', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain('left.style.vertical_spacing = COLUMN_SPACING')
+    expect(source).toContain('dynamic.style.vertical_spacing = COLUMN_SPACING')
+    expect(source).toContain('top.style.horizontal_spacing = COLUMN_SPACING')
+    expect(source).toContain('resources.style.horizontal_spacing = COLUMN_SPACING')
+    expect(source).toContain("create_section(parent, 'Status', HALF_SECTION_WIDTH, undefined, false)")
+    expect(source).toContain("create_section(parent, 'Controls', HALF_SECTION_WIDTH, undefined, false)")
+    expect(source).toContain('right.style.vertically_stretchable = true')
+    expect(source).toMatch(/build_left_dynamic\(dynamic,[\s\S]*render_prompt\(left, player\)[\s\S]*render_world_preview\(right, runtime, player\)/)
+  })
+
+  it('puts a native Factorio camera preview in the right column with an interactive zoom slider', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain("type: 'camera'")
     expect(source).toContain('position: preview.position')
     expect(source).toContain('surface_index: preview.surface_index')
     expect(source).toContain('camera.entity = preview.entity')
     expect(source).toContain('PREVIEW_COLUMN_WIDTH')
-    expect(source).toMatch(/const right = columns\.add[\s\S]*render_world_preview\(right, runtime\)/)
+    expect(source).toContain("type: 'slider'")
+    expect(source).toContain('name: PREVIEW_ZOOM_SLIDER_NAME')
+    expect(source).toContain('defines.events.on_gui_value_changed')
+    expect(source).toContain('camera.zoom = zoom')
+    expect(source).toContain('PREVIEW_CAMERA_MIN_HEIGHT')
   })
 
   it('shows live mod task state and when AIRI last synced', () => {
@@ -200,25 +223,24 @@ describe('in-game task board UI projection', () => {
     expect(control).toContain('set_task_board_world_task_provider(() => task_manager.get_status_snapshot())')
   })
 
-  it('provides a direct AIRI prompt field that preserves drafts and emits a fixed structured prompt event', () => {
+  it('provides a direct AIRI prompt field that preserves drafts and queues structured input', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain("type: 'textfield'")
     expect(source).toContain("name: PROMPT_FIELD_NAME")
     expect(source).toContain("name: PROMPT_SEND_BUTTON_NAME")
-    expect(source).toContain('[AIRI_UI_PROMPT]')
+    expect(source).toContain("kind: 'prompt'")
+    expect(source).toContain('enqueue_ui_input({')
     expect(source).toContain('defines.events.on_gui_text_changed')
     expect(source).toContain('defines.events.on_gui_confirmed')
   })
 
   it('refreshes live content without destroying the prompt field being typed into', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
-    // The prompt row is a sibling of the refreshed container, so a state update
-    // can never take the player's keyboard focus or caret mid-sentence.
-    expect(source).toContain('columns.clear()')
-    expect(source).toContain('build_columns(columns, player)')
-    expect(source).toMatch(/render_prompt\(root, player\)/)
-    expect(source).not.toContain('render_prompt(left, player)')
-    // The old refresh skipped updates while a draft existed; it no longer has to.
+    expect(source).toContain('dynamic.clear()')
+    expect(source).toContain('build_left_dynamic(dynamic, player, board, synced_tick, runtime)')
+    expect(source).toContain('right.clear()')
+    expect(source).toContain('render_prompt(left, player)')
+    expect(source).not.toMatch(/left\.clear\(\)/)
     expect(source).not.toContain('task_board_ui_prompt_draft(player.index).length === 0')
   })
 
@@ -230,11 +252,10 @@ describe('in-game task board UI projection', () => {
 
   it('does not create storage tables from the render path', () => {
     ;(globalThis as any).storage = {}
-    // Reading state while drawing must not write synchronized game state: on a
-    // joining client that write happens on one peer only and desyncs the game.
     expect(task_board_ui_is_open(1)).toBe(false)
     expect(task_board_ui_prompt_draft(1)).toBe('')
     expect(task_board_ui_terminate_is_armed(1, 10)).toBe(false)
+    expect(task_board_preview_zoom(1)).toBe(0.75)
     expect((globalThis as any).storage).toEqual({})
 
     expect(toggle_task_board_ui_open(1)).toBe(true)
@@ -244,14 +265,10 @@ describe('in-game task board UI projection', () => {
   it('keeps rendering read-only so drawing the console cannot desync multiplayer', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     const controller = readFileSync(new URL('./actors/actor_controller.ts', import.meta.url), 'utf8')
-    // get_controlled_actor creates bodies, runs post-load reconciliation and
-    // writes storage; a joining client doing that mid-game desyncs the game.
     expect(source).toContain('peek_controlled_actor()')
     expect(source).not.toContain('get_controlled_actor()')
     expect(controller).toContain('export function peek_controlled_actor()')
 
-    // The console also draws the skill section every refresh, so those reads
-    // must not lazily create their storage tables either.
     const skills = readFileSync(new URL('./skills.ts', import.meta.url), 'utf8')
     const learning = readFileSync(new URL('./factory_area_learning.ts', import.meta.url), 'utf8')
     expect(skills).toContain('return storage.airi_skill_definitions ?? {}')
@@ -263,28 +280,22 @@ describe('in-game task board UI projection', () => {
   it('opens area learning in its own window instead of consuming console space', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     const skills = readFileSync(new URL('./skills.ts', import.meta.url), 'utf8')
-    // Controls keeps only the entry point; the analysis output and the saved
-    // candidate list no longer occupy a full-width row in the main column.
     expect(source).toContain('name: SKILLS_BUTTON_NAME')
     expect(source).not.toContain('render_skill_export_section(left)')
     expect(source).toContain('render_learn_area_button(actions)')
     expect(source).toContain('render_skill_export_section(body)')
     expect(skills).toContain('export function render_learn_area_button(')
 
-    // It is a real movable window with its own titlebar, close button and
-    // in-place refresh, not a section nested back inside the console.
     expect(source).toContain('player.gui.screen.add')
     expect(source).toContain('render_titlebar(root, SKILLS_POPOUT_TITLE, SKILLS_CLOSE_BUTTON_NAME)')
     expect(source).toContain('build_skills_body(body)')
     expect(source).toContain('body.clear()')
-    // Closing the console must not leave an unreachable orphan window behind.
     expect(source).toMatch(/close_task_board_skills_ui\(player\.index\)\s*\n\s*destroy_skills_popout\(player\)/)
   })
 
   it('keeps the area learning window closed by default and scoped per player', () => {
     ;(globalThis as any).storage = {}
     expect(task_board_skills_ui_is_open(1)).toBe(false)
-    // Drawing reads this on every peer, so it must not create the table.
     expect((globalThis as any).storage).toEqual({})
 
     expect(toggle_task_board_skills_ui_open(1)).toBe(true)
@@ -297,7 +308,8 @@ describe('in-game task board UI projection', () => {
   it('only emits fixed UI control actions instead of arbitrary console commands', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain("type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow'")
-    expect(source).toContain('[AIRI_UI_CONTROL]')
+    expect(source).toContain("kind: 'control'")
+    expect(source).toContain('drain_inputs: () => drain_ui_inputs()')
     expect(source).not.toContain('rcon.print')
   })
 })
