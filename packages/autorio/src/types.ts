@@ -6,6 +6,7 @@ export enum TaskStates {
   WALKING_TO_ENTITY = 'walking_to_entity',
   MINING = 'mining',
   PLACING = 'placing',
+  ROTATING = 'rotating',
   PLACING_IN_CHEST = 'placing_in_chest',
   PICKING_UP = 'picking_up',
   CRAFTING = 'crafting',
@@ -82,6 +83,18 @@ export interface PlayerParametersPlaceEntity {
   position?: MapPositionStruct
   /** Factorio direction value (0..15) for precise placement. */
   direction?: number
+}
+
+export interface PlayerParametersRotateEntity {
+  type: TaskStates.ROTATING
+  operation_id?: number
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
+  /** Stable Factorio identity of the exact placed entity to rotate. */
+  target_unit_number: number
+  /** Factorio rotate direction: false clockwise, true counter-clockwise. */
+  reverse: boolean
 }
 
 export interface PlayerParametersMoveItems {
@@ -202,6 +215,7 @@ export type PlayerParameters
     | PlayerParametersWalkingDirect
     | PlayerParametersMineEntity
     | PlayerParametersPlaceEntity
+    | PlayerParametersRotateEntity
     | PlayerParametersMoveItems
     | PlayerParametersSetRecipe
     | PlayerParametersCraftItem
@@ -215,6 +229,7 @@ export interface PlayerState {
   parameters_walking_direct?: PlayerParametersWalkingDirect
   parameters_mine_entity?: PlayerParametersMineEntity
   parameters_place_entity?: PlayerParametersPlaceEntity
+  parameters_rotate_entity?: PlayerParametersRotateEntity
   parameters_move_items?: PlayerParametersMoveItems
   parameters_set_recipe?: PlayerParametersSetRecipe
   parameters_craft_item?: PlayerParametersCraftItem
