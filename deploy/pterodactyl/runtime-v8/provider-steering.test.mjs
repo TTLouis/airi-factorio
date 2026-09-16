@@ -99,6 +99,22 @@ test('terrain goals steer the model toward live tile observations instead of ent
   assert.match(context, /water is a tile, not an entity/)
 })
 
+test('dynamic steering prefers local completion without becoming a route solver', () => {
+  const context = buildSteeringContext([
+    { role: 'user', content: planState({
+      current_step_text: 'fuel and configure the local furnace before returning to the miner patch',
+      last_operations: [
+        'move_items_exact {"unit_number":582,"item_name":"coal","max_count":10,"to_entity":true}',
+        'set_machine_recipe {"unit_number":583,"recipe_name":"iron-gear-wheel"}',
+      ],
+    }) },
+    { role: 'user', content: '[CHAT] TTLouis: 继续' },
+  ])
+  assert.match(context, /locality=before intentionally crossing to another area/)
+  assert.match(context, /known current-area targets/)
+  assert.match(context, /do not invent targets or reorder user constraints, prerequisites, or observation-dependent work/)
+})
+
 test('steering is inserted before a MOD receipt so completion remains the final observation', () => {
   const messages = [
     { role: 'system', content: 'system' },
