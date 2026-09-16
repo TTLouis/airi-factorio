@@ -1,8 +1,12 @@
 import type { FrameGuiElement, LuaGuiElement, LuaPlayer } from 'factorio:runtime'
 
-export const PROJECTS_BUTTON_NAME = 'airi_task_board_projects'
-export const PROJECTS_CLOSE_BUTTON_NAME = 'airi_task_board_projects_close'
-export const PROJECT_SELECT_BUTTON_NAME = 'airi_task_board_project_select'
+// The main Task Board already owns on_gui_click. PROJECTS intentionally reuses
+// its existing debug-close click route for the sixth 3x2 control slot; project
+// selection itself uses a list-box and on_gui_selection_state_changed, which is
+// otherwise unused by the console.
+export const PROJECTS_BUTTON_NAME = 'airi_task_board_debug_close'
+export const PROJECTS_CLOSE_BUTTON_NAME = PROJECTS_BUTTON_NAME
+export const PROJECT_LIST_NAME = 'airi_task_board_project_list'
 
 const ROOT_NAME = 'airi_task_board_projects_panel'
 const BODY_NAME = 'airi_task_board_projects_body'
@@ -128,6 +132,12 @@ function project_name(objective: string, goal_id: string) {
   return objective.length <= 56 ? objective : `${objective.slice(0, 55)}…`
 }
 
+/**
+ * Durable goals are the first useful project boundary we have today. Keeping
+ * the archive behind a ProjectHistoryRecord makes the UI useful immediately,
+ * while leaving room for a later Project -> Tasks layer without changing the
+ * main Task Board or the runtime heartbeat schema.
+ */
 export function record_project_snapshot(board: any, tick: number) {
   const goal_id = clean_text(board?.goal_id, 100)
   if (goal_id.length === 0) return false
@@ -226,33 +236,37 @@ function render_titlebar(root: FrameGuiElement) {
   titlebar.add({ type: 'sprite-button', name: PROJECTS_CLOSE_BUTTON_NAME, sprite: 'utility/close', style: 'frame_action_button', tooltip: 'Close Projects' })
 }
 
-function render_project_list(parent: LuaGuiElement, player: LuaPlayer, selected_id: string) {
+function render_project_list(parent: LuaGuiElement, selected_id: string) {
   const frame = parent.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame' })
   frame.style.width = PROJECT_LIST_WIDTH
   const header = frame.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
   header.style.horizontally_stretchable = true
   header.add({ type: 'label', caption: 'PROJECTS', style: 'subheader_caption_label' })
-  const scroll = frame.add({ type: 'scroll-pane', horizontal_scroll_policy: 'never' })
-  scroll.style.width = PROJECT_LIST_WIDTH - 12
-  scroll.style.maximal_height = 620
   const history = project_history()
   if (history.length === 0) {
-    const empty = scroll.add({ type: 'label', caption: 'No durable AIRI projects recorded yet.' })
+    const empty = frame.add({ type: 'label', caption: 'No durable AIRI projects recorded yet.' })
     empty.style.single_line = false
-    empty.style.maximal_width = PROJECT_LIST_WIDTH - 36
+    empty.style.maximal_width = PROJECT_LIST_WIDTH - 24
     return
   }
-  for (const project of history) {
-    const button = scroll.add({
-      type: 'button',
-      name: PROJECT_SELECT_BUTTON_NAME,
-      caption: project.name,
-      style: project.id === selected_id ? 'confirm_button' : 'list_box_item',
-      tags: { airi_project_id: project.id },
-      tooltip: project.objective,
-    })
-    button.style.width = PROJECT_LIST_WIDTH - 36
+  const items: string[] = []
+  const ids: string[] = []
+  let selected_index = 0
+  for (let index = 0; index < history.length; index++) {
+    const project = history[index]
+    items.push(project.name)
+    ids.push(project.id)
+    if (project.id === selected_id) selected_index = index + 1
   }
+  const list = frame.add({
+    type: 'list-box',
+    name: PROJECT_LIST_NAME,
+    items,
+    selected_index,
+    tags: { airi_project_ids: ids },
+  }) as any
+  list.style.width = PROJECT_LIST_WIDTH - 20
+  list.style.maximal_height = 620
 }
 
 function add_detail_row(parent: LuaGuiElement, key: string, value: string) {
@@ -322,7 +336,7 @@ function build_projects_body(body: LuaGuiElement, player: LuaPlayer, current_goa
   const selected_id = selected_project_id(player.index, current_goal_id)
   const columns = body.add({ type: 'flow', direction: 'horizontal' })
   columns.style.horizontal_spacing = 12
-  render_project_list(columns, player, selected_id)
+  render_project_list(columns, selected_id)
   render_project_detail(columns, selected_id.length > 0 ? project_by_id(selected_id) : undefined)
 }
 
@@ -353,11 +367,23 @@ export function render_projects_popout(player: LuaPlayer, task_board_open: boole
   build_projects_popout(player, current_goal_id)
 }
 
-export function handle_projects_ui_click(player: LuaPlayer, element: LuaGuiElement) {
-  if (element.name !== PROJECT_SELECT_BUTTON_NAME) return false
-  const project_id = clean_text(element.tags?.airi_project_id, 100)
-  if (project_id.length === 0) return true
-  select_project(player.index, project_id)
-  render_projects_popout(player, true, project_id)
+function handle_project_selection(player: LuaPlayer, element: any) {
+  if (element.name !== PROJECT_LIST_NAME) return false
+  const ids = element.tags?.airi_project_ids as string[] | undefined
+  const index = typeof element.selected_index === 'number' ? element.selected_index - 1 : -1
+  if (ids === undefined || index < 0 || index >= ids.length) return true
+  select_project(player.index, ids[index])
+  render_projects_popout(player, true, ids[index])
   return true
+}
+
+// No other Autorio UI currently owns this event, so Projects can handle its
+// selector without competing for the Task Board's single on_gui_click handler.
+if (typeof script !== 'undefined' && typeof defines !== 'undefined') {
+  script.on_event(defines.events.on_gui_selection_state_changed, (event: any) => {
+    const element = event.element
+    if (!element?.valid || element.name !== PROJECT_LIST_NAME) return
+    const player = game.get_player(event.player_index)
+    if (player?.valid) handle_project_selection(player, element)
+  })
 }
