@@ -33,6 +33,7 @@ describe('AIRI NPC console layout regressions', () => {
     expect(source).toContain("const ACTIVITY_FILTER_ITEMS = ['ALL', 'PLAN', 'OBS', 'ACTIONS', 'RESULTS', 'ISSUES']")
     expect(source).toContain("type: 'drop-down', name: ACTIVITY_FILTER_NAME")
     expect(source).toContain('on_gui_selection_state_changed')
-    expect(source).toContain("activity_scroll.scroll_to_element(latest_line, 'bottom-third')")
+    expect(source).toContain('activity_scroll.scroll_to_bottom()')
+    expect(source).not.toContain("'bottom-third'")
   })
 })
