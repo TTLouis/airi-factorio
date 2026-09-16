@@ -3,6 +3,7 @@ import type { ControlledActor } from './actors/types'
 import { create_map_construction_remote_interface } from './map_construction'
 import { create_map_deconstruction_remote_interface } from './map_deconstruction'
 import { create_map_remote_interface } from './map_remote'
+import { create_map_upgrade_remote_interface } from './map_upgrade'
 
 const MIN_LONG_RANGE_RADIUS = 64
 const MAX_LONG_RANGE_RADIUS = 4096
@@ -181,6 +182,7 @@ export function create_discovery_remote_interface(get_actor: () => ControlledAct
   create_map_remote_interface(get_actor)
   create_map_construction_remote_interface(get_actor)
   create_map_deconstruction_remote_interface(get_actor)
+  create_map_upgrade_remote_interface(get_actor)
   remote.add_interface('autorio_discovery', {
     find_entities: (name: string, max_radius: number = 1024, limit: number = 8) => {
       const actor = get_actor()
