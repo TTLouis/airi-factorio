@@ -147,7 +147,7 @@ export function create_tools_remote_interface() {
       })
 
       let entity = matches[0]
-      let nearest_distance = entity ? squared_distance(actor.position, entity.position) : math.huge
+      let nearest_distance = entity !== undefined ? squared_distance(actor.position, entity.position) : math.huge
       for (let i = 1; i < matches.length; i++) {
         const candidate = matches[i]
         const candidate_distance = squared_distance(actor.position, candidate.position)

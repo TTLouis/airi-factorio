@@ -285,7 +285,7 @@ export function peek_controlled_actor(): ControlledActor | undefined {
     return standalone_actor
   }
   const surface = game.surfaces[1]
-  return surface ? StandaloneCharacterActor.peek(surface) : undefined
+  return surface !== undefined ? StandaloneCharacterActor.peek(surface) : undefined
 }
 
 export interface NpcLoadReconciliationResult {
@@ -314,7 +314,7 @@ export function reconcile_npc_after_load(): NpcLoadReconciliationResult {
   const surface = game.surfaces[1]
   const actor = standalone_actor?.is_valid
     ? standalone_actor
-    : surface
+    : surface !== undefined
       ? StandaloneCharacterActor.reacquire(surface)
       : undefined
   if (!actor?.is_valid) {
