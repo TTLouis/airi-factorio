@@ -42,8 +42,19 @@ beforeEach(() => {
   ;(globalThis as any).game.tick = 120
   ;(globalThis as any).game.get_entity_by_unit_number = vi.fn(() => undefined)
   ;(globalThis as any).prototypes.entity['assembling-machine-1'] = {
+    type: 'assembling-machine',
+    tile_width: 3,
+    tile_height: 3,
     collision_box: { left_top: { x: -1.4, y: -1.4 }, right_bottom: { x: 1.4, y: 1.4 } },
     selection_box: { left_top: { x: -1.5, y: -1.5 }, right_bottom: { x: 1.5, y: 1.5 } },
+  }
+  ;(globalThis as any).prototypes.entity['burner-mining-drill'] = {
+    type: 'mining-drill',
+    tile_width: 2,
+    tile_height: 2,
+    collision_box: { left_top: { x: -0.9, y: -0.9 }, right_bottom: { x: 0.9, y: 0.9 } },
+    selection_box: { left_top: { x: -1, y: -1 }, right_bottom: { x: 1, y: 1 } },
+    mining_drill_radius: 1.49,
   }
 })
 
@@ -56,7 +67,14 @@ describe('shared local spatial observation', () => {
       tick: 120,
       size: { width: 8, height: 8 },
       actor: { position: { x: 0.5, y: 0.5 } },
-      requested_entity: { name: 'assembling-machine-1', exists: true },
+      requested_entity: {
+        name: 'assembling-machine-1',
+        exists: true,
+        physical_footprint: {
+          tile_width: 3,
+          tile_height: 3,
+        },
+      },
       entity_count: 2,
     })
     expect(result.entities).toEqual(expect.arrayContaining([
@@ -66,6 +84,26 @@ describe('shared local spatial observation', () => {
     expect(result.blocking_terrain.tiles).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'water', position: { x: -1, y: 0 } }),
     ]))
+  })
+
+  it('keeps a mining drill physical footprint separate from its mining working area', () => {
+    const { actor } = fixture()
+    const result: any = local_spatial_observation(actor, {
+      position: { x: 0.5, y: 0.5 },
+      half_size: 4,
+      requested_entity_name: 'burner-mining-drill',
+    })
+
+    expect(result.requested_entity).toMatchObject({
+      name: 'burner-mining-drill',
+      type: 'mining-drill',
+      physical_footprint: {
+        tile_width: 2,
+        tile_height: 2,
+        collision_box: { left_top: { x: -0.9, y: -0.9 }, right_bottom: { x: 0.9, y: 0.9 } },
+      },
+      working_area: { kind: 'mining', radius: 1.49 },
+    })
   })
 
   it('chooses a deterministic valid side-biased placement and exposes rejected collision causes', () => {
@@ -84,6 +122,9 @@ describe('shared local spatial observation', () => {
     expect(result.ok).toBe(true)
     expect(result.best.position.x).toBeGreaterThanOrEqual(1.5)
     expect(result.candidates.length).toBeLessThanOrEqual(3)
+    expect(result.prototype).toMatchObject({
+      physical_footprint: { tile_width: 3, tile_height: 3 },
+    })
     expect(result.corridors).toMatchObject({ input: { reserved: true }, output: { reserved: true }, power: { reserved: true } })
     expect(result.rejected.length).toBeGreaterThan(0)
   })
