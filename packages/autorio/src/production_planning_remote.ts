@@ -1,13 +1,13 @@
 import type { ControlledActor } from './actors/types'
 import type { ConstructionExecutionValidationRequest } from './construction_execution'
 import type { ConstructionObservationRequest, PlacementPlanRequest } from './construction_planning'
-import type { ProductionSolveResult } from './production_planning'
+import type { LiveProductionCandidateSolveResult } from './production_planning_candidates_live'
 import type { LiveProductionSolveRequest } from './production_planning_live'
 import type { ThroughputCapacityRequest } from './throughput_capacity'
 import type { ThroughputMeasurementRequest } from './throughput_measurement'
 import { validate_construction_execution_plan } from './construction_execution'
 import { local_spatial_observation, plan_placement, select_navigation_escape_point } from './construction_planning'
-import { solve_live_production } from './production_planning_live'
+import { solve_live_production_candidates } from './production_planning_candidates_live'
 import { plan_research_path } from './research_path'
 import { throughput_capacity } from './throughput_capacity'
 import { new_throughput_measurement_controller } from './throughput_measurement'
@@ -20,7 +20,7 @@ export function create_production_planning_remote_interface(
   if (!injected_throughput_measurement) script.on_nth_tick(1, () => throughput_measurement.tick())
 
   remote.add_interface('autorio_planning', {
-    solve: (request: LiveProductionSolveRequest): ProductionSolveResult => {
+    solve: (request: LiveProductionSolveRequest): LiveProductionCandidateSolveResult => {
       const actor = get_actor()
       if (!actor) {
         return {
@@ -32,7 +32,7 @@ export function create_production_planning_remote_interface(
           },
         }
       }
-      return solve_live_production(actor, request)
+      return solve_live_production_candidates(actor, request)
     },
     capacity: (request: ThroughputCapacityRequest) => {
       const actor = get_actor()
