@@ -240,17 +240,19 @@ function failureRecoveryHint(failure) {
   return 'operation_failure: the failed operation and dependent queued operations are not successful; use the receipt to choose the smallest necessary recovery'
 }
 
-function steeringDomain(state, failure) {
+function steeringDomain(state, failure, userText = '') {
   const haystack = JSON.stringify({
     objective: state?.objective,
     step: state?.current_step_text,
     operations: state?.last_operations,
     blocker: state?.blocker,
     failure,
+    userText,
   })
   if (/place_entity|placing|construction|PLANNED_COLLISION|WORLD_COLLISION|execute_construction_plan|validateConstructionPlan/i.test(haystack)) return 'construction'
   if (/gather_resource|mine_entity|mine_resource|mining/i.test(haystack)) return 'mining'
   if (/move_items|supply_entity|moving_items|transfer/i.test(haystack)) return 'logistics'
+  if (/water|shore|coast|river|lake|terrain|tile|水边|岸边|海岸|河|湖|水|地形|地图/i.test(haystack)) return 'terrain'
   return 'general'
 }
 
@@ -283,7 +285,7 @@ export function buildSteeringContext(messages) {
   const user = classifyUserSteering(messages)
   const failure = latestFailure(messages)
   const failureHint = failureRecoveryHint(failure)
-  const domain = steeringDomain(state, failure)
+  const domain = steeringDomain(state, failure, user?.text)
   const lines = [
     `${STEERING_MARKER} Harness-generated decision guidance; this is not Factorio world state.`,
     `domain=${domain}`,
@@ -312,6 +314,9 @@ export function buildSteeringContext(messages) {
   if (domain === 'construction') {
     lines.push('construction=physical collision footprint != mining/working area != selection box != pickup/drop position; validate multiple exact placements together before executing them')
   }
+  if (domain === 'terrain') {
+    lines.push('terrain=use getLocalSpatialObservation for live bounded terrain before terrain-dependent movement or construction; terrain_tiles.runs are compact exact tile runs, and water is a tile, not an entity')
+  }
   if (failureHint) lines.push(`recovery=${failureHint}`)
   const delta = receiptDelta(messages)
   if (delta) lines.push(delta)
@@ -324,7 +329,10 @@ export function applySteeringMessages(messages, sourceMessages = messages) {
   if (!steering) return output
   const steeringMessage = { role: 'user', content: steering }
   const last = output.at(-1)
-  if (last?.role === 'user' && typeof last.content === 'string' && last.content.startsWith('[MOD]')) {
+  const terminalInstruction = last?.role === 'user'
+    && typeof last.content === 'string'
+    && (last.content.startsWith('[MOD]') || last.content.startsWith('[HARNESS]'))
+  if (terminalInstruction) {
     output.splice(Math.max(0, output.length - 1), 0, steeringMessage)
   }
   else {
