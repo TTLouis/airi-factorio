@@ -150,6 +150,9 @@ test('behavior trace correlates request through verification, records usage, and
     output_units: 20,
     total_units: 120,
   })
+  const toolResultChars = rows
+    .filter(row => row.event === 'tool.result')
+    .reduce((total, row) => total + row.data.output_chars, 0)
   const completed = rows.find(row => row.event === 'request.completed')
   assert.deepEqual(completed.data.usage, {
     provider_calls: 3,
@@ -160,7 +163,7 @@ test('behavior trace correlates request through verification, records usage, and
     total_units: 360,
     tool_calls: 1,
     duplicate_tool_calls: 0,
-    tool_result_chars: 'tool-output'.length,
+    tool_result_chars: toolResultChars,
     coalesced_runtime_events: 0,
   })
 })

@@ -27,6 +27,7 @@ class FakeRcon {
   constructor() {
     this.status = deployment()
     this.mutations = []
+    this.batchId = 6
   }
 
   async command(text) {
@@ -36,7 +37,7 @@ class FakeRcon {
         task_state: 'idle',
         queue_empty: true,
         queue_length: 0,
-        last_completed_batch: { batch_id: 7, task_count: 1, task_types: ['mining'], tick: 400 },
+        last_completed_batch: { batch_id: this.batchId, task_count: 1, task_types: ['mining'], tick: 400 + this.batchId },
         basic_operation: { last_result: { operation_id: 9, code: 'completed', completed: true } },
       })
     }
@@ -44,6 +45,7 @@ class FakeRcon {
       const marker = text.match(/AIRI_RESULT_[a-f0-9]{24}:/)?.[0]
       assert.ok(marker)
       this.mutations.push(text)
+      this.batchId++
       const admissions = [...text.matchAll(/local r\d+=remote\.call/g)].length
       return `${marker}${JSON.stringify({ ok: true, result: Array.from({ length: admissions }, () => [true, 'Task started']) })}`
     }
