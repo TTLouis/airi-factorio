@@ -97,6 +97,11 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(source).toContain('issue.style.maximal_width = CONTROLS_SECTION_WIDTH - 2 * SECTION_PADDING')
     expect(source).not.toContain('HALF_SECTION_WIDTH')
     expect(source).not.toContain('HALF_VALUE_WIDTH')
+    // Every caption in the grid has to survive the narrower button, so the one
+    // that did not fit is a word rather than a clipped phrase. The full
+    // description stays in the tooltip.
+    expect(source).toContain("caption: skills_open ? 'CLOSE' : 'LEARN'")
+    expect(source).toContain('Open area learning and saved skill candidates in a separate movable window.')
   })
 
   it('does not print the plan step number twice when the plan numbers itself', () => {
