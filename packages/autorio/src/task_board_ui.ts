@@ -14,8 +14,15 @@ const MOD_GUI_TOP_FRAME_NAME = 'mod_gui_top_frame'
 const MOD_GUI_INNER_FRAME_NAME = 'mod_gui_inner_frame'
 const ROOT_NAME = 'airi_task_board_panel'
 const COLUMNS_NAME = 'airi_task_board_columns'
+const LEFT_COLUMN_NAME = 'airi_task_board_left_column'
+const LEFT_DYNAMIC_NAME = 'airi_task_board_left_dynamic'
+const RIGHT_COLUMN_NAME = 'airi_task_board_right_column'
 const PROMPT_SECTION_NAME = 'airi_task_board_prompt_section'
 const PROMPT_FLOW_NAME = 'airi_task_board_prompt_flow'
+const PREVIEW_CAMERA_FRAME_NAME = 'airi_task_board_preview_camera_frame'
+const PREVIEW_CAMERA_NAME = 'airi_task_board_preview_camera'
+const PREVIEW_ZOOM_SLIDER_NAME = 'airi_task_board_preview_zoom'
+const PREVIEW_ZOOM_VALUE_NAME = 'airi_task_board_preview_zoom_value'
 // Area learning lives in its own movable window: its results and the saved
 // candidate list are tall, and inlining them stretched the whole console.
 const SKILLS_ROOT_NAME = 'airi_task_board_skills_panel'
@@ -53,8 +60,12 @@ const SLOT_ROWS = 2
 const SCROLLBAR_WIDTH = 12
 const TRACKER_STEPS_LIST_HEIGHT = 132
 const TRACKER_ACTIVITY_LIST_HEIGHT = 174
-const PREVIEW_CAMERA_SIZE = PREVIEW_COLUMN_WIDTH - 2 * SECTION_PADDING
-const PREVIEW_ZOOM = 0.75
+const PREVIEW_CAMERA_WIDTH = PREVIEW_COLUMN_WIDTH - 2 * SECTION_PADDING
+const PREVIEW_CAMERA_MIN_HEIGHT = 360
+const PREVIEW_ZOOM_DEFAULT = 0.75
+const PREVIEW_ZOOM_MIN = 0.25
+const PREVIEW_ZOOM_MAX = 2
+const PREVIEW_ZOOM_STEP = 0.05
 const COMPACT_BUTTON_HEIGHT = 32
 const COMPACT_TASK_BUTTON_WIDTH = 108
 const COMPACT_ACTION_BUTTON_WIDTH = 132
@@ -180,6 +191,7 @@ declare const storage: {
   airi_task_board_terminate_confirm_until?: Record<number, number>
   airi_task_board_prompt_draft?: Record<number, string>
   airi_task_board_ui_inputs?: TaskBoardUiInput[]
+  airi_task_board_preview_zoom?: Record<number, number>
 }
 
 let world_task_provider: ((this: void) => unknown) | undefined
@@ -322,6 +334,32 @@ function ensure_prompt_draft_state() {
 function ensure_ui_input_queue() {
   if (storage.airi_task_board_ui_inputs === undefined) storage.airi_task_board_ui_inputs = []
   return storage.airi_task_board_ui_inputs
+}
+
+function ensure_preview_zoom_state() {
+  if (storage.airi_task_board_preview_zoom === undefined) storage.airi_task_board_preview_zoom = {}
+  return storage.airi_task_board_preview_zoom
+}
+
+function normalize_preview_zoom(value: unknown) {
+  if (typeof value !== 'number') return PREVIEW_ZOOM_DEFAULT
+  const clamped = math.max(PREVIEW_ZOOM_MIN, math.min(PREVIEW_ZOOM_MAX, value))
+  const steps = math.floor((clamped - PREVIEW_ZOOM_MIN) / PREVIEW_ZOOM_STEP + 0.5)
+  return math.floor((PREVIEW_ZOOM_MIN + steps * PREVIEW_ZOOM_STEP) * 100 + 0.5) / 100
+}
+
+export function task_board_preview_zoom(player_index: number) {
+  return normalize_preview_zoom(storage.airi_task_board_preview_zoom?.[player_index] ?? PREVIEW_ZOOM_DEFAULT)
+}
+
+function set_preview_zoom(player_index: number, value: unknown) {
+  const zoom = normalize_preview_zoom(value)
+  ensure_preview_zoom_state()[player_index] = zoom
+  return zoom
+}
+
+function preview_zoom_caption(zoom: number) {
+  return `${zoom}×`
 }
 
 function enqueue_ui_input(input: TaskBoardUiInput) {
@@ -576,11 +614,11 @@ function emit_prompt(player: LuaPlayer, raw: unknown) {
   return true
 }
 
-function create_section(parent: LuaGuiElement, title: string, width?: number, tooltip?: string) {
+function create_section(parent: LuaGuiElement, title: string, width?: number, tooltip?: string, stretch_vertical = true) {
   const section = parent.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame' })
   if (width !== undefined) section.style.width = width
   else section.style.horizontally_stretchable = true
-  section.style.vertically_stretchable = true
+  section.style.vertically_stretchable = stretch_vertical
 
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
   header.style.horizontally_stretchable = true
@@ -591,7 +629,7 @@ function create_section(parent: LuaGuiElement, title: string, width?: number, to
 
   const body = section.add({ type: 'flow', direction: 'vertical' })
   body.style.horizontally_stretchable = true
-  body.style.vertically_stretchable = true
+  body.style.vertically_stretchable = stretch_vertical
   body.style.padding = SECTION_PADDING
   body.style.vertical_spacing = 6
   return { header, body }
@@ -657,7 +695,7 @@ function overall_state(board: TaskBoardUiSnapshot | undefined, synced_tick: numb
 }
 
 function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot, synced_tick: number | undefined) {
-  const { header, body } = create_section(parent, 'Status', HALF_SECTION_WIDTH)
+  const { header, body } = create_section(parent, 'Status', HALF_SECTION_WIDTH, undefined, false)
   const overall = overall_state(board, synced_tick)
   add_status_badge(header, overall.tone, overall.caption)
 
@@ -707,7 +745,7 @@ function compact_button(button: LuaGuiElement, width: number) {
 }
 
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
-  const { body } = create_section(parent, 'Controls', HALF_SECTION_WIDTH)
+  const { body } = create_section(parent, 'Controls', HALF_SECTION_WIDTH, undefined, false)
   body.style.vertical_spacing = 4
   const follow = runtime.follow
 
@@ -763,7 +801,7 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   }
 }
 
-function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) {
+function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) {
   const { header, body } = create_section(parent, 'NPC World Preview', PREVIEW_COLUMN_WIDTH)
   const preview = runtime.preview
   if (preview === undefined) {
@@ -771,31 +809,64 @@ function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntime
     return
   }
 
+  const zoom = task_board_preview_zoom(player.index)
   const position = header.add({
     type: 'label',
-    caption: `1:1 · X ${math.floor(preview.position.x)} · Y ${math.floor(preview.position.y)}`,
+    caption: `X ${math.floor(preview.position.x)} · Y ${math.floor(preview.position.y)}`,
     style: 'semibold_label',
   })
   position.style.right_padding = 4
 
-  // The preview is deliberately square and fixed-size. The left column may
-  // grow as tracker rows appear, but it must never stretch or squash the camera.
-  const frame = body.add({ type: 'frame', direction: 'vertical', style: 'deep_frame_in_shallow_frame' })
-  frame.style.width = PREVIEW_CAMERA_SIZE
-  frame.style.height = PREVIEW_CAMERA_SIZE
+  // The preview consumes the full height of the right column. Its width stays
+  // fixed, while the camera grows vertically until its bottom aligns with the
+  // Prompt AIRI section at the bottom of the left column.
+  const frame = body.add({
+    type: 'frame',
+    name: PREVIEW_CAMERA_FRAME_NAME,
+    direction: 'vertical',
+    style: 'deep_frame_in_shallow_frame',
+  })
+  frame.style.width = PREVIEW_CAMERA_WIDTH
+  frame.style.minimal_height = PREVIEW_CAMERA_MIN_HEIGHT
   frame.style.horizontally_stretchable = false
-  frame.style.vertically_stretchable = false
+  frame.style.vertically_stretchable = true
   const camera = frame.add({
     type: 'camera',
+    name: PREVIEW_CAMERA_NAME,
     position: preview.position,
     surface_index: preview.surface_index,
-    zoom: PREVIEW_ZOOM,
+    zoom,
   })
-  camera.style.width = PREVIEW_CAMERA_SIZE
-  camera.style.height = PREVIEW_CAMERA_SIZE
-  camera.style.horizontally_stretchable = false
-  camera.style.vertically_stretchable = false
+  camera.style.width = PREVIEW_CAMERA_WIDTH
+  camera.style.minimal_height = PREVIEW_CAMERA_MIN_HEIGHT
+  camera.style.horizontally_stretchable = true
+  camera.style.vertically_stretchable = true
   if (preview.entity?.valid) camera.entity = preview.entity
+
+  const zoom_row = body.add({ type: 'flow', direction: 'horizontal' })
+  zoom_row.style.horizontally_stretchable = true
+  zoom_row.style.vertical_align = 'center'
+  zoom_row.style.horizontal_spacing = 8
+  zoom_row.add({ type: 'label', caption: 'ZOOM', style: 'semibold_label' })
+  const slider = zoom_row.add({
+    type: 'slider',
+    name: PREVIEW_ZOOM_SLIDER_NAME,
+    minimum_value: PREVIEW_ZOOM_MIN,
+    maximum_value: PREVIEW_ZOOM_MAX,
+    value: zoom,
+    value_step: PREVIEW_ZOOM_STEP,
+    discrete_slider: true,
+    discrete_values: true,
+  })
+  slider.style.horizontally_stretchable = true
+  slider.style.width = PREVIEW_CAMERA_WIDTH - 100
+  const zoom_value = zoom_row.add({
+    type: 'label',
+    name: PREVIEW_ZOOM_VALUE_NAME,
+    caption: preview_zoom_caption(zoom),
+    style: 'semibold_label',
+  })
+  zoom_value.style.minimal_width = 46
 }
 
 export function task_board_activity_for_display(board: TaskBoardUiSnapshot | undefined): TaskBoardUiActivity[] {
@@ -973,12 +1044,11 @@ function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   })), 'yellow_slot_button')
 }
 
-// Built once per open window and never rebuilt: destroying the textfield while
-// somebody is typing drops both their keyboard focus and the caret position.
+// Built once per open window and deliberately kept outside LEFT_DYNAMIC_NAME:
+// live refreshes rebuild the status/tracker/resources above it without ever
+// destroying the textfield, keyboard focus, or caret position.
 function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   const section = parent.add({ type: 'frame', name: PROMPT_SECTION_NAME, direction: 'vertical', style: 'inside_shallow_frame' })
-  // Prompt is intentionally left-column only. The right half belongs to the
-  // square world preview instead of a full-width text bar.
   section.style.width = LEFT_COLUMN_WIDTH
   section.style.horizontally_stretchable = false
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
@@ -1039,31 +1109,56 @@ function render_titlebar(root: FrameGuiElement, caption = 'AIRI NPC Console', cl
   })
 }
 
+function build_left_dynamic(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, synced_tick: number | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
+  const top = parent.add({ type: 'flow', direction: 'horizontal' })
+  top.style.horizontal_spacing = COLUMN_SPACING
+  top.style.vertical_align = 'top'
+  render_status_panel(top, board, runtime, synced_tick)
+  render_controls_panel(top, player, board, runtime)
+
+  render_tracker(parent, board)
+
+  const resources = parent.add({ type: 'flow', direction: 'horizontal' })
+  resources.style.horizontal_spacing = COLUMN_SPACING
+  render_inventory(resources, runtime)
+  render_wanted_items(resources, board)
+}
+
 function build_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const board = storage.airi_task_board_ui
   const synced_tick = storage.airi_task_board_ui_synced_tick
   const runtime = runtime_snapshot()
 
-  const left = columns.add({ type: 'flow', direction: 'vertical' })
+  const left = columns.add({ type: 'flow', name: LEFT_COLUMN_NAME, direction: 'vertical' })
   left.style.width = LEFT_COLUMN_WIDTH
   left.style.vertical_spacing = COLUMN_SPACING
 
-  const top = left.add({ type: 'flow', direction: 'horizontal' })
-  top.style.horizontal_spacing = COLUMN_SPACING
-  render_status_panel(top, board, runtime, synced_tick)
-  render_controls_panel(top, player, board, runtime)
+  const dynamic = left.add({ type: 'flow', name: LEFT_DYNAMIC_NAME, direction: 'vertical' })
+  dynamic.style.width = LEFT_COLUMN_WIDTH
+  dynamic.style.vertical_spacing = COLUMN_SPACING
+  build_left_dynamic(dynamic, player, board, synced_tick, runtime)
+  render_prompt(left, player)
 
-  render_tracker(left, board)
-
-  const resources = left.add({ type: 'flow', direction: 'horizontal' })
-  resources.style.horizontal_spacing = COLUMN_SPACING
-  render_inventory(resources, runtime)
-  render_wanted_items(resources, board)
-
-  const right = columns.add({ type: 'flow', direction: 'vertical' })
+  const right = columns.add({ type: 'flow', name: RIGHT_COLUMN_NAME, direction: 'vertical' })
   right.style.width = PREVIEW_COLUMN_WIDTH
-  right.style.vertically_stretchable = false
-  render_world_preview(right, runtime)
+  right.style.vertically_stretchable = true
+  render_world_preview(right, runtime, player)
+}
+
+function refresh_columns(columns: LuaGuiElement, player: LuaPlayer) {
+  const left = columns[LEFT_COLUMN_NAME]
+  const dynamic = left?.valid ? left[LEFT_DYNAMIC_NAME] : undefined
+  const right = columns[RIGHT_COLUMN_NAME]
+  if (!dynamic?.valid || !right?.valid) return false
+
+  const board = storage.airi_task_board_ui
+  const synced_tick = storage.airi_task_board_ui_synced_tick
+  const runtime = runtime_snapshot()
+  dynamic.clear()
+  build_left_dynamic(dynamic, player, board, synced_tick, runtime)
+  right.clear()
+  render_world_preview(right, runtime, player)
+  return true
 }
 
 function build_panel(player: LuaPlayer) {
@@ -1086,7 +1181,6 @@ function build_panel(player: LuaPlayer) {
   const columns = root.add({ type: 'flow', name: COLUMNS_NAME, direction: 'horizontal' })
   columns.style.horizontal_spacing = COLUMN_SPACING
   build_columns(columns, player)
-  render_prompt(root, player)
   root.bring_to_front()
 }
 
@@ -1098,13 +1192,7 @@ function render_panel(player: LuaPlayer) {
 
   const root = player.gui.screen[ROOT_NAME]
   const columns = root?.valid ? root[COLUMNS_NAME] : undefined
-  if (columns?.valid) {
-    // Refresh the live content in place. The prompt row is outside this
-    // container, so typing is never interrupted by an AIRI state update.
-    columns.clear()
-    build_columns(columns, player)
-    return
-  }
+  if (columns?.valid && refresh_columns(columns, player)) return
   build_panel(player)
 }
 
@@ -1176,7 +1264,9 @@ function render_all() {
 
 function prompt_field(player: LuaPlayer) {
   const root = player.gui.screen[ROOT_NAME]
-  const section = root?.valid ? root[PROMPT_SECTION_NAME] : undefined
+  const columns = root?.valid ? root[COLUMNS_NAME] : undefined
+  const left = columns?.valid ? columns[LEFT_COLUMN_NAME] : undefined
+  const section = left?.valid ? left[PROMPT_SECTION_NAME] : undefined
   const row = section?.valid ? section[PROMPT_FLOW_NAME] : undefined
   const field = row?.valid ? row[PROMPT_FIELD_NAME] : undefined
   return field?.valid ? field as TextFieldGuiElement : undefined
@@ -1312,6 +1402,24 @@ export function create_task_board_ui_remote_interface() {
     const player = game.get_player(event.player_index)
     if (!player?.valid) return
     submit_prompt(player, element.text)
+  })
+
+  script.on_event(defines.events.on_gui_value_changed, (event: any) => {
+    const element = event.element
+    if (!element?.valid || element.name !== PREVIEW_ZOOM_SLIDER_NAME) return
+    const player = game.get_player(event.player_index)
+    if (!player?.valid) return
+    const zoom = set_preview_zoom(player.index, element.slider_value)
+    element.slider_value = zoom
+
+    const row = element.parent
+    const value = row?.valid ? row[PREVIEW_ZOOM_VALUE_NAME] : undefined
+    if (value?.valid) value.caption = preview_zoom_caption(zoom)
+
+    const body = row?.parent
+    const frame = body?.valid ? body[PREVIEW_CAMERA_FRAME_NAME] : undefined
+    const camera = frame?.valid ? frame[PREVIEW_CAMERA_NAME] : undefined
+    if (camera?.valid) camera.zoom = zoom
   })
 
   script.on_nth_tick(60, () => {
