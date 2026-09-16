@@ -2,6 +2,7 @@ import type { LuaEntity, LuaInventory, SurfaceCreateEntity } from 'factorio:runt
 import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
 import { resolve_exact_entity } from './entity_reference'
+import { build_interaction_reach, entity_interaction_reach } from './interaction_range'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersMineEntity, PlayerParametersWalkToEntity } from './types'
 import { TaskStates } from './types'
@@ -9,9 +10,6 @@ import { TaskStates } from './types'
 type Manager = ReturnType<typeof new_task_manager>
 type BasicController = ReturnType<typeof new_basic_operation_controller>
 
-const PLAYER_TRANSFER_DISTANCE = 8
-const ENTITY_TRANSFER_DISTANCE = 8
-const MAX_PLACEMENT_DISTANCE = 10
 const MINING_TARGET_SEARCH_RADIUS = 5
 const MINING_REACH_MARGIN = 0.25
 
@@ -304,7 +302,8 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return [false, 'Entity not found in inventory']
     }
 
-    if (task.position && squared_distance(actor.position, task.position) > MAX_PLACEMENT_DISTANCE ** 2) {
+    const build_reach = build_interaction_reach(actor)
+    if (task.position && squared_distance(actor.position, task.position) > build_reach ** 2) {
       controller.fail(actor, task, 'too_far')
       return [false, 'Requested placement position is out of build range']
     }
@@ -359,7 +358,8 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       controller.fail(actor, task, 'different_surface')
       return 0
     }
-    if (squared_distance(actor.position, player.position) > PLAYER_TRANSFER_DISTANCE ** 2) {
+    const reach = entity_interaction_reach(actor)
+    if (squared_distance(actor.position, player.position) > reach ** 2) {
       controller.fail(actor, task, 'too_far')
       return 0
     }
@@ -410,6 +410,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
   function entity_targets(actor: ControlledActor) {
     const task = manager.player_state.parameters_move_items
     if (!task) return undefined
+    const reach = entity_interaction_reach(actor)
 
     if (task.target_unit_number !== undefined) {
       const target = resolve_exact_entity(actor, task.target_unit_number)
@@ -425,7 +426,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
         controller.fail(actor, task, 'wrong_force')
         return undefined
       }
-      if (squared_distance(actor.position, target.position) > ENTITY_TRANSFER_DISTANCE ** 2) {
+      if (squared_distance(actor.position, target.position) > reach ** 2) {
         controller.fail(actor, task, 'too_far')
         return undefined
       }
@@ -439,7 +440,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
 
     const nearby = actor.surface.find_entities_filtered({
       position: actor.position,
-      radius: ENTITY_TRANSFER_DISTANCE,
+      radius: reach,
       name: task.entity_name,
       force: actor.force,
     })
