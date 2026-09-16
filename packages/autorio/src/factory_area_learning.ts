@@ -140,12 +140,23 @@ declare const storage: {
   airi_factory_area_next_id?: number
 }
 
-function analyses() {
+// Read-only views. The console renders the latest analysis on every multiplayer
+// peer, so these must not lazily create their tables: that write would land on
+// one peer only and desync the game.
+function analyses(): Record<string, FactoryAreaAnalysis> {
+  return storage.airi_factory_area_analyses ?? {}
+}
+
+function analysis_order(): string[] {
+  return storage.airi_factory_area_order ?? []
+}
+
+function ensure_analyses() {
   if (storage.airi_factory_area_analyses === undefined) storage.airi_factory_area_analyses = {}
   return storage.airi_factory_area_analyses
 }
 
-function analysis_order() {
+function ensure_analysis_order() {
   if (storage.airi_factory_area_order === undefined) storage.airi_factory_area_order = []
   return storage.airi_factory_area_order
 }
@@ -551,8 +562,8 @@ function build_blocks(entities: FactoryEntityObservation[], relations: FactoryGr
 }
 
 function store_analysis(analysis: FactoryAreaAnalysis) {
-  const registry = analyses()
-  const order = analysis_order()
+  const registry = ensure_analyses()
+  const order = ensure_analysis_order()
   registry[analysis.id] = analysis
   order.push(analysis.id)
   while (order.length > MAX_ANALYSES) {

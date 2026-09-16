@@ -474,7 +474,14 @@ export function canonicalize_skill_definition(value: any): SkillDefinition {
   return skill
 }
 
-function definitions() {
+// Read-only view. The console renders saved skills on every multiplayer peer,
+// and lazily creating this table there would write synchronized game state on
+// one peer only, which desyncs the game.
+function definitions(): Record<string, SkillDefinition> {
+  return storage.airi_skill_definitions ?? {}
+}
+
+function ensure_definitions() {
   if (storage.airi_skill_definitions === undefined) storage.airi_skill_definitions = {}
   return storage.airi_skill_definitions
 }
@@ -486,7 +493,7 @@ function exports_state() {
 
 export function put_skill_definition(value: any) {
   const skill = canonicalize_skill_definition(value)
-  definitions()[skill.id] = skill
+  ensure_definitions()[skill.id] = skill
   return skill
 }
 
@@ -755,19 +762,22 @@ function add_skill_section(parent: LuaGuiElement) {
   return body
 }
 
-function render_factory_learning(body: LuaGuiElement) {
-  const controls = body.add({ type: 'flow', direction: 'horizontal' })
-  controls.style.horizontally_stretchable = true
-  const analyze = controls.add({
+// The action button lives in the console Controls panel; its results render in
+// the skills section below.
+export function render_learn_area_button(parent: LuaGuiElement) {
+  const analyze = parent.add({
     type: 'button',
     name: FACTORY_ANALYZE_BUTTON_NAME,
     caption: 'LEARN AREA',
     style: 'dialog_button',
-    tooltip: `Deterministically inspect a ${FACTORY_DEFAULT_RADIUS * 2}x${FACTORY_DEFAULT_RADIUS * 2} factory area around your current position. No provider call is used.`,
+    tooltip: `Deterministically inspect a ${FACTORY_DEFAULT_RADIUS * 2}x${FACTORY_DEFAULT_RADIUS * 2} factory area around your current position. No provider call is used. Engine scan → factory graph → choose block → SkillCandidate; observation is not verification.`,
   })
-  analyze.style.minimal_width = 130
-  controls.add({ type: 'label', caption: 'Engine scan → factory graph → choose block → SkillCandidate. Observation is not verification.', style: 'grey_label' })
+  analyze.style.minimal_width = 0
+  analyze.style.horizontally_stretchable = true
+  return analyze
+}
 
+export function render_factory_learning(body: LuaGuiElement) {
   const analysis = latest_factory_area_analysis()
   if (!analysis) {
     body.add({ type: 'label', caption: 'No factory area has been analyzed yet.' })
@@ -802,6 +812,8 @@ function render_factory_learning(body: LuaGuiElement) {
   }
 }
 
+// Area learning lives in the console Controls panel; this section lists what
+// was already saved from it.
 export function render_skill_export_section(parent: LuaGuiElement) {
   const body = add_skill_section(parent)
   render_factory_learning(body)

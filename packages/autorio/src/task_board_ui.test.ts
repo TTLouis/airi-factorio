@@ -152,7 +152,9 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain("const MOD_GUI_TOP_FRAME_NAME = 'mod_gui_top_frame'")
     expect(source).toContain("style: 'slot_window_frame'")
     expect(source).toContain("style: 'mod_gui_inside_deep_frame'")
-    expect(source).toMatch(/type: 'sprite-button',\s+name: BUTTON_NAME,\s+sprite: 'entity\/character'/)
+    expect(source).toMatch(/type: 'sprite-button',\s+name: BUTTON_NAME,\s+sprite: BUTTON_SPRITE/)
+    // A plain character icon reads as another player in the mod button bar.
+    expect(source).not.toContain("'entity/character'")
     expect(source).toContain("style: 'slot_button'")
     expect(source).toContain('button.toggled = task_board_ui_is_open(player.index)')
     expect(source).not.toContain("caption: 'AIRI',")
@@ -204,7 +206,63 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('[AIRI_UI_PROMPT]')
     expect(source).toContain('defines.events.on_gui_text_changed')
     expect(source).toContain('defines.events.on_gui_confirmed')
-    expect(source).toContain('task_board_ui_prompt_draft(player.index).length === 0')
+  })
+
+  it('refreshes live content without destroying the prompt field being typed into', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    // The prompt row is a sibling of the refreshed container, so a state update
+    // can never take the player's keyboard focus or caret mid-sentence.
+    expect(source).toContain('columns.clear()')
+    expect(source).toContain('build_columns(columns, player)')
+    expect(source).toMatch(/render_prompt\(root, player\)/)
+    expect(source).not.toContain('render_prompt(left, player)')
+    // The old refresh skipped updates while a draft existed; it no longer has to.
+    expect(source).not.toContain('task_board_ui_prompt_draft(player.index).length === 0')
+  })
+
+  it('places the window before building content so it never opens in the corner', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toMatch(/root\.auto_center = true[\s\S]*render_titlebar\(root\)/)
+    expect(source).not.toContain('root.force_auto_center()')
+  })
+
+  it('does not create storage tables from the render path', () => {
+    ;(globalThis as any).storage = {}
+    // Reading state while drawing must not write synchronized game state: on a
+    // joining client that write happens on one peer only and desyncs the game.
+    expect(task_board_ui_is_open(1)).toBe(false)
+    expect(task_board_ui_prompt_draft(1)).toBe('')
+    expect(task_board_ui_terminate_is_armed(1, 10)).toBe(false)
+    expect((globalThis as any).storage).toEqual({})
+
+    expect(toggle_task_board_ui_open(1)).toBe(true)
+    expect((globalThis as any).storage.airi_task_board_ui_open).toEqual({ 1: true })
+  })
+
+  it('keeps rendering read-only so drawing the console cannot desync multiplayer', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const controller = readFileSync(new URL('./actors/actor_controller.ts', import.meta.url), 'utf8')
+    // get_controlled_actor creates bodies, runs post-load reconciliation and
+    // writes storage; a joining client doing that mid-game desyncs the game.
+    expect(source).toContain('peek_controlled_actor()')
+    expect(source).not.toContain('get_controlled_actor()')
+    expect(controller).toContain('export function peek_controlled_actor()')
+
+    // The console also draws the skill section every refresh, so those reads
+    // must not lazily create their storage tables either.
+    const skills = readFileSync(new URL('./skills.ts', import.meta.url), 'utf8')
+    const learning = readFileSync(new URL('./factory_area_learning.ts', import.meta.url), 'utf8')
+    expect(skills).toContain('return storage.airi_skill_definitions ?? {}')
+    expect(skills).toContain('ensure_definitions()[skill.id] = skill')
+    expect(learning).toContain('return storage.airi_factory_area_analyses ?? {}')
+    expect(learning).toContain('return storage.airi_factory_area_order ?? []')
+  })
+
+  it('offers area learning as a Controls action instead of its own wide section', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const skills = readFileSync(new URL('./skills.ts', import.meta.url), 'utf8')
+    expect(source).toContain('render_learn_area_button(body)')
+    expect(skills).toContain('export function render_learn_area_button(')
   })
 
   it('only emits fixed UI control actions instead of arbitrary console commands', () => {

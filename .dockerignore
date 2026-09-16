@@ -2,6 +2,10 @@ node_modules
 **/node_modules
 .git
 .git/**
+.pixi
+**/.pixi
+models
+**/*.zip
 test-results
 **/test-results
 dist

@@ -1,8 +1,8 @@
 import type { MapPositionStruct } from 'factorio:prototype'
-import type { FrameGuiElement, LuaEntity, LuaGuiElement, LuaPlayer, LuaSurface, SpriteButtonGuiElement, SpritePath } from 'factorio:runtime'
+import type { FrameGuiElement, LuaEntity, LuaGuiElement, LuaPlayer, LuaSurface, SpriteButtonGuiElement, SpritePath, TextFieldGuiElement } from 'factorio:runtime'
 
-import { get_controlled_actor } from './actors/actor_controller'
-import { create_skill_remote_interface, handle_skill_export_click, render_skill_export_section } from './skills'
+import { peek_controlled_actor } from './actors/actor_controller'
+import { create_skill_remote_interface, handle_skill_export_click, render_learn_area_button, render_skill_export_section } from './skills'
 import { get_actor_inventory_items } from './utils/inventory'
 
 const BUTTON_NAME = 'airi_task_board_button'
@@ -12,6 +12,12 @@ const MOD_GUI_LEGACY_FLOW_NAME = 'mod_gui_button_flow'
 const MOD_GUI_TOP_FRAME_NAME = 'mod_gui_top_frame'
 const MOD_GUI_INNER_FRAME_NAME = 'mod_gui_inner_frame'
 const ROOT_NAME = 'airi_task_board_panel'
+const COLUMNS_NAME = 'airi_task_board_columns'
+const PROMPT_SECTION_NAME = 'airi_task_board_prompt_section'
+const PROMPT_FLOW_NAME = 'airi_task_board_prompt_flow'
+// A logistic robot reads as "assistant working for you" in the mod button bar,
+// where a plain character icon looks like another player.
+const BUTTON_SPRITE: SpritePath = 'item/logistic-robot'
 const CLOSE_BUTTON_NAME = 'airi_task_board_close'
 const PAUSE_BUTTON_NAME = 'airi_task_board_pause'
 const TERMINATE_BUTTON_NAME = 'airi_task_board_terminate'
@@ -216,53 +222,56 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
   }
 }
 
-function open_state() {
+// `storage` is synchronized game state. Reads happen while rendering, which runs
+// on every multiplayer peer, so they must never lazily create their table: only
+// the replicated input handlers below are allowed to write.
+function ensure_open_state() {
   if (storage.airi_task_board_ui_open === undefined) storage.airi_task_board_ui_open = {}
   return storage.airi_task_board_ui_open
 }
 
-function terminate_confirm_state() {
+function ensure_terminate_confirm_state() {
   if (storage.airi_task_board_terminate_confirm_until === undefined) storage.airi_task_board_terminate_confirm_until = {}
   return storage.airi_task_board_terminate_confirm_until
 }
 
-function prompt_draft_state() {
+function ensure_prompt_draft_state() {
   if (storage.airi_task_board_prompt_draft === undefined) storage.airi_task_board_prompt_draft = {}
   return storage.airi_task_board_prompt_draft
 }
 
 export function task_board_ui_prompt_draft(player_index: number) {
-  return prompt_draft_state()[player_index] ?? ''
+  return storage.airi_task_board_prompt_draft?.[player_index] ?? ''
 }
 
 function set_prompt_draft(player_index: number, value: unknown) {
-  prompt_draft_state()[player_index] = text(value, MAX_PROMPT_TEXT)
+  ensure_prompt_draft_state()[player_index] = text(value, MAX_PROMPT_TEXT)
 }
 
 export function task_board_ui_is_open(player_index: number) {
-  return open_state()[player_index] === true
+  return storage.airi_task_board_ui_open?.[player_index] === true
 }
 
 export function toggle_task_board_ui_open(player_index: number) {
   const next = !task_board_ui_is_open(player_index)
-  open_state()[player_index] = next
+  ensure_open_state()[player_index] = next
   return next
 }
 
 function close_task_board_ui(player_index: number) {
-  open_state()[player_index] = false
+  ensure_open_state()[player_index] = false
 }
 
 export function task_board_ui_terminate_is_armed(player_index: number, tick: number) {
-  return (terminate_confirm_state()[player_index] ?? 0) >= tick
+  return (storage.airi_task_board_terminate_confirm_until?.[player_index] ?? 0) >= tick
 }
 
 function clear_terminate_confirmation(player_index: number) {
-  terminate_confirm_state()[player_index] = 0
+  ensure_terminate_confirm_state()[player_index] = 0
 }
 
 function arm_terminate(player_index: number) {
-  terminate_confirm_state()[player_index] = game.tick + TERMINATE_CONFIRM_TICKS
+  ensure_terminate_confirm_state()[player_index] = game.tick + TERMINATE_CONFIRM_TICKS
 }
 
 function mod_gui_button_flow(player: LuaPlayer): LuaGuiElement {
@@ -295,7 +304,7 @@ function ensure_button(player: LuaPlayer) {
     : flow.add({
         type: 'sprite-button',
         name: BUTTON_NAME,
-        sprite: 'entity/character',
+        sprite: BUTTON_SPRITE,
         style: 'slot_button',
         tooltip: 'AIRI NPC Console',
       })) as SpriteButtonGuiElement
@@ -403,8 +412,9 @@ function read_world_task(): TaskBoardUiWorldTask | undefined {
   }
 }
 
+// Rendering must stay read-only: this runs on every connected peer.
 function runtime_snapshot(): TaskBoardUiRuntimeSnapshot {
-  const actor = get_controlled_actor()
+  const actor = peek_controlled_actor()
   const identity = actor?.status_snapshot()
   const inventory = actor ? get_actor_inventory_items(actor) : []
   inventory.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
@@ -613,6 +623,8 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   })
   follow_button.style.minimal_width = 0
   follow_button.style.horizontally_stretchable = true
+
+  render_learn_area_button(body)
 }
 
 function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) {
@@ -789,9 +801,18 @@ function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   })), 'yellow_slot_button')
 }
 
+// Built once per open window and never rebuilt: destroying the textfield while
+// somebody is typing drops both their keyboard focus and the caret position.
 function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
-  const { body } = create_section(parent, 'Prompt AIRI')
-  const row = body.add({ type: 'flow', direction: 'horizontal' })
+  const section = parent.add({ type: 'frame', name: PROMPT_SECTION_NAME, direction: 'vertical', style: 'inside_shallow_frame' })
+  section.style.horizontally_stretchable = true
+  const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
+  header.style.horizontally_stretchable = true
+  header.style.vertical_align = 'center'
+  header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
+
+  const row = section.add({ type: 'flow', name: PROMPT_FLOW_NAME, direction: 'horizontal' })
+  row.style.padding = SECTION_PADDING
   row.style.horizontally_stretchable = true
   row.style.vertical_align = 'center'
   row.style.horizontal_spacing = 8
@@ -841,25 +862,10 @@ function render_titlebar(root: FrameGuiElement) {
   })
 }
 
-function render_panel(player: LuaPlayer) {
-  const previous_location = destroy_panel(player)
-  if (!task_board_ui_is_open(player.index)) return
-
-  // Keep Factorio GUI elements strongly typed. Casting these to `any` makes
-  // TypeScriptToLua emit JS-style method calls with the wrong Lua self ABI.
-  const root = player.gui.screen.add({
-    type: 'frame',
-    name: ROOT_NAME,
-    direction: 'vertical',
-  }) as FrameGuiElement
-  render_titlebar(root)
-
+function build_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const board = storage.airi_task_board_ui
   const synced_tick = storage.airi_task_board_ui_synced_tick
   const runtime = runtime_snapshot()
-
-  const columns = root.add({ type: 'flow', direction: 'horizontal' })
-  columns.style.horizontal_spacing = COLUMN_SPACING
 
   const left = columns.add({ type: 'flow', direction: 'vertical' })
   left.style.width = LEFT_COLUMN_WIDTH
@@ -878,15 +884,52 @@ function render_panel(player: LuaPlayer) {
   resources.style.horizontal_spacing = COLUMN_SPACING
   render_inventory(resources, runtime)
   render_wanted_items(resources, board)
-  render_prompt(left, player)
 
   const right = columns.add({ type: 'flow', direction: 'vertical' })
   right.style.vertically_stretchable = true
   render_world_preview(right, runtime)
+}
 
+function build_panel(player: LuaPlayer) {
+  const previous_location = destroy_panel(player)
+
+  // Keep Factorio GUI elements strongly typed. Casting these to `any` makes
+  // TypeScriptToLua emit JS-style method calls with the wrong Lua self ABI.
+  const root = player.gui.screen.add({
+    type: 'frame',
+    name: ROOT_NAME,
+    direction: 'vertical',
+  }) as FrameGuiElement
+
+  // Place the window before any content exists. Centering afterwards leaves it
+  // parked in the top-left corner until the content finishes laying out.
   if (previous_location !== undefined) root.location = previous_location
-  else root.force_auto_center()
+  else root.auto_center = true
+
+  render_titlebar(root)
+  const columns = root.add({ type: 'flow', name: COLUMNS_NAME, direction: 'horizontal' })
+  columns.style.horizontal_spacing = COLUMN_SPACING
+  build_columns(columns, player)
+  render_prompt(root, player)
   root.bring_to_front()
+}
+
+function render_panel(player: LuaPlayer) {
+  if (!task_board_ui_is_open(player.index)) {
+    destroy_panel(player)
+    return
+  }
+
+  const root = player.gui.screen[ROOT_NAME]
+  const columns = root?.valid ? root[COLUMNS_NAME] : undefined
+  if (columns?.valid) {
+    // Refresh the live content in place. The prompt row is outside this
+    // container, so typing is never interrupted by an AIRI state update.
+    columns.clear()
+    build_columns(columns, player)
+    return
+  }
+  build_panel(player)
 }
 
 function render(player: LuaPlayer) {
@@ -897,12 +940,23 @@ function render(player: LuaPlayer) {
 function render_all() {
   for (const player of game.connected_players) {
     ensure_button(player)
-    if (task_board_ui_prompt_draft(player.index).length === 0) render_panel(player)
+    render_panel(player)
   }
+}
+
+function prompt_field(player: LuaPlayer) {
+  const root = player.gui.screen[ROOT_NAME]
+  const section = root?.valid ? root[PROMPT_SECTION_NAME] : undefined
+  const row = section?.valid ? section[PROMPT_FLOW_NAME] : undefined
+  const field = row?.valid ? row[PROMPT_FIELD_NAME] : undefined
+  return field?.valid ? field as TextFieldGuiElement : undefined
 }
 
 function submit_prompt(player: LuaPlayer, raw: unknown) {
   if (!emit_prompt(player, raw)) return false
+  // The prompt row survives refreshes, so the sent text has to be cleared here.
+  const field = prompt_field(player)
+  if (field !== undefined) field.text = ''
   render_panel(player)
   return true
 }
@@ -1002,7 +1056,7 @@ export function create_task_board_ui_remote_interface() {
 
   script.on_nth_tick(60, () => {
     for (const player of game.connected_players) {
-      if (task_board_ui_is_open(player.index) && task_board_ui_prompt_draft(player.index).length === 0) render_panel(player)
+      if (task_board_ui_is_open(player.index)) render_panel(player)
     }
   })
 }

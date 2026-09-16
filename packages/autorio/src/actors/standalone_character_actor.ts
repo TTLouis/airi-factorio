@@ -106,6 +106,25 @@ export class StandaloneCharacterActor implements ControlledActor {
     return new StandaloneCharacterActor(entity, ensure_identity())
   }
 
+  /**
+   * Read-only lookup for UI and diagnostics. Unlike `reacquire` it never
+   * allocates an identity, so it can run on every multiplayer peer without
+   * writing `storage` or drawing from the synced map RNG.
+   */
+  static peek(surface: LuaSurface): StandaloneCharacterActor | undefined {
+    const unit_number = storage.standalone_character_unit_number
+    const identity = storage.standalone_npc_identity
+    if (unit_number === undefined || identity === undefined) return undefined
+
+    const entity = surface
+      .find_entities_filtered({ name: 'character' })
+      .find(candidate => candidate.unit_number === unit_number)
+
+    if (!entity) return undefined
+
+    return StandaloneCharacterActor.from_registered_entity(entity, identity)
+  }
+
   get is_valid(): boolean {
     return this.character_entity.valid
   }

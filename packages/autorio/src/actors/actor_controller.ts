@@ -249,6 +249,25 @@ export function get_controlled_actor(): ControlledActor | undefined {
   return get_player_actor()
 }
 
+/**
+ * Read-only actor lookup for rendering and diagnostics.
+ *
+ * GUI code runs on every multiplayer peer, so it must never create a body, run
+ * post-load reconciliation or write `storage`. `get_controlled_actor` does all
+ * three, and a joining client calling it stops the NPC's walking state locally
+ * while the server keeps walking, which desyncs the game.
+ */
+export function peek_controlled_actor(): ControlledActor | undefined {
+  if (get_actor_mode() !== 'npc') {
+    return get_player_actor()
+  }
+  if (standalone_actor?.is_valid) {
+    return standalone_actor
+  }
+  const surface = game.surfaces[1]
+  return surface ? StandaloneCharacterActor.peek(surface) : undefined
+}
+
 export function get_load_reconciliation_status() {
   return {
     policy: 'discard_autorio_tasks_and_stop_npc_controls_on_load',
