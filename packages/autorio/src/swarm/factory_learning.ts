@@ -111,9 +111,11 @@ export function augment_factory_skill_candidate(
 }
 
 export function new_swarm_factory_learning_service() {
-  const swarm = get_swarm_storage()
-
   function analyze(actorId: ActorId, request: FactoryAreaLearningRequest = {}) {
+    // Factorio save/load and deterministic test reset paths may replace the
+    // persistent swarm root while the remote interface remains alive. Always
+    // resolve the authoritative current root instead of retaining a stale table.
+    const swarm = get_swarm_storage()
     if (swarm.actors[actorId] === undefined) return { ok: false as const, code: 'unknown_actor' as const }
     const resolved = temporary_registry_for(swarm, actorId)
     if (!resolved.ok) return resolved
