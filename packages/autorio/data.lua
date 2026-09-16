@@ -44,11 +44,15 @@ radar.connects_to_other_radars = false
 
 data:extend({radar})
 
--- The console's Recent activity feed follows new events until the player
--- scrolls it by hand. Factorio exposes neither a scroll offset nor a scroll
--- event to Lua, so the wheel itself is the signal. consuming = "none" leaves the
--- wheel doing everything it normally does (scrolling the feed, zooming the map);
--- these inputs only listen. Players can rebind or clear them under Controls.
+-- These listen-only wheel inputs were introduced to stop Recent activity follow
+-- when a player manually scrolls the feed. The control-stage handler assumed a
+-- CustomInputEvent exposes the hovered GUI element, but Factorio does not make
+-- that relationship available through this event. In 2.0.77 the unsafe handler
+-- can be invoked without a usable event payload and crash the whole multiplayer
+-- server. Keep the prototypes so existing control-stage registrations and save
+-- bindings stay valid, but disable them until the handler is replaced with an
+-- event-safe implementation. The LIVE/PAUSED button and hover hold behavior
+-- remain available in the console.
 data:extend({
   {
     type = "custom-input",
@@ -57,6 +61,7 @@ data:extend({
     key_sequence = "mouse-wheel-up",
     consuming = "none",
     action = "lua",
+    enabled = false,
   },
   {
     type = "custom-input",
@@ -65,5 +70,6 @@ data:extend({
     key_sequence = "mouse-wheel-down",
     consuming = "none",
     action = "lua",
+    enabled = false,
   },
 })
