@@ -15,6 +15,7 @@ declare const storage: {
   airi_task_board_ui_revision?: number
   airi_task_board_ui?: any
   airi_task_board_ui_suppressed?: { goal_id: string, objective: string }
+  airi_task_board_ui_last_seen?: { goal_id: string, objective: string }
   airi_task_board_ui_inputs?: any[]
   airi_task_board_follow_seen?: Record<number, boolean>
 }
@@ -83,9 +84,12 @@ export function current_sync_version() {
   return { generation: storage.airi_task_board_ui_generation ?? 0, revision: storage.airi_task_board_ui_revision ?? 0 }
 }
 
+function snapshot_identity(board: any) {
+  return { goal_id: clean_text(board?.goal_id, 100), objective: clean_text(board?.objective, 500) }
+}
 export function suppress_snapshot(board: any) {
   if (board === undefined || board === null) return
-  storage.airi_task_board_ui_suppressed = { goal_id: clean_text(board.goal_id, 100), objective: clean_text(board.objective, 500) }
+  storage.airi_task_board_ui_suppressed = snapshot_identity(board)
 }
 export function clear_snapshot_suppression() { storage.airi_task_board_ui_suppressed = undefined }
 export function snapshot_is_suppressed(value: any) {
@@ -97,32 +101,52 @@ export function snapshot_is_suppressed(value: any) {
   return goal_id.length === 0 || goal_id === suppressed.goal_id
 }
 
-// task_board_ui registers its interface after module import. At runtime only,
-// wrap that one registration so a clear creates a tombstone and a delayed old
-// heartbeat cannot re-publish the just-terminated goal. Restore add_interface as
-// soon as the target interface has been registered. The guard is inert in unit
-// tests where Factorio's `remote` global does not exist.
-function install_remote_guard() {
-  if (typeof remote === 'undefined' || typeof remote.add_interface !== 'function') return
-  const original_add_interface = remote.add_interface
-  ;(remote as any).add_interface = (name: string, functions: Record<string, (...args: any[]) => any>) => {
-    if (name !== 'autorio_task_board') return original_add_interface(name, functions)
-    const set_snapshot = functions.set_snapshot
-    const clear = functions.clear
-    functions.set_snapshot = (value: unknown, ...args: unknown[]) => {
-      if (snapshot_is_suppressed(value)) return true
-      clear_snapshot_suppression()
-      return set_snapshot(value, ...args)
-    }
-    functions.clear = (...args: unknown[]) => {
-      suppress_snapshot(storage.airi_task_board_ui)
-      return clear(...args)
-    }
-    ;(remote as any).add_interface = original_add_interface
-    return original_add_interface(name, functions)
+function terminate_is_queued() {
+  for (const input of storage.airi_task_board_ui_inputs ?? []) {
+    if (input?.kind === 'control' && input?.action === 'terminate') return true
   }
+  return false
 }
-install_remote_guard()
+
+/**
+ * Keep the UI projection monotonic around destructive clears without mutating
+ * Factorio's `remote` object. The confirmed Terminate input creates a tombstone
+ * before the runtime can drain it. We also learn a tombstone whenever a board
+ * that was visible disappears, covering runtime-originated clears. If an old
+ * heartbeat later republishes that same goal (including the plan-less live
+ * projection with an empty goal id), clear it through the public remote
+ * interface on the next deterministic game tick. A new durable goal id or a
+ * different objective is accepted and becomes the new baseline.
+ */
+export function reconcile_task_board_freshness() {
+  const current = storage.airi_task_board_ui
+  if (terminate_is_queued() && current !== undefined) {
+    suppress_snapshot(current)
+    storage.airi_task_board_ui_last_seen = snapshot_identity(current)
+    return false
+  }
+  if (current === undefined) {
+    if (storage.airi_task_board_ui_suppressed === undefined && storage.airi_task_board_ui_last_seen !== undefined) {
+      storage.airi_task_board_ui_suppressed = storage.airi_task_board_ui_last_seen
+    }
+    return false
+  }
+  if (snapshot_is_suppressed(current)) {
+    if (typeof remote !== 'undefined' && remote.interfaces?.autorio_task_board !== undefined) remote.call('autorio_task_board', 'clear')
+    else storage.airi_task_board_ui = undefined
+    return true
+  }
+  storage.airi_task_board_ui_last_seen = snapshot_identity(current)
+  if (storage.airi_task_board_ui_suppressed !== undefined) clear_snapshot_suppression()
+  return false
+}
+
+// No other Autorio module owns on_tick. Keeping this watchdog separate from the
+// one-second UI refresh means a stale goal can only flash for at most one game
+// tick if an old unversioned runtime snapshot arrives after a clear.
+if (typeof script !== 'undefined' && typeof defines !== 'undefined') {
+  script.on_event(defines.events.on_tick, () => { reconcile_task_board_freshness() })
+}
 
 function ensure_debug_open_state() { if (storage.airi_task_board_debug_open === undefined) storage.airi_task_board_debug_open = {}; return storage.airi_task_board_debug_open }
 export function debug_ui_is_open(player_index: number) { return storage.airi_task_board_debug_open?.[player_index] === true }
