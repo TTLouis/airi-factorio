@@ -94,10 +94,37 @@ def run(client, results: Path) -> None:
     bottom = position['y'] + chart_radius
     chart_command = (
         '/silent-command '
-        f'game.forces["player"].chart(game.surfaces[1], '
-        f'{{{{x={left}, y={top}}}, {{x={right}, y={bottom}}}}})'
+        f'local f=game.forces["player"]; local s=game.surfaces[1]; '
+        f'f.chart(s, {{{{x={left}, y={top}}}, {{x={right}, y={bottom}}}}}); '
+        'rcon.print("AIRI_CHART_REQUESTED")'
     )
-    command(chart_command)
+    chart_response = command(chart_command)
+    if chart_response != 'AIRI_CHART_REQUESTED':
+        # Factorio 2.x may reject the first Lua console command in a fresh
+        # process while enabling script commands. Repeating the identical safe
+        # request mirrors the existing RCON handshake used by run.py.
+        chart_response = command(chart_command)
+    assert_true(chart_response == 'AIRI_CHART_REQUESTED', f'chart request did not execute: {chart_response!r}')
+
+    chunk_x = int(position['x'] // 32)
+    chunk_y = int(position['y'] // 32)
+    chart_state_expr = (
+        '(function() local f=game.forces["player"]; local s=game.surfaces[1]; '
+        f'local c={{x={chunk_x},y={chunk_y}}}; '
+        'return {charted=f.is_chunk_charted(s,c), visible=f.is_chunk_visible(s,c), '
+        'requested=f.is_chunk_requested_for_charting(s,c)} end)()'
+    )
+    chart_state = None
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        chart_state = decode_json(command(lua_json(chart_state_expr)), 'map chart state')
+        if chart_state.get('charted') is True and chart_state.get('visible') is True:
+            break
+        time.sleep(0.1)
+    assert_true(
+        chart_state is not None and chart_state.get('charted') is True and chart_state.get('visible') is True,
+        f'chart request did not become charted+visible within 8s: {chart_state!r}',
+    )
 
     query = call(
         'autorio_swarm_map',
@@ -164,6 +191,7 @@ def run(client, results: Path) -> None:
         'before_physical_actor_id': before_physical,
         'after_physical_actor_id': after_physical,
         'prechart_code': prechart_query.get('code'),
+        'chart_state': chart_state,
         'query_returned_count': query.get('returned_count'),
         'rebound_query_returned_count': rebound_query.get('returned_count'),
         'learning_policy': learning.get('policy'),
