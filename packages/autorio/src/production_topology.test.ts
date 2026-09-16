@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ProductionSolveSuccess } from './production_planning'
+import type { ProductionRecipeRate, ProductionSolveSuccess } from './production_planning'
 import { production_topology_context } from './production_topology'
 
 function solved(overrides: Partial<ProductionSolveSuccess>): ProductionSolveSuccess {
@@ -22,13 +22,15 @@ function recipeRate(
   product: { type: 'item' | 'fluid', name: string, amount: number },
   required_output_rate_per_second: number,
   ingredient_rates: Array<{ type: 'item' | 'fluid', name: string, rate_per_second: number }>,
-) {
+  machine?: ProductionRecipeRate['machine'],
+): ProductionRecipeRate {
   return {
     recipe_name,
     product,
     required_output_rate_per_second,
     crafts_per_second: required_output_rate_per_second,
     ingredient_rates,
+    ...(machine ? { machine } : {}),
     evidence_ids: [],
   }
 }
@@ -59,6 +61,11 @@ describe('production topology candidates', () => {
       rate_per_second: 10,
     }])
     expect(topology.external_requirements).toEqual({ item_input_count: 2, fluid_input_count: 0 })
+    expect(topology.layout_readiness).toMatchObject({
+      ready: false,
+      missing_machine_selections: ['copper-cable', 'electronic-circuit'],
+      machine_groups: [],
+    })
     expect(topology.candidate_ordering).toBe('canonical_not_ranked')
     expect(topology.candidates.map(candidate => candidate.kind)).toEqual(['belt-fed', 'direct-insertion'])
     expect(topology.candidates[1]).toMatchObject({
@@ -66,6 +73,43 @@ describe('production topology candidates', () => {
       requires_validation: ['inserter_throughput', 'adjacency', 'external_item_transport'],
     })
     expect(topology.semantics.selection).toContain('not a ranking')
+  })
+
+  it('exposes compact machine groups only when every recipe is fully sized', () => {
+    const topology = production_topology_context(solved({
+      fully_sized: true,
+      sized_machine_count: 5,
+      recipe_rates: [
+        recipeRate('a-recipe', { type: 'item', name: 'a', amount: 1 }, 2, [], {
+          name: 'assembling-machine-2',
+          crafting_speed: 0.75,
+          machine_count: 2,
+          nominal_output_rate_per_second: 2.25,
+          utilization: 0.8888888889,
+          evidence_ids: ['machine:a'],
+        }),
+        recipeRate('b-recipe', { type: 'item', name: 'target', amount: 1 }, 3, [
+          { type: 'item', name: 'a', rate_per_second: 2 },
+        ], {
+          name: 'assembling-machine-1',
+          crafting_speed: 0.5,
+          machine_count: 3,
+          nominal_output_rate_per_second: 3,
+          utilization: 1,
+          evidence_ids: ['machine:b'],
+        }),
+      ],
+    }))
+
+    expect(topology.layout_readiness).toEqual({
+      ready: true,
+      missing_machine_selections: [],
+      machine_groups: [
+        { recipe_name: 'a-recipe', machine_name: 'assembling-machine-2', machine_count: 2 },
+        { recipe_name: 'b-recipe', machine_name: 'assembling-machine-1', machine_count: 3 },
+      ],
+      semantics: 'all recipe machine prototypes and counts are explicitly sized; spatial planning may use these machine groups but must still validate footprints, topology constraints, transport and live placement',
+    })
   })
 
   it('offers a shared-intermediate strategy for one intermediate feeding multiple recipes', () => {

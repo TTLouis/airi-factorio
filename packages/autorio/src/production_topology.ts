@@ -29,6 +29,19 @@ export interface ProductionInternalTransfer {
   rate_per_second: number
 }
 
+export interface ProductionTopologyMachineGroup {
+  recipe_name: string
+  machine_name: string
+  machine_count: number
+}
+
+export interface ProductionTopologyLayoutReadiness {
+  ready: boolean
+  missing_machine_selections: string[]
+  machine_groups: ProductionTopologyMachineGroup[]
+  semantics: string
+}
+
 export interface ProductionTopologyCandidate {
   candidate_id: string
   kind: ProductionTopologyCandidateKind
@@ -45,6 +58,7 @@ export interface ProductionTopologyContext {
     item_input_count: number
     fluid_input_count: number
   }
+  layout_readiness: ProductionTopologyLayoutReadiness
   candidate_ordering: 'canonical_not_ranked'
   candidates: ProductionTopologyCandidate[]
   semantics: {
@@ -92,6 +106,47 @@ function sort_transfers(values: ProductionInternalTransfer[]) {
         values[j] = previous
       }
     }
+  }
+}
+
+function sort_machine_groups(values: ProductionTopologyMachineGroup[]) {
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      const left = `${values[i].recipe_name}:${values[i].machine_name}`
+      const right = `${values[j].recipe_name}:${values[j].machine_name}`
+      if (right < left) {
+        const previous = values[i]
+        values[i] = values[j]
+        values[j] = previous
+      }
+    }
+  }
+}
+
+function layout_readiness(solution: ProductionSolveSuccess): ProductionTopologyLayoutReadiness {
+  const missing_machine_selections: string[] = []
+  const machine_groups: ProductionTopologyMachineGroup[] = []
+  for (const recipe of solution.recipe_rates) {
+    if (!recipe.machine) {
+      missing_machine_selections.push(recipe.recipe_name)
+      continue
+    }
+    machine_groups.push({
+      recipe_name: recipe.recipe_name,
+      machine_name: recipe.machine.name,
+      machine_count: recipe.machine.machine_count,
+    })
+  }
+  sort_strings(missing_machine_selections)
+  sort_machine_groups(machine_groups)
+  const ready = solution.fully_sized === true && missing_machine_selections.length === 0
+  return {
+    ready,
+    missing_machine_selections,
+    machine_groups: ready ? machine_groups : [],
+    semantics: ready
+      ? 'all recipe machine prototypes and counts are explicitly sized; spatial planning may use these machine groups but must still validate footprints, topology constraints, transport and live placement'
+      : 'spatial planning is not ready; choose explicit machine_selections for every listed recipe and re-run solveProduction before generating a production layout',
   }
 }
 
@@ -245,6 +300,7 @@ export function production_topology_context(solution: ProductionSolveSuccess): P
       item_input_count: external_item_count,
       fluid_input_count: external_fluid_count,
     },
+    layout_readiness: layout_readiness(solution),
     candidate_ordering: 'canonical_not_ranked',
     candidates,
     semantics: {
