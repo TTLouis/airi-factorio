@@ -3,12 +3,14 @@ import {
   ACTIVITY_FILTER_ALL,
   activity_filter_mask,
   activity_filter_selected,
+  activity_history,
   activity_key,
   activity_matches_mask,
   activity_rows_diff,
   activity_should_scroll,
   activity_unseen,
   activity_view,
+  merge_activity_history,
   reset_activity_view,
   resume_activity_follow,
   set_activity_hover,
@@ -71,9 +73,30 @@ describe('recent activity filters', () => {
 })
 
 describe('recent activity rows', () => {
+  beforeEach(() => { delete store.airi_task_board_activity_history })
+
   it('identifies runtime events by id and derived ones by content', () => {
     expect(activity_key({ id: 'e1', kind: 'action', text: 'x' })).toBe('id:e1')
     expect(activity_key({ kind: 'system', text: 'Paused', timestamp: '00:01:00' })).toBe('system|00:01:00|Paused')
+  })
+
+  it('retains overlapping snapshot windows as one scrollable history', () => {
+    merge_activity_history([
+      { id: 'e1', kind: 'observation', text: 'first', timestamp: '00:00:01' },
+      { id: 'e2', kind: 'action', text: 'second', timestamp: '00:00:02' },
+    ])
+    merge_activity_history([
+      { id: 'e2', kind: 'action', text: 'second', timestamp: '00:00:02' },
+      { id: 'e3', kind: 'result', text: 'third', timestamp: '00:00:03' },
+    ])
+    expect(activity_history().map(entry => entry.id)).toEqual(['e1', 'e2', 'e3'])
+  })
+
+  it('bounds retained history without making heartbeat snapshots larger', () => {
+    merge_activity_history(Array.from({ length: 180 }, (_, index) => ({ id: `e${index}`, kind: 'note' as const, text: `${index}` })))
+    expect(activity_history()).toHaveLength(160)
+    expect(activity_history()[0].id).toBe('e20')
+    expect(activity_history().at(-1)?.id).toBe('e179')
   })
 
   it('appends new rows and drops trimmed ones instead of rebuilding the feed', () => {
