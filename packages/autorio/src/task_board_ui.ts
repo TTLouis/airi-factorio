@@ -651,7 +651,7 @@ export function create_task_board_ui_remote_interface() {
     if (element.name === BUTTON_NAME) { toggle_task_board_ui_open(player.index); render(player); return }
     if (element.name === CLOSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); close_task_board_ui(player.index); close_task_board_skills_ui(player.index); destroy_skills_popout(player); destroy_panel(player); ensure_button(player); return }
     if (element.name === SKILLS_BUTTON_NAME) { toggle_task_board_skills_ui_open(player.index); render_panel(player); render_skills_popout(player); return }
-    if (element.name === SKILLS_CLOSE_BUTTON_NAME) { close_task_board_skills_ui_open(player.index); destroy_skills_popout(player); render_panel(player); return }
+    if (element.name === SKILLS_CLOSE_BUTTON_NAME) { close_task_board_skills_ui(player.index); destroy_skills_popout(player); render_panel(player); return }
     if (handle_learning_ui_click(player, element.name)) { render_skills_popout(player); return }
     if (handle_skill_export_click(player, element.name)) { render_skills_popout(player); return }
     handle_control_click(player, element.name)
