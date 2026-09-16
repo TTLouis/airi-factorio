@@ -1,5 +1,6 @@
 import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
+import { create_map_construction_remote_interface } from './map_construction'
 import { create_map_remote_interface } from './map_remote'
 
 const MIN_LONG_RANGE_RADIUS = 64
@@ -177,6 +178,7 @@ export function find_nearest_enemy(actor: ControlledActor, max_distance: number 
 
 export function create_discovery_remote_interface(get_actor: () => ControlledActor | undefined) {
   create_map_remote_interface(get_actor)
+  create_map_construction_remote_interface(get_actor)
   remote.add_interface('autorio_discovery', {
     find_entities: (name: string, max_radius: number = 1024, limit: number = 8) => {
       const actor = get_actor()
