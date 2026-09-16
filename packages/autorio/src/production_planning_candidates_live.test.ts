@@ -80,8 +80,8 @@ describe('live production route candidate solver', () => {
       ['route-b'],
     ])
     expect(candidates.map(item => item.route_choices)).toEqual([
-      [{ material: { type: 'item', name: 'target' }, recipe_name: 'route-a' }],
-      [{ material: { type: 'item', name: 'target' }, recipe_name: 'route-b' }],
+      [{ material: { type: 'item', name: 'target', rate_per_second: 4 }, recipe_name: 'route-a' }],
+      [{ material: { type: 'item', name: 'target', rate_per_second: 4 }, recipe_name: 'route-b' }],
     ])
     expect(externalRate(candidates[0], 'raw-a')).toBeCloseTo(8)
     expect(externalRate(candidates[1], 'raw-b')).toBeCloseTo(6)
