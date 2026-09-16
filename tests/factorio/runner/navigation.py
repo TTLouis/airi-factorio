@@ -157,6 +157,8 @@ def run(client: Rcon, results: Path) -> None:
             break
         time.sleep(0.05)
     require(accepted_path is not None, 'navigation never accepted an initial path before target relocation')
+    initial_repath_tick = (accepted_path.get('path') or {}).get('last_repath_tick')
+    require(isinstance(initial_repath_tick, int), accepted_path)
 
     moved = json_command(
         "/silent-command local target=nil; for _,e in pairs(game.surfaces[1].find_entities_filtered{name='wooden-chest'}) do "
@@ -166,10 +168,30 @@ def run(client: Rcon, results: Path) -> None:
         'moving target relocation',
     )
     require(moved['ok'] is True, moved)
+
+    repath_deadline = time.monotonic() + 8.0
+    observed_repath = None
+    while time.monotonic() < repath_deadline:
+        nav = navigation_status('moving target repath wait')
+        path = nav.get('path') or {}
+        last_repath_tick = path.get('last_repath_tick')
+        if (
+            nav.get('task_active') is True
+            and isinstance(last_repath_tick, int)
+            and last_repath_tick > initial_repath_tick
+            and path.get('last_recovery_reason') == 'target_moved'
+        ):
+            observed_repath = nav
+            break
+        if nav.get('task_active') is False:
+            break
+        time.sleep(0.02)
+    require(observed_repath is not None, {'initial_path': accepted_path, 'last_status': nav, 'moved': moved})
+
     wait_for_idle('navigation moving target', 30)
     moving_after = observe(moving_fixture['target_id'], 'wooden-chest', 'moving target after')
     moving_nav = navigation_status('moving target navigation result')
-    assert_reached(moving_before, moving_after, moving_nav, actor_id, moving_fixture['target_id'], minimum_attempts=2)
+    assert_reached(moving_before, moving_after, moving_nav, actor_id, moving_fixture['target_id'])
     require(squared_distance(moving_after['target_position'], moved['position']) < 0.01, (moving_after, moved))
 
     # Case 3: put a target on a small island inside a wide water moat. The
@@ -247,7 +269,13 @@ def run(client: Rcon, results: Path) -> None:
         'status': 'pass',
         'actor_id': actor_id,
         'obstacle': {'before': obstacle_before, 'after': obstacle_after, 'navigation': obstacle_nav},
-        'moving_target': {'before': moving_before, 'after': moving_after, 'navigation': moving_nav, 'relocation': moved},
+        'moving_target': {
+            'before': moving_before,
+            'after': moving_after,
+            'navigation': moving_nav,
+            'relocation': moved,
+            'observed_repath': observed_repath,
+        },
         'unreachable': {'before': unreachable_before, 'after': unreachable_after, 'navigation': unreachable_nav, 'quiet': quiet},
         'transport_belt': {'fixture': belt_fixture, 'before': belt_before, 'after': belt_after},
     }
