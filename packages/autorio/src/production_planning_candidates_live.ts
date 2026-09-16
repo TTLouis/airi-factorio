@@ -1,17 +1,22 @@
 import type { ControlledActor } from './actors/types'
-import type { ProductionMaterialType, ProductionSolveFailure, ProductionSolveResult, ProductionSolveSuccess, ProductionTarget } from './production_planning'
+import type { ProductionMaterialType, ProductionSolveFailure, ProductionSolveSuccess, ProductionTarget } from './production_planning'
+import type { ProductionTopologyContext } from './production_topology'
 import type { LiveProductionSolveRequest } from './production_planning_live'
 import { solve_live_production } from './production_planning_live'
+import { production_topology_context } from './production_topology'
 
 export interface ProductionRouteChoice {
   material: { type: ProductionMaterialType, name: string }
   recipe_name: string
 }
+export interface ProductionSolvedRoute extends ProductionSolveSuccess {
+  topology: ProductionTopologyContext
+}
 export interface ProductionRouteCandidate {
   candidate_id: string
   route_recipe_names: string[]
   route_choices: ProductionRouteChoice[]
-  solution: ProductionSolveSuccess
+  solution: ProductionSolvedRoute
 }
 export interface ProductionCandidateSolveSuccess {
   ok: true
@@ -20,7 +25,7 @@ export interface ProductionCandidateSolveSuccess {
   candidate_count: number
   candidates: ProductionRouteCandidate[]
 }
-export type LiveProductionCandidateSolveResult = ProductionSolveResult | ProductionCandidateSolveSuccess
+export type LiveProductionCandidateSolveResult = ProductionSolveFailure | ProductionSolvedRoute | ProductionCandidateSolveSuccess
 
 const MAX_CANDIDATES = 5
 const MAX_EXPLORED = 16
@@ -78,6 +83,9 @@ function merge(left: Plan, right: Plan): Plan | undefined {
   return { recipes, choices }
 }
 function materialType(value: unknown): ProductionMaterialType | undefined { return value === 'item' || value === 'fluid' ? value : undefined }
+function with_topology(solution: ProductionSolveSuccess): ProductionSolvedRoute {
+  return { ...solution, topology: production_topology_context(solution) }
+}
 
 function enumerate(actor: ControlledActor, material: Material, calculation_id: string, stack: string[]): Enumeration {
   if (stack.length > MAX_DEPTH) return { failure: fail(calculation_id, 'LIMIT_EXCEEDED', `production graph exceeds depth ${MAX_DEPTH}`) }
@@ -116,9 +124,16 @@ function publicChoices(route: Plan) {
 }
 
 export function solve_live_production_candidates(actor: ControlledActor, request: LiveProductionSolveRequest): LiveProductionCandidateSolveResult {
-  if (request?.included_recipe_names !== undefined) return solve_live_production(actor, request)
+  if (request?.included_recipe_names !== undefined) {
+    const solved = solve_live_production(actor, request)
+    return solved.ok ? with_topology(solved) : solved
+  }
   const probe = solve_live_production(actor, { calculation_id: request.calculation_id, target: request.target })
-  if (probe.ok || probe.error.code !== 'AMBIGUOUS_RECIPE') return probe.ok ? solve_live_production(actor, request) : probe
+  if (probe.ok || probe.error.code !== 'AMBIGUOUS_RECIPE') {
+    if (!probe.ok) return probe
+    const solved = solve_live_production(actor, request)
+    return solved.ok ? with_topology(solved) : solved
+  }
 
   const found = enumerate(actor, request.target, request.calculation_id, [])
   if (found.failure) return found.failure
@@ -135,7 +150,7 @@ export function solve_live_production_candidates(actor: ControlledActor, request
     const machine_selections = request.machine_selections?.filter(selection => routeHas(route, selection.recipe_name))
     const solved = solve_live_production(actor, { calculation_id: request.calculation_id, target: request.target, included_recipe_names: route.recipes, machine_selections })
     if (!solved.ok) return solved
-    candidates.push({ candidate_id: `route-${candidates.length + 1}`, route_recipe_names: route.recipes, route_choices: publicChoices(route), solution: solved })
+    candidates.push({ candidate_id: `route-${candidates.length + 1}`, route_recipe_names: route.recipes, route_choices: publicChoices(route), solution: with_topology(solved) })
   }
   if (candidates.length === 0) return probe
   if (candidates.length === 1) return candidates[0].solution
