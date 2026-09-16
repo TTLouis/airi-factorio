@@ -162,7 +162,7 @@ const TONE_SPRITES: Record<Tone, SpritePath> = {
 }
 
 export interface TaskBoardUiStep { id: string, description: string, status: 'pending' | 'active' | 'completed' | 'blocked' | 'paused' }
-export interface TaskBoardUiActivity { kind: TaskBoardUiActivityKind, text: string, timestamp?: string }
+export interface TaskBoardUiActivity { id?: string, kind: TaskBoardUiActivityKind, text: string, timestamp?: string }
 export interface TaskBoardUiWantedItem { name: string, count: number, reason: string }
 export interface TaskBoardUiAgentStatus { phase: TaskBoardUiAgentPhase, detail: string }
 export interface TaskBoardUiSnapshot {
@@ -252,8 +252,10 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
     const entry = raw_activity[index]
     const entry_text = text(entry?.text, 1000)
     if (entry_text.length === 0) continue
+    const id = text(entry?.id, 120)
     const timestamp = text(entry?.timestamp, 16)
     const next: TaskBoardUiActivity = { kind: activity_kind(entry?.kind), text: entry_text }
+    if (id.length > 0) next.id = id
     if (timestamp.length > 0) next.timestamp = timestamp
     activity.push(next)
   }
@@ -285,15 +287,23 @@ export function task_board_game_time(tick: number) {
   const seconds = total_seconds % 60
   return `${two_digits(hours)}:${two_digits(minutes)}:${two_digits(seconds)}`
 }
-function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBoardUiSnapshot | undefined, tick: number) {
+export function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBoardUiSnapshot | undefined, tick: number) {
   const previous_activity = previous?.activity ?? []
   const used: boolean[] = []
   const now = task_board_game_time(tick)
   return { ...next, activity: next.activity.map(entry => {
     if (entry.timestamp !== undefined && entry.timestamp.length > 0) return entry
+    if (entry.id !== undefined && entry.id.length > 0) {
+      for (let index = 0; index < previous_activity.length; index++) {
+        const old = previous_activity[index]
+        if (old.id !== entry.id || !old.timestamp) continue
+        return { ...entry, timestamp: old.timestamp }
+      }
+      return { ...entry, timestamp: now }
+    }
     for (let index = 0; index < previous_activity.length; index++) {
       const old = previous_activity[index]
-      if (used[index] === true || old.kind !== entry.kind || old.text !== entry.text || !old.timestamp) continue
+      if ((old.id !== undefined && old.id.length > 0) || used[index] === true || old.kind !== entry.kind || old.text !== entry.text || !old.timestamp) continue
       used[index] = true
       return { ...entry, timestamp: old.timestamp }
     }
@@ -811,9 +821,9 @@ export function create_task_board_ui_remote_interface() {
   script.on_event(defines.events.on_gui_click, (event: any) => {
     const element = event.element; if (!element?.valid) return; const player = game.get_player(event.player_index); if (!player?.valid) return
     if (element.name === BUTTON_NAME) { toggle_task_board_ui_open(player.index); render(player); return }
-    if (element.name === CLOSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); close_task_board_ui(player.index); close_task_board_skills_ui(player.index); destroy_skills_popout(player); destroy_panel(player); ensure_button(player); return }
+    if (element.name === CLOSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); close_task_board_ui_open(player.index); close_task_board_skills_ui_open(player.index); destroy_skills_popout(player); destroy_panel(player); ensure_button(player); return }
     if (element.name === SKILLS_BUTTON_NAME) { toggle_task_board_skills_ui_open(player.index); render_panel(player); render_skills_popout(player); return }
-    if (element.name === SKILLS_CLOSE_BUTTON_NAME) { close_task_board_skills_ui(player.index); destroy_skills_popout(player); render_panel(player); return }
+    if (element.name === SKILLS_CLOSE_BUTTON_NAME) { close_task_board_skills_ui_open(player.index); destroy_skills_popout(player); render_panel(player); return }
     if (handle_learning_ui_click(player, element.name)) { render_skills_popout(player); return }
     if (handle_skill_export_click(player, element.name)) { render_skills_popout(player); return }
     handle_control_click(player, element.name)
