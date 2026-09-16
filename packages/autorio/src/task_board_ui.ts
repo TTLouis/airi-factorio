@@ -38,6 +38,7 @@ const MAX_INVENTORY_ITEMS = 24
 const MAX_WANTED_ITEMS = 16
 const MAX_TEXT = 500
 const MAX_PROMPT_TEXT = 4000
+const UI_INPUT_QUEUE_LIMIT = 32
 const TERMINATE_CONFIRM_TICKS = 5 * 60
 const LEFT_COLUMN_WIDTH = 640
 const PREVIEW_COLUMN_WIDTH = 640
@@ -131,6 +132,26 @@ interface TaskBoardUiFollowStatus {
   last_failure: string
 }
 
+interface TaskBoardUiControlInput {
+  kind: 'control'
+  version: 1
+  action: TaskBoardUiControlAction
+  player_index: number
+  player_name: string
+  tick: number
+}
+
+interface TaskBoardUiPromptInput {
+  kind: 'prompt'
+  version: 1
+  player_index: number
+  player_name: string
+  text: string
+  tick: number
+}
+
+type TaskBoardUiInput = TaskBoardUiControlInput | TaskBoardUiPromptInput
+
 interface TaskBoardUiWorldPreview {
   position: MapPositionStruct
   surface_index: LuaSurface['index']
@@ -158,6 +179,7 @@ declare const storage: {
   airi_task_board_skills_open?: Record<number, boolean>
   airi_task_board_terminate_confirm_until?: Record<number, number>
   airi_task_board_prompt_draft?: Record<number, string>
+  airi_task_board_ui_inputs?: TaskBoardUiInput[]
 }
 
 let world_task_provider: ((this: void) => unknown) | undefined
@@ -295,6 +317,23 @@ function ensure_terminate_confirm_state() {
 function ensure_prompt_draft_state() {
   if (storage.airi_task_board_prompt_draft === undefined) storage.airi_task_board_prompt_draft = {}
   return storage.airi_task_board_prompt_draft
+}
+
+function ensure_ui_input_queue() {
+  if (storage.airi_task_board_ui_inputs === undefined) storage.airi_task_board_ui_inputs = []
+  return storage.airi_task_board_ui_inputs
+}
+
+function enqueue_ui_input(input: TaskBoardUiInput) {
+  const queue = ensure_ui_input_queue()
+  queue.push(input)
+  while (queue.length > UI_INPUT_QUEUE_LIMIT) queue.shift()
+}
+
+function drain_ui_inputs() {
+  const queued = storage.airi_task_board_ui_inputs ?? []
+  storage.airi_task_board_ui_inputs = []
+  return queued
 }
 
 export function task_board_ui_prompt_draft(player_index: number) {
@@ -512,27 +551,27 @@ function runtime_snapshot(): TaskBoardUiRuntimeSnapshot {
 }
 
 function emit_control(player: LuaPlayer, action: TaskBoardUiControlAction) {
-  const payload = helpers.table_to_json({
+  enqueue_ui_input({
+    kind: 'control',
     version: 1,
     action,
     player_index: player.index,
     player_name: player.name,
     tick: game.tick,
   })
-  log(`[AIRI_UI_CONTROL] ${payload}`)
 }
 
 function emit_prompt(player: LuaPlayer, raw: unknown) {
   const prompt = text(raw, MAX_PROMPT_TEXT)
   if (prompt.length === 0) return false
-  const payload = helpers.table_to_json({
+  enqueue_ui_input({
+    kind: 'prompt',
     version: 1,
     player_index: player.index,
     player_name: player.name,
     text: prompt,
     tick: game.tick,
   })
-  log(`[AIRI_UI_PROMPT] ${payload}`)
   set_prompt_draft(player.index, '')
   return true
 }
@@ -642,11 +681,21 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: HALF_VALUE_WIDTH })
 }
 
-function follow_summary(follow: TaskBoardUiFollowStatus | undefined) {
-  if (!follow?.active) return 'STOPPED'
-  const target = follow.target_player.length > 0 ? ` ${follow.target_player}` : ''
-  const distance = follow.current_distance !== undefined ? ` · ${math.floor(follow.current_distance * 10) / 10} tiles` : ''
-  return `${follow.state.toUpperCase() || 'ACTIVE'}${target}${distance}`
+function follow_button_caption(follow: TaskBoardUiFollowStatus | undefined) {
+  if (!follow?.active) return 'FOLLOW ME'
+  const distance = follow.current_distance !== undefined ? ` · ${math.floor(follow.current_distance * 10) / 10}` : ''
+  return `FOLLOWING${distance}`
+}
+
+function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) {
+  if (!follow?.active) return 'Pause current work and follow this player'
+  const details = ['Click to stop following.']
+  if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`)
+  if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`)
+  if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`)
+  if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`)
+  if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`)
+  return details.join('\n')
 }
 
 function compact_button(button: LuaGuiElement, width: number) {
@@ -658,16 +707,9 @@ function compact_button(button: LuaGuiElement, width: number) {
 }
 
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
-  const { header, body } = create_section(parent, 'Controls', HALF_SECTION_WIDTH)
+  const { body } = create_section(parent, 'Controls', HALF_SECTION_WIDTH)
   body.style.vertical_spacing = 4
   const follow = runtime.follow
-  add_status_badge(header, follow?.active ? 'good' : 'muted', follow?.active ? 'FOLLOWING' : 'FREE')
-
-  const follow_table = create_key_value_table(body)
-  add_key_value(follow_table, 'FOLLOW', follow_summary(follow), { width: HALF_VALUE_WIDTH })
-  if (follow?.last_failure) {
-    add_key_value(follow_table, 'ISSUE', text(follow.last_failure, 90), { tone: 'bad', tooltip: follow.last_failure, width: HALF_VALUE_WIDTH })
-  }
 
   const has_open_goal = board !== undefined && board.status !== 'idle' && board.status !== 'completed'
   const task_controls = body.add({ type: 'flow', direction: 'horizontal' })
@@ -696,9 +738,9 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   compact_button(action_controls.add({
     type: 'button',
     name: FOLLOW_BUTTON_NAME,
-    caption: follow?.active ? 'STOP FOLLOW' : 'FOLLOW ME',
-    style: follow?.active ? 'red_button' : 'confirm_button',
-    tooltip: follow?.active ? 'Stop the persistent follow controller' : 'Pause current work and follow this player',
+    caption: follow_button_caption(follow),
+    style: follow?.active ? 'confirm_button' : 'dialog_button',
+    tooltip: follow_button_tooltip(follow),
   }), COMPACT_ACTION_BUTTON_WIDTH)
 
   // Only the entry point lives here. The analysis output and saved candidate
@@ -710,6 +752,15 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
     style: 'dialog_button',
     tooltip: 'Open area learning and saved skill candidates in a separate movable window.',
   }), COMPACT_ACTION_BUTTON_WIDTH)
+
+  // Follow state is represented by the toggle itself. Only exceptional state
+  // gets a separate line so the panel does not repeat FREE/FOLLOWING/FOLLOW.
+  if (follow?.last_failure) {
+    const issue = body.add({ type: 'label', caption: `⚠ ${text(follow.last_failure, 100)}`, tooltip: follow.last_failure })
+    issue.style.single_line = false
+    issue.style.maximal_width = HALF_SECTION_WIDTH - 2 * SECTION_PADDING
+    issue.style.font_color = TONE_COLORS.bad
+  }
 }
 
 function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) {
@@ -1197,6 +1248,7 @@ export function create_task_board_ui_remote_interface() {
       return true
     },
     status: () => storage.airi_task_board_ui,
+    drain_inputs: () => drain_ui_inputs(),
   })
 
   script.on_event(defines.events.on_player_joined_game, (event: any) => {
