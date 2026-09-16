@@ -55,9 +55,9 @@ function fixture() {
   const gear_recipe = recipe('iron-gear-wheel', ['iron-plate'], ['iron-gear-wheel'])
   const belt_recipe = recipe('transport-belt', ['iron-plate', 'iron-gear-wheel'], ['transport-belt'])
   const cable_recipe = recipe('copper-cable', ['copper-plate'], ['copper-cable'])
-  const gear = entity('assembling-machine-1', 'assembling-machine', 10, 4, 4, { get_recipe: () => gear_recipe })
-  const belt = entity('assembling-machine-1', 'assembling-machine', 11, 8, 4, { get_recipe: () => belt_recipe })
-  const unrelated = entity('assembling-machine-1', 'assembling-machine', 12, 8, 9, { get_recipe: () => cable_recipe })
+  const gear = entity('assembling-machine-1', 'assembling-machine', 10, 4, 4, { get_recipe: () => [gear_recipe, undefined] })
+  const belt = entity('assembling-machine-1', 'assembling-machine', 11, 8, 4, { get_recipe: () => [belt_recipe, undefined] })
+  const unrelated = entity('assembling-machine-1', 'assembling-machine', 12, 8, 9, { get_recipe: () => [cable_recipe, undefined] })
 
   const plate_to_gear = entity('inserter', 'inserter', 20, 2.5, 4, {
     pickup_position: { x: 1, y: 4 }, drop_position: { x: 4, y: 4 }, pickup_target: input_belt, drop_target: gear,
