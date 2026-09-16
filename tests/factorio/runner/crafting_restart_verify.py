@@ -55,7 +55,22 @@ def run(client: Rcon, results: Path) -> None:
         return json_command(observation_command, context)
 
     probe = command('/silent-command rcon.print("AIRI_CRAFT_RESTART_READY")')
+    if probe != 'AIRI_CRAFT_RESTART_READY':
+        probe = command('/silent-command rcon.print("AIRI_CRAFT_RESTART_READY")')
     require(probe == 'AIRI_CRAFT_RESTART_READY', probe)
+
+    # Production intentionally leaves post-load mutation pending in multiplayer
+    # until the supervisor has RCON and calls this replicated repair boundary.
+    # Mirror bindNpc() here before asserting that persisted Autorio-owned native
+    # crafting was cancelled and its ownership marker was cleared.
+    reconcile_result = json_command(
+        lua_json(remote_call('autorio_actor', 'reconcile_after_load')),
+        'owned crafting post-restart reconciliation',
+    )
+    require(reconcile_result.get('reconciled') is True, reconcile_result)
+    require(reconcile_result.get('reason') == 'reconciled', reconcile_result)
+    require(reconcile_result.get('actor_id') == actor_id, reconcile_result)
+    require(isinstance(reconcile_result.get('tick'), int), reconcile_result)
 
     after = observe('owned crafting post-restart observation')
     validate_clock(after['runtime'])
@@ -101,6 +116,7 @@ def run(client: Rcon, results: Path) -> None:
     payload = {
         'status': 'pass',
         'actor_id': actor_id,
+        'reconciliation': reconcile_result,
         'after_restart': after,
         'quiet': quiet,
         'fresh_before': fresh_before,
