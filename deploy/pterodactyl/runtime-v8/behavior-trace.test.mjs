@@ -28,6 +28,7 @@ class FakeRcon {
   constructor() {
     this.status = deployment()
     this.mutations = []
+    this.batchId = 1
   }
 
   async command(text) {
@@ -36,7 +37,14 @@ class FakeRcon {
     if (text.includes('remote.call("autorio_operations","status")')) {
       return JSON.stringify({
         task_state: 'IDLE',
+        queue_empty: true,
         queue_length: 0,
+        last_completed_batch: {
+          batch_id: this.batchId,
+          task_count: 1,
+          task_types: ['waiting'],
+          tick: 100 + this.batchId,
+        },
         basic_operation: { last_result: { operation_id: 9, code: 'completed', completed: true } },
       })
     }
@@ -69,7 +77,26 @@ function planMessage(operations, chatMessage = 'Working.') {
   }
 }
 
-test('behavior trace correlates request through verification and redacts secrets', async t => {
+function withProviderUsage(message, usage = {
+  prompt_tokens: 100,
+  completion_tokens: 20,
+  total_tokens: 120,
+  prompt_tokens_details: { cached_tokens: 80 },
+}) {
+  Object.defineProperty(message, '_airiProvider', {
+    configurable: true,
+    enumerable: false,
+    value: {
+      response_id: 'resp-test',
+      model: 'test-model',
+      finish_reason: 'stop',
+      usage,
+    },
+  })
+  return message
+}
+
+test('behavior trace correlates request through verification, records usage, and redacts secrets', async t => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-behavior-trace-'))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
   const traceFile = path.join(dir, 'airi-behavior.jsonl')
@@ -81,7 +108,7 @@ test('behavior trace correlates request through verification and redacts secrets
   let budgetCount = 0
   const agent = new NpcAgentLoop({
     rcon: new FakeRcon(),
-    provider: async () => replies.shift(),
+    provider: async () => withProviderUsage(replies.shift()),
     reserve: async () => ({ count: ++budgetCount, token: 'budget-secret-token' }),
     systemPrompt: 'NPC test prompt',
     traceFile,
@@ -113,6 +140,67 @@ test('behavior trace correlates request through verification and redacts secrets
   assert.doesNotMatch(raw, /Bearer abcdefghijklmnop/)
   assert.match(raw, /\[REDACTED\]/)
   assert.match(raw, /operation_id\\?":9/)
+
+  const responses = rows.filter(row => row.event === 'provider.response')
+  assert.equal(responses.length, 3)
+  assert.deepEqual(responses[0].data.usage, {
+    input_units: 100,
+    cached_input_units: 80,
+    cache_miss_input_units: 20,
+    output_units: 20,
+    total_units: 120,
+  })
+  const completed = rows.find(row => row.event === 'request.completed')
+  assert.deepEqual(completed.data.usage, {
+    provider_calls: 3,
+    input_units: 300,
+    cached_input_units: 240,
+    cache_miss_input_units: 60,
+    output_units: 60,
+    total_units: 360,
+    tool_calls: 1,
+    duplicate_tool_calls: 0,
+    tool_result_chars: 'tool-output'.length,
+    coalesced_runtime_events: 0,
+  })
+})
+
+test('duplicate completion receipts do not spend another provider call, while a new batch still does', async () => {
+  const rcon = new FakeRcon()
+  const replies = [
+    planMessage([{ name: 'wait', args: { ticks: 1 } }]),
+    planMessage([{ name: 'wait', args: { ticks: 1 } }], 'Continue.'),
+    planMessage([], 'Verified complete.'),
+  ]
+  let providerCalls = 0
+  const activity = []
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      providerCalls++
+      return replies.shift()
+    },
+    systemPrompt: 'NPC test prompt',
+    traceFile: null,
+    onActivity: (event, data) => activity.push({ event, data }),
+  })
+
+  await agent.request('wait twice', { sender: 'TTLouis' })
+  assert.equal(providerCalls, 1)
+
+  await agent.completed()
+  assert.equal(providerCalls, 2)
+  assert.equal(agent.active, true)
+
+  const duplicate = await agent.completed()
+  assert.equal(duplicate, null)
+  assert.equal(providerCalls, 2)
+  assert.ok(activity.some(entry => entry.event === 'factorio.event_coalesced' && entry.data.kind === 'completion'))
+
+  rcon.batchId = 2
+  await agent.completed()
+  assert.equal(providerCalls, 3)
+  assert.equal(agent.active, false)
 })
 
 test('provider response metadata is available to tracing without changing assistant JSON', async () => {
