@@ -6,6 +6,9 @@ import { parsePlan, renderOperation, toolCommand } from './structured-policy.mjs
 export class AgentLoopError extends Error {}
 
 const THROUGHPUT_MEASUREMENT_TOOL = 'measureTransportThroughput'
+const STATIC_PROTOTYPE_TOOL = 'getPrototypeDetails'
+const STATIC_PROTOTYPE_CACHE_LIMIT = 64
+const STATIC_PROTOTYPE_CONTEXT_LIMIT = 8
 const THROUGHPUT_POLL_MS = process.env.NODE_TEST_CONTEXT ? 1 : 250
 const THROUGHPUT_NO_PROGRESS_MS = process.env.NODE_TEST_CONTEXT ? 100 : 10000
 
@@ -36,6 +39,76 @@ function toolSignature(name, args) {
 
 function messageChars(message) {
   return String(message?.content ?? '').length + JSON.stringify(message?.tool_calls ?? '').length
+}
+
+function prototypeReference(name) {
+  return `prototype:${String(name ?? '').slice(0, 200)}`
+}
+
+function compactPrototypeFacts(raw, fallbackName = '') {
+  try {
+    const value = JSON.parse(String(raw ?? ''))
+    const name = typeof value?.query === 'string' ? value.query : fallbackName
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid prototype result')
+    if (value.found !== true) {
+      return {
+        reference: prototypeReference(name),
+        found: false,
+        error: typeof value.error === 'string' ? cleanMemoryText(value.error, 300) : 'prototype not found',
+      }
+    }
+    const entity = value.entity && typeof value.entity === 'object'
+      ? {
+          name: value.entity.name,
+          type: value.entity.type,
+          is_building: value.entity.is_building,
+          size: {
+            width: value.entity.tile_width,
+            height: value.entity.tile_height,
+          },
+          collision_box: value.entity.collision_box,
+          selection_box: value.entity.selection_box,
+          place_items: value.entity.place_items,
+          crafting: value.entity.crafting,
+          mining: value.entity.mining,
+          belt: value.entity.belt,
+          inserter: value.entity.inserter,
+          fluidboxes: value.entity.fluidboxes,
+          fluidboxes_truncated: value.entity.fluidboxes_truncated,
+        }
+      : undefined
+    return {
+      reference: prototypeReference(name),
+      found: true,
+      item: value.item,
+      fluid: value.fluid,
+      entity,
+    }
+  }
+  catch {
+    return {
+      reference: prototypeReference(fallbackName),
+      found: 'unknown',
+      raw_summary: cleanMemoryText(raw, 1200),
+    }
+  }
+}
+
+function prototypeBaselineResult(entry) {
+  return JSON.stringify({
+    observation_mode: 'cached_static',
+    source: 'runtime_static_prototype_cache',
+    ...entry.facts,
+  })
+}
+
+function prototypeUnchangedResult(entry) {
+  return JSON.stringify({
+    observation_mode: 'unchanged',
+    source: 'runtime_static_prototype_cache',
+    reference: entry.facts.reference,
+    note: 'Static prototype facts are already present in [STATIC_PROTOTYPE_CACHE] for this request.',
+  })
 }
 
 function throughputMeasurementStatusCommand(measurementId) {
@@ -208,10 +281,46 @@ export class NpcAgentLoop {
     this.epoch = null
     this.continuations = 0
     this.toolCache = new Map()
+    this.staticPrototypeCache ??= new Map()
+    this.prototypeRefsThisRequest = []
     this.duplicateToolRounds = 0
     this.toolValidationRetries = 0
     this.requestInfo = null
     this.generation = (this.generation ?? 0) + 1
+  }
+
+  rememberPrototypeRef(signature) {
+    const existing = this.prototypeRefsThisRequest.indexOf(signature)
+    if (existing >= 0) this.prototypeRefsThisRequest.splice(existing, 1)
+    this.prototypeRefsThisRequest.push(signature)
+    if (this.prototypeRefsThisRequest.length > STATIC_PROTOTYPE_CONTEXT_LIMIT) this.prototypeRefsThisRequest.shift()
+  }
+
+  prototypeContext() {
+    const facts = []
+    for (const signature of this.prototypeRefsThisRequest) {
+      const entry = this.staticPrototypeCache.get(signature)
+      if (entry?.facts) facts.push(entry.facts)
+    }
+    if (facts.length === 0) return ''
+    return `[STATIC_PROTOTYPE_CACHE] Runtime-static deterministic prototype facts already observed for this request. They remain valid for this server runtime; do not re-query getPrototypeDetails unless a different prototype is needed.\n${JSON.stringify(facts)}`
+  }
+
+  cachePrototype(signature, name, raw) {
+    const entry = {
+      name,
+      raw: String(raw),
+      facts: compactPrototypeFacts(raw, name),
+    }
+    if (this.staticPrototypeCache.has(signature)) this.staticPrototypeCache.delete(signature)
+    this.staticPrototypeCache.set(signature, entry)
+    while (this.staticPrototypeCache.size > STATIC_PROTOTYPE_CACHE_LIMIT) {
+      const oldest = this.staticPrototypeCache.keys().next().value
+      if (oldest === undefined) break
+      this.staticPrototypeCache.delete(oldest)
+    }
+    this.rememberPrototypeRef(signature)
+    return entry
   }
 
   async captureEpoch() {
@@ -265,8 +374,10 @@ export class NpcAgentLoop {
 
   prepareContinuationContext() {
     const latestPlan = [...this.messages].reverse().find(message => message.role === 'assistant' && message.tool_calls === undefined)
+    const prototypeContext = this.prototypeContext()
     this.messages = [
       ...this.baseMessages.map(message => ({ ...message })),
+      ...(prototypeContext ? [{ role: 'user', content: prototypeContext }] : []),
       ...(latestPlan ? [{ ...latestPlan }] : []),
     ]
   }
@@ -521,6 +632,22 @@ export class NpcAgentLoop {
       if (cached !== undefined) {
         duplicateThisRound = true
         output = `[HARNESS] Duplicate observation suppressed. Reuse this cached result and act or report a blocker instead of repeating the same tool call.\n${cached}`
+      }
+      else if (entry.tool.function.name === STATIC_PROTOTYPE_TOOL) {
+        const staticEntry = this.staticPrototypeCache.get(entry.signature)
+        if (staticEntry) {
+          const alreadyReferenced = this.prototypeRefsThisRequest.includes(entry.signature)
+          this.rememberPrototypeRef(entry.signature)
+          output = alreadyReferenced ? prototypeUnchangedResult(staticEntry) : prototypeBaselineResult(staticEntry)
+          this.toolCache.set(entry.signature, output)
+        }
+        else {
+          await this.assertCurrent()
+          output = String(await this.rcon.command(entry.command)).slice(0, 12000)
+          await this.assertCurrent()
+          this.toolCache.set(entry.signature, output)
+          this.cachePrototype(entry.signature, entry.args?.name, output)
+        }
       }
       else {
         if (entry.tool.function.name === THROUGHPUT_MEASUREMENT_TOOL) {
