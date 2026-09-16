@@ -685,8 +685,10 @@ function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntime
 }
 
 export function task_board_activity_for_display(board: TaskBoardUiSnapshot | undefined): TaskBoardUiActivity[] {
+  const history = activity_state.activity_history()
+  if (history.length > 0) return history
   if (board === undefined) return []
-  if (board.activity.length > 0) return board.activity.slice(-MAX_ACTIVITY)
+  if (board.activity.length > 0) return board.activity
   if (board.status === 'idle') return []
   if (board.steps.length === 0) return [{ kind: 'system', text: `Goal is ${board.status}; no auditable step activity has been recorded yet.` }]
   const index = math.min(board.active_index, board.steps.length - 1); const step = board.steps[index]
@@ -952,9 +954,10 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
 export function create_task_board_ui_remote_interface() {
   create_skill_remote_interface(); create_learning_remote_interface()
   remote.add_interface('autorio_task_board', {
-    set_snapshot: (value: unknown, generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
+    set_snapshot: (value: unknown, generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); activity_state.merge_activity_history(stamped.activity); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
     clear: (generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; storage.airi_task_board_ui = undefined; storage.airi_task_board_ui_synced_tick = game.tick; render_all(); return true },
     status: () => storage.airi_task_board_ui,
+    sync_version: () => debug_ui.current_sync_version(),
     drain_inputs: () => drain_ui_inputs(),
   })
   script.on_event(defines.events.on_player_joined_game, (event: any) => { const player = game.get_player(event.player_index); if (player?.valid) render(player) })
