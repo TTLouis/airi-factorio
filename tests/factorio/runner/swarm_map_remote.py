@@ -65,10 +65,10 @@ def run(client, results: Path) -> None:
     assert_true(observer.get('body_revision') == before_revision, f'map context has stale body revision: {context!r}')
     assert_true((context.get('policy') or {}).get('actor_scoped') is True, f'map context lacks actor-scoped policy: {context!r}')
 
-    # A zero-player test save intentionally starts with no charted map. First
-    # prove the production map service fails closed, then explicitly chart a
-    # bounded test area using Factorio's own LuaForce.chart API. The product
-    # interface itself never bypasses chart/visibility policy.
+    # A zero-player test save intentionally starts with no charted map. Prove
+    # the production map service fails closed first. Then establish visibility
+    # through a real same-force powered radar instead of bypassing fog/chart
+    # policy with a debug-only map mutation.
     prechart_query = call(
         'autorio_swarm_map',
         'query_area',
@@ -87,43 +87,38 @@ def run(client, results: Path) -> None:
     assert_true(prechart_observer.get('actor_id') == actor_id, f'uncharted query lost actor provenance: {prechart_query!r}')
     assert_true(prechart_observer.get('body_revision') == before_revision, f'uncharted query lost body revision: {prechart_query!r}')
 
-    chart_radius = 64
-    left = position['x'] - chart_radius
-    top = position['y'] - chart_radius
-    right = position['x'] + chart_radius
-    bottom = position['y'] + chart_radius
-    chart_command = (
-        '/silent-command '
-        f'local f=game.forces["player"]; local s=game.surfaces[1]; '
-        f'f.chart(s, {{{{x={left}, y={top}}}, {{x={right}, y={bottom}}}}}); '
-        'rcon.print("AIRI_CHART_REQUESTED")'
+    radar_create_expr = (
+        '(function() local s=game.surfaces[1]; local f=game.forces["player"]; '
+        f'local p=s.find_non_colliding_position("radar", {{x={position["x"]},y={position["y"]}}}, 24, 1); '
+        'if not p then return {ok=false,code="no_radar_position"} end; '
+        'local r=s.create_entity{name="radar",position=p,force=f,raise_built=false}; '
+        'if not r then return {ok=false,code="radar_create_failed"} end; '
+        'r.energy=100000000; return {ok=true,unit_number=r.unit_number,position=r.position} end)()'
     )
-    chart_response = command(chart_command)
-    if chart_response != 'AIRI_CHART_REQUESTED':
-        # Factorio 2.x may reject the first Lua console command in a fresh
-        # process while enabling script commands. Repeating the identical safe
-        # request mirrors the existing RCON handshake used by run.py.
-        chart_response = command(chart_command)
-    assert_true(chart_response == 'AIRI_CHART_REQUESTED', f'chart request did not execute: {chart_response!r}')
+    radar = decode_json(command(lua_json(radar_create_expr)), 'temporary radar creation')
+    assert_true(radar.get('ok') is True and radar.get('unit_number') is not None, f'could not create temporary powered radar: {radar!r}')
+    radar_unit = int(radar['unit_number'])
 
     chunk_x = int(position['x'] // 32)
     chunk_y = int(position['y'] // 32)
     chart_state_expr = (
         '(function() local f=game.forces["player"]; local s=game.surfaces[1]; '
+        f'local r=game.get_entity_by_unit_number({radar_unit}); if r and r.valid then r.energy=100000000 end; '
         f'local c={{x={chunk_x},y={chunk_y}}}; '
-        'return {charted=f.is_chunk_charted(s,c), visible=f.is_chunk_visible(s,c), '
+        'return {radar_valid=(r and r.valid) or false, radar_energy=(r and r.valid and r.energy) or 0, '
+        'charted=f.is_chunk_charted(s,c), visible=f.is_chunk_visible(s,c), '
         'requested=f.is_chunk_requested_for_charting(s,c)} end)()'
     )
     chart_state = None
-    deadline = time.monotonic() + 8.0
+    deadline = time.monotonic() + 12.0
     while time.monotonic() < deadline:
-        chart_state = decode_json(command(lua_json(chart_state_expr)), 'map chart state')
+        chart_state = decode_json(command(lua_json(chart_state_expr)), 'radar chart state')
         if chart_state.get('charted') is True and chart_state.get('visible') is True:
             break
         time.sleep(0.1)
     assert_true(
         chart_state is not None and chart_state.get('charted') is True and chart_state.get('visible') is True,
-        f'chart request did not become charted+visible within 8s: {chart_state!r}',
+        f'powered radar did not make actor chunk charted+visible within 12s: {chart_state!r}; radar={radar!r}',
     )
 
     query = call(
@@ -136,7 +131,7 @@ def run(client, results: Path) -> None:
         '4',
         '16',
     )
-    assert_true(query.get('ok') is True, f'live actor-local map query failed after explicit charting: {query!r}')
+    assert_true(query.get('ok') is True, f'live actor-local map query failed with real radar visibility: {query!r}')
     query_observer = query.get('observer') or {}
     assert_true(query_observer.get('actor_id') == actor_id, f'map query lost actor provenance: {query!r}')
     assert_true(query_observer.get('body_revision') == before_revision, f'map query lost body revision: {query!r}')
@@ -182,6 +177,12 @@ def run(client, results: Path) -> None:
     assert_true(rebound_query.get('ok') is True, f'map query failed after replacement: {rebound_query!r}')
     assert_true((rebound_query.get('observer') or {}).get('body_revision') == after_revision, f'post-replacement query used stale provenance: {rebound_query!r}')
 
+    cleanup_expr = (
+        f'(function() local r=game.get_entity_by_unit_number({radar_unit}); '
+        'if r and r.valid then r.destroy{raise_destroy=false} end; return true end)()'
+    )
+    decode_json(command(lua_json(cleanup_expr)), 'temporary radar cleanup')
+
     result = {
         'status': 'pass',
         'actor_id': actor_id,
@@ -191,6 +192,7 @@ def run(client, results: Path) -> None:
         'before_physical_actor_id': before_physical,
         'after_physical_actor_id': after_physical,
         'prechart_code': prechart_query.get('code'),
+        'radar': radar,
         'chart_state': chart_state,
         'query_returned_count': query.get('returned_count'),
         'rebound_query_returned_count': rebound_query.get('returned_count'),
@@ -199,7 +201,7 @@ def run(client, results: Path) -> None:
     }
     (results / 'swarm-map-remote.json').write_text(json.dumps(result, indent=2))
     print(
-        'PASS: actor-scoped map remote rejected uncharted access, preserved logical provenance, '
+        'PASS: actor-scoped map remote rejected uncharted access, used real radar visibility, preserved logical provenance, '
         f'rejected a missing body, and rebound {actor_id} from body revision {before_revision} to {after_revision}; '
         'swarm learning pipeline remote is live'
     )
