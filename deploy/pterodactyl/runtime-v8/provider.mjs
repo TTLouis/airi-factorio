@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import { check, DeploymentError } from './common.mjs'
-import { toolDefinitions } from './structured-policy.mjs'
+import { parsePlan, toolDefinitions } from './structured-policy.mjs'
 
 const COMPLETION_MARKER = '[MOD] Autorio operation batch completed.'
 const FAILURE_MARKER = '[MOD] Autorio operation error:'
@@ -217,36 +217,33 @@ function topLevelJsonObjectSpans(text) {
   return depth === 0 && !inString ? spans : []
 }
 
+function validPlanCandidate(candidate) {
+  try {
+    parsePlan(JSON.parse(candidate))
+    return true
+  }
+  catch {
+    return false
+  }
+}
+
 export function normalizeProviderPlanContent(content) {
   const text = String(content ?? '').trim()
   if (!text) return text
-
-  try {
-    JSON.parse(text)
-    return text
-  }
-  catch {}
+  if (validPlanCandidate(text)) return text
 
   const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
   if (fenced) {
     const candidate = fenced[1].trim()
-    try {
-      JSON.parse(candidate)
-      return candidate
-    }
-    catch {}
+    if (validPlanCandidate(candidate)) return candidate
   }
 
   const spans = topLevelJsonObjectSpans(text)
-  if (spans.length !== 1) return text
-  const candidate = text.slice(spans[0][0], spans[0][1]).trim()
-  try {
-    JSON.parse(candidate)
-    return candidate
+  for (let index = spans.length - 1; index >= 0; index--) {
+    const candidate = text.slice(spans[index][0], spans[index][1]).trim()
+    if (validPlanCandidate(candidate)) return candidate
   }
-  catch {
-    return text
-  }
+  return text
 }
 
 function leanTaskBoard(board) {

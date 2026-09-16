@@ -94,3 +94,26 @@ test('normalizer refuses to guess when provider content contains multiple top-le
   const content = 'first {"a":1} second {"b":2}'
   assert.equal(normalizeProviderPlanContent(content), content)
 })
+
+test('normalizer extracts the final strict plan after reasoning JSON', () => {
+  const plan = '{"chatMessage":"","plan":["continue"],"currentStep":0,"operations":[]}'
+  assert.equal(normalizeProviderPlanContent(`thinking {"candidate":1}\n${plan}`), plan)
+})
+
+test('normalizer prefers the last valid plan candidate', () => {
+  const draft = '{"chatMessage":"draft","plan":["draft"],"currentStep":0,"operations":[]}'
+  const finalPlan = '{"chatMessage":"final","plan":[],"currentStep":0,"operations":[]}'
+  assert.equal(normalizeProviderPlanContent(`draft ${draft}\nreason {"x":2}\nfinal ${finalPlan}`), finalPlan)
+})
+
+test('normalizer does not accept plan-like JSON that fails strict schema', () => {
+  const invalid = '{"chatMessage":"x","plan":[],"currentStep":0,"operations":[],"reasoning":"no"}'
+  assert.equal(normalizeProviderPlanContent(invalid), invalid)
+})
+
+test('normalizer validates operations through the plan policy', () => {
+  const valid = '{"chatMessage":"","plan":["wait"],"currentStep":0,"operations":[{"name":"wait","args":{"ticks":60}}]}'
+  const invalid = '{"chatMessage":"","plan":["bad"],"currentStep":0,"operations":[{"name":"shell","args":{}}]}'
+  assert.equal(normalizeProviderPlanContent(`reason {"x":1}\n${valid}`), valid)
+  assert.equal(normalizeProviderPlanContent(invalid), invalid)
+})
