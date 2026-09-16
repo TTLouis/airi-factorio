@@ -65,17 +65,23 @@ const HALF_SECTION_WIDTH = (LEFT_COLUMN_WIDTH - COLUMN_SPACING) / 2
 const SECTION_PADDING = 10
 const KEY_COLUMN_WIDTH = 64
 const HALF_VALUE_WIDTH = HALF_SECTION_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12
-const SLOT_SIZE = 40
-const INVENTORY_SLOT_COLUMNS = 8
-const WANTED_SLOT_COLUMNS = 5
-const EQUIPPED_SLOT_COLUMNS = 3
-const EQUIPPED_LABEL_WIDTH = 48
-const INVENTORY_SECTION_WIDTH = 424
-const WANTED_SECTION_WIDTH = PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - INVENTORY_SECTION_WIDTH
-const SLOT_ROWS_MIN = 5
-const SLOT_ROWS_MID = 6
-const SLOT_ROWS_MAX = 8
-const SCROLLBAR_WIDTH = 12
+// Keep the resource layout behind one table. TSTL turns module-scope constants
+// and helper functions into Lua locals, and Factorio's Lua parser has a hard
+// limit of 200 locals per function. One layout table leaves headroom for future
+// console work without changing the Inventory / Wanted / Equipped geometry.
+const RESOURCE_LAYOUT = {
+  slot_size: 40,
+  inventory_slot_columns: 8,
+  wanted_slot_columns: 5,
+  equipped_slot_columns: 3,
+  equipped_label_width: 48,
+  inventory_section_width: 424,
+  wanted_section_width: PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - 424,
+  slot_rows_min: 5,
+  slot_rows_mid: 6,
+  slot_rows_max: 8,
+  scrollbar_width: 12,
+}
 // The console is exactly as tall as its left column, because the world preview
 // stretches to match it. So the two tracker scroll panes and the camera's floor
 // are what decide the window's height, and sizing them from the player's own
@@ -356,7 +362,6 @@ function agent_tone(phase: TaskBoardUiAgentPhase): Tone { if (phase === 'thinkin
 function agent_caption(phase: TaskBoardUiAgentPhase) { if (phase === 'thinking') return 'THINKING'; if (phase === 'observing') return 'OBSERVING'; if (phase === 'executing') return 'EXECUTING'; if (phase === 'waiting') return 'WORKING'; if (phase === 'error') return 'ERROR'; return 'IDLE' }
 function item_caption(name: string) { const item_prototypes = prototypes.item; if (item_prototypes !== undefined && item_prototypes[name] !== undefined) return `[item=${name}] ${name}`; return name }
 function item_sprite(name: string): SpritePath { const item: SpritePath = `item/${name}`; if (helpers.is_valid_sprite_path(item)) return item; const entity: SpritePath = `entity/${name}`; if (helpers.is_valid_sprite_path(entity)) return entity; return 'utility/questionmark' }
-function inventory_items(inventory: LuaInventory | undefined): TaskBoardUiItem[] { if (inventory === undefined) return []; return inventory.get_contents().map(({ name, count }) => ({ name, count })) }
 function read_follow_status(): TaskBoardUiFollowStatus | undefined {
   if (remote.interfaces?.autorio_follow === undefined || typeof remote.call !== 'function') return undefined
   const raw = remote.call('autorio_follow', 'status') as any
@@ -375,6 +380,9 @@ function runtime_snapshot(): TaskBoardUiRuntimeSnapshot {
   const inventory = actor ? get_actor_inventory_items(actor) : []
   inventory.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
   const character = actor?.character
+  // Keep this helper inside runtime_snapshot so it does not consume another Lua
+  // local in the already-large module wrapper.
+  const inventory_items = (source: LuaInventory | undefined): TaskBoardUiItem[] => source === undefined ? [] : source.get_contents().map(({ name, count }) => ({ name, count }))
   const guns = character?.valid ? inventory_items(character.get_inventory(defines.inventory.character_guns)) : []
   const ammo = character?.valid ? inventory_items(character.get_inventory(defines.inventory.character_ammo)) : []
   const preview: TaskBoardUiWorldPreview | undefined = actor?.is_valid ? { position: actor.position, surface_index: actor.surface.index, entity: character?.valid ? character : undefined } : undefined
@@ -514,9 +522,9 @@ export function task_board_tracker_heights(gui_height: number) {
  * show the character's equipped gun and ammo state underneath.
  */
 export function task_board_resource_rows(gui_height: number) {
-  if (gui_height >= 1200) return SLOT_ROWS_MAX
-  if (gui_height >= 900) return SLOT_ROWS_MID
-  return SLOT_ROWS_MIN
+  if (gui_height >= 1200) return RESOURCE_LAYOUT.slot_rows_max
+  if (gui_height >= 900) return RESOURCE_LAYOUT.slot_rows_mid
+  return RESOURCE_LAYOUT.slot_rows_min
 }
 export function task_board_wanted_rows(gui_height: number) { return math.max(1, task_board_resource_rows(gui_height) - 4) }
 
@@ -640,24 +648,31 @@ function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | unde
   activity_scroll.scroll_to_bottom()
 }
 function add_slot_grid(parent: LuaGuiElement, slots: Array<{ name: string, count: number, tooltip: string }>, style: 'slot_button' | 'yellow_slot_button', rows: number, columns: number) {
-  const height = rows * SLOT_SIZE
-  const scroll = parent.add({ type: 'scroll-pane', style: 'deep_slots_scroll_pane', horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' }); scroll.style.width = columns * SLOT_SIZE + SCROLLBAR_WIDTH; scroll.style.height = height; scroll.style.minimal_height = height; scroll.style.maximal_height = height
+  const height = rows * RESOURCE_LAYOUT.slot_size
+  const scroll = parent.add({ type: 'scroll-pane', style: 'deep_slots_scroll_pane', horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' }); scroll.style.width = columns * RESOURCE_LAYOUT.slot_size + RESOURCE_LAYOUT.scrollbar_width; scroll.style.height = height; scroll.style.minimal_height = height; scroll.style.maximal_height = height
   const grid = scroll.add({ type: 'table', column_count: columns, style: 'slot_table' }); for (const slot of slots) grid.add({ type: 'sprite-button', sprite: item_sprite(slot.name), number: slot.count, style, tooltip: slot.tooltip })
 }
-function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) { const { header, body } = create_section(parent, 'NPC Inventory', INVENTORY_SECTION_WIDTH, undefined, false); header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: `${item_caption(item.name)} × ${item.count}` })), 'slot_button', task_board_resource_rows(player_gui_height(player)), INVENTORY_SLOT_COLUMNS) }
-function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) { const { header, body } = create_section(parent, 'Wanted / Needed', WANTED_SECTION_WIDTH, undefined, false); const items = board?.wanted_items ?? []; header.add({ type: 'label', caption: `${items.length} items`, style: 'semibold_label' }); add_slot_grid(body, items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: item.reason.length > 0 ? `${item_caption(item.name)} × ${item.count} — ${item.reason}` : `${item_caption(item.name)} × ${item.count}` })), 'yellow_slot_button', task_board_wanted_rows(player_gui_height(player)), WANTED_SLOT_COLUMNS) }
-function add_equipped_row(parent: LuaGuiElement, caption: string, items: TaskBoardUiItem[]) {
-  const row = parent.add({ type: 'flow', direction: 'horizontal' }); row.style.vertical_align = 'center'; row.style.horizontal_spacing = 4
-  const label = row.add({ type: 'label', caption, style: 'semibold_label' }); label.style.minimal_width = EQUIPPED_LABEL_WIDTH
-  const slots = row.add({ type: 'table', column_count: EQUIPPED_SLOT_COLUMNS, style: 'slot_table' })
-  for (let index = 0; index < EQUIPPED_SLOT_COLUMNS; index++) {
-    const item = items[index]
-    if (item !== undefined) slots.add({ type: 'sprite-button', sprite: item_sprite(item.name), number: item.count, style: 'slot_button', tooltip: `${item_caption(item.name)} × ${item.count}` })
-    else slots.add({ type: 'sprite-button', style: 'slot_button', tooltip: `Empty ${caption.toLowerCase()} slot` })
+function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) { const { header, body } = create_section(parent, 'NPC Inventory', RESOURCE_LAYOUT.inventory_section_width, undefined, false); header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: `${item_caption(item.name)} × ${item.count}` })), 'slot_button', task_board_resource_rows(player_gui_height(player)), RESOURCE_LAYOUT.inventory_slot_columns) }
+function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) { const { header, body } = create_section(parent, 'Wanted / Needed', RESOURCE_LAYOUT.wanted_section_width, undefined, false); const items = board?.wanted_items ?? []; header.add({ type: 'label', caption: `${items.length} items`, style: 'semibold_label' }); add_slot_grid(body, items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: item.reason.length > 0 ? `${item_caption(item.name)} × ${item.count} — ${item.reason}` : `${item_caption(item.name)} × ${item.count}` })), 'yellow_slot_button', task_board_wanted_rows(player_gui_height(player)), RESOURCE_LAYOUT.wanted_slot_columns) }
+function render_resource_sidebar(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) {
+  const sidebar = parent.add({ type: 'flow', direction: 'vertical' }); sidebar.style.width = RESOURCE_LAYOUT.wanted_section_width; sidebar.style.vertical_spacing = COLUMN_SPACING
+  render_wanted_items(sidebar, board, player)
+  const { body } = create_section(sidebar, 'Equipped', RESOURCE_LAYOUT.wanted_section_width, undefined, false)
+  // Nest the row helper here rather than allocating two more module-scope Lua
+  // locals for add_equipped_row/render_equipped.
+  const add_equipped_row = (caption: string, items: TaskBoardUiItem[]) => {
+    const row = body.add({ type: 'flow', direction: 'horizontal' }); row.style.vertical_align = 'center'; row.style.horizontal_spacing = 4
+    const label = row.add({ type: 'label', caption, style: 'semibold_label' }); label.style.minimal_width = RESOURCE_LAYOUT.equipped_label_width
+    const slots = row.add({ type: 'table', column_count: RESOURCE_LAYOUT.equipped_slot_columns, style: 'slot_table' })
+    for (let index = 0; index < RESOURCE_LAYOUT.equipped_slot_columns; index++) {
+      const item = items[index]
+      if (item !== undefined) slots.add({ type: 'sprite-button', sprite: item_sprite(item.name), number: item.count, style: 'slot_button', tooltip: `${item_caption(item.name)} × ${item.count}` })
+      else slots.add({ type: 'sprite-button', style: 'slot_button', tooltip: `Empty ${caption.toLowerCase()} slot` })
+    }
   }
+  add_equipped_row('GUN', runtime.guns)
+  add_equipped_row('AMMO', runtime.ammo)
 }
-function render_equipped(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) { const { body } = create_section(parent, 'Equipped', WANTED_SECTION_WIDTH, undefined, false); add_equipped_row(body, 'GUN', runtime.guns); add_equipped_row(body, 'AMMO', runtime.ammo) }
-function render_resource_sidebar(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) { const sidebar = parent.add({ type: 'flow', direction: 'vertical' }); sidebar.style.width = WANTED_SECTION_WIDTH; sidebar.style.vertical_spacing = COLUMN_SPACING; render_wanted_items(sidebar, board, player); render_equipped(sidebar, runtime) }
 function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   const section = parent.add({ type: 'frame', name: PROMPT_SECTION_NAME, direction: 'vertical', style: 'inside_shallow_frame' }); section.style.width = LEFT_COLUMN_WIDTH; section.style.horizontally_stretchable = false
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'; header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
