@@ -94,6 +94,13 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     args: placementArgs,
   }).strict(),
   z.object({
+    name: z.literal('rotate_entity'),
+    args: z.object({
+      unit_number: unitNumber,
+      reverse: z.boolean().default(false),
+    }).strict(),
+  }).strict(),
+  z.object({
     name: z.literal('move_items'),
     args: z.object({
       item_name: factorioNameSchema,
@@ -182,6 +189,7 @@ const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]select_weapon_slot['"]${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]mine_entity['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]place_entity['"]${separator}${quotedSafeName}${callEnd}`),
+  new RegExp(`${callStart}['"]rotate_entity['"]${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]move_items['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]move_items_exact['"]${separator}${quotedSafeName}${separator}${positiveInteger}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]set_machine_recipe['"]${separator}${positiveInteger}${separator}${quotedSafeName}${callEnd}`),
@@ -246,6 +254,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       }
       return `remote.call('autorio_operations', 'place_entity', ${name})`
     }
+    case 'rotate_entity':
+      return `remote.call('autorio_operations', 'rotate_entity', ${operation.args.unit_number}, ${operation.args.reverse})`
     case 'move_items':
       return `remote.call('autorio_operations', 'move_items', ${renderLuaString(operation.args.item_name)}, ${renderLuaString(operation.args.entity_name)}, ${operation.args.max_count}, ${operation.args.to_entity})`
     case 'move_items_exact':
