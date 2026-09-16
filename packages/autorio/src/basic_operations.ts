@@ -4,17 +4,19 @@ import type {
   PlayerParametersMineEntity,
   PlayerParametersMoveItems,
   PlayerParametersPlaceEntity,
+  PlayerParametersRotateEntity,
   PlayerParametersSetRecipe,
   PlayerParametersWaiting,
 } from './types'
 import { TaskStates } from './types'
 
-type BasicTask = PlayerParametersMineEntity | PlayerParametersPlaceEntity | PlayerParametersMoveItems | PlayerParametersSetRecipe | PlayerParametersWaiting
+type BasicTask = PlayerParametersMineEntity | PlayerParametersPlaceEntity | PlayerParametersRotateEntity | PlayerParametersMoveItems | PlayerParametersSetRecipe | PlayerParametersWaiting
 type BasicOperationCode = 'queued' | 'completed' | 'cancelled'
-  | 'no_actor' | 'invalid_count' | 'invalid_ticks' | 'invalid_max_count' | 'invalid_position' | 'invalid_direction' | 'invalid_unit_number' | 'invalid_recipe'
+  | 'no_actor' | 'invalid_count' | 'invalid_ticks' | 'invalid_max_count' | 'invalid_position' | 'invalid_direction' | 'invalid_unit_number' | 'invalid_recipe' | 'invalid_reverse'
   | 'actor_changed' | 'no_target' | 'target_gone' | 'no_inventory' | 'wrong_force'
   | 'invalid_entity' | 'item_missing' | 'no_position' | 'create_failed'
   | 'nothing_moved' | 'player_unavailable' | 'different_surface' | 'too_far'
+  | 'not_rotatable' | 'rotation_failed'
   | 'not_recipe_machine' | 'recipe_disabled' | 'incompatible_recipe' | 'set_recipe_failed'
 
 export interface BasicOperationResult {
@@ -39,6 +41,8 @@ export interface BasicOperationResult {
   requested_ticks?: number
   requested_position?: { x: number, y: number }
   direction?: number
+  previous_direction?: number
+  reverse?: boolean
 }
 
 declare const storage: {
@@ -108,7 +112,7 @@ function result_for(actor: ControlledActor | undefined, task: BasicTask | undefi
     actor_kind: bound?.actor_kind ?? identity?.kind,
     force_index: bound?.force_index ?? (actor?.is_valid ? actor.force.index : undefined),
     entity_name: task && 'entity_name' in task ? task.entity_name : undefined,
-    target_unit_number: task?.type === TaskStates.MOVING_ITEMS || task?.type === TaskStates.SETTING_RECIPE ? task.target_unit_number : undefined,
+    target_unit_number: task?.type === TaskStates.MOVING_ITEMS || task?.type === TaskStates.SETTING_RECIPE || task?.type === TaskStates.ROTATING ? task.target_unit_number : undefined,
     recipe_name: task?.type === TaskStates.SETTING_RECIPE ? task.recipe_name : undefined,
     player_name: task?.type === TaskStates.MOVING_ITEMS ? task.player_name : undefined,
     item_name: task && 'item_name' in task ? task.item_name : undefined,
@@ -120,6 +124,7 @@ function result_for(actor: ControlledActor | undefined, task: BasicTask | undefi
       ? { x: task.position.x, y: task.position.y }
       : undefined,
     direction: task?.type === TaskStates.PLACING ? task.direction : undefined,
+    reverse: task?.type === TaskStates.ROTATING ? task.reverse : undefined,
     ...details,
   }
   storage.airi_last_basic_operation_result = result
@@ -184,6 +189,26 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
       direction,
     }
     return queue(task, actor)
+  }
+
+  function submit_rotate_exact(target_unit_number: number, reverse: boolean = false): [boolean, string] {
+    if (!valid_integer(target_unit_number, 1, 9007199254740991)) {
+      result_for(get_actor(), undefined, false, false, 'invalid_unit_number')
+      return [false, 'unit_number must be a positive safe integer']
+    }
+    if (typeof reverse !== 'boolean') {
+      result_for(get_actor(), undefined, false, false, 'invalid_reverse')
+      return [false, 'reverse must be boolean']
+    }
+    const actor = actor_for_submission()
+    if (!actor) return [false, 'No controlled actor']
+    const task: PlayerParametersRotateEntity = {
+      type: TaskStates.ROTATING,
+      target_unit_number,
+      reverse,
+    }
+    if (!queue(task, actor)) return [false, 'No controlled actor']
+    return [true, 'Task started']
   }
 
   function submit_move(item_name: string, entity_name: string, max_count: number, to_entity: boolean): [boolean, string] {
@@ -298,7 +323,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
     log(`[AUTORIO] [ERROR] ${task.type} failed: ${code}; dependent operations cancelled`)
   }
 
-  function register_cancel(state: TaskStates.MINING | TaskStates.PLACING | TaskStates.MOVING_ITEMS | TaskStates.SETTING_RECIPE | TaskStates.WAITING, get_task: () => BasicTask | undefined) {
+  function register_cancel(state: TaskStates.MINING | TaskStates.PLACING | TaskStates.ROTATING | TaskStates.MOVING_ITEMS | TaskStates.SETTING_RECIPE | TaskStates.WAITING, get_task: () => BasicTask | undefined) {
     manager.register_cancel_handler(state, () => {
       if (suppress_cancel_receipt) return
       const task = get_task()
@@ -310,6 +335,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
 
   register_cancel(TaskStates.MINING, () => manager.player_state.parameters_mine_entity)
   register_cancel(TaskStates.PLACING, () => manager.player_state.parameters_place_entity)
+  register_cancel(TaskStates.ROTATING, () => manager.player_state.parameters_rotate_entity)
   register_cancel(TaskStates.MOVING_ITEMS, () => manager.player_state.parameters_move_items)
   register_cancel(TaskStates.SETTING_RECIPE, () => manager.player_state.parameters_set_recipe)
   register_cancel(TaskStates.WAITING, () => manager.player_state.parameters_waiting)
@@ -324,6 +350,7 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
   return {
     submit_mining,
     submit_placement,
+    submit_rotate_exact,
     submit_move,
     submit_move_exact,
     submit_set_recipe_exact,
