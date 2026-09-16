@@ -162,7 +162,7 @@ const TONE_SPRITES: Record<Tone, SpritePath> = {
 }
 
 export interface TaskBoardUiStep { id: string, description: string, status: 'pending' | 'active' | 'completed' | 'blocked' | 'paused' }
-export interface TaskBoardUiActivity { id?: string, kind: TaskBoardUiActivityKind, text: string, timestamp?: string }
+export interface TaskBoardUiActivity { kind: TaskBoardUiActivityKind, text: string, timestamp?: string }
 export interface TaskBoardUiWantedItem { name: string, count: number, reason: string }
 export interface TaskBoardUiAgentStatus { phase: TaskBoardUiAgentPhase, detail: string }
 export interface TaskBoardUiSnapshot {
@@ -252,10 +252,8 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
     const entry = raw_activity[index]
     const entry_text = text(entry?.text, 1000)
     if (entry_text.length === 0) continue
-    const id = text(entry?.id, 120)
     const timestamp = text(entry?.timestamp, 16)
     const next: TaskBoardUiActivity = { kind: activity_kind(entry?.kind), text: entry_text }
-    if (id.length > 0) next.id = id
     if (timestamp.length > 0) next.timestamp = timestamp
     activity.push(next)
   }
@@ -287,23 +285,15 @@ export function task_board_game_time(tick: number) {
   const seconds = total_seconds % 60
   return `${two_digits(hours)}:${two_digits(minutes)}:${two_digits(seconds)}`
 }
-export function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBoardUiSnapshot | undefined, tick: number) {
+function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBoardUiSnapshot | undefined, tick: number) {
   const previous_activity = previous?.activity ?? []
   const used: boolean[] = []
   const now = task_board_game_time(tick)
   return { ...next, activity: next.activity.map(entry => {
     if (entry.timestamp !== undefined && entry.timestamp.length > 0) return entry
-    if (entry.id !== undefined && entry.id.length > 0) {
-      for (let index = 0; index < previous_activity.length; index++) {
-        const old = previous_activity[index]
-        if (old.id !== entry.id || !old.timestamp) continue
-        return { ...entry, timestamp: old.timestamp }
-      }
-      return { ...entry, timestamp: now }
-    }
     for (let index = 0; index < previous_activity.length; index++) {
       const old = previous_activity[index]
-      if ((old.id !== undefined && old.id.length > 0) || used[index] === true || old.kind !== entry.kind || old.text !== entry.text || !old.timestamp) continue
+      if (used[index] === true || old.kind !== entry.kind || old.text !== entry.text || !old.timestamp) continue
       used[index] = true
       return { ...entry, timestamp: old.timestamp }
     }
@@ -521,7 +511,7 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
 // The live distance belongs in the tooltip: in the caption it re-flowed the
 // button every tick and overran a fixed-width control.
 function follow_button_caption(follow: TaskBoardUiFollowStatus | undefined) { return follow?.active ? 'FOLLOWING' : 'FOLLOW ME' }
-function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Pause current work and follow this player'; const details = ['Click to stop following.']); if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
+function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Pause current work and follow this player'; const details = ['Click to stop following.']; if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
 function compact_button(button: LuaGuiElement) { button.style.width = COMPACT_BUTTON_WIDTH; button.style.height = COMPACT_BUTTON_HEIGHT; button.style.minimal_width = COMPACT_BUTTON_WIDTH; button.style.maximal_width = COMPACT_BUTTON_WIDTH; button.style.minimal_height = COMPACT_BUTTON_HEIGHT; button.style.maximal_height = COMPACT_BUTTON_HEIGHT; return button }
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const { body } = create_section(parent, 'Controls', CONTROLS_SECTION_WIDTH, undefined, false)
