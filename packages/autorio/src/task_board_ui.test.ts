@@ -291,7 +291,9 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('render_titlebar(root, SKILLS_POPOUT_TITLE, SKILLS_CLOSE_BUTTON_NAME)')
     expect(source).toContain('build_skills_body(body)')
     expect(source).toContain('body.clear()')
-    expect(source).toMatch(/close_task_board_skills_ui\(player\.index\)\s*\n\s*destroy_skills_popout\(player\)/)
+    // Guard the ordering, not the line breaks: the console source is formatted
+    // both one-call-per-line and semicolon-separated in different places.
+    expect(source).toMatch(/close_task_board_skills_ui\(player\.index\)[\s;]*destroy_skills_popout\(player\)/)
   })
 
   it('keeps the area learning window closed by default and scoped per player', () => {
