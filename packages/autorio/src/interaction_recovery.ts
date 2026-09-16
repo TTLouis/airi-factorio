@@ -1,37 +1,24 @@
 import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import { resolve_exact_entity } from './entity_reference'
+import { build_interaction_reach, entity_interaction_reach } from './interaction_range'
 import type { new_task_manager } from './task_manager'
 import type {
   PlayerParameters,
   PlayerParametersWalkToEntity,
-  PlayerParametersWalkingDirect,
 } from './types'
 import { TaskStates } from './types'
 
 const LEGACY_ENTITY_SEARCH_DISTANCE = 8
-const INTERACTION_REACH_MARGIN = 0.25
-const FALLBACK_ENTITY_REACH = 8
-const FALLBACK_BUILD_REACH = 10
-const MIN_RECOVERY_REACH = 0.75
 
 type Manager = ReturnType<typeof new_task_manager>
+type RecoveryNavigationTask = PlayerParametersWalkToEntity & {
+  target_kind?: 'nearest_entity' | 'exact_entity' | 'position' | 'player'
+  requested_position?: { x: number, y: number }
+}
 
 function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
-}
-
-function bounded_reach(raw: unknown, fallback: number) {
-  const value = typeof raw === 'number' && raw === raw && raw > 0 && raw < math.huge ? raw : fallback
-  return math.max(MIN_RECOVERY_REACH, value - INTERACTION_REACH_MARGIN)
-}
-
-function entity_reach(actor: ControlledActor) {
-  return bounded_reach((actor.character as any)?.reach_distance, FALLBACK_ENTITY_REACH)
-}
-
-function build_reach(actor: ControlledActor) {
-  return bounded_reach((actor.character as any)?.build_distance, FALLBACK_BUILD_REACH)
 }
 
 function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
@@ -47,7 +34,7 @@ function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
   return result
 }
 
-function entity_navigation(actor: ControlledActor, entity: LuaEntity, reach_distance: number, target_player_name?: string): PlayerParametersWalkToEntity | undefined {
+function entity_navigation(actor: ControlledActor, entity: LuaEntity, reach_distance: number, target_player_name?: string): RecoveryNavigationTask | undefined {
   const identity = actor.status_snapshot()
   if (identity.actor_id === undefined) return undefined
   return {
@@ -56,6 +43,7 @@ function entity_navigation(actor: ControlledActor, entity: LuaEntity, reach_dist
     search_radius: 1,
     target_player_name,
     reach_distance,
+    target_kind: target_player_name ? 'player' : 'exact_entity',
     path: null,
     path_drawn: false,
     path_index: 1,
@@ -72,10 +60,27 @@ function entity_navigation(actor: ControlledActor, entity: LuaEntity, reach_dist
   }
 }
 
-function position_navigation(position: { x: number, y: number }): PlayerParametersWalkingDirect {
+function position_navigation(actor: ControlledActor, position: { x: number, y: number }, reach_distance: number): RecoveryNavigationTask | undefined {
+  const identity = actor.status_snapshot()
+  if (identity.actor_id === undefined) return undefined
   return {
-    type: TaskStates.WALKING_DIRECT,
+    type: TaskStates.WALKING_TO_ENTITY,
+    entity_name: '',
+    search_radius: 1,
+    reach_distance,
+    target_kind: 'position',
+    requested_position: { x: position.x, y: position.y },
+    path: null,
+    path_drawn: false,
+    path_index: 1,
+    calculating_path: false,
     target_position: { x: position.x, y: position.y },
+    target: null,
+    owner_actor_id: identity.actor_id,
+    owner_actor_kind: identity.kind,
+    owner_force_index: actor.force.index,
+    path_attempts: 0,
+    last_progress_tick: game.tick,
   }
 }
 
@@ -93,9 +98,19 @@ export function new_interaction_recovery(manager: Manager) {
     if (manager.player_state.task_state === TaskStates.PLACING) {
       const task = manager.player_state.parameters_place_entity
       if (!task?.position) return false
-      const reach = build_reach(actor)
+      const reach = build_interaction_reach(actor)
       if (squared_distance(actor.position, task.position) <= reach ** 2) return false
-      return interrupt(manager, position_navigation(task.position), task, `placement approach to <=${reach} tiles`)
+      return interrupt(manager, position_navigation(actor, task.position, reach), task, `placement approach to <=${reach} tiles`)
+    }
+
+    if (manager.player_state.task_state === TaskStates.ROTATING) {
+      const task = manager.player_state.parameters_rotate_entity
+      if (!task) return false
+      const target = resolve_exact_entity(actor, task.target_unit_number)
+      if (!target || !target.valid || target.surface.index !== actor.surface.index || target.force.index !== actor.force.index) return false
+      const reach = entity_interaction_reach(actor)
+      if (squared_distance(actor.position, target.position) <= reach ** 2) return false
+      return interrupt(manager, entity_navigation(actor, target, reach), task, `rotation approach to <=${reach} tiles`)
     }
 
     if (manager.player_state.task_state === TaskStates.SETTING_RECIPE) {
@@ -103,7 +118,7 @@ export function new_interaction_recovery(manager: Manager) {
       if (!task) return false
       const target = resolve_exact_entity(actor, task.target_unit_number)
       if (!target || !target.valid || target.surface.index !== actor.surface.index || target.force.index !== actor.force.index) return false
-      const reach = entity_reach(actor)
+      const reach = entity_interaction_reach(actor)
       if (squared_distance(actor.position, target.position) <= reach ** 2) return false
       return interrupt(manager, entity_navigation(actor, target, reach), task, `recipe-machine approach to <=${reach} tiles`)
     }
@@ -111,7 +126,7 @@ export function new_interaction_recovery(manager: Manager) {
     if (manager.player_state.task_state !== TaskStates.MOVING_ITEMS) return false
     const task = manager.player_state.parameters_move_items
     if (!task) return false
-    const reach = entity_reach(actor)
+    const reach = entity_interaction_reach(actor)
 
     if (task.player_name) {
       const player = game.get_player(task.player_name)
@@ -130,7 +145,7 @@ export function new_interaction_recovery(manager: Manager) {
     if (!task.entity_name || !prototypes.entity[task.entity_name]) return false
     const nearby = actor.surface.find_entities_filtered({
       position: actor.position,
-      radius: LEGACY_ENTITY_SEARCH_DISTANCE,
+      radius: math.max(LEGACY_ENTITY_SEARCH_DISTANCE, reach),
       name: task.entity_name,
       force: actor.force,
     })
