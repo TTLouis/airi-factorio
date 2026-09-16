@@ -32,6 +32,7 @@ import { event_handlers, set_load_handler } from './test-event-registry'
   },
   print: () => {},
   tick: 0,
+  is_multiplayer: () => false,
 }
 
 ;(globalThis as any).rendering = {

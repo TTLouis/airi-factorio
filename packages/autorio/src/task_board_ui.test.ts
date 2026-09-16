@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   sanitize_task_board_ui_snapshot,
   task_board_activity_for_display,
+  task_board_skills_ui_is_open,
   task_board_ui_is_open,
   task_board_ui_prompt_draft,
   task_board_ui_terminate_is_armed,
+  toggle_task_board_skills_ui_open,
   toggle_task_board_ui_open,
 } from './task_board_ui'
 
@@ -258,11 +260,38 @@ describe('in-game task board UI projection', () => {
     expect(learning).toContain('return storage.airi_factory_area_order ?? []')
   })
 
-  it('offers area learning as a Controls action instead of its own wide section', () => {
+  it('opens area learning in its own window instead of consuming console space', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     const skills = readFileSync(new URL('./skills.ts', import.meta.url), 'utf8')
-    expect(source).toContain('render_learn_area_button(body)')
+    // Controls keeps only the entry point; the analysis output and the saved
+    // candidate list no longer occupy a full-width row in the main column.
+    expect(source).toContain('name: SKILLS_BUTTON_NAME')
+    expect(source).not.toContain('render_skill_export_section(left)')
+    expect(source).toContain('render_learn_area_button(actions)')
+    expect(source).toContain('render_skill_export_section(body)')
     expect(skills).toContain('export function render_learn_area_button(')
+
+    // It is a real movable window with its own titlebar, close button and
+    // in-place refresh, not a section nested back inside the console.
+    expect(source).toContain('player.gui.screen.add')
+    expect(source).toContain('render_titlebar(root, SKILLS_POPOUT_TITLE, SKILLS_CLOSE_BUTTON_NAME)')
+    expect(source).toContain('build_skills_body(body)')
+    expect(source).toContain('body.clear()')
+    // Closing the console must not leave an unreachable orphan window behind.
+    expect(source).toMatch(/close_task_board_skills_ui\(player\.index\)\s*\n\s*destroy_skills_popout\(player\)/)
+  })
+
+  it('keeps the area learning window closed by default and scoped per player', () => {
+    ;(globalThis as any).storage = {}
+    expect(task_board_skills_ui_is_open(1)).toBe(false)
+    // Drawing reads this on every peer, so it must not create the table.
+    expect((globalThis as any).storage).toEqual({})
+
+    expect(toggle_task_board_skills_ui_open(1)).toBe(true)
+    expect(task_board_skills_ui_is_open(1)).toBe(true)
+    expect(task_board_skills_ui_is_open(2)).toBe(false)
+    expect(toggle_task_board_skills_ui_open(1)).toBe(false)
+    expect(task_board_skills_ui_is_open(1)).toBe(false)
   })
 
   it('only emits fixed UI control actions instead of arbitrary console commands', () => {

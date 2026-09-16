@@ -672,10 +672,28 @@ export class Session {
     return parseStatus(await this.rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("airi_deployment","status")))'))
   }
 
+  // Autorio cannot safely reconcile a loaded save from `script.on_load`: that
+  // handler runs per peer, so a joining client would stop engine control states
+  // the server is still driving and desync the game. An RCON command is
+  // replicated to every peer as a single input action, so the mod defers the
+  // work to this explicit call once the server has finished loading.
+  async reconcileNpcAfterLoad() {
+    if (!this.rcon) return false
+    try {
+      await this.rcon.command('/silent-command remote.call("autorio_actor","reconcile_after_load")')
+      return true
+    }
+    catch (error) {
+      this.log(`NPC post-load reconciliation failed: ${error instanceof Error ? error.message : error}`)
+      return false
+    }
+  }
+
   async bindNpc() {
     const status = await configureNpcSession(this.rcon, this.session)
     this.updateNpcIdentity(status)
     this.lastStatus = status
+    await this.reconcileNpcAfterLoad()
     return status
   }
 

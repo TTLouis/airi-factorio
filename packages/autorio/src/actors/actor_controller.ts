@@ -51,8 +51,12 @@ let recovery_invalidated_actor_id: number | undefined
 // Factorio does not persist ordinary Lua module locals across save/load. Autorio's
 // logical task manager is therefore intentionally volatile for now, while the
 // standalone character entity and its engine control states are persisted in the
-// save. on_load cannot access `game` or mutate `storage`, so it only marks local
-// work for the first normal runtime resolution of the NPC.
+// save. on_load cannot access `game` or mutate `storage`, so it only restores
+// module-local caches here.
+//
+// This handler runs on every peer that loads the map, including a client joining
+// a running server, so the flag it sets is NOT by itself permission to change
+// game state. See `maybe_reconcile_loaded_npc`.
 script.on_load(() => {
   standalone_actor = undefined
   post_load_reconciliation_pending = true
@@ -137,10 +141,6 @@ function reconcile_owned_crafting_after_load(actor: StandaloneCharacterActor) {
 }
 
 function reconcile_loaded_npc(actor: StandaloneCharacterActor) {
-  if (!post_load_reconciliation_pending) {
-    return
-  }
-
   // Logical Autorio tasks are not resumed across a save/load boundary. Clear
   // the engine-owned physical inputs that *are* serialized with the character,
   // otherwise a freshly loaded NPC could keep walking/mining/shooting with no
@@ -158,6 +158,26 @@ function reconcile_loaded_npc(actor: StandaloneCharacterActor) {
   last_reconciled_tick = game.tick
   post_load_reconciliation_pending = false
   log(`[AUTORIO] Reconciled loaded NPC controls for actor_id=${identity.actor_id ?? 'unknown'}`)
+}
+
+/**
+ * Automatic post-load reconciliation, for single-player only.
+ *
+ * `script.on_load` runs on every peer that loads the map, but the server ran it
+ * once at its own load and has already cleared the flag. Acting on that
+ * module-local flag therefore changes synchronized game state on one peer only:
+ * a joining client stops the NPC walking while the server keeps walking it, and
+ * the next tick fails its CRC check. Multiplayer must reconcile from a
+ * replicated trigger instead — see `reconcile_npc_after_load`.
+ */
+function maybe_reconcile_loaded_npc(actor: StandaloneCharacterActor) {
+  if (!post_load_reconciliation_pending) {
+    return
+  }
+  if (game.is_multiplayer()) {
+    return
+  }
+  reconcile_loaded_npc(actor)
 }
 
 function invalidate_missing_npc(previous_actor_id: number) {
@@ -200,7 +220,7 @@ function record_npc_recovery(previous_actor_id: number, actor: StandaloneCharact
 
 function get_npc_actor(): ControlledActor | undefined {
   if (standalone_actor?.is_valid) {
-    reconcile_loaded_npc(standalone_actor)
+    maybe_reconcile_loaded_npc(standalone_actor)
     return standalone_actor
   }
 
@@ -214,7 +234,7 @@ function get_npc_actor(): ControlledActor | undefined {
   standalone_actor = StandaloneCharacterActor.reacquire(surface)
   if (standalone_actor?.is_valid) {
     recovery_invalidated_actor_id = undefined
-    reconcile_loaded_npc(standalone_actor)
+    maybe_reconcile_loaded_npc(standalone_actor)
     return standalone_actor
   }
 
@@ -237,7 +257,7 @@ function get_npc_actor(): ControlledActor | undefined {
     if (persisted_actor_id !== undefined) {
       record_npc_recovery(persisted_actor_id, standalone_actor)
     }
-    reconcile_loaded_npc(standalone_actor)
+    maybe_reconcile_loaded_npc(standalone_actor)
   }
   return standalone_actor
 }
@@ -268,10 +288,59 @@ export function peek_controlled_actor(): ControlledActor | undefined {
   return surface ? StandaloneCharacterActor.peek(surface) : undefined
 }
 
+export interface NpcLoadReconciliationResult {
+  reconciled: boolean
+  reason: 'reconciled' | 'actor_mode_is_player' | 'no_persisted_npc_body'
+  actor_id?: number
+  tick: number
+}
+
+/**
+ * Replicated post-load reconciliation.
+ *
+ * The supervisor issues this over RCON once the server has loaded the save.
+ * Factorio replicates an RCON command to every connected peer as a single input
+ * action, so each peer runs this at the same tick against the same `storage` and
+ * reaches the same result — unlike the `on_load` flag, which is set per peer.
+ *
+ * Only ever stops controls, so repeating it is safe.
+ */
+export function reconcile_npc_after_load(): NpcLoadReconciliationResult {
+  if (get_actor_mode() !== 'npc') {
+    post_load_reconciliation_pending = false
+    return { reconciled: false, reason: 'actor_mode_is_player', tick: game.tick }
+  }
+
+  const surface = game.surfaces[1]
+  const actor = standalone_actor?.is_valid
+    ? standalone_actor
+    : surface
+      ? StandaloneCharacterActor.reacquire(surface)
+      : undefined
+  if (!actor?.is_valid) {
+    // Nothing persisted means no stale engine control state to stop. Creating a
+    // body here would make an explicit repair command spawn an NPC.
+    post_load_reconciliation_pending = false
+    return { reconciled: false, reason: 'no_persisted_npc_body', tick: game.tick }
+  }
+
+  standalone_actor = actor
+  reconcile_loaded_npc(actor)
+  return {
+    reconciled: true,
+    reason: 'reconciled',
+    actor_id: actor.status_snapshot().actor_id,
+    tick: game.tick,
+  }
+}
+
 export function get_load_reconciliation_status() {
   return {
     policy: 'discard_autorio_tasks_and_stop_npc_controls_on_load',
     owned_crafting_policy: 'cancel_persisted_autorio_owned_native_queue_on_load',
+    // Single-player resolves this lazily; multiplayer only ever reconciles from
+    // the replicated `reconcile_after_load` call.
+    trigger: 'lazy_in_single_player_replicated_remote_call_in_multiplayer',
     pending: post_load_reconciliation_pending,
     last_actor_id: last_reconciled_actor_id,
     last_tick: last_reconciled_tick,
@@ -299,6 +368,9 @@ export function create_actor_remote_interface() {
       const actor = get_controlled_actor()
       return [true, actor?.status_snapshot()]
     },
+    // Replicated repair entry point: safe to call on a live multiplayer server
+    // because every peer executes the same RCON input action at the same tick.
+    reconcile_after_load: () => reconcile_npc_after_load(),
     status: () => {
       const actor = get_controlled_actor()
       return {

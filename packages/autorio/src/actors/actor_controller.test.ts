@@ -5,6 +5,7 @@ import {
   get_controlled_actor,
   get_load_reconciliation_status,
   get_npc_recovery_status,
+  reconcile_npc_after_load,
   register_npc_recovery_handler,
   set_actor_mode,
 } from './actor_controller'
@@ -54,6 +55,7 @@ beforeEach(() => {
     forces: { player: force },
     print: vi.fn(),
     tick: 123,
+    is_multiplayer: vi.fn(() => false),
   }
   ;(globalThis as any).rendering = { clear: vi.fn() }
   register_npc_recovery_handler(undefined)
@@ -262,6 +264,7 @@ describe('actor mode', () => {
     expect(get_load_reconciliation_status()).toEqual({
       policy: 'discard_autorio_tasks_and_stop_npc_controls_on_load',
       owned_crafting_policy: 'cancel_persisted_autorio_owned_native_queue_on_load',
+      trigger: 'lazy_in_single_player_replicated_remote_call_in_multiplayer',
       pending: false,
       last_actor_id: 42,
       last_tick: 123,
@@ -352,5 +355,72 @@ describe('actor mode', () => {
     expect(player.walking_state).toEqual({ walking: true, direction: 'east' })
     expect((globalThis as any).rendering.clear).not.toHaveBeenCalled()
     expect(get_load_reconciliation_status().pending).toBe(true)
+  })
+
+  function loaded_multiplayer_npc() {
+    const surface = (globalThis as any).game.surfaces[1]
+    const character = fake_character(42)
+    character.surface = surface
+    character.force = (globalThis as any).game.forces.player
+    character.walking_state = { walking: true, direction: 'east' }
+    surface.find_entities_filtered.mockReturnValue([character])
+    ;(globalThis as any).storage.airi_actor_mode = 'npc'
+    ;(globalThis as any).storage.standalone_character_unit_number = 42
+    ;(globalThis as any).game.is_multiplayer.mockReturnValue(true)
+    return character
+  }
+
+  it('never reconciles a loaded NPC from on_load alone in multiplayer', () => {
+    const character = loaded_multiplayer_npc()
+
+    get_load_handler()()
+    const actor = get_controlled_actor()
+
+    // on_load runs again on every joining client, but the server cleared its own
+    // flag at its load. Stopping the NPC here would change synchronized state on
+    // one peer only while the server keeps walking it, which desyncs the game.
+    expect(actor?.character).toBe(character)
+    expect(character.walking_state).toEqual({ walking: true, direction: 'east' })
+    expect(character.shooting_state).toEqual({ state: 'not_shooting', position: { x: 4, y: 5 } })
+    expect((globalThis as any).rendering.clear).not.toHaveBeenCalled()
+    expect(get_load_reconciliation_status().pending).toBe(true)
+  })
+
+  it('reconciles a loaded multiplayer NPC from the replicated remote call instead', () => {
+    const character = loaded_multiplayer_npc()
+    character.shooting_state = { state: 'shooting_selected', position: { x: 6, y: 5 } }
+
+    get_load_handler()()
+    get_controlled_actor()
+    expect(character.walking_state).toEqual({ walking: true, direction: 'east' })
+
+    // RCON is replicated to every peer as one input action, so this runs at the
+    // same tick against the same storage everywhere.
+    const result = reconcile_npc_after_load()
+
+    expect(result).toEqual({ reconciled: true, reason: 'reconciled', actor_id: 42, tick: 123 })
+    expect(character.walking_state).toEqual({ walking: false, direction: 'north' })
+    expect(character.mining_state).toEqual({ mining: false })
+    expect(character.shooting_state).toEqual({ state: 'not_shooting', position: character.position })
+    expect(get_load_reconciliation_status().pending).toBe(false)
+  })
+
+  it('keeps a replicated reconcile a no-op instead of spawning a body or touching a player actor', () => {
+    ;(globalThis as any).storage.airi_actor_mode = 'npc'
+    const surface = (globalThis as any).game.surfaces[1]
+
+    expect(reconcile_npc_after_load()).toEqual({
+      reconciled: false,
+      reason: 'no_persisted_npc_body',
+      tick: 123,
+    })
+    expect(surface.create_entity).not.toHaveBeenCalled()
+
+    ;(globalThis as any).storage.airi_actor_mode = 'player'
+    expect(reconcile_npc_after_load()).toEqual({
+      reconciled: false,
+      reason: 'actor_mode_is_player',
+      tick: 123,
+    })
   })
 })

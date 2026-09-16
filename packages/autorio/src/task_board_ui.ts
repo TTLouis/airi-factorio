@@ -15,6 +15,13 @@ const ROOT_NAME = 'airi_task_board_panel'
 const COLUMNS_NAME = 'airi_task_board_columns'
 const PROMPT_SECTION_NAME = 'airi_task_board_prompt_section'
 const PROMPT_FLOW_NAME = 'airi_task_board_prompt_flow'
+// Area learning lives in its own movable window: its results and the saved
+// candidate list are tall, and inlining them stretched the whole console.
+const SKILLS_ROOT_NAME = 'airi_task_board_skills_panel'
+const SKILLS_BODY_NAME = 'airi_task_board_skills_body'
+const SKILLS_BUTTON_NAME = 'airi_task_board_skills'
+const SKILLS_CLOSE_BUTTON_NAME = 'airi_task_board_skills_close'
+const SKILLS_POPOUT_TITLE = 'Area Learning & Skills'
 // A logistic robot reads as "assistant working for you" in the mod button bar,
 // where a plain character icon looks like another player.
 const BUTTON_SPRITE: SpritePath = 'item/logistic-robot'
@@ -46,6 +53,7 @@ const STEPS_LIST_HEIGHT = 104
 const ACTIVITY_LIST_HEIGHT = 104
 const PREVIEW_MIN_HEIGHT = 360
 const PREVIEW_ZOOM = 0.75
+const SKILLS_POPOUT_WIDTH = 720
 
 type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow'
 type TaskBoardUiActivityKind = 'observation' | 'decision' | 'action' | 'result' | 'blocker' | 'system' | 'note'
@@ -138,6 +146,7 @@ declare const storage: {
   airi_task_board_ui?: TaskBoardUiSnapshot
   airi_task_board_ui_synced_tick?: number
   airi_task_board_ui_open?: Record<number, boolean>
+  airi_task_board_skills_open?: Record<number, boolean>
   airi_task_board_terminate_confirm_until?: Record<number, number>
   airi_task_board_prompt_draft?: Record<number, string>
 }
@@ -260,6 +269,25 @@ export function toggle_task_board_ui_open(player_index: number) {
 
 function close_task_board_ui(player_index: number) {
   ensure_open_state()[player_index] = false
+}
+
+function ensure_skills_open_state() {
+  if (storage.airi_task_board_skills_open === undefined) storage.airi_task_board_skills_open = {}
+  return storage.airi_task_board_skills_open
+}
+
+export function task_board_skills_ui_is_open(player_index: number) {
+  return storage.airi_task_board_skills_open?.[player_index] === true
+}
+
+export function toggle_task_board_skills_ui_open(player_index: number) {
+  const next = !task_board_skills_ui_is_open(player_index)
+  ensure_skills_open_state()[player_index] = next
+  return next
+}
+
+function close_task_board_skills_ui(player_index: number) {
+  ensure_skills_open_state()[player_index] = false
 }
 
 export function task_board_ui_terminate_is_armed(player_index: number, tick: number) {
@@ -624,7 +652,17 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   follow_button.style.minimal_width = 0
   follow_button.style.horizontally_stretchable = true
 
-  render_learn_area_button(body)
+  // Only the entry point lives here. The analysis output and saved candidate
+  // list open in their own window so they cost the console no space at all.
+  const skills_button = body.add({
+    type: 'button',
+    name: SKILLS_BUTTON_NAME,
+    caption: task_board_skills_ui_is_open(player.index) ? 'CLOSE LEARNING' : 'LEARN AREA…',
+    style: 'dialog_button',
+    tooltip: 'Open area learning and saved skill candidates in a separate movable window.',
+  })
+  skills_button.style.minimal_width = 0
+  skills_button.style.horizontally_stretchable = true
 }
 
 function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot) {
@@ -835,14 +873,14 @@ function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   send.style.minimal_width = 100
 }
 
-function render_titlebar(root: FrameGuiElement) {
+function render_titlebar(root: FrameGuiElement, caption = 'AIRI NPC Console', close_name = CLOSE_BUTTON_NAME) {
   const titlebar = root.add({ type: 'flow', direction: 'horizontal' })
   titlebar.style.horizontally_stretchable = true
   titlebar.style.horizontal_spacing = 8
   titlebar.drag_target = root
   titlebar.add({
     type: 'label',
-    caption: 'AIRI NPC Console',
+    caption,
     style: 'frame_title',
     ignored_by_interaction: true,
   })
@@ -855,10 +893,10 @@ function render_titlebar(root: FrameGuiElement) {
   dragger.style.height = 24
   titlebar.add({
     type: 'sprite-button',
-    name: CLOSE_BUTTON_NAME,
+    name: close_name,
     sprite: 'utility/close',
     style: 'frame_action_button',
-    tooltip: 'Close AIRI NPC Console',
+    tooltip: `Close ${caption}`,
   })
 }
 
@@ -878,7 +916,6 @@ function build_columns(columns: LuaGuiElement, player: LuaPlayer) {
 
   render_steps(left, board)
   render_activity(left, board)
-  render_skill_export_section(left)
 
   const resources = left.add({ type: 'flow', direction: 'horizontal' })
   resources.style.horizontal_spacing = COLUMN_SPACING
@@ -932,15 +969,68 @@ function render_panel(player: LuaPlayer) {
   build_panel(player)
 }
 
+function destroy_skills_popout(player: LuaPlayer) {
+  const existing = player.gui.screen[SKILLS_ROOT_NAME]
+  const location = existing?.valid ? existing.location : undefined
+  if (existing?.valid) existing.destroy()
+  return location
+}
+
+function build_skills_body(body: LuaGuiElement) {
+  const actions = body.add({ type: 'flow', direction: 'horizontal' })
+  actions.style.horizontally_stretchable = true
+  render_learn_area_button(actions)
+  render_skill_export_section(body)
+}
+
+function build_skills_popout(player: LuaPlayer) {
+  const previous_location = destroy_skills_popout(player)
+  const root = player.gui.screen.add({
+    type: 'frame',
+    name: SKILLS_ROOT_NAME,
+    direction: 'vertical',
+  }) as FrameGuiElement
+
+  // Same ordering rule as the console: place the window before it has content,
+  // otherwise it is visibly parked in the corner while the layout settles.
+  if (previous_location !== undefined) root.location = previous_location
+  else root.auto_center = true
+
+  render_titlebar(root, SKILLS_POPOUT_TITLE, SKILLS_CLOSE_BUTTON_NAME)
+  const body = root.add({ type: 'flow', name: SKILLS_BODY_NAME, direction: 'vertical' })
+  body.style.width = SKILLS_POPOUT_WIDTH
+  body.style.vertical_spacing = 6
+  build_skills_body(body)
+  root.bring_to_front()
+}
+
+function render_skills_popout(player: LuaPlayer) {
+  if (!task_board_ui_is_open(player.index) || !task_board_skills_ui_is_open(player.index)) {
+    destroy_skills_popout(player)
+    return
+  }
+
+  const root = player.gui.screen[SKILLS_ROOT_NAME]
+  const body = root?.valid ? root[SKILLS_BODY_NAME] : undefined
+  if (body?.valid) {
+    body.clear()
+    build_skills_body(body)
+    return
+  }
+  build_skills_popout(player)
+}
+
 function render(player: LuaPlayer) {
   ensure_button(player)
   render_panel(player)
+  render_skills_popout(player)
 }
 
 function render_all() {
   for (const player of game.connected_players) {
     ensure_button(player)
     render_panel(player)
+    render_skills_popout(player)
   }
 }
 
@@ -1029,12 +1119,28 @@ export function create_task_board_ui_remote_interface() {
     if (element.name === CLOSE_BUTTON_NAME) {
       clear_terminate_confirmation(player.index)
       close_task_board_ui(player.index)
+      // The pop-out is only reachable from the console, so it must not outlive
+      // it as an orphan window the player cannot reopen or close.
+      close_task_board_skills_ui(player.index)
+      destroy_skills_popout(player)
       destroy_panel(player)
       ensure_button(player)
       return
     }
-    if (handle_skill_export_click(player, element.name)) {
+    if (element.name === SKILLS_BUTTON_NAME) {
+      toggle_task_board_skills_ui_open(player.index)
       render_panel(player)
+      render_skills_popout(player)
+      return
+    }
+    if (element.name === SKILLS_CLOSE_BUTTON_NAME) {
+      close_task_board_skills_ui(player.index)
+      destroy_skills_popout(player)
+      render_panel(player)
+      return
+    }
+    if (handle_skill_export_click(player, element.name)) {
+      render_skills_popout(player)
       return
     }
     handle_control_click(player, element.name)
@@ -1056,7 +1162,9 @@ export function create_task_board_ui_remote_interface() {
 
   script.on_nth_tick(60, () => {
     for (const player of game.connected_players) {
-      if (task_board_ui_is_open(player.index)) render_panel(player)
+      if (!task_board_ui_is_open(player.index)) continue
+      render_panel(player)
+      render_skills_popout(player)
     }
   })
 }

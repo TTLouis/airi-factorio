@@ -252,3 +252,29 @@ test('stop follow leaves the durable plan paused', async () => {
   assert.equal(paused, false)
   assert.equal(session.syncs.length, 0)
 })
+
+test('post-load NPC reconciliation is issued as a single replicated RCON command', async () => {
+  const commands = []
+  const session = Object.create(Session.prototype)
+  Object.assign(session, {
+    rcon: { command: async (text) => { commands.push(text); return '' } },
+    log: () => {},
+  })
+
+  assert.equal(await session.reconcileNpcAfterLoad(), true)
+  // Factorio replicates this to every peer as one input action, unlike the
+  // per-peer script.on_load path that desynced joining clients.
+  assert.deepEqual(commands, ['/silent-command remote.call("autorio_actor","reconcile_after_load")'])
+})
+
+test('a failed post-load reconciliation is reported instead of breaking the NPC bind', async () => {
+  const logs = []
+  const session = Object.create(Session.prototype)
+  Object.assign(session, {
+    rcon: { command: async () => { throw new Error('rcon closed') } },
+    log: line => logs.push(line),
+  })
+
+  assert.equal(await session.reconcileNpcAfterLoad(), false)
+  assert.match(logs.join('\n'), /post-load reconciliation failed/)
+})
