@@ -60,17 +60,35 @@ const SLOT_SIZE = 40
 const SLOT_COLUMNS = 6
 const SLOT_ROWS = 2
 const SCROLLBAR_WIDTH = 12
-const TRACKER_STEPS_LIST_HEIGHT = 132
-const TRACKER_ACTIVITY_LIST_HEIGHT = 174
+// The console is exactly as tall as its left column, because the world preview
+// stretches to match it. So the two tracker scroll panes and the camera's floor
+// are what decide the window's height, and sizing them from the player's own
+// display lets a large screen be used properly without producing a window a
+// small screen cannot show. Both display properties are synchronized, so this
+// stays identical on every peer.
+const CONSOLE_SCREEN_FRACTION = 0.92
+// Deliberately generous estimate of everything in the left column that is not a
+// tracker list: titlebar, the status/controls row, section headers, progress
+// bar, divider, the inventory row and the prompt. Overestimating costs a little
+// height; underestimating would push the window past the bottom of the screen.
+const CONSOLE_FIXED_HEIGHT = 620
+const TRACKER_LIST_MIN_TOTAL = 306
+const TRACKER_LIST_MAX_TOTAL = 900
+const TRACKER_STEPS_SHARE = 0.43
 const PREVIEW_CAMERA_WIDTH = PREVIEW_COLUMN_WIDTH - 2 * SECTION_PADDING
 const PREVIEW_CAMERA_MIN_HEIGHT = 360
+const PREVIEW_CAMERA_MAX_HEIGHT = 900
+const PREVIEW_CAMERA_SCREEN_FRACTION = 0.5
 const PREVIEW_ZOOM_DEFAULT = 0.75
 const PREVIEW_ZOOM_MIN = 0.25
 const PREVIEW_ZOOM_MAX = 2
 const PREVIEW_ZOOM_STEP = 0.05
 const COMPACT_BUTTON_HEIGHT = 32
-const COMPACT_TASK_BUTTON_WIDTH = 108
-const COMPACT_ACTION_BUTTON_WIDTH = 132
+const COMPACT_BUTTON_SPACING = 6
+// Every control is the same size. Two sizes across two rows read as a ragged
+// grid, and sizing each button to its own caption made the panel look
+// accidental. Two of these plus the gap exactly fill the section's inner width.
+const COMPACT_BUTTON_WIDTH = (HALF_SECTION_WIDTH - 2 * SECTION_PADDING - COMPACT_BUTTON_SPACING) / 2
 const PROMPT_SEND_WIDTH = 84
 const PROMPT_FIELD_WIDTH = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 8 - PROMPT_SEND_WIDTH
 const SKILLS_POPOUT_WIDTH = 720
@@ -376,22 +394,66 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   add_key_value(table, 'GOAL', text(goal, 110), { tooltip: goal, width: HALF_VALUE_WIDTH })
   add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: HALF_VALUE_WIDTH })
 }
-function follow_button_caption(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'FOLLOW ME'; const distance = follow.current_distance !== undefined ? ` · ${math.floor(follow.current_distance * 10) / 10}` : ''; return `FOLLOWING${distance}` }
+// The live distance belongs in the tooltip: in the caption it re-flowed the
+// button every tick and overran a fixed-width control.
+function follow_button_caption(follow: TaskBoardUiFollowStatus | undefined) { return follow?.active ? 'FOLLOWING' : 'FOLLOW ME' }
 function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Pause current work and follow this player'; const details = ['Click to stop following.']; if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
-function compact_button(button: LuaGuiElement, width: number) { button.style.width = width; button.style.height = COMPACT_BUTTON_HEIGHT; button.style.minimal_width = 0; button.style.maximal_width = width; return button }
+function compact_button(button: LuaGuiElement) { button.style.width = COMPACT_BUTTON_WIDTH; button.style.height = COMPACT_BUTTON_HEIGHT; button.style.minimal_width = 0; button.style.maximal_width = COMPACT_BUTTON_WIDTH; return button }
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const { body } = create_section(parent, 'Controls', HALF_SECTION_WIDTH, undefined, false)
   body.style.vertical_spacing = 4
   const follow = runtime.follow
   const has_open_goal = board !== undefined && board.status !== 'idle' && board.status !== 'completed'
-  const task_controls = body.add({ type: 'flow', direction: 'horizontal' }); task_controls.style.horizontal_spacing = 6
-  const pause = compact_button(task_controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: 'PAUSE', style: 'dialog_button', tooltip: 'Pause the durable AIRI goal and stop current world work' }), COMPACT_TASK_BUTTON_WIDTH); pause.enabled = has_open_goal && board.status !== 'paused'
+  const task_controls = body.add({ type: 'flow', direction: 'horizontal' }); task_controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING
+  // PAUSE and TERMINATE stay clickable even with no durable goal. They also stop
+  // the current world work, which is exactly what a player needs when the
+  // runtime is offline and the body is still mining; disabling them left the
+  // console with no way to intervene at the moment intervention matters most.
+  compact_button(task_controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: 'PAUSE', style: 'dialog_button', tooltip: has_open_goal && board.status !== 'paused' ? 'Pause the durable AIRI goal and stop current world work' : 'Stop the current world work. There is no durable AIRI goal to pause.' }))
   const armed = task_board_ui_terminate_is_armed(player.index, game.tick)
-  const terminate = compact_button(task_controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: armed ? 'CONFIRM' : 'TERMINATE', style: 'red_button', tooltip: armed ? 'Click again within 5 seconds to discard the goal permanently' : 'Discard the current durable AIRI goal permanently' }), COMPACT_TASK_BUTTON_WIDTH); terminate.enabled = has_open_goal
-  const action_controls = body.add({ type: 'flow', direction: 'horizontal' }); action_controls.style.horizontal_spacing = 6
-  compact_button(action_controls.add({ type: 'button', name: FOLLOW_BUTTON_NAME, caption: follow_button_caption(follow), style: follow?.active ? 'confirm_button' : 'dialog_button', tooltip: follow_button_tooltip(follow) }), COMPACT_ACTION_BUTTON_WIDTH)
-  compact_button(action_controls.add({ type: 'button', name: SKILLS_BUTTON_NAME, caption: task_board_skills_ui_is_open(player.index) ? 'CLOSE LEARNING' : 'LEARN AREA…', style: 'dialog_button', tooltip: 'Open area learning and saved skill candidates in a separate movable window.' }), COMPACT_ACTION_BUTTON_WIDTH)
-  if (follow?.last_failure) { const issue = body.add({ type: 'label', caption: `⚠ ${text(follow.last_failure, 100)}`, tooltip: follow.last_failure }); issue.style.single_line = false; issue.style.maximal_width = HALF_SECTION_WIDTH - 2 * SECTION_PADDING; issue.style.font_color = TONE_COLORS.bad }
+  compact_button(task_controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: armed ? 'CONFIRM' : 'TERMINATE', style: 'red_button', tooltip: armed ? 'Click again within 5 seconds to discard the goal permanently' : has_open_goal ? 'Discard the current durable AIRI goal permanently' : 'Stop the current world work. There is no durable AIRI goal to discard.' }))
+  const action_controls = body.add({ type: 'flow', direction: 'horizontal' }); action_controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING
+  compact_button(action_controls.add({ type: 'button', name: FOLLOW_BUTTON_NAME, caption: follow_button_caption(follow), style: follow?.active ? 'confirm_button' : 'dialog_button', tooltip: follow_button_tooltip(follow) }))
+  const skills_open = task_board_skills_ui_is_open(player.index)
+  compact_button(action_controls.add({ type: 'button', name: SKILLS_BUTTON_NAME, caption: skills_open ? 'CLOSE' : 'LEARN AREA', style: 'dialog_button', tooltip: skills_open ? 'Close the area learning window.' : 'Open area learning and saved skill candidates in a separate movable window.' }))
+  // A blank last_failure is still truthy, which drew a lone warning triangle with
+  // no message next to it. Render the row only when there is something to read.
+  const issue_text = text(follow?.last_failure ?? '', 100)
+  if (issue_text.length > 0) { const issue = body.add({ type: 'label', caption: `⚠ ${issue_text}`, tooltip: follow?.last_failure }); issue.style.single_line = false; issue.style.maximal_width = HALF_SECTION_WIDTH - 2 * SECTION_PADDING; issue.style.font_color = TONE_COLORS.bad }
+}
+
+/**
+ * Usable GUI height for this player, in the units Factorio styles are measured
+ * in. `display_resolution` is physical pixels, so it has to be divided by the
+ * player's UI scale before it means anything to a style.
+ */
+export function task_board_gui_height(resolution_height: number, scale: number) {
+  const safe_scale = scale > 0 ? scale : 1
+  return math.floor(resolution_height / safe_scale)
+}
+
+/**
+ * How much vertical room the two tracker lists may take, split between them.
+ *
+ * Clamped at both ends: never shorter than the previous fixed layout, and never
+ * so tall that the list stops being a list.
+ */
+export function task_board_tracker_heights(gui_height: number) {
+  const budget = math.max(TRACKER_LIST_MIN_TOTAL, math.min(TRACKER_LIST_MAX_TOTAL, math.floor(gui_height * CONSOLE_SCREEN_FRACTION) - CONSOLE_FIXED_HEIGHT))
+  const steps = math.floor(budget * TRACKER_STEPS_SHARE)
+  return { steps, activity: budget - steps }
+}
+
+/**
+ * The camera's floor, which is what keeps the console tall while AIRI has no
+ * plan to show and the left column is therefore short.
+ */
+export function task_board_preview_min_height(gui_height: number) {
+  return math.max(PREVIEW_CAMERA_MIN_HEIGHT, math.min(PREVIEW_CAMERA_MAX_HEIGHT, math.floor(gui_height * PREVIEW_CAMERA_SCREEN_FRACTION)))
+}
+
+function player_gui_height(player: LuaPlayer) {
+  return task_board_gui_height(player.display_resolution.height, player.display_scale)
 }
 
 function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) {
@@ -399,11 +461,12 @@ function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntime
   const preview = runtime.preview
   if (preview === undefined) { add_empty_state(body, 'NPC world preview is unavailable.'); return }
   const zoom = task_board_preview_zoom(player.index)
+  const preview_min_height = task_board_preview_min_height(player_gui_height(player))
   const position = header.add({ type: 'label', caption: `X ${math.floor(preview.position.x)} · Y ${math.floor(preview.position.y)}`, style: 'semibold_label' }); position.style.right_padding = 4
   const frame = body.add({ type: 'frame', name: PREVIEW_CAMERA_FRAME_NAME, direction: 'vertical', style: 'deep_frame_in_shallow_frame' })
-  frame.style.width = PREVIEW_CAMERA_WIDTH; frame.style.minimal_height = PREVIEW_CAMERA_MIN_HEIGHT; frame.style.horizontally_stretchable = false; frame.style.vertically_stretchable = true
+  frame.style.width = PREVIEW_CAMERA_WIDTH; frame.style.minimal_height = preview_min_height; frame.style.horizontally_stretchable = false; frame.style.vertically_stretchable = true
   const camera = frame.add({ type: 'camera', name: PREVIEW_CAMERA_NAME, position: preview.position, surface_index: preview.surface_index, zoom })
-  camera.style.width = PREVIEW_CAMERA_WIDTH; camera.style.minimal_height = PREVIEW_CAMERA_MIN_HEIGHT; camera.style.horizontally_stretchable = true; camera.style.vertically_stretchable = true
+  camera.style.width = PREVIEW_CAMERA_WIDTH; camera.style.minimal_height = preview_min_height; camera.style.horizontally_stretchable = true; camera.style.vertically_stretchable = true
   if (preview.entity?.valid) camera.entity = preview.entity
   const zoom_row = body.add({ type: 'flow', direction: 'horizontal' }); zoom_row.style.horizontally_stretchable = true; zoom_row.style.vertical_align = 'center'; zoom_row.style.horizontal_spacing = 8
   zoom_row.add({ type: 'label', caption: 'ZOOM', style: 'semibold_label' })
@@ -420,14 +483,15 @@ export function task_board_activity_for_display(board: TaskBoardUiSnapshot | und
   const index = math.min(board.active_index, board.steps.length - 1); const step = board.steps[index]
   return [{ kind: 'system', text: `Current canonical step ${index + 1}/${board.total_steps}: ${step.description} (${step.status}). Waiting for the next auditable observation, action, or result.` }]
 }
-function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined) {
+function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) {
+  const tracker_heights = task_board_tracker_heights(player_gui_height(player))
   const { header, body } = create_section(parent, 'Plan Tracker / Activity', undefined, 'Canonical plan progress plus timestamped auditable observations, actions, results, blockers, and system events.')
   const activity = task_board_activity_for_display(board); const has_steps = board !== undefined && board.steps.length > 0
   if (has_steps) {
     const active_number = board.status === 'completed' ? board.total_steps : math.min(board.active_index + 1, board.total_steps)
     const summary = header.add({ type: 'label', caption: `STEP ${active_number}/${board.total_steps} · ${board.completed_count} done`, style: 'semibold_label' }); summary.style.right_padding = 4
     const progress = body.add({ type: 'progressbar', value: board.total_steps > 0 ? board.completed_count / board.total_steps : 0 }); progress.style.horizontally_stretchable = true
-    const steps_scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' }); steps_scroll.style.maximal_height = TRACKER_STEPS_LIST_HEIGHT; steps_scroll.style.horizontally_stretchable = true
+    const steps_scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' }); steps_scroll.style.maximal_height = tracker_heights.steps; steps_scroll.style.horizontally_stretchable = true
     const steps_grid = steps_scroll.add({ type: 'table', column_count: 4 }); steps_grid.style.horizontal_spacing = 8; steps_grid.style.vertical_spacing = 4
     const visible = board.steps.slice(0, MAX_STEPS); let active_label: LuaGuiElement | undefined
     for (let index = 0; index < visible.length; index++) {
@@ -446,7 +510,7 @@ function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | unde
   const divider = body.add({ type: 'line', direction: 'horizontal' }); divider.style.horizontally_stretchable = true
   const activity_header = body.add({ type: 'flow', direction: 'horizontal' }); activity_header.style.horizontally_stretchable = true; activity_header.add({ type: 'label', caption: 'Recent activity', style: 'bold_label' }); const header_filler = activity_header.add({ type: 'empty-widget' }); header_filler.style.horizontally_stretchable = true; activity_header.add({ type: 'label', caption: `${activity.length} event${activity.length === 1 ? '' : 's'}`, style: 'semibold_label' })
   if (activity.length === 0) { add_empty_state(body, 'No recent AIRI activity yet.'); return }
-  const activity_scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' }); activity_scroll.style.maximal_height = TRACKER_ACTIVITY_LIST_HEIGHT; activity_scroll.style.horizontally_stretchable = true
+  const activity_scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' }); activity_scroll.style.maximal_height = tracker_heights.activity; activity_scroll.style.horizontally_stretchable = true
   const activity_grid = activity_scroll.add({ type: 'table', column_count: 3 }); activity_grid.style.horizontal_spacing = 10; activity_grid.style.vertical_spacing = 4
   for (const entry of activity) { const timestamp = activity_grid.add({ type: 'label', caption: entry.timestamp ?? '--:--:--', tooltip: entry.timestamp ? 'Factorio game time when this activity was first observed' : 'No timestamp recorded yet' }); timestamp.style.minimal_width = 66; timestamp.style.font_color = TONE_COLORS.muted; const tag = activity_grid.add({ type: 'label', caption: activity_prefix(entry.kind), style: 'bold_label' }); tag.style.minimal_width = 52; tag.style.font_color = TONE_COLORS[activity_tone(entry.kind)]; const line = activity_grid.add({ type: 'label', caption: entry.text }); line.style.single_line = false; line.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 160 }
   activity_scroll.scroll_to_bottom()
@@ -471,7 +535,7 @@ function render_titlebar(root: FrameGuiElement, caption = 'AIRI NPC Console', cl
 }
 function build_left_dynamic(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, synced_tick: number | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const top = parent.add({ type: 'flow', direction: 'horizontal' }); top.style.horizontal_spacing = COLUMN_SPACING; top.style.vertical_align = 'top'; render_status_panel(top, board, runtime, synced_tick); render_controls_panel(top, player, board, runtime)
-  render_tracker(parent, board)
+  render_tracker(parent, board, player)
   const resources = parent.add({ type: 'flow', direction: 'horizontal' }); resources.style.horizontal_spacing = COLUMN_SPACING; render_inventory(resources, runtime); render_wanted_items(resources, board)
 }
 function build_columns(columns: LuaGuiElement, player: LuaPlayer) {

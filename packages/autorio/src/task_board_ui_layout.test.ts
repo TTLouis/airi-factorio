@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { task_board_game_time } from './task_board_ui'
+import { task_board_game_time, task_board_gui_height, task_board_preview_min_height, task_board_tracker_heights } from './task_board_ui'
 
 describe('AIRI NPC console compact tracker layout', () => {
   it('formats deterministic Factorio game time for tracker activity', () => {
@@ -18,7 +18,7 @@ describe('AIRI NPC console compact tracker layout', () => {
     // pinned to a fixed square, so the preview follows the console's height.
     expect(source).toContain('const PREVIEW_CAMERA_WIDTH = PREVIEW_COLUMN_WIDTH - 2 * SECTION_PADDING')
     expect(source).toContain('camera.style.width = PREVIEW_CAMERA_WIDTH')
-    expect(source).toContain('camera.style.minimal_height = PREVIEW_CAMERA_MIN_HEIGHT')
+    expect(source).toContain('camera.style.minimal_height = preview_min_height')
     expect(source).toContain('camera.style.vertically_stretchable = true')
 
     // A stretching camera must not advertise a fixed ratio: the header once read
@@ -33,6 +33,56 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(source).toContain('value_step: PREVIEW_ZOOM_STEP')
   })
 
+  it('sizes the console from the player display so a big screen is used and a small one still fits', () => {
+    // display_resolution is physical pixels; a style only means anything once
+    // the player's UI scale has been divided out.
+    expect(task_board_gui_height(2160, 2)).toBe(1080)
+    expect(task_board_gui_height(1080, 1)).toBe(1080)
+    // A zero or missing scale must not divide the console down to nothing.
+    expect(task_board_gui_height(1080, 0)).toBe(1080)
+
+    // A short screen never drops below the layout this replaced (132 + 174).
+    const small = task_board_tracker_heights(720)
+    expect(small.steps + small.activity).toBe(306)
+
+    // A tall screen gets a genuinely taller console, not a token increase.
+    const tall = task_board_tracker_heights(1440)
+    expect(tall.steps + tall.activity).toBeGreaterThan(600)
+    expect(tall.steps).toBeLessThan(tall.activity)
+
+    // ...but the lists stay lists rather than growing without bound.
+    const huge = task_board_tracker_heights(4320)
+    expect(huge.steps + huge.activity).toBe(900)
+
+    // The camera floor is what keeps the window tall while there is no plan to
+    // show, so it scales too, between the same kind of bounds.
+    expect(task_board_preview_min_height(720)).toBe(360)
+    expect(task_board_preview_min_height(1440)).toBe(720)
+    expect(task_board_preview_min_height(4320)).toBe(900)
+  })
+
+  it('gives every control the same size and keeps pause and terminate usable', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    // One width for all four buttons: two of them plus the gap fill the section.
+    expect(source).toContain('const COMPACT_BUTTON_WIDTH = (HALF_SECTION_WIDTH - 2 * SECTION_PADDING - COMPACT_BUTTON_SPACING) / 2')
+    expect(source).toContain('function compact_button(button: LuaGuiElement)')
+    expect(source).not.toContain('COMPACT_TASK_BUTTON_WIDTH')
+    expect(source).not.toContain('COMPACT_ACTION_BUTTON_WIDTH')
+
+    // Intervening matters most exactly when there is no plan, so neither task
+    // button may be disabled by the absence of one.
+    expect(source).not.toContain('pause.enabled')
+    expect(source).not.toContain('terminate.enabled')
+
+    // A caption whose width changes every tick reads as jitter in a fixed-width
+    // control; the live distance lives in the tooltip instead.
+    expect(source).toContain("return follow?.active ? 'FOLLOWING' : 'FOLLOW ME'")
+    expect(source).toContain('Distance: ${math.floor(follow.current_distance * 10) / 10} tiles')
+
+    // A blank failure string must not draw a lone warning triangle.
+    expect(source).toContain('if (issue_text.length > 0)')
+  })
+
   it('uses compact controls and one combined timestamped plan/activity tracker', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain('function compact_button(')
@@ -40,7 +90,7 @@ describe('AIRI NPC console compact tracker layout', () => {
     // Assert the tracker is rendered from the board, not the name of whichever
     // local holds the parent element.
     expect(source).toContain('function render_tracker(')
-    expect(source).toMatch(/render_tracker\(\w+, board\)/)
+    expect(source).toMatch(/render_tracker\(\w+, board[,)]/)
     expect(source).toContain('const previous = storage.airi_task_board_ui')
     expect(source).toContain('stamp_activity_times(next, previous, game.tick)')
     expect(source).toContain("caption: entry.timestamp ?? '--:--:--'")
