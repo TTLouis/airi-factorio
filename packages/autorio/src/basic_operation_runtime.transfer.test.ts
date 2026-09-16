@@ -107,6 +107,25 @@ describe('exact entity item transfers', () => {
     expect(c.manager.player_state.task_state).toBe(TaskStates.IDLE)
   })
 
+  it('uses the actor current reach instead of a hard-coded eight-tile transfer limit', () => {
+    const c = context()
+    ;(c.actor.character as any).reach_distance = 10
+    const selectedInventory = inventory()
+    const selected = entity(101, selectedInventory, { position: { x: 9, y: 0 } })
+    ;(globalThis as any).game.get_entity_by_unit_number = vi.fn(() => selected)
+
+    expect(c.controller.submit_move_exact('firearm-magazine', 101, 5, true)[0]).toBe(true)
+    expect(c.runtime.state_moving_items(c.actor)).toBe(5)
+
+    expect(selectedInventory.counts['firearm-magazine']).toBe(5)
+    expect(c.controller.status().last_result).toMatchObject({
+      code: 'completed',
+      completed: true,
+      moved_count: 5,
+      target_unit_number: 101,
+    })
+  })
+
   it('recovers the same observed unit when native lookup temporarily returns nil', () => {
     const c = context()
     const selectedInventory = inventory()
