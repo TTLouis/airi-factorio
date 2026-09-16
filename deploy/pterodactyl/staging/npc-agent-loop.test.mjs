@@ -146,24 +146,30 @@ test('tool-budget exhaustion gets up to three no-tool recovery attempts', async 
   assert.equal(contexts[2].recoveryAttempt, 1)
 })
 
-test('duplicate observation loops reuse cached output and fail after three retries', async () => {
+test('duplicate observation loops reuse cached output then switch to no-tool recovery after one no-progress round', async () => {
   const rcon = new FakeRcon()
+  const contexts = []
   let calls = 0
   const agent = new NpcAgentLoop({
     rcon,
     maxToolRounds: 12,
-    maxToolLoopRetries: 3,
-    provider: async () => {
+    provider: async (_messages, context) => {
+      contexts.push(context)
       calls++
+      if (context.allowTools === false) return planMessage([], 'I will use the collected state.')
       return toolMessage(`tool-${calls}`, 'getActorStatus')
     },
     systemPrompt: 'NPC test prompt',
   })
 
-  await assert.rejects(() => agent.request('keep looking'), /Repeated tool observation loop after 3 retries/)
+  const result = await agent.request('keep looking')
   const actorReads = rcon.commands.filter(command => command.includes('remote.call("autorio_actor","status")'))
+  assert.equal(result.chatMessage, 'I will use the collected state.')
   assert.equal(actorReads.length, 1)
-  assert.equal(calls, 5)
+  assert.equal(calls, 3)
+  assert.equal(contexts[2].allowTools, false)
+  assert.equal(contexts[2].recoveryAttempt, 1)
+  assert.ok(agent.messages.some(message => message.role === 'user' && /Repeated tool observation loop after 1 no-progress round/.test(message.content)))
 })
 
 test('dialogue memory belongs to the logical NPC and survives body replacement', async () => {

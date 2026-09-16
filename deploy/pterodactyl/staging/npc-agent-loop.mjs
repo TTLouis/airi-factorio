@@ -236,7 +236,7 @@ export class NpcAgentLoop {
     log = () => {},
     maxToolRounds = 12,
     maxContinuations = 10,
-    maxToolLoopRetries = 3,
+    maxToolLoopRetries = 1,
     maxToolValidationRetries = 3,
     maxRecoveryAttempts = 3,
     maxWorkingMessages = 36,
@@ -698,6 +698,13 @@ export class NpcAgentLoop {
         }
         this.toolValidationRetries = 0
         await this.handleToolBatch(message, prepared)
+        if (this.duplicateToolRounds >= this.maxToolLoopRetries && this.duplicateToolRounds > 0) {
+          return this.recoverPlan(
+            generation,
+            new AgentLoopError(`Repeated tool observation loop after ${this.duplicateToolRounds} no-progress round${this.duplicateToolRounds === 1 ? '' : 's'}`),
+            round + 1,
+          )
+        }
         continue
       }
 
