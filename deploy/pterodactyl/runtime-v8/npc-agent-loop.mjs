@@ -19,6 +19,7 @@ const TRACE_FILES = 5
 const SENSITIVE_TRACE_KEY = /(?:authorization|api.?key|token|password|secret|cookie|session)/i
 const STATE_SCHEMA = 1
 const PLAN_HISTORY_LIMIT = 24
+const DUPLICATE_OBSERVATION_MESSAGE = '[HARNESS] Duplicate observation suppressed. The result is unchanged from the earlier identical tool call already present in this decision context; reuse it and act or report a blocker.'
 
 const DURABLE_PLAN_PROMPT = `
 ## Durable goal and plan state
@@ -516,6 +517,142 @@ function messageChars(message) {
   return String(message?.content ?? '').length + JSON.stringify(message?.tool_calls ?? '').length
 }
 
+function finiteNonNegative(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function firstUsageNumber(...values) {
+  for (const value of values) {
+    const valid = finiteNonNegative(value)
+    if (valid !== undefined) return valid
+  }
+  return 0
+}
+
+function normalizedProviderUsage(usage) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return undefined
+  const details = usage.prompt_tokens_details ?? usage.input_tokens_details ?? {}
+  const cached = firstUsageNumber(
+    details?.cached_tokens,
+    usage.prompt_cache_hit_tokens,
+    usage.input_cache_hit_tokens,
+    usage.cache_hit_tokens,
+  )
+  const explicitMiss = firstUsageNumber(
+    usage.prompt_cache_miss_tokens,
+    usage.input_cache_miss_tokens,
+    usage.cache_miss_tokens,
+  )
+  const input = firstUsageNumber(
+    usage.prompt_tokens,
+    usage.input_tokens,
+    cached + explicitMiss,
+  )
+  const output = firstUsageNumber(usage.completion_tokens, usage.output_tokens)
+  const total = firstUsageNumber(usage.total_tokens, input + output)
+  const miss = explicitMiss > 0 ? explicitMiss : Math.max(0, input - cached)
+  return {
+    input_units: input,
+    cached_input_units: cached,
+    cache_miss_input_units: miss,
+    output_units: output,
+    total_units: total,
+  }
+}
+
+function emptyUsageSummary() {
+  return {
+    provider_calls: 0,
+    input_units: 0,
+    cached_input_units: 0,
+    cache_miss_input_units: 0,
+    output_units: 0,
+    total_units: 0,
+    tool_calls: 0,
+    duplicate_tool_calls: 0,
+    tool_result_chars: 0,
+    coalesced_runtime_events: 0,
+  }
+}
+
+function accumulateProviderUsage(summary, usage) {
+  if (!summary) return
+  summary.provider_calls++
+  if (!usage) return
+  summary.input_units += usage.input_units
+  summary.cached_input_units += usage.cached_input_units
+  summary.cache_miss_input_units += usage.cache_miss_input_units
+  summary.output_units += usage.output_units
+  summary.total_units += usage.total_units
+}
+
+function compactTaskBatch(batch) {
+  if (!batch || typeof batch !== 'object' || Array.isArray(batch)) return undefined
+  return {
+    batch_id: Number.isSafeInteger(batch.batch_id) ? batch.batch_id : undefined,
+    task_count: Number.isSafeInteger(batch.task_count) ? batch.task_count : undefined,
+    task_types: Array.isArray(batch.task_types) ? batch.task_types.slice(0, 16) : undefined,
+    tick: Number.isFinite(batch.tick) ? batch.tick : undefined,
+    reason: typeof batch.reason === 'string' ? cleanMemoryText(batch.reason, 800) : undefined,
+  }
+}
+
+function taskStatusDecisionView(raw) {
+  try {
+    const status = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (!status || typeof status !== 'object' || Array.isArray(status)) return { status_error: 'invalid_task_status' }
+    return {
+      task_state: status.task_state,
+      queue_empty: status.queue_empty,
+      queue_length: status.queue_length,
+      last_completed_batch: compactTaskBatch(status.last_completed_batch),
+      last_cancelled_batch: compactTaskBatch(status.last_cancelled_batch),
+      basic_operation: status.basic_operation?.last_result
+        ? { last_result: status.basic_operation.last_result }
+        : undefined,
+    }
+  }
+  catch {
+    return { status_error: 'invalid_task_status_json' }
+  }
+}
+
+function sameJsonValue(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function taskStatusDelta(previous, current) {
+  if (!previous) return { observation_mode: 'full', ...current }
+  const delta = {
+    observation_mode: 'diff',
+    task_state: current.task_state,
+    queue_empty: current.queue_empty,
+    queue_length: current.queue_length,
+  }
+  let changed = false
+  for (const key of ['last_completed_batch', 'last_cancelled_batch', 'basic_operation', 'status_error']) {
+    if (!sameJsonValue(previous[key], current[key])) {
+      delta[key] = current[key]
+      changed = true
+    }
+  }
+  if (!sameJsonValue(previous.task_state, current.task_state)
+    || !sameJsonValue(previous.queue_empty, current.queue_empty)
+    || !sameJsonValue(previous.queue_length, current.queue_length)) changed = true
+  if (!changed) delta.observation_mode = 'unchanged'
+  return delta
+}
+
+function runtimeReceiptKey(kind, view, detail = '', epoch) {
+  const batch = kind === 'failure'
+    ? (view?.last_cancelled_batch ?? view?.last_completed_batch)
+    : (view?.last_completed_batch ?? view?.last_cancelled_batch)
+  const batchId = Number.isSafeInteger(batch?.batch_id) ? batch.batch_id : undefined
+  const prefix = `${epoch ?? 'no-epoch'}:${kind}`
+  if (batchId !== undefined) return `${prefix}:batch:${batchId}:${cleanMemoryText(detail, 300)}`
+  return `${prefix}:state:${JSON.stringify(view)}:${cleanMemoryText(detail, 300)}`
+}
+
 function stateFileFromOptions(options) {
   if (options.stateFile === null) return null
   if (typeof options.stateFile === 'string' && options.stateFile.length > 0) return path.resolve(options.stateFile)
@@ -553,6 +690,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.traceRequest = null
     this.traceRequestSequence = 0
     this.planUpdateReason = 'request'
+    this.lastTaskStatusView = null
+    this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.onActivity = typeof options.onActivity === 'function' ? options.onActivity : null
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
@@ -597,10 +736,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.loadPersistentState()
     this.lastMemoryKey = `npc:${this.npcId}`
     this.planUpdateReason = 'request'
-    if (this.traceRequest) await this.traceEvent('request.superseded')
+    this.lastTaskStatusView = null
+    this.lastHandledRuntimeReceipt = { completion: null, failure: null }
+    if (this.traceRequest) await this.traceEvent('request.superseded', { usage: this.traceRequest.usage })
     this.traceRequest = {
       id: `req_${Date.now().toString(36)}_${(++this.traceRequestSequence).toString(36)}`,
       seq: 0,
+      usage: emptyUsageSummary(),
     }
     await this.traceEvent('request.received', { sender: options.sender ?? 'unknown', text })
     try {
@@ -610,7 +752,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     catch (error) {
       if (this.traceRequest) {
-        await this.traceEvent('request.failed', { stage: 'bind', message: error instanceof Error ? error.message : String(error) })
+        await this.traceEvent('request.failed', {
+          stage: 'bind',
+          message: error instanceof Error ? error.message : String(error),
+          usage: this.traceRequest.usage,
+        })
         this.traceRequest = null
       }
       throw error
@@ -655,7 +801,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     catch (error) {
       if (this.traceRequest) {
-        await this.traceEvent('request.failed', { stage: 'runtime', message: error instanceof Error ? error.message : String(error) })
+        await this.traceEvent('request.failed', {
+          stage: 'runtime',
+          message: error instanceof Error ? error.message : String(error),
+          usage: this.traceRequest.usage,
+        })
         this.traceRequest = null
       }
       throw error
@@ -670,18 +820,29 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   async taskStatusReceipt() {
     try {
-      const taskStatus = String(await this.rcon.command(toolCommand('getTaskStatus', {}))).slice(0, 16000)
-      const evidence = receiptEvidence(taskStatus, this.planUpdateReason === 'failure' ? 'failed' : 'completed')
+      const raw = String(await this.rcon.command(toolCommand('getTaskStatus', {}))).slice(0, 16000)
+      const evidence = receiptEvidence(raw, this.planUpdateReason === 'failure' ? 'failed' : 'completed')
       if (this.memory.recordBoardEvidence?.(this.activePlanKey(), evidence)) await this.persistState()
+      const view = taskStatusDecisionView(raw)
+      const providerStatus = taskStatusDelta(this.lastTaskStatusView, view)
+      this.lastTaskStatusView = view
       // The UI refresh must observe the board after receipt reconciliation. Emitting
       // factorio.status before recordBoardEvidence let the console snapshot the old
       // active_index and leave Plan Tracker one step behind until a later event.
-      await this.traceEvent('factorio.status', { task_status: taskStatus })
-      return taskStatus
+      await this.traceEvent('factorio.status', {
+        observation_mode: providerStatus.observation_mode,
+        raw_chars: raw.length,
+        task_status: providerStatus,
+      })
+      return { raw, view, providerStatus }
     }
     catch (error) {
-      await this.traceEvent('factorio.status_error', { message: error instanceof Error ? error.message : String(error) })
-      return JSON.stringify({ status_error: error instanceof Error ? error.message : String(error) })
+      const message = error instanceof Error ? error.message : String(error)
+      const view = { status_error: message }
+      const providerStatus = taskStatusDelta(this.lastTaskStatusView, view)
+      this.lastTaskStatusView = view
+      await this.traceEvent('factorio.status_error', { message })
+      return { raw: JSON.stringify(view), view, providerStatus }
     }
   }
 
@@ -721,11 +882,23 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   async completed() {
     await this.loadPersistentState()
+    if (!this.active) return null
     this.planUpdateReason = 'completion'
     await this.traceEvent('factorio.completed_signal')
-    const taskStatus = await this.taskStatusReceipt()
+    const receipt = await this.taskStatusReceipt()
+    const receiptKey = runtimeReceiptKey('completion', receipt.view, '', this.epoch?.epoch)
+    if (this.lastHandledRuntimeReceipt.completion === receiptKey) {
+      if (this.traceRequest?.usage) this.traceRequest.usage.coalesced_runtime_events++
+      await this.traceEvent('factorio.event_coalesced', {
+        kind: 'completion',
+        receipt_key: receiptKey,
+        observation_mode: receipt.providerStatus.observation_mode,
+      })
+      return null
+    }
+    this.lastHandledRuntimeReceipt.completion = receiptKey
     return this.continueFromModMessage(
-      `[MOD] Autorio operation batch completed. Detailed task receipt: ${taskStatus}`,
+      `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
       'factorio.completion_continuation',
     )
   }
@@ -734,15 +907,27 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.loadPersistentState()
     if (!this.active) return null
     this.planUpdateReason = 'failure'
-    const taskStatus = await this.taskStatusReceipt()
+    const cleanError = cleanMemoryText(errorText, 4000)
+    const receipt = await this.taskStatusReceipt()
+    const receiptKey = runtimeReceiptKey('failure', receipt.view, cleanError, this.epoch?.epoch)
+    if (this.lastHandledRuntimeReceipt.failure === receiptKey) {
+      if (this.traceRequest?.usage) this.traceRequest.usage.coalesced_runtime_events++
+      await this.traceEvent('factorio.event_coalesced', {
+        kind: 'failure',
+        receipt_key: receiptKey,
+        observation_mode: receipt.providerStatus.observation_mode,
+      })
+      return null
+    }
+    this.lastHandledRuntimeReceipt.failure = receiptKey
     return this.continueFromModMessage(
-      `[MOD] Autorio operation error: ${cleanMemoryText(errorText, 4000)}. Dependent queued operations may have been cancelled. Detailed task receipt: ${taskStatus}`,
+      `[MOD] Autorio operation error: ${cleanError}. Dependent queued operations may have been cancelled. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
       'factorio.error_continuation',
     )
   }
 
   cancel(reason = 'cancelled') {
-    void this.traceEvent('request.cancelled', { reason })
+    void this.traceEvent('request.cancelled', { reason, usage: this.traceRequest?.usage })
     this.traceRequest = null
     return super.cancel()
   }
@@ -767,6 +952,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const startedAt = Date.now()
     await this.traceEvent('provider.request', {
       round,
+      trigger_source: this.planUpdateReason,
       allow_tools: allowTools,
       recovery_attempt: recoveryAttempt,
       message_count: providerMessages.length,
@@ -782,18 +968,29 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         recoveryAttempt,
         signal: controller.signal,
       })
+      const usage = normalizedProviderUsage(message?._airiProvider?.usage)
+      accumulateProviderUsage(this.traceRequest?.usage, usage)
       await this.traceEvent('provider.response', {
         round,
+        trigger_source: this.planUpdateReason,
         latency_ms: Date.now() - startedAt,
         has_tool_calls: message?.tool_calls !== undefined,
         content_chars: typeof message?.content === 'string' ? message.content.length : 0,
-        provider: message?._airiProvider,
+        usage,
+        provider: message?._airiProvider
+          ? {
+              response_id: message._airiProvider.response_id,
+              model: message._airiProvider.model,
+              finish_reason: message._airiProvider.finish_reason,
+            }
+          : undefined,
       })
     }
     catch (error) {
       const messageText = error instanceof Error ? error.message : String(error)
       await this.traceEvent('provider.error', {
         round,
+        trigger_source: this.planUpdateReason,
         latency_ms: Date.now() - startedAt,
         message: messageText,
         timeout: /timed out/i.test(messageText),
@@ -821,12 +1018,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   async handleToolBatch(message, prepared = this.prepareToolBatch(message)) {
-    for (const entry of prepared) {
+    const cachedBefore = prepared.map(entry => this.toolCache.has(entry.signature))
+    for (let index = 0; index < prepared.length; index++) {
+      const entry = prepared[index]
+      if (this.traceRequest?.usage) {
+        this.traceRequest.usage.tool_calls++
+        if (cachedBefore[index]) this.traceRequest.usage.duplicate_tool_calls++
+      }
       await this.traceEvent('tool.call', {
         tool_call_id: entry.tool.id,
         name: entry.tool.function.name,
         args: entry.args,
-        cached: this.toolCache.has(entry.signature),
+        cached: cachedBefore[index],
       })
     }
     const beforeCount = this.messages.length
@@ -839,12 +1042,20 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     const results = this.messages.slice(beforeCount + 1).filter(item => item.role === 'tool')
     for (let index = 0; index < results.length; index++) {
+      const original = String(results[index].content ?? '')
+      if (cachedBefore[index]) results[index].content = DUPLICATE_OBSERVATION_MESSAGE
+      const output = String(results[index].content ?? '')
+      if (this.traceRequest?.usage) this.traceRequest.usage.tool_result_chars += output.length
       await this.traceEvent('tool.result', {
         tool_call_id: prepared[index]?.tool.id,
         name: prepared[index]?.tool.function.name,
-        output: results[index].content,
+        cached: cachedBefore[index],
+        original_output_chars: original.length,
+        output_chars: output.length,
+        output,
       })
     }
+    this.compactWorkingContext()
   }
 
   async commitPlan(plan) {
@@ -909,6 +1120,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         outcome,
         persistent_runtime: persistentRuntime,
         task_board: visibleTaskBoard(stateResult?.state?.task_board),
+        usage: this.traceRequest?.usage,
       })
       this.traceRequest = null
     }
@@ -916,6 +1128,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       await this.traceEvent('request.waiting', {
         operation_count: commands.length,
         task_board: visibleTaskBoard(stateResult?.state?.task_board),
+        usage: this.traceRequest?.usage,
       })
     }
 
