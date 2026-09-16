@@ -62,11 +62,65 @@ describe('AIRI NPC console layout regressions', () => {
     expect(resumeBody).not.toContain('set_prompt_draft')
   })
 
-  it('filters recent activity and anchors the feed on the newest visible event', () => {
-    expect(source).toContain("const ACTIVITY_FILTER_ITEMS = ['ALL', 'PLAN', 'OBS', 'ACTIONS', 'RESULTS', 'ISSUES']")
-    expect(source).toContain("type: 'drop-down', name: ACTIVITY_FILTER_NAME")
-    expect(source).toContain('on_gui_selection_state_changed')
-    expect(source).toContain('activity_scroll.scroll_to_bottom()')
+  it('filters recent activity with toggle buttons, since a drop-down can only hold one selection', () => {
+    expect(source).not.toContain("type: 'drop-down'")
+    expect(source).not.toContain('on_gui_selection_state_changed')
+    expect(source).toContain("tags: { airi_activity_filter: activity_state.ACTIVITY_FILTER_ALL }")
+    expect(source).toContain('tags: { airi_activity_filter: filter.flag }')
+    expect(source).toContain('(button as ButtonGuiElement).toggled = activity_state.activity_filter_selected(mask, flag)')
+    expect(source).toContain('activity_state.toggle_activity_filter(player.index, filter_flag)')
     expect(source).not.toContain("'bottom-third'")
+  })
+
+  it('keeps the tracker scroll-panes alive across refreshes so the player keeps their place', () => {
+    const refresh_columns = source.split('function refresh_columns(')[1]?.split('function build_panel(')[0] ?? ''
+    // The tracker is refreshed in place before the rest of the left column is
+    // rebuilt, and is never inside what gets cleared.
+    expect(refresh_columns).toContain('if (left === undefined || !refresh_tracker(left, board, player)) return false')
+    expect(refresh_columns.indexOf('refresh_tracker(left')).toBeLessThan(refresh_columns.indexOf('dynamic.clear()'))
+    const left_dynamic = source.split('function build_left_dynamic(')[1]?.split('function build_columns(')[0] ?? ''
+    expect(left_dynamic).not.toContain('render_tracker(')
+
+    const refresh_activity = source.split('function refresh_activity(')[1]?.split('function activity_scroll_of(')[0] ?? ''
+    // Rows are appended and trimmed; the pane itself is never cleared...
+    expect(refresh_activity).toContain('activity_state.activity_rows_diff(shown, keys)')
+    expect(refresh_activity).not.toContain('scroll.clear()')
+    // ...and it only moves when the follow state says so.
+    expect(refresh_activity).toContain('if (activity_state.activity_should_scroll(view, appended, last_key)) (scroll as ScrollPaneGuiElement).scroll_to_bottom()')
+    expect(refresh_activity.split('scroll_to_bottom()').length).toBe(2)
+
+    const refresh_steps = source.split('function refresh_steps(')[1]?.split('function refresh_activity(')[0] ?? ''
+    expect(refresh_steps).toContain('if (steps_table.tags.signature !== signature)')
+    expect(refresh_steps).toContain('previous_active !== active_index')
+  })
+
+  it('ends follow when the player scrolls the feed, and shows whether anything new arrived', () => {
+    // Factorio gives Lua no scroll offset and no scroll event, so the wheel is
+    // the signal, declared as listen-only inputs in the data stage.
+    const data = readFileSync(new URL('../data.lua', import.meta.url), 'utf8')
+    expect(data).toContain('name = "airi-task-board-activity-scroll-up"')
+    expect(data).toContain('key_sequence = "mouse-wheel-up"')
+    expect(data).toContain('name = "airi-task-board-activity-scroll-down"')
+    expect(data).toContain('key_sequence = "mouse-wheel-down"')
+    // Listen-only: the wheel must still scroll the feed and zoom the map.
+    expect(data.split('    consuming = "none",').length).toBe(3)
+    expect(source).toContain("scroll_up_input: 'airi-task-board-activity-scroll-up'")
+    expect(source).toContain("scroll_down_input: 'airi-task-board-activity-scroll-down'")
+    expect(source).toContain('script.on_event(TRACKER.scroll_up_input, on_activity_wheel)')
+    expect(source).toContain('script.on_event(TRACKER.scroll_down_input, on_activity_wheel)')
+    expect(source).toContain('activity_state.stop_activity_follow(player.index, last_shown_activity_key(element))')
+
+    // Hovering holds the feed still; the rows ignore the mouse so the pane is
+    // what the cursor and the wheel land on.
+    expect(source).toContain('activity_scroll.raise_hover_events = true')
+    expect(source).toContain('defines.events.on_gui_hover')
+    expect(source).toContain('defines.events.on_gui_leave')
+    expect(source).toContain("column_count: 3, ignored_by_interaction: true")
+
+    // One indicator doubles as the follow switch.
+    expect(source).toContain("const state = view.follow ? 'LIVE' : unseen.count > 0 ? `${unseen.count}${unseen.overflow ? '+' : ''} NEW` : 'PAUSED'")
+    expect(source).toContain('activity_state.resume_activity_follow(player.index, last_shown_activity_key(scroll))')
+    // A brand-new console starts out following.
+    expect(source).toContain('activity_state.reset_activity_view(player.index)')
   })
 })

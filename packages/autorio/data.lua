@@ -43,3 +43,27 @@ radar.rotation_speed = 0
 radar.connects_to_other_radars = false
 
 data:extend({radar})
+
+-- The console's Recent activity feed follows new events until the player
+-- scrolls it by hand. Factorio exposes neither a scroll offset nor a scroll
+-- event to Lua, so the wheel itself is the signal. consuming = "none" leaves the
+-- wheel doing everything it normally does (scrolling the feed, zooming the map);
+-- these inputs only listen. Players can rebind or clear them under Controls.
+data:extend({
+  {
+    type = "custom-input",
+    name = "airi-task-board-activity-scroll-up",
+    localised_name = "AIRI console: scroll activity up",
+    key_sequence = "mouse-wheel-up",
+    consuming = "none",
+    action = "lua",
+  },
+  {
+    type = "custom-input",
+    name = "airi-task-board-activity-scroll-down",
+    localised_name = "AIRI console: scroll activity down",
+    key_sequence = "mouse-wheel-down",
+    consuming = "none",
+    action = "lua",
+  },
+})
