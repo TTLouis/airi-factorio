@@ -34,6 +34,13 @@ jobs:
       - name: Typecheck
         run: pnpm run build && pnpm run typecheck
 
+      - name: Reject raw JavaScript slice calls in generated Lua
+        run: |
+          if grep -n ':slice(' packages/autorio/dist/control.lua; then
+            echo 'Generated Lua contains a raw JavaScript .slice() method call; use typed/Lua-safe iteration instead.'
+            exit 1
+          fi
+
       - name: Compile native NPC Pterodactyl guard
         run: |
           node deploy/pterodactyl/staging/source-preparer.mjs . deploy/pterodactyl/staging/guard.ts
