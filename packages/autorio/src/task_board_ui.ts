@@ -186,14 +186,44 @@ function agent_phase(value: unknown): TaskBoardUiAgentPhase { return value === '
 
 export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot | undefined {
   if (value === undefined || value === null || typeof value !== 'object' || !Array.isArray(value.steps)) return undefined
-  const steps = value.steps.slice(0, 30).map((step: any, index: number) => ({ id: text(step?.id || `step_${index + 1}`, 80), description: text(step?.description, MAX_TEXT), status: step_status(step?.status) })).filter((step: TaskBoardUiStep) => step.description.length > 0)
-  const activity = (Array.isArray(value.activity) ? value.activity : []).slice(-MAX_ACTIVITY).map((entry: any) => {
+
+  // Snapshot values arrive through helpers.json_to_table(), so these arrays are
+  // plain Lua tables at runtime. Calling JS Array methods directly on `any`
+  // makes TSTL emit `table:slice(...)`, which plain Lua tables do not have.
+  // Iterate the dynamic boundary explicitly, then return normal typed arrays.
+  const raw_steps = value.steps as any[]
+  const steps: TaskBoardUiStep[] = []
+  const step_count = math.min(raw_steps.length, 30)
+  for (let index = 0; index < step_count; index++) {
+    const step = raw_steps[index]
+    const description = text(step?.description, MAX_TEXT)
+    if (description.length === 0) continue
+    steps.push({ id: text(step?.id || `step_${index + 1}`, 80), description, status: step_status(step?.status) })
+  }
+
+  const raw_activity = (Array.isArray(value.activity) ? value.activity : []) as any[]
+  const activity: TaskBoardUiActivity[] = []
+  const activity_start = math.max(0, raw_activity.length - MAX_ACTIVITY)
+  for (let index = activity_start; index < raw_activity.length; index++) {
+    const entry = raw_activity[index]
+    const entry_text = text(entry?.text, 1000)
+    if (entry_text.length === 0) continue
     const timestamp = text(entry?.timestamp, 16)
-    const next: TaskBoardUiActivity = { kind: activity_kind(entry?.kind), text: text(entry?.text, 1000) }
+    const next: TaskBoardUiActivity = { kind: activity_kind(entry?.kind), text: entry_text }
     if (timestamp.length > 0) next.timestamp = timestamp
-    return next
-  }).filter((entry: TaskBoardUiActivity) => entry.text.length > 0)
-  const wanted_items = (Array.isArray(value.wanted_items) ? value.wanted_items : []).slice(0, MAX_WANTED_ITEMS).map((item: any) => ({ name: text(item?.name, 200), count: positive_integer(item?.count, 1), reason: text(item?.reason, 300) })).filter((item: TaskBoardUiWantedItem) => item.name.length > 0)
+    activity.push(next)
+  }
+
+  const raw_wanted_items = (Array.isArray(value.wanted_items) ? value.wanted_items : []) as any[]
+  const wanted_items: TaskBoardUiWantedItem[] = []
+  const wanted_count = math.min(raw_wanted_items.length, MAX_WANTED_ITEMS)
+  for (let index = 0; index < wanted_count; index++) {
+    const item = raw_wanted_items[index]
+    const name = text(item?.name, 200)
+    if (name.length === 0) continue
+    wanted_items.push({ name, count: positive_integer(item?.count, 1), reason: text(item?.reason, 300) })
+  }
+
   const total = integer(value.total_steps, steps.length)
   const agent = value.agent !== null && typeof value.agent === 'object' ? value.agent : undefined
   return {
@@ -573,7 +603,7 @@ function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'; header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
   const row = section.add({ type: 'flow', name: PROMPT_FLOW_NAME, direction: 'horizontal' }); row.style.padding = SECTION_PADDING; row.style.horizontally_stretchable = true; row.style.vertical_align = 'center'; row.style.horizontal_spacing = 8
   const field = row.add({ type: 'textfield', name: PROMPT_FIELD_NAME, text: task_board_ui_prompt_draft(player.index), tooltip: 'Send a prompt directly to AIRI without typing !airi in chat. Press Enter to send.' }); field.style.width = PROMPT_FIELD_WIDTH; field.style.minimal_width = 0; field.style.maximal_width = PROMPT_FIELD_WIDTH
-  const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: 'Send this prompt to AIRI' }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
+  const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: 'Send this prompt directly to AIRI' }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
 }
 function render_titlebar(root: FrameGuiElement, caption = 'AIRI NPC Console', close_name = CLOSE_BUTTON_NAME) {
   const titlebar = root.add({ type: 'flow', direction: 'horizontal' }); titlebar.style.horizontally_stretchable = true; titlebar.style.horizontal_spacing = 8; titlebar.drag_target = root
