@@ -4,6 +4,7 @@ set -Eeuo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="${PTERODACTYL_IMAGE:-ghcr.io/ptero-eggs/yolks:debian_bookworm}"
 FACTORIO_SMOKE_VERSION="${FACTORIO_SMOKE_VERSION:-2.0.77}"
+SMOKE_SOURCE_REF="${AIRI_SMOKE_SOURCE_REF:-}"
 ROOT="$(mktemp -d)"
 NAME="airi-ptero-smoke-$RANDOM-$$"
 LOG="$ROOT/runtime.log"
@@ -29,6 +30,12 @@ command -v docker >/dev/null || { echo '[pterodactyl-smoke] docker is required' 
 command -v node >/dev/null || { echo '[pterodactyl-smoke] node is required to parse the committed egg' >&2; exit 1; }
 [[ -f "$HERE/install.sh" ]] || { echo '[pterodactyl-smoke] generated install.sh is missing' >&2; exit 1; }
 [[ -f "$HERE/egg-airi-factorio-server.json" ]] || { echo '[pterodactyl-smoke] generated egg is missing' >&2; exit 1; }
+
+SOURCE_ENV_ARGS=()
+if [[ -n "$SMOKE_SOURCE_REF" ]]; then
+  [[ "$SMOKE_SOURCE_REF" =~ ^[a-f0-9]{40}$ ]] || { echo '[pterodactyl-smoke] AIRI_SMOKE_SOURCE_REF must be an exact 40-character commit SHA' >&2; exit 1; }
+  SOURCE_ENV_ARGS=(-e "AIRI_SOURCE_REF=$SMOKE_SOURCE_REF")
+fi
 
 chmod 0777 "$ROOT"
 echo '[pterodactyl-smoke] Verifying generated artifacts.'
@@ -61,6 +68,7 @@ docker run --rm \
   -e AIRI_ACTOR_MODE=npc \
   -e AIRI_CHAT_PLAYERS=SmokeOperator \
   -e FACTORIO_VERSION="$FACTORIO_SMOKE_VERSION" \
+  "${SOURCE_ENV_ARGS[@]}" \
   "$IMAGE" \
   bash /tmp/egg-install.sh
 
