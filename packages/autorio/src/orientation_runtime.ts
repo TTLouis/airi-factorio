@@ -1,9 +1,8 @@
 import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
 import { resolve_exact_entity } from './entity_reference'
+import { entity_interaction_reach } from './interaction_range'
 import type { new_task_manager } from './task_manager'
-
-const MAX_ROTATION_DISTANCE = 10
 
 type Manager = ReturnType<typeof new_task_manager>
 type BasicController = ReturnType<typeof new_basic_operation_controller>
@@ -37,7 +36,8 @@ export function new_orientation_runtime(manager: Manager, controller: BasicContr
       controller.fail(actor, task, 'wrong_force')
       return [false, 'Target entity belongs to another force'] as const
     }
-    if (squared_distance(actor.position, entity.position) > MAX_ROTATION_DISTANCE ** 2) {
+    const reach = entity_interaction_reach(actor)
+    if (squared_distance(actor.position, entity.position) > reach ** 2) {
       controller.fail(actor, task, 'too_far')
       return [false, 'Target entity is out of rotation range'] as const
     }
