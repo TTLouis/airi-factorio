@@ -148,6 +148,25 @@ function requested_prototype(name: string | undefined) {
   return prototypes.entity[name]
 }
 
+export function prototype_spatial_geometry(name: string) {
+  const prototype = prototypes.entity[name]
+  if (!prototype) return { name, exists: false }
+  return {
+    name,
+    exists: true,
+    type: prototype.type,
+    physical_footprint: {
+      tile_width: prototype.tile_width,
+      tile_height: prototype.tile_height,
+      collision_box: prototype.collision_box,
+      selection_box: prototype.selection_box,
+    },
+    working_area: prototype.type === 'mining-drill'
+      ? { kind: 'mining', radius: prototype.mining_drill_radius }
+      : undefined,
+  }
+}
+
 function corridor_descriptors(anchor: Position, request: PlacementPlanRequest) {
   const side = request.side ?? 'any'
   const extension = request.extension_direction ?? side
@@ -185,12 +204,7 @@ export function local_spatial_observation(actor: ControlledActor, request: Const
       footprint: actor.character?.bounding_box,
     },
     requested_entity: request.requested_entity_name
-      ? {
-          name: request.requested_entity_name,
-          exists: prototype !== undefined,
-          collision_box: prototype?.collision_box,
-          selection_box: prototype?.selection_box,
-        }
+      ? prototype_spatial_geometry(request.requested_entity_name)
       : undefined,
     entities,
     entity_count: matches.length,
@@ -307,7 +321,7 @@ export function plan_placement(actor: ControlledActor, request: PlacementPlanReq
     side,
     search_radius: radius,
     max_candidates,
-    prototype: { collision_box: prototype.collision_box, selection_box: prototype.selection_box },
+    prototype: prototype_spatial_geometry(request.entity_name),
     corridors: corridor_descriptors(anchor.position, request),
     best: selected[0],
     candidates: selected,
