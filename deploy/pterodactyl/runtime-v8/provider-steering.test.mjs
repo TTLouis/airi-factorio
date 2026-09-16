@@ -47,6 +47,19 @@ test('latest human message steers pending intent without discarding completed ev
   assert.match(steering, /physical collision footprint != mining\/working area/)
 })
 
+test('the original durable objective is not misclassified as a fresh mid-plan steering event', () => {
+  const messages = [
+    { role: 'user', content: planState() },
+    { role: 'user', content: '[CHAT] TTLouis: rebuild the burner miner and furnace layout' },
+    { role: 'user', content: '[MOD] Autorio operation batch completed. Detailed task receipt: {}' },
+  ]
+  const steering = classifyUserSteering(messages)
+  assert.equal(steering.mode, 'current_goal')
+  const context = buildSteeringContext(messages)
+  assert.match(context, /user_mode=current_goal/)
+  assert.match(context, /not a new mid-plan steering event/)
+})
+
 test('bare continue resumes the durable goal instead of becoming a replacement goal', () => {
   const steering = classifyUserSteering([
     { role: 'user', content: planState({ status: 'paused' }) },
