@@ -1,17 +1,21 @@
 {
-  "name": "@proj-airi/autorio-workspace",
+  "name": "factorio-npc-workspace",
   "type": "module",
   "version": "1.0.0",
   "packageManager": "pnpm@10.30.1",
-  "description": "An automation mod for Factorio written in TypeScript.",
-  "author": "LemonNekoGH",
+  "description": "Headless-first autonomous NPC runtime, planning harness, and server deployment stack for Factorio.",
+  "author": "TTLouis; originally derived from moeru-ai/airi-factorio by LemonNekoGH",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/moeru-ai/airi-factorio"
+    "url": "https://github.com/TTLouis/airi-factorio"
   },
   "keywords": [
     "factorio",
+    "npc",
+    "llm",
+    "agent",
+    "headless",
     "automation",
     "typescript"
   ],
@@ -21,14 +25,12 @@
     "build:apps": "pnpm -r --filter=./apps/* run build",
     "build:packages": "pnpm -r --filter=./packages/* run build",
     "dev:packages": "pnpm -r --filter=./packages/* run dev",
-    "dev:extension": "pnpm -r --filter=./packages/vscode-factorio-rcon-evaluator run dev",
-    "build:extension": "pnpm -r --filter=./packages/vscode-factorio-rcon-evaluator run build",
     "lint": "eslint --cache .",
     "lint:fix": "eslint --cache --fix .",
     "typecheck": "pnpm -r --filter=./packages/* run typecheck",
     "test": "pnpm --filter @proj-airi/factorio-agent --filter autorio.ts --if-present run test",
     "test:prompt": "pnpm --filter @proj-airi/factorio-agent run test:prompt",
-    "test:npc": "docker build -f tests/factorio/Dockerfile -t airi-factorio-npc-test . && docker run --rm airi-factorio-npc-test",
+    "test:npc": "docker build -f tests/factorio/Dockerfile -t factorio-npc-test . && docker run --rm factorio-npc-test",
     "bootstrap": "node scripts/bootstrap.ts"
   },
   "devDependencies": {

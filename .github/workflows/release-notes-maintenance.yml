@@ -1,0 +1,52 @@
+name: Release notes maintenance
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/release-notes-request
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          version="$(tr -d '\r\n' < .github/release-notes-request)"
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-pre\.[0-9]+$ ]] || {
+            echo 'release-notes-request must contain a prerelease tag such as v0.1.0-pre.1' >&2
+            exit 1
+          }
+          source_sha="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$version" --jq .target_commitish)"
+          image_ref="ghcr.io/${GITHUB_REPOSITORY,,}:$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Render corrected release notes
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          IMAGE_REF: ${{ steps.release.outputs.image_ref }}
+        run: node deploy/release/write-release-notes.mjs
+
+      - name: Update GitHub release notes
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --notes-file release-out/RELEASE_NOTES.md
