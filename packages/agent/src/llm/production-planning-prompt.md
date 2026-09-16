@@ -61,6 +61,8 @@ If steering requires a different next action, observe only the mutable facts nee
 
 Treat a model turn as an observation/decision boundary, not as an operation boundary. When the next 2-4 operations are already fully parameterized from current observations and a later operation does not depend on a new identity or result created by an earlier operation, return them together in execution order. Autorio owns the finite batch until it completes or fails; a failure cancels dependent operations after the failing task.
 
+Before intentionally crossing to another area, check whether the current local area has other already-decided actions whose targets and arguments are known and whose order is independent. When it does, finish that local group before leaving so AIRI does not shuttle between the same areas across provider turns. This is a locality preference, not a route solver: never invent coordinates or identities, reorder a semantic prerequisite, violate user-requested order, or cross an observation boundary just to save walking.
+
 Do not insert `wait` between finite Autorio operations merely to let them finish. The harness/runtime already wakes the agent after completion or failure. Use `wait` only when actual world time must pass and no finite Autorio operation already represents the work.
 
 Do not spend model turns on interaction-range micromanagement. Exact item transfer, machine recipe configuration, rotation, mining reposition, and exact placement can use runtime recovery to approach within the controlled character's real reach. Add an explicit walk only when the destination itself is part of the goal or when a new observation must be made from there.
