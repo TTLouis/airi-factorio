@@ -48,7 +48,13 @@ const UI_SNAPSHOT_MAX_BYTES = 15360
 const UI_FAILURE_LOG_INTERVAL_MS = 60000
 const SYSTEM_RECOVERY_PAUSE_REASONS = new Set(['npc_identity_or_session_changed', 'actor_replaced'])
 const UI_AGENT_PHASES = new Set(['idle', 'thinking', 'observing', 'executing', 'waiting', 'error'])
-const UI_LIVE_ACTIVITY_LIMIT = 8
+const UI_LIVE_ACTIVITY_LIMIT = 14
+// The console's activity pane is sized from the player's display and now
+// absorbs whatever the plan tracker does not need, so a taller screen can show
+// more history than the old fixed twelve. Oversized snapshots are still trimmed
+// from the front by taskBoardUiJson, so this raises the ceiling, not the
+// guaranteed wire size.
+const UI_ACTIVITY_LIMIT = 18
 const UI_SYNC_BATCH_MS = 50
 const UI_STALE_THINKING_MS = 5000
 
@@ -376,7 +382,7 @@ export function deriveActivity(state) {
   if (blocker) entries.push({ kind: 'blocker', text: blocker })
   const pauseReason = uiText(state.pause_reason, 300)
   if (pauseReason) entries.push({ kind: 'system', text: `Paused: ${pauseReason}` })
-  return entries.slice(-12)
+  return entries.slice(-UI_ACTIVITY_LIMIT)
 }
 
 // Maps agent-loop trace events onto the live phase shown in the in-game console.
@@ -454,7 +460,7 @@ export function taskBoardUiSnapshot(state, live) {
       total_steps: 0,
       active_index: 0,
       steps: [],
-      activity: liveActivity.slice(-12),
+      activity: liveActivity.slice(-UI_ACTIVITY_LIMIT),
       wanted_items: [],
       agent,
     }
@@ -473,7 +479,7 @@ export function taskBoardUiSnapshot(state, live) {
       description: String(step?.description ?? '').slice(0, 500),
       status: step?.status,
     })),
-    activity: [...deriveActivity(state), ...liveActivity].slice(-12),
+    activity: [...deriveActivity(state), ...liveActivity].slice(-UI_ACTIVITY_LIMIT),
     wanted_items: deriveWantedItems(state),
     agent,
   }

@@ -194,6 +194,24 @@ test('task board projection carries canonical steps plus activity and wanted ite
   assert.deepEqual(snapshot.wanted_items, [{ name: 'boiler', count: 1, reason: 'planned craft' }])
 })
 
+test('the activity feed keeps more history than the console used to be able to show', () => {
+  const live = Array.from({ length: 30 }, (_, index) => ({ kind: 'note', text: `live ${index}` }))
+  const snapshot = taskBoardUiSnapshot({
+    goal_id: 'goal_1', objective: 'Build power', blocker: '', pause_reason: '',
+    last_chat_message: '', last_operations: [],
+    task_board: {
+      kind: 'task_board_lite', goal_id: 'goal_1', status: 'active', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 1, active_index: 0,
+      steps: [{ id: 'step_1', description: 'Build boiler', status: 'active' }], evidence: [],
+    },
+  }, { phase: 'idle', detail: '', activity: live })
+  // The console now sizes its activity pane from the player's display and hands
+  // it whatever the plan tracker does not need, so the feed is no longer capped
+  // at the twelve entries the old fixed pane could fit.
+  assert.equal(snapshot.activity.length, 18)
+  assert.equal(snapshot.activity.at(-1).text, 'live 29')
+})
+
 function sessionFixture({ state = { status: 'active' } } = {}) {
   const commands = []
   const chats = []

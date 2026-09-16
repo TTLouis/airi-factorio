@@ -14,11 +14,13 @@ describe('AIRI NPC console layout regressions', () => {
     expect(task_board_wanted_rows(1440)).toBe(4)
     expect(source).toContain('const MAX_INVENTORY_ITEMS = 64')
     expect(source).toContain('const RESOURCE_LAYOUT = {')
-    expect(source).toContain('inventory_slot_columns: 8')
-    expect(source).toContain('wanted_slot_columns: 5')
+    expect(source).toContain('inventory_slot_columns: 9')
+    expect(source).toContain('wanted_slot_columns: 6')
     expect(source).toContain('equipped_slot_columns: 3')
-    expect(source).toContain('inventory_section_width: 424')
-    expect(source).toContain('wanted_section_width: PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - 424')
+    // Each pane is exactly its own grid wide, so no empty frame is drawn to the
+    // right of the last slot and the resource row spends its full width on slots.
+    expect(source).toContain('inventory_section_width: 9 * 40 + 12 + 2 * SECTION_PADDING')
+    expect(source).toContain('wanted_section_width: PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - (9 * 40 + 12 + 2 * SECTION_PADDING)')
     expect(source).toContain("add_slot_grid(body, runtime.inventory.map")
     expect(source).toContain("task_board_resource_rows(player_gui_height(player)), RESOURCE_LAYOUT.inventory_slot_columns")
     expect(source).toContain("task_board_wanted_rows(player_gui_height(player)), RESOURCE_LAYOUT.wanted_slot_columns")
@@ -34,6 +36,12 @@ describe('AIRI NPC console layout regressions', () => {
     expect(source).not.toContain('function render_equipped(')
     expect(source).toContain('const inventory_items = (source: LuaInventory | undefined)')
     expect(source).toContain('const add_equipped_row = (caption: string, items: TaskBoardUiItem[]) =>')
+    // The console height numbers are packed the same way, for the same reason.
+    expect(source).toContain('const CONSOLE_LAYOUT = {')
+    expect(source).not.toContain('const CONSOLE_SCREEN_FRACTION =')
+    expect(source).not.toContain('const TRACKER_LIST_MIN_TOTAL =')
+    expect(source).not.toContain('const TRACKER_STEPS_SHARE =')
+    expect(source).not.toContain('const PREVIEW_CAMERA_MIN_HEIGHT =')
   })
 
   it('locks control and prompt widths instead of shrinking to their captions', () => {

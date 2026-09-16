@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { task_board_game_time, task_board_gui_height, task_board_preview_min_height, task_board_tracker_heights } from './task_board_ui'
+import { step_caption, task_board_game_time, task_board_gui_height, task_board_preview_min_height, task_board_tracker_heights } from './task_board_ui'
 
 describe('AIRI NPC console compact tracker layout', () => {
   it('formats deterministic Factorio game time for tracker activity', () => {
@@ -60,6 +60,41 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(task_board_preview_min_height(720)).toBe(360)
     expect(task_board_preview_min_height(1440)).toBe(720)
     expect(task_board_preview_min_height(4320)).toBe(900)
+  })
+
+  it('spends the plan list leftovers on the activity feed instead of reserving them', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    // The resource row lives in the right column under the camera, so charging
+    // the left column for its height is what used to shrink the activity feed.
+    expect(source).toContain('fixed_height: 560,')
+    expect(source).not.toContain('const CONSOLE_FIXED_HEIGHT')
+    expect(source).toContain('task_board_tracker_heights(player_gui_height(player), board === undefined ? 0 : math.min(board.steps.length, MAX_STEPS))')
+
+    // A six-step plan claims six rows, not the whole ceiling, and every unit it
+    // leaves behind belongs to the feed.
+    const short_plan = task_board_tracker_heights(1286, 6)
+    const long_plan = task_board_tracker_heights(1286, 24)
+    expect(short_plan.steps + short_plan.activity).toBe(long_plan.steps + long_plan.activity)
+    expect(short_plan.steps).toBeLessThan(long_plan.steps)
+    expect(short_plan.activity).toBeGreaterThan(long_plan.activity)
+
+    // The plan list keeps a floor while a plan exists, and gives up everything
+    // once there is no plan at all.
+    expect(task_board_tracker_heights(1286, 1).steps).toBe(120)
+    const no_plan = task_board_tracker_heights(1286, 0)
+    expect(no_plan.steps).toBe(0)
+    expect(no_plan.activity).toBe(long_plan.steps + long_plan.activity)
+  })
+
+  it('does not print the plan step number twice when the plan numbers itself', () => {
+    expect(step_caption('1. Craft iron gear wheels')).toBe('Craft iron gear wheels')
+    expect(step_caption('12) Connect the boiler')).toBe('Connect the boiler')
+    // Only a leading ordinal goes. Everything else is the plan's own wording.
+    expect(step_caption('Craft 1. iron gear wheels')).toBe('Craft 1. iron gear wheels')
+    expect(step_caption('2026 was the year')).toBe('2026 was the year')
+    expect(step_caption('Place 4 boilers')).toBe('Place 4 boilers')
+    expect(step_caption('3.')).toBe('3.')
+    expect(step_caption('')).toBe('')
   })
 
   it('gives every control the same size and aligns all four buttons in a two-column grid', () => {

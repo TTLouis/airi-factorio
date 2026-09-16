@@ -213,7 +213,7 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('name: PREVIEW_ZOOM_SLIDER_NAME')
     expect(source).toContain('defines.events.on_gui_value_changed')
     expect(source).toContain('camera.zoom = zoom')
-    expect(source).toContain('PREVIEW_CAMERA_MIN_HEIGHT')
+    expect(source).toContain('CONSOLE_LAYOUT.preview_min_height')
   })
 
   it('shows live mod task state and when AIRI last synced', () => {

@@ -43,7 +43,7 @@ const FOLLOW_BUTTON_NAME = 'airi_task_board_follow'
 const PROMPT_FIELD_NAME = 'airi_task_board_prompt'
 const PROMPT_SEND_BUTTON_NAME = 'airi_task_board_prompt_send'
 const MAX_STEPS = 24
-const MAX_ACTIVITY = 12
+const MAX_ACTIVITY = 18
 const MAX_INVENTORY_ITEMS = 64
 const MAX_WANTED_ITEMS = 48
 const MAX_TEXT = 500
@@ -71,12 +71,16 @@ const HALF_VALUE_WIDTH = HALF_SECTION_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_W
 // console work without changing the Inventory / Wanted / Equipped geometry.
 const RESOURCE_LAYOUT = {
   slot_size: 40,
-  inventory_slot_columns: 8,
-  wanted_slot_columns: 5,
+  inventory_slot_columns: 9,
+  wanted_slot_columns: 6,
   equipped_slot_columns: 3,
   equipped_label_width: 48,
-  inventory_section_width: 424,
-  wanted_section_width: PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - 424,
+  // Each pane is exactly as wide as the grid it holds - columns * slot_size,
+  // plus the reserved scrollbar, plus the body padding. Any width beyond that
+  // is empty frame drawn to the right of the last slot, so the columns are
+  // chosen to spend the row's full width on slots instead.
+  inventory_section_width: 9 * 40 + 12 + 2 * SECTION_PADDING,
+  wanted_section_width: PREVIEW_COLUMN_WIDTH - COLUMN_SPACING - (9 * 40 + 12 + 2 * SECTION_PADDING),
   slot_rows_min: 5,
   slot_rows_mid: 6,
   slot_rows_max: 8,
@@ -88,19 +92,32 @@ const RESOURCE_LAYOUT = {
 // display lets a large screen be used properly without producing a window a
 // small screen cannot show. Both display properties are synchronized, so this
 // stays identical on every peer.
-const CONSOLE_SCREEN_FRACTION = 0.92
-// Deliberately generous estimate of everything in the left column that is not a
-// tracker list: titlebar, the status/controls row, section headers, progress
-// bar, divider, the resource row and the prompt. Overestimating costs a little
-// height; underestimating would push the window past the bottom of the screen.
-const CONSOLE_FIXED_HEIGHT = 620
-const TRACKER_LIST_MIN_TOTAL = 306
-const TRACKER_LIST_MAX_TOTAL = 900
-const TRACKER_STEPS_SHARE = 0.43
+//
+// Behind one table for the same reason as RESOURCE_LAYOUT: TSTL emits every
+// module-scope constant as a Lua local, and Factorio's parser allows 200 per
+// function.
+const CONSOLE_LAYOUT = {
+  screen_fraction: 0.92,
+  // Everything in the LEFT column that is not a tracker list: titlebar, the
+  // status/controls row, the tracker's own header/progress/divider chrome and
+  // the prompt. The resource row is deliberately not counted here - it sits in
+  // the right column underneath the camera, so it costs the left column no
+  // height at all, and charging the left column for it is what used to starve
+  // the activity feed.
+  fixed_height: 560,
+  list_min_total: 306,
+  list_max_total: 900,
+  // A ceiling on the plan list's share, not its size. A plan shorter than the
+  // ceiling only claims the rows it actually has and the remainder goes to the
+  // activity feed, which is the list that keeps growing.
+  steps_share: 0.36,
+  step_row_height: 30,
+  steps_floor: 120,
+  preview_min_height: 360,
+  preview_max_height: 900,
+  preview_screen_fraction: 0.5,
+}
 const PREVIEW_CAMERA_WIDTH = PREVIEW_COLUMN_WIDTH - 2 * SECTION_PADDING
-const PREVIEW_CAMERA_MIN_HEIGHT = 360
-const PREVIEW_CAMERA_MAX_HEIGHT = 900
-const PREVIEW_CAMERA_SCREEN_FRACTION = 0.5
 const PREVIEW_ZOOM_DEFAULT = 0.75
 const PREVIEW_ZOOM_MIN = 0.25
 const PREVIEW_ZOOM_MAX = 2
@@ -354,6 +371,26 @@ function destroy_panel(player: LuaPlayer) {
 }
 
 function step_tone(step: TaskBoardUiStep): Tone { if (step.status === 'completed') return 'good'; if (step.status === 'active') return 'info'; if (step.status === 'blocked') return 'bad'; if (step.status === 'paused') return 'warn'; return 'muted' }
+/**
+ * Plans habitually number their own steps, and the tracker already prints the
+ * canonical index in a column of its own, so a raw description renders as
+ * "1. 1. build a boiler". Strip one leading ASCII ordinal; anything else is
+ * shown exactly as the plan wrote it.
+ */
+export function step_caption(description: string) {
+  let cursor = 0
+  while (description.substring(cursor, cursor + 1) === ' ') cursor++
+  const first_digit = cursor
+  while (cursor < description.length && '0123456789'.indexOf(description.substring(cursor, cursor + 1)) >= 0) cursor++
+  const digits = cursor - first_digit
+  if (digits < 1 || digits > 2) return description
+  const separator = description.substring(cursor, cursor + 1)
+  if (separator !== '.' && separator !== ')') return description
+  cursor++
+  while (description.substring(cursor, cursor + 1) === ' ') cursor++
+  const rest = description.substring(cursor)
+  return rest.length > 0 ? rest : description
+}
 function activity_prefix(kind: TaskBoardUiActivityKind) { if (kind === 'observation') return 'OBS'; if (kind === 'decision') return 'PLAN'; if (kind === 'action') return 'ACT'; if (kind === 'result') return 'RESULT'; if (kind === 'blocker') return 'BLOCK'; if (kind === 'system') return 'SYS'; return 'NOTE' }
 function activity_tone(kind: TaskBoardUiActivityKind): Tone { if (kind === 'decision' || kind === 'observation') return 'info'; if (kind === 'action' || kind === 'result') return 'good'; if (kind === 'blocker') return 'bad'; if (kind === 'system') return 'warn'; return 'muted' }
 function activity_matches_filter(kind: TaskBoardUiActivityKind, filter: number) { if (filter === 2) return kind === 'decision'; if (filter === 3) return kind === 'observation' || kind === 'note'; if (filter === 4) return kind === 'action'; if (filter === 5) return kind === 'result'; if (filter === 6) return kind === 'blocker' || kind === 'system'; return true }
@@ -506,12 +543,18 @@ export function task_board_gui_height(resolution_height: number, scale: number) 
 /**
  * How much vertical room the two tracker lists may take, split between them.
  *
- * Clamped at both ends: never shorter than the previous fixed layout, and never
- * so tall that the list stops being a list.
+ * The total is clamped at both ends: never shorter than the previous fixed
+ * layout, and never so tall that a list stops being a list. The split is not
+ * even. The plan list is sized to the plan that actually exists, capped at its
+ * share, and everything it does not need goes to the activity feed - a plan has
+ * a handful of steps and stops, while activity keeps arriving.
  */
-export function task_board_tracker_heights(gui_height: number) {
-  const budget = math.max(TRACKER_LIST_MIN_TOTAL, math.min(TRACKER_LIST_MAX_TOTAL, math.floor(gui_height * CONSOLE_SCREEN_FRACTION) - CONSOLE_FIXED_HEIGHT))
-  const steps = math.floor(budget * TRACKER_STEPS_SHARE)
+export function task_board_tracker_heights(gui_height: number, step_count = MAX_STEPS) {
+  const budget = math.max(CONSOLE_LAYOUT.list_min_total, math.min(CONSOLE_LAYOUT.list_max_total, math.floor(gui_height * CONSOLE_LAYOUT.screen_fraction) - CONSOLE_LAYOUT.fixed_height))
+  if (step_count <= 0) return { steps: 0, activity: budget }
+  const ceiling = math.floor(budget * CONSOLE_LAYOUT.steps_share)
+  const wanted = math.min(ceiling, step_count * CONSOLE_LAYOUT.step_row_height)
+  const steps = math.max(math.min(CONSOLE_LAYOUT.steps_floor, ceiling), wanted)
   return { steps, activity: budget - steps }
 }
 
@@ -533,7 +576,7 @@ export function task_board_wanted_rows(gui_height: number) { return math.max(1, 
  * plan to show and the left column is therefore short.
  */
 export function task_board_preview_min_height(gui_height: number) {
-  return math.max(PREVIEW_CAMERA_MIN_HEIGHT, math.min(PREVIEW_CAMERA_MAX_HEIGHT, math.floor(gui_height * PREVIEW_CAMERA_SCREEN_FRACTION)))
+  return math.max(CONSOLE_LAYOUT.preview_min_height, math.min(CONSOLE_LAYOUT.preview_max_height, math.floor(gui_height * CONSOLE_LAYOUT.preview_screen_fraction)))
 }
 
 function player_gui_height(player: LuaPlayer) {
@@ -606,7 +649,7 @@ export function task_board_activity_for_display(board: TaskBoardUiSnapshot | und
   return [{ kind: 'system', text: `Current canonical step ${index + 1}/${board.total_steps}: ${step.description} (${step.status}). Waiting for the next auditable observation, action, or result.` }]
 }
 function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) {
-  const tracker_heights = task_board_tracker_heights(player_gui_height(player))
+  const tracker_heights = task_board_tracker_heights(player_gui_height(player), board === undefined ? 0 : math.min(board.steps.length, MAX_STEPS))
   const { header, body } = create_section(parent, 'Plan Tracker / Activity', undefined, 'Canonical plan progress plus timestamped auditable observations, actions, results, blockers, and system events.')
   const all_activity = task_board_activity_for_display(board)
   const selected_filter = activity_filter_index(player.index)
@@ -623,7 +666,7 @@ function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | unde
     for (let index = 0; index < visible.length; index++) {
       const step = visible[index]; const tone = step_tone(step)
       steps_grid.add({ type: 'sprite', sprite: TONE_SPRITES[tone], style: 'status_image', tooltip: step.status }); steps_grid.add({ type: 'label', caption: `${index + 1}.`, style: 'semibold_label' })
-      const description = steps_grid.add({ type: 'label', caption: step.description, style: step.status === 'active' ? 'bold_label' : 'label' }); description.style.single_line = false; description.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 170
+      const description = steps_grid.add({ type: 'label', caption: step_caption(step.description), style: step.status === 'active' ? 'bold_label' : 'label' }); description.style.single_line = false; description.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 170
       if (step.status === 'completed' || step.status === 'pending') description.style.font_color = TONE_COLORS.muted
       const state = steps_grid.add({ type: 'label', caption: step.status.toUpperCase(), style: 'semibold_label' }); state.style.font_color = TONE_COLORS[tone]; state.style.minimal_width = 72
       if (step.status === 'active' || step.status === 'blocked' || step.status === 'paused') active_label = description
