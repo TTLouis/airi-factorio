@@ -1,5 +1,5 @@
 import type { MapPositionStruct } from 'factorio:prototype'
-import type { FrameGuiElement, LuaEntity, LuaGuiElement, LuaPlayer, LuaSurface, SpriteButtonGuiElement, SpritePath, TextFieldGuiElement } from 'factorio:runtime'
+import type { CameraGuiElement, FrameGuiElement, LuaEntity, LuaGuiElement, LuaPlayer, LuaSurface, SpriteButtonGuiElement, SpritePath, TextFieldGuiElement } from 'factorio:runtime'
 
 import { peek_controlled_actor } from './actors/actor_controller'
 import { create_learning_remote_interface, handle_learning_ui_click, handle_task_board_learning_transition, render_learning_status } from './learning_pipeline'
@@ -17,6 +17,12 @@ const LEFT_DYNAMIC_NAME = 'airi_task_board_left_dynamic'
 const RIGHT_COLUMN_NAME = 'airi_task_board_right_column'
 const PROMPT_SECTION_NAME = 'airi_task_board_prompt_section'
 const PROMPT_FLOW_NAME = 'airi_task_board_prompt_flow'
+// The preview is refreshed in place rather than rebuilt, so every element the
+// refresh has to find needs a stable name.
+const PREVIEW_SECTION_NAME = 'airi_task_board_preview_section'
+const PREVIEW_HEADER_NAME = 'airi_task_board_preview_header'
+const PREVIEW_BODY_NAME = 'airi_task_board_preview_body'
+const PREVIEW_POSITION_NAME = 'airi_task_board_preview_position'
 const PREVIEW_CAMERA_FRAME_NAME = 'airi_task_board_preview_camera_frame'
 const PREVIEW_CAMERA_NAME = 'airi_task_board_preview_camera'
 const PREVIEW_ZOOM_SLIDER_NAME = 'airi_task_board_preview_zoom'
@@ -331,17 +337,17 @@ function emit_prompt(player: LuaPlayer, raw: unknown) {
   return true
 }
 
-function create_section(parent: LuaGuiElement, title: string, width?: number, tooltip?: string, stretch_vertical = true) {
-  const section = parent.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame' })
+function create_section(parent: LuaGuiElement, title: string, width?: number, tooltip?: string, stretch_vertical = true, names?: { section?: string, header?: string, body?: string }) {
+  const section = parent.add({ type: 'frame', name: names?.section, direction: 'vertical', style: 'inside_shallow_frame' })
   if (width !== undefined) section.style.width = width
   else section.style.horizontally_stretchable = true
   section.style.vertically_stretchable = stretch_vertical
-  const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
+  const header = section.add({ type: 'frame', name: names?.header, direction: 'horizontal', style: 'subheader_frame' })
   header.style.horizontally_stretchable = true
   header.style.vertical_align = 'center'
   header.add({ type: 'label', caption: title, style: 'subheader_caption_label', tooltip })
   const filler = header.add({ type: 'empty-widget' }); filler.style.horizontally_stretchable = true
-  const body = section.add({ type: 'flow', direction: 'vertical' })
+  const body = section.add({ type: 'flow', name: names?.body, direction: 'vertical' })
   body.style.horizontally_stretchable = true
   body.style.vertically_stretchable = stretch_vertical
   body.style.padding = SECTION_PADDING
@@ -456,13 +462,51 @@ function player_gui_height(player: LuaPlayer) {
   return task_board_gui_height(player.display_resolution.height, player.display_scale)
 }
 
+function preview_position_caption(preview: TaskBoardUiWorldPreview) { return `X ${math.floor(preview.position.x)} · Y ${math.floor(preview.position.y)}` }
+
+/**
+ * Updates the preview without rebuilding it.
+ *
+ * The console refreshes every second, and rebuilding this column destroyed the
+ * zoom slider along with it, cancelling a drag in progress. Only the camera and
+ * the coordinate label carry live data; the slider holds the player's own state
+ * and must survive untouched. Returns false when the structure itself has to
+ * change, which is the only case that still warrants a rebuild.
+ */
+function refresh_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) {
+  const preview = runtime.preview
+  if (preview === undefined) return false
+  const section = parent[PREVIEW_SECTION_NAME]
+  const header = section?.valid ? section[PREVIEW_HEADER_NAME] : undefined
+  const body = section?.valid ? section[PREVIEW_BODY_NAME] : undefined
+  const frame = body?.valid ? body[PREVIEW_CAMERA_FRAME_NAME] : undefined
+  // Keep the element typed: the camera's live properties are read-only on the
+  // base union, and casting to `any` would emit the wrong Lua self ABI.
+  const camera = frame?.valid ? frame[PREVIEW_CAMERA_NAME] as CameraGuiElement | undefined : undefined
+  const position = header?.valid ? header[PREVIEW_POSITION_NAME] : undefined
+  if (!frame?.valid || !camera?.valid || !position?.valid) return false
+
+  camera.position = preview.position
+  camera.surface_index = preview.surface_index
+  if (preview.entity?.valid) camera.entity = preview.entity
+  // Follow storage rather than the slider: the slider is the player's input, and
+  // writing to it mid-drag is exactly what this refresh must not do.
+  camera.zoom = task_board_preview_zoom(player.index)
+  position.caption = preview_position_caption(preview)
+
+  const preview_min_height = task_board_preview_min_height(player_gui_height(player))
+  frame.style.minimal_height = preview_min_height
+  camera.style.minimal_height = preview_min_height
+  return true
+}
+
 function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) {
-  const { header, body } = create_section(parent, 'NPC World Preview', PREVIEW_COLUMN_WIDTH)
+  const { header, body } = create_section(parent, 'NPC World Preview', PREVIEW_COLUMN_WIDTH, undefined, true, { section: PREVIEW_SECTION_NAME, header: PREVIEW_HEADER_NAME, body: PREVIEW_BODY_NAME })
   const preview = runtime.preview
   if (preview === undefined) { add_empty_state(body, 'NPC world preview is unavailable.'); return }
   const zoom = task_board_preview_zoom(player.index)
   const preview_min_height = task_board_preview_min_height(player_gui_height(player))
-  const position = header.add({ type: 'label', caption: `X ${math.floor(preview.position.x)} · Y ${math.floor(preview.position.y)}`, style: 'semibold_label' }); position.style.right_padding = 4
+  const position = header.add({ type: 'label', name: PREVIEW_POSITION_NAME, caption: preview_position_caption(preview), style: 'semibold_label' }); position.style.right_padding = 4
   const frame = body.add({ type: 'frame', name: PREVIEW_CAMERA_FRAME_NAME, direction: 'vertical', style: 'deep_frame_in_shallow_frame' })
   frame.style.width = PREVIEW_CAMERA_WIDTH; frame.style.minimal_height = preview_min_height; frame.style.horizontally_stretchable = false; frame.style.vertically_stretchable = true
   const camera = frame.add({ type: 'camera', name: PREVIEW_CAMERA_NAME, position: preview.position, surface_index: preview.surface_index, zoom })
@@ -548,7 +592,10 @@ function refresh_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const left = columns[LEFT_COLUMN_NAME]; const dynamic = left?.valid ? left[LEFT_DYNAMIC_NAME] : undefined; const right = columns[RIGHT_COLUMN_NAME]
   if (!dynamic?.valid || !right?.valid) return false
   const board = storage.airi_task_board_ui; const synced_tick = storage.airi_task_board_ui_synced_tick; const runtime = runtime_snapshot()
-  dynamic.clear(); build_left_dynamic(dynamic, player, board, synced_tick, runtime); right.clear(); render_world_preview(right, runtime, player); return true
+  dynamic.clear(); build_left_dynamic(dynamic, player, board, synced_tick, runtime)
+  // Never clear the preview column on a routine refresh: it owns the zoom slider.
+  if (!refresh_world_preview(right, runtime, player)) { right.clear(); render_world_preview(right, runtime, player) }
+  return true
 }
 function build_panel(player: LuaPlayer) {
   const previous_location = destroy_panel(player)

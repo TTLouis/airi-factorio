@@ -24,7 +24,8 @@ describe('AIRI NPC console compact tracker layout', () => {
     // A stretching camera must not advertise a fixed ratio: the header once read
     // "1:1" while the view was taller than it was wide.
     expect(source).not.toContain('1:1')
-    expect(source).toContain('caption: `X ${math.floor(preview.position.x)} · Y ${math.floor(preview.position.y)}`')
+    // One caption helper feeds both the initial build and the in-place refresh.
+    expect(source).toContain('return `X ${math.floor(preview.position.x)} · Y ${math.floor(preview.position.y)}`')
 
     // Framing is the player's choice, bounded by the zoom constants.
     expect(source).toContain('name: PREVIEW_ZOOM_SLIDER_NAME')
@@ -81,6 +82,24 @@ describe('AIRI NPC console compact tracker layout', () => {
 
     // A blank failure string must not draw a lone warning triangle.
     expect(source).toContain('if (issue_text.length > 0)')
+  })
+
+  it('refreshes the world preview in place so dragging zoom is never cancelled', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain('function refresh_world_preview(')
+    // The once-a-second refresh must not destroy the column that owns the
+    // slider; a rebuild is reserved for a structural change.
+    expect(source).toContain('if (!refresh_world_preview(right, runtime, player)) { right.clear()')
+
+    const refresh_body = source.split('function refresh_world_preview(')[1]?.split('function render_world_preview(')[0] ?? ''
+    // Live data may be written to the camera...
+    expect(refresh_body).toContain('camera.position = preview.position')
+    expect(refresh_body).toContain('position.caption = preview_position_caption(preview)')
+    // ...but the slider is the player's own input, and writing to it or
+    // destroying it mid-drag is exactly the bug this prevents.
+    expect(refresh_body).not.toContain('slider_value')
+    expect(refresh_body).not.toContain('PREVIEW_ZOOM_SLIDER_NAME')
+    expect(refresh_body).not.toContain('.clear()')
   })
 
   it('uses compact controls and one combined timestamped plan/activity tracker', () => {
