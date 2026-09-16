@@ -156,6 +156,26 @@ function parseConstructionPlan(args) {
   }
 }
 
+function parseConstructionIntent(args) {
+  exactKeys(args, ['surface_index', 'x', 'y', 'entity_name', 'direction', 'prepare_execution'])
+  const parsed = {
+    x: finiteCoordinate(args.x, 'x'),
+    y: finiteCoordinate(args.y, 'y'),
+    entity_name: base.factorioName(args.entity_name),
+    prepare_execution: args.prepare_execution === undefined ? false : optionalBoolean(args.prepare_execution, 'prepare_execution'),
+  }
+  if (args.surface_index !== undefined) parsed.surface_index = optionalInteger(args.surface_index, 'surface_index', 1, 4294967295)
+  if (args.direction !== undefined) parsed.direction = optionalInteger(args.direction, 'direction', 0, 15)
+  return parsed
+}
+
+function renderConstructionIntent(args) {
+  const parsed = parseConstructionIntent(args)
+  const surface = parsed.surface_index === undefined ? 'nil' : parsed.surface_index
+  const direction = parsed.direction === undefined ? 'nil' : parsed.direction
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_map_construction","intent",${surface},${parsed.x},${parsed.y},${base.luaString(parsed.entity_name)},${direction},${parsed.prepare_execution})))`
+}
+
 function parseResearchPath(args) {
   exactKeys(args, ['name', 'max_nodes'])
   return {
@@ -316,6 +336,27 @@ const constructionPlanValidationDefinition = {
   },
 }
 
+const constructionIntentDefinition = {
+  type: 'function',
+  function: {
+    name: 'inspectConstructionIntent',
+    description: 'Compact deterministic ghost check for fixed or personal-roboport fulfillment. prepare_execution only reserves a validation token; use returned execute_construction_plan if you choose to stage it.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['x', 'y', 'entity_name'],
+      properties: {
+        surface_index: { type: 'integer', minimum: 1, maximum: 4294967295 },
+        x: { type: 'number', minimum: -1000000, maximum: 1000000 },
+        y: { type: 'number', minimum: -1000000, maximum: 1000000 },
+        entity_name: { type: 'string', minLength: 1, maxLength: 200 },
+        direction: { type: 'integer', minimum: 0, maximum: 15 },
+        prepare_execution: { type: 'boolean', default: false },
+      },
+    },
+  },
+}
+
 const researchPathDefinition = {
   type: 'function',
   function: {
@@ -340,6 +381,7 @@ export const toolDefinitions = [
   localSpatialObservationDefinition,
   placementPlannerDefinition,
   constructionPlanValidationDefinition,
+  constructionIntentDefinition,
   researchPathDefinition,
 ]
 export function toolCommand(name, args) {
@@ -348,6 +390,7 @@ export function toolCommand(name, args) {
   if (name === 'getLocalSpatialObservation') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","spatial_observation",${luaTable(parseSpatialObservation(args))})))`
   if (name === 'planPlacement') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","plan_placement",${luaTable(parsePlacement(args))})))`
   if (name === 'validateConstructionPlan') return renderConstructionPlan(args)
+  if (name === 'inspectConstructionIntent') return renderConstructionIntent(args)
   if (name === 'getResearchPath') return renderResearchPath(args)
   return base.toolCommand(name, args)
 }

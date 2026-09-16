@@ -1,6 +1,7 @@
 import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
 import { local_spatial_observation, prototype_spatial_geometry } from './construction_planning'
+import { execute_prepared_remote_construction_plan } from './map_construction'
 import type { new_task_manager } from './task_manager'
 
 type BasicController = ReturnType<typeof new_basic_operation_controller>
@@ -336,6 +337,8 @@ export function execute_validated_construction_plan(
   if (!valid_integer(validation_id, 1, 9007199254740991) || !valid_integer(placement_count, 1, MAX_PLACEMENTS)) {
     return [false, 'invalid construction validation identity or placement count']
   }
+  const remote = execute_prepared_remote_construction_plan(actor, validation_id, placement_count)
+  if (remote) return remote
   const plan = storage.airi_validated_construction_plan
   if (!plan || plan.validation_id !== validation_id) return [false, 'validated construction plan is unavailable or superseded']
   if (plan.placements.length !== placement_count) return [false, 'construction placement count does not match validated plan']
