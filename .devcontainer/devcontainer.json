@@ -1,7 +1,7 @@
 {
-  "name": "airi-factorio",
+  "name": "factorio-npc",
   "dockerComposeFile": ["./docker-compose.yml"],
-  "service": "airi-factorio",
+  "service": "factorio-npc",
   "shutdownAction": "none",
   "workspaceFolder": "/workspace/",
   "customizations": {
