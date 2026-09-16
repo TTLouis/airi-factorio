@@ -11,6 +11,7 @@ const boundedTaskCount = z.number().int().min(1).max(1000)
 const searchRadius = z.number().int().min(1).max(4096)
 const combatSearchRadius = z.number().int().min(1).max(256)
 const followDistance = z.number().min(1).max(64).default(4)
+const navigationReachDistance = z.number().min(0.25).max(64)
 const equipmentSlot = z.number().int().min(1).max(64)
 const placementCoordinate = z.number().min(-1000000).max(1000000)
 const placementDirection = z.number().int().min(0).max(15)
@@ -31,6 +32,21 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     args: z.object({
       entity_name: factorioNameSchema,
       search_radius: searchRadius,
+    }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('walk_to_entity_exact'),
+    args: z.object({
+      unit_number: unitNumber,
+      reach_distance: navigationReachDistance.default(2.5),
+    }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('walk_to_position'),
+    args: z.object({
+      x: placementCoordinate,
+      y: placementCoordinate,
+      reach_distance: navigationReachDistance.default(0.75),
     }).strict(),
   }).strict(),
   z.object({
@@ -240,6 +256,10 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
   switch (operation.name) {
     case 'walk_to_entity':
       return `remote.call('autorio_operations', 'walk_to_entity', ${renderLuaString(operation.args.entity_name)}, ${operation.args.search_radius})`
+    case 'walk_to_entity_exact':
+      return `remote.call('autorio_operations', 'walk_to_entity_exact', ${operation.args.unit_number}, ${operation.args.reach_distance})`
+    case 'walk_to_position':
+      return `remote.call('autorio_operations', 'walk_to_position', ${operation.args.x}, ${operation.args.y}, ${operation.args.reach_distance})`
     case 'walk_to_player':
       return `remote.call('autorio_operations', 'walk_to_player', ${renderLuaString(operation.args.player_name)})`
     case 'follow_player':
