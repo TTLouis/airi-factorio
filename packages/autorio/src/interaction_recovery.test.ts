@@ -70,6 +70,7 @@ describe('generic interaction range recovery', () => {
     expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
     expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
       entity_name: 'steel-chest',
+      target_kind: 'exact_entity',
       target: chest,
       target_unit_number: 101,
       target_position: { x: 5, y: 0 },
@@ -97,10 +98,29 @@ describe('generic interaction range recovery', () => {
     expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
     expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
       entity_name: 'assembling-machine-1',
+      target_kind: 'exact_entity',
       target_unit_number: 202,
       reach_distance: 2.75,
     })
     expect(f.manager.get_status_snapshot().queued_task_types).toEqual([TaskStates.SETTING_RECIPE])
+  })
+
+  it('uses the same exact-entity recovery before rotating a placed entity', () => {
+    const f = fixture()
+    const chest = target('steel-chest', 212, 5)
+    ;(globalThis as any).game.get_entity_by_unit_number = vi.fn(() => chest)
+
+    expect(f.controller.submit_rotate_exact(212, false)[0]).toBe(true)
+    expect(f.recovery.tick(f.actor)).toBe(true)
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      entity_name: 'steel-chest',
+      target_kind: 'exact_entity',
+      target_unit_number: 212,
+      reach_distance: 2.75,
+    })
+    expect(f.manager.get_status_snapshot().queued_task_types).toEqual([TaskStates.ROTATING])
   })
 
   it('tracks a moving connected player for player item transfers', () => {
@@ -119,6 +139,7 @@ describe('generic interaction range recovery', () => {
     expect(f.recovery.tick(f.actor)).toBe(true)
 
     expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      target_kind: 'player',
       target_player_name: 'Louis',
       target: character,
       reach_distance: 2.75,
@@ -126,15 +147,19 @@ describe('generic interaction range recovery', () => {
     expect(f.manager.get_status_snapshot().queued_task_types).toEqual([TaskStates.MOVING_ITEMS])
   })
 
-  it('approaches an exact placement position using real build reach before resuming placement', () => {
+  it('pathfinds to an exact placement position using real build reach before resuming placement', () => {
     const f = fixture()
 
     expect(f.controller.submit_placement('steel-chest', 8, 0, 2)).toBe(true)
     expect(f.recovery.tick(f.actor)).toBe(true)
 
-    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_DIRECT)
-    expect(f.manager.player_state.parameters_walking_direct).toMatchObject({
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      target_kind: 'position',
+      requested_position: { x: 8, y: 0 },
       target_position: { x: 8, y: 0 },
+      reach_distance: 5.75,
+      owner_actor_id: 42,
     })
     expect(f.manager.get_status_snapshot()).toMatchObject({
       queue_length: 1,
@@ -170,6 +195,7 @@ describe('generic interaction range recovery', () => {
       name: 'steel-chest',
     }))
     expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      target_kind: 'exact_entity',
       target: far,
       target_unit_number: 505,
       reach_distance: 2.75,
