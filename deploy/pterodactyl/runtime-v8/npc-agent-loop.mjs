@@ -671,9 +671,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   async taskStatusReceipt() {
     try {
       const taskStatus = String(await this.rcon.command(toolCommand('getTaskStatus', {}))).slice(0, 16000)
-      await this.traceEvent('factorio.status', { task_status: taskStatus })
       const evidence = receiptEvidence(taskStatus, this.planUpdateReason === 'failure' ? 'failed' : 'completed')
       if (this.memory.recordBoardEvidence?.(this.activePlanKey(), evidence)) await this.persistState()
+      // The UI refresh must observe the board after receipt reconciliation. Emitting
+      // factorio.status before recordBoardEvidence let the console snapshot the old
+      // active_index and leave Plan Tracker one step behind until a later event.
+      await this.traceEvent('factorio.status', { task_status: taskStatus })
       return taskStatus
     }
     catch (error) {
