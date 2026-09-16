@@ -1,5 +1,16 @@
 # autorio.ts
 
+> [!NOTE]
+> This package is a heavily modified fork of the original `autorio` implementation from [`moeru-ai/airi-factorio`](https://github.com/moeru-ai/airi-factorio), originally authored by **LemonNekoGH**. The current fork is maintained by **TTLouis** as part of the standalone-NPC AIRI Factorio work.
+>
+> The Factorio mod name remains `autorio` for compatibility with existing saves and deployment tooling; the retained name does not imply that this fork is maintained by the original author.
+
+## Fork scope
+
+The fork has diverged substantially from the upstream package. In addition to the original automation foundation, this version contains standalone NPC actor ownership, actor-aware operations, navigation and recovery, combat, research, production-planning primitives, map operations, skills/verification, task-board UI, throughput tooling, and the supporting deterministic test harnesses used by this repository.
+
+Upstream code and the modifications in this fork are distributed under the **MIT License**. The original copyright notice is retained. See [`LICENSE`](./LICENSE) for the package copy and [`../../LICENSE`](../../LICENSE) for the repository-level license.
+
 ## Example
 
 To make a burner inserter, we need to:
