@@ -94,8 +94,8 @@ describe('AIRI NPC console compact tracker layout', () => {
     const resources_index = build_columns.indexOf("right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' })")
     expect(preview_index).toBeGreaterThanOrEqual(0)
     expect(resources_index).toBeGreaterThan(preview_index)
-    expect(build_columns).toContain('render_inventory(resources, runtime)')
-    expect(build_columns).toContain('render_wanted_items(resources, board)')
+    expect(build_columns).toContain('render_inventory(resources, runtime, player)')
+    expect(build_columns).toContain('render_wanted_items(resources, board, player)')
 
     const left_dynamic = source.split('function build_left_dynamic(')[1]?.split('function build_columns(')[0] ?? ''
     expect(left_dynamic).not.toContain('render_inventory(')
@@ -110,7 +110,7 @@ describe('AIRI NPC console compact tracker layout', () => {
     // may trigger a structural rebuild of the right column.
     expect(source).toContain('const resources = right[RIGHT_RESOURCES_NAME]')
     expect(source).toContain('if (!refresh_world_preview(right, runtime, player) || !resources?.valid) {')
-    expect(source).toContain('resources.clear(); render_inventory(resources, runtime); render_wanted_items(resources, board)')
+    expect(source).toContain('resources.clear(); render_inventory(resources, runtime, player); render_wanted_items(resources, board, player)')
 
     const refresh_body = source.split('function refresh_world_preview(')[1]?.split('function render_world_preview(')[0] ?? ''
     // Live data may be written to the camera...
