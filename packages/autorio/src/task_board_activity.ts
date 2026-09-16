@@ -23,6 +23,7 @@ export const ACTIVITY_FILTERS: ActivityFilter[] = [
   { caption: 'ISSUE', flag: 16, tooltip: 'Blockers and system events' },
 ]
 export const ACTIVITY_FILTER_ALL = 31
+const ACTIVITY_HISTORY_LIMIT = 160
 
 export interface ActivityView {
   // Scroll to each new event as it arrives.
@@ -39,6 +40,7 @@ declare const storage: {
   airi_task_board_activity_filter?: Record<number, number>
   airi_task_board_activity_filters?: Record<number, number>
   airi_task_board_activity_view?: Record<number, ActivityView>
+  airi_task_board_activity_history?: TaskBoardUiActivity[]
 }
 
 function has_flag(mask: number, flag: number) { return math.floor(mask / flag) % 2 === 1 }
@@ -96,6 +98,31 @@ export function activity_matches_mask(kind: ActivityKind, mask: number) { return
 export function activity_key(entry: TaskBoardUiActivity) {
   return entry.id !== undefined && entry.id.length > 0 ? `id:${entry.id}` : `${entry.kind}|${entry.timestamp ?? ''}|${entry.text}`
 }
+
+/**
+ * Snapshots intentionally carry only a small recent activity window so RCON
+ * payloads stay bounded. Preserve those windows locally in synchronized mod
+ * storage so the UI can scroll farther back without making every heartbeat
+ * larger. Duplicate overlap between snapshots is ignored by stable activity key.
+ */
+export function merge_activity_history(incoming: TaskBoardUiActivity[]) {
+  if (storage.airi_task_board_activity_history === undefined) storage.airi_task_board_activity_history = []
+  const history = storage.airi_task_board_activity_history
+  for (const entry of incoming) {
+    const key = activity_key(entry)
+    let seen = false
+    for (let index = history.length - 1; index >= 0; index--) {
+      if (activity_key(history[index]) !== key) continue
+      seen = true
+      break
+    }
+    if (!seen) history.push(entry)
+  }
+  while (history.length > ACTIVITY_HISTORY_LIMIT) history.shift()
+  return history
+}
+
+export function activity_history() { return storage.airi_task_board_activity_history ?? [] }
 
 /**
  * How to turn the rows on screen into the rows that should be there without
