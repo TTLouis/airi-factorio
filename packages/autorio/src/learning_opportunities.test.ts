@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { SkillDefinition } from './skills'
 import {
@@ -118,9 +119,8 @@ describe('autonomous learning opportunity state', () => {
     expect(list_learning_opportunities()[0].id).toBe(opportunity.id)
   })
 
-  it('contains no provider dependency in deterministic opportunity state', async () => {
-    const source = await import('./learning_opportunities?raw') as any
-    const text = typeof source.default === 'string' ? source.default : ''
-    expect(text).not.toMatch(/openai|providerRequest|tool_calls/i)
+  it('contains no provider dependency in deterministic opportunity state', () => {
+    const source = readFileSync(new URL('./learning_opportunities.ts', import.meta.url), 'utf8')
+    expect(source).not.toMatch(/openai|providerRequest|tool_calls/i)
   })
 })
