@@ -68,22 +68,21 @@ See [`deploy/pterodactyl/README.md`](./deploy/pterodactyl/README.md) for import,
 
 ## Docker Compose deployment (WIP)
 
-Docker Compose support currently lives on [`feat/docker-compose-deployment`](https://github.com/TTLouis/airi-factorio/tree/feat/docker-compose-deployment) rather than `main`. It is intentionally a thin deployment wrapper around the standalone-NPC runtime rather than a second runtime implementation.
+Docker Compose support is now included in the active integration line through [`compose.yml`](./compose.yml) and [`deploy/docker/`](./deploy/docker/). It is intentionally a thin deployment wrapper around the standalone-NPC runtime rather than a second runtime implementation.
 
-During this early WIP stage, Docker builds locally instead of pulling a published image. The Compose environment mirrors the Pterodactyl parameters through `.env`, including provider configuration, chat authorization, Factorio account settings, request budgeting, timeouts, and Factorio version selection.
+During this WIP stage, Docker builds locally instead of pulling a published application image. The Compose environment mirrors the Pterodactyl parameters through `.env`, including provider configuration, chat authorization, Factorio account settings, request budgeting, timeouts, and Factorio version selection.
 
-The Docker branch may follow an integration ref while it is being developed. Each build resolves that ref to an exact Git commit SHA; restarting the container does not update source. Persistent saves and runtime state live outside the image under the configured data directory.
+`.env.example` currently follows `feat/npc-transition-work`. Each build resolves that moving ref to an exact Git commit SHA and bakes that exact runtime into the image; restarting the container does not update source. Persistent saves and runtime state live outside the image under the configured data directory.
 
 To try the WIP deployment:
 
 ```bash
-git switch feat/docker-compose-deployment
 cp .env.example .env
 # Fill in OPENAI_API_KEY, OPENAI_API_BASEURL, and OPENAI_MODEL.
 docker compose up -d --build
 ```
 
-No stable GHCR application image is published yet. See the Docker branch's `deploy/docker/README.md` for current details.
+No stable GHCR application image is published yet. See [`deploy/docker/README.md`](./deploy/docker/README.md) for source pinning, configuration, persistence, console attach, and shutdown details.
 
 ## Important Pterodactyl defaults
 
@@ -108,10 +107,11 @@ Install workspace dependencies with:
 pnpm install
 ```
 
-The standalone-NPC runtime and E2E harness live primarily under:
+The standalone-NPC runtime and E2E/deployment harness live primarily under:
 
 ```text
 deploy/pterodactyl/
+deploy/docker/
 packages/agent/
 packages/autorio/
 tests/factorio/

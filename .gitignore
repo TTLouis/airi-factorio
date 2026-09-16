@@ -141,3 +141,6 @@ dist
 .pnp.*
 
 .pnpm-store/
+
+# Docker Compose server state
+/data/
