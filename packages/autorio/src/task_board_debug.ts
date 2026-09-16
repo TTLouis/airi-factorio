@@ -7,7 +7,6 @@ const DEBUG_BODY_NAME = 'airi_task_board_debug_body'
 const DEBUG_WIDTH = 720
 const DEBUG_KEY_WIDTH = 118
 const DEBUG_VALUE_WIDTH = DEBUG_WIDTH - DEBUG_KEY_WIDTH - 54
-const UI_INPUT_QUEUE_LIMIT = 32
 
 declare const storage: {
   airi_task_board_debug_open?: Record<number, boolean>
@@ -17,7 +16,6 @@ declare const storage: {
   airi_task_board_ui_suppressed?: { goal_id: string, objective: string }
   airi_task_board_ui_last_seen?: { goal_id: string, objective: string }
   airi_task_board_ui_inputs?: any[]
-  airi_task_board_follow_seen?: Record<number, boolean>
 }
 
 export interface TaskBoardUiDebugSnapshot {
@@ -141,18 +139,16 @@ export function reconcile_task_board_freshness() {
   return false
 }
 
-// No other Autorio module owns on_tick. Keeping this watchdog separate from the
-// one-second UI refresh means a stale goal can only flash for at most one game
-// tick if an old unversioned runtime snapshot arrives after a clear.
+// New runtimes attach generation/revision numbers to every snapshot. Keep the
+// watchdog as a rolling-upgrade fallback for an older unversioned supervisor.
 if (typeof script !== 'undefined' && typeof defines !== 'undefined') {
   script.on_event(defines.events.on_tick, () => { reconcile_task_board_freshness() })
 }
 
 function ensure_debug_open_state() { if (storage.airi_task_board_debug_open === undefined) storage.airi_task_board_debug_open = {}; return storage.airi_task_board_debug_open }
 export function debug_ui_is_open(player_index: number) { return storage.airi_task_board_debug_open?.[player_index] === true }
-// Keep the current runtime poll schema unchanged for rolling-upgrade safety.
-// Returning undefined compiles to nil, so the optional `debug` field disappears
-// from the Lua table before the old supervisor drains it.
+// Runtime diagnostics are intentionally bounded and ride the normal snapshot,
+// so the poll schema stays unchanged and remains compatible with older eggs.
 export function any_debug_ui_open(): any { return undefined }
 export function toggle_debug_ui(player_index: number) { const next = !debug_ui_is_open(player_index); ensure_debug_open_state()[player_index] = next; return next }
 export function close_debug_ui(player_index: number) { ensure_debug_open_state()[player_index] = false }
@@ -205,17 +201,6 @@ function sync_age(synced_tick: number | undefined) {
   return seconds < 60 ? `${seconds}s` : `${math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
-function enqueue_follow_resume(player: LuaPlayer, board: any, runtime: any) {
-  if (storage.airi_task_board_follow_seen === undefined) storage.airi_task_board_follow_seen = {}
-  const active = runtime?.follow?.active === true
-  const previous = storage.airi_task_board_follow_seen[player.index]
-  storage.airi_task_board_follow_seen[player.index] = active
-  if (previous !== true || active || board?.status !== 'paused' || board?.pause_reason !== 'ui_follow') return
-  if (storage.airi_task_board_ui_inputs === undefined) storage.airi_task_board_ui_inputs = []
-  storage.airi_task_board_ui_inputs.push({ kind: 'prompt', version: 1, player_index: player.index, player_name: player.name, text: 'continue', tick: game.tick })
-  while (storage.airi_task_board_ui_inputs.length > UI_INPUT_QUEUE_LIMIT) storage.airi_task_board_ui_inputs.shift()
-}
-
 function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_tick: number | undefined) {
   body.clear()
   const note = body.add({ type: 'label', caption: 'Structured runtime diagnostics only — no hidden chain-of-thought or secrets are exposed.' })
@@ -263,7 +248,6 @@ function build_debug_popout(player: LuaPlayer, board: any, runtime: any, synced_
 }
 
 export function render_debug_popout(player: LuaPlayer, console_open: boolean, board: any, runtime: any, synced_tick: number | undefined) {
-  enqueue_follow_resume(player, board, runtime)
   if (!console_open || !debug_ui_is_open(player.index)) { destroy_debug_popout(player); return }
   const root = player.gui.screen[DEBUG_ROOT_NAME]; const body = root?.valid ? root[DEBUG_BODY_NAME] : undefined
   if (body?.valid) { fill_debug_body(body, board, runtime, synced_tick); return }
