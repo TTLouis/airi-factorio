@@ -8,7 +8,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/TTLouis/airi-factorio"
+    "url": "https://github.com/TTLouis/factorio-npc"
   },
   "keywords": [
     "factorio",
@@ -28,8 +28,8 @@
     "lint": "eslint --cache .",
     "lint:fix": "eslint --cache --fix .",
     "typecheck": "pnpm -r --filter=./packages/* run typecheck",
-    "test": "pnpm --filter @proj-airi/factorio-agent --filter autorio.ts --if-present run test",
-    "test:prompt": "pnpm --filter @proj-airi/factorio-agent run test:prompt",
+    "test": "pnpm --filter @factorio-npc/agent --filter autorio.ts --if-present run test",
+    "test:prompt": "pnpm --filter @factorio-npc/agent run test:prompt",
     "test:npc": "docker build -f tests/factorio/Dockerfile -t factorio-npc-test . && docker run --rm factorio-npc-test",
     "bootstrap": "node scripts/bootstrap.ts"
   },

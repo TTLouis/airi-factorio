@@ -2,12 +2,12 @@
 
 This tracker covers the transition from the historical `airi-factorio` fork identity to the independent **Factorio NPC** project.
 
-The goal is to preserve useful Git history and MIT attribution while removing tooling, CI, runtime assumptions, and branding that no longer match the headless-first autonomous NPC architecture.
+The goal is to preserve useful Git history and MIT attribution while removing tooling, runtime assumptions, and branding that no longer match the headless-first autonomous NPC architecture.
 
 ## Ground rules
 
-- Preserve Git history; do **not** rewrite the repository just to hide its origin.
-- Preserve upstream MIT attribution and explicitly document the original AIRI/`autorio` lineage.
+- Preserve Git history; do **not** rewrite history to hide project origin.
+- Preserve upstream MIT attribution and document the original AIRI/`autorio` lineage.
 - Keep cleanup isolated from NPC behavior changes.
 - Prove old components unused before deleting them.
 - Do not bulk-rename established deployment protocol identifiers such as `AIRI_*` until compatibility aliases/tests exist.
@@ -18,11 +18,14 @@ The goal is to preserve useful Git history and MIT attribution while removing to
 - [x] Adopt **Factorio NPC** as the project-facing name.
 - [x] Define the project as headless-first and standalone-NPC-first.
 - [x] Document that CV/YOLO is not required by the current runtime.
-- [x] Move root package identity away from `@proj-airi/autorio-workspace`.
+- [x] Move root workspace identity away from `@proj-airi/autorio-workspace`.
+- [x] Move the agent package identity to `@factorio-npc/agent`.
 - [x] Preserve upstream lineage and MIT attribution.
-- [ ] Update the GitHub repository description (requires repository settings access).
-- [ ] Rename GitHub repository from `airi-factorio` to `factorio-npc` (requires repository settings access).
-- [ ] Use GitHub **Leave fork network** after the cleanup PR is merged (requires repository settings access; this preserves Git branches/commit history but not fork-network metadata such as PR/issue relationships).
+- [x] Rename the GitHub repository from `airi-factorio` to `factorio-npc`.
+- [x] Update the GitHub repository description.
+- [x] Leave the GitHub fork network.
+
+Verified after detach on 2026-09-16: the repository is `TTLouis/factorio-npc`, GitHub reports `fork: false`, the old `parent`/`source` relationship is gone, and all project branches remain present.
 
 ## Phase 1 — Active architecture to keep
 
@@ -35,77 +38,75 @@ The following are current project-owned architecture and must remain intact duri
 - [x] `tests/factorio/`
 - [x] `packages/tstl-plugin-reload-factorio-mod/` while `packages/autorio` depends on it.
 - [x] Current NPC harness/status/architecture/validation docs.
+- [x] Current learning/skill work: `factory_area_learning*`, `learning_pipeline*`, `learning_opportunities*`, `skills*`, and `skill_verification*`.
+
+The learning/skill subsystem was added as current Factorio NPC work and is **not** upstream baggage.
 
 ## Phase 2 — Legacy AIRI vision/developer stack
 
-Reference audit showed that these components are not part of the current headless NPC runtime. They are removed on `chore/factorio-npc-detach`:
+The following inherited components were removed after reference audit showed they were not part of the current headless NPC runtime:
 
 - [x] `models/factorio-yolo-v0/`.
 - [x] `pixi.toml` / `pixi.lock` YOLO/Python environment.
-- [x] `.github/workflows/python.yml`, which existed for the inherited model tree.
+- [x] `.github/workflows/python.yml` used by the inherited model tree.
 - [x] `packages/factorio-rcon-snippets-for-node/` YOLO dataset collector.
 - [x] `packages/factorio-rcon-snippets-for-vscode/` YOLO/dev snippets.
-- [x] legacy root `docker/` GUI/X11/noVNC-oriented stack; current deployment is `deploy/docker/`.
-- [x] `packages/vscode-factorio-rcon-evaluator/` and its root VSCode launch/build hooks.
+- [x] legacy root `docker/` GUI/X11/noVNC stack; current deployment is `deploy/docker/`.
+- [x] `packages/vscode-factorio-rcon-evaluator/` and old root VSCode launch/build hooks.
 - [x] `packages/factorio-wrapper/`, superseded by the current supervisor/Pterodactyl runtime.
-- [x] Adapt `scripts/bootstrap.ts` so it no longer creates `factorio-wrapper` configuration.
-- [x] Rename the devcontainer service/project identity to `factorio-npc`.
-- [ ] Let a normal `pnpm install` prune stale lockfile importer/package entries after deletion; CI must prove frozen-lock compatibility before merge.
-- [ ] Verify typecheck/tests/build/deployment packaging remain green.
+- [x] `scripts/bootstrap.ts` no longer creates `factorio-wrapper` configuration.
+- [x] Devcontainer service/project identity moved to Factorio NPC.
+- [x] Cleanup passed TypeScript build/typecheck, unit tests, and Pterodactyl runtime/staging CI before merge.
 
 Vision may return later as a **separate optional sensor package** rather than as a core workspace dependency.
 
-## Phase 3 — Compatibility names still intentionally retained
+## Phase 3 — Compatibility names intentionally retained
 
-These names are not proof that the project remains coupled to AIRI. They are compatibility surface and should be migrated separately with aliases/tests instead of being changed during the detach cleanup:
+These identifiers are compatibility surface, not evidence that the repository is still coupled to AIRI. Migrate them separately with aliases/tests instead of changing them cosmetically during detach:
 
-- [ ] internal package names such as `@proj-airi/factorio-agent` and the TSTL plugin package name;
-- [ ] `AIRI_*` environment/config variables already used by deployments;
-- [ ] Pterodactyl egg filenames and some human-facing labels;
-- [ ] runtime/log/config filenames such as `airi-config.json` where deployed servers may already depend on them;
-- [ ] old repository URLs in deployment source defaults after GitHub performs the repository rename.
+- [ ] `@proj-airi/tstl-plugin-reload-factorio-mod` internal package name.
+- [ ] `AIRI_*` environment/config variables already used by deployments.
+- [ ] Pterodactyl egg filenames and selected human-facing labels.
+- [ ] Runtime/log/config filenames such as `airi-config.json` where deployed servers may depend on them.
 
-A future compatibility migration should introduce project-owned names first, keep AIRI aliases for one deprecation window, add tests, then remove aliases.
+A future compatibility migration should introduce Factorio NPC names first, keep AIRI aliases for a deprecation window, add tests, then remove aliases.
 
-## Phase 4 — Repository detach
+## Phase 4 — Post-detach repository references
 
-### Preconditions
+- [x] Root `package.json` repository URL points to `TTLouis/factorio-npc`.
+- [x] Root test filters use `@factorio-npc/agent`.
+- [x] Agent package metadata uses the Factorio NPC identity.
+- [ ] Regenerate `pnpm-lock.yaml` with a normal `pnpm install` to prune stale importer records left by deleted workspaces. Current CI installation remains green, so this is cleanup rather than a runtime blocker.
+- [ ] Repin the immutable Pterodactyl installer payload to the renamed repository.
 
-- [x] Project identity committed to `main`.
-- [x] Upstream attribution retained.
-- [x] Legacy CV/YOLO/developer-stack cleanup isolated on its own branch.
-- [x] Existing feature branches remain untouched.
-- [ ] Cleanup PR CI is green.
-- [ ] Cleanup merged to `main`.
+### Pterodactyl repin requirement
 
-### GitHub settings actions
+The Pterodactyl deployment chain intentionally pins an immutable installer payload by commit SHA and checksum. Some pinned/generated scripts still contain the historical `TTLouis/airi-factorio` repository URL. GitHub rename redirects currently preserve behavior, but the deployment should not rely on that redirect indefinitely.
 
-These operations are repository-level administration and are not exposed by the current GitHub connector, so they must be performed in GitHub Settings after the code cleanup is merged:
+Do **not** replace those strings ad hoc. The safe sequence is:
 
-- [ ] Change repository name: `airi-factorio` -> `factorio-npc`.
-- [ ] Change description to: `Headless-first autonomous NPC runtime and planning harness for Factorio servers.`
-- [ ] Add topics: `factorio`, `npc`, `llm`, `agents`, `headless`, `factorio-mod`.
-- [ ] Choose **Leave fork network**.
-- [ ] Confirm all local/deployment clones follow the GitHub redirect or update their remotes explicitly.
-- [ ] Verify all branches still exist after detach.
+1. Commit a new `deploy/pterodactyl/payload-src/installer.sh` using `TTLouis/factorio-npc` source URLs.
+2. Use that commit SHA as the new `PAYLOAD_REF` in `deploy/pterodactyl/build-payload.mjs`.
+3. Update the generator test expectation to the new repository slug.
+4. Regenerate `deploy/pterodactyl/install.sh` and both generated egg JSON files.
+5. Run `node deploy/pterodactyl/build-payload.mjs --check` and the full Pterodactyl CI suite before merge.
 
-Do **not** delete or recreate the repository to detach it. Use GitHub's supported fork-network detach path so Git history and branches remain intact.
+This preserves the existing immutable-loader/checksum security model.
 
 ## Phase 5 — Architecture cleanup after detach
 
-This is separate from de-fork identity work and should continue through ordinary feature/audit PRs:
+This is separate from repository identity work and should continue through ordinary feature/audit PRs:
 
-- [ ] Audit `factory_area_learning.ts`, `learning_pipeline.ts`, and `learning_opportunities.ts` for overlap with the current deterministic harness.
-- [ ] Audit `skills.ts` / `skill_verification.ts` for duplicated or superseded responsibilities.
 - [ ] Document `deploy/pterodactyl/staging/` versus `runtime-v8/` source-of-truth layering and remove accidental duplication only where safe.
 - [ ] Document production-planning module boundaries and consolidate only true duplication.
 - [ ] Keep task-board/project/debug UI as projections of canonical runtime state rather than parallel state stores.
 - [ ] Complete single-NPC E2E gates before expanding swarm behavior.
 - [ ] Formalize swarm identity, ownership/leases, message board, and lifecycle.
+- [ ] Review the learning/skill subsystem for architecture quality only; do not treat it as de-fork cleanup.
 
 ## Validation gates
 
-Cleanup is not considered complete merely because dead files are gone. The relevant checks are:
+Cleanup is not considered complete merely because old files are gone. Relevant checks are:
 
 ```bash
 pnpm install
@@ -124,10 +125,11 @@ Heavy Factorio/Pterodactyl smoke remains authoritative for runtime packaging beh
 
 ### 2026-09-16
 
-- The project is now **Factorio NPC**, not an AIRI product extension.
-- Preferred repository name: `factorio-npc`.
+- The project is **Factorio NPC**, not an AIRI product extension.
+- Repository: `TTLouis/factorio-npc`.
 - Primary runtime target: headless Factorio servers.
+- GitHub fork-network detach completed successfully without losing project branches.
 - Preserve Git history and upstream attribution; do not history-rebase for cosmetic separation.
-- YOLO/CV is not a required runtime and is removed from the core repository.
-- Existing feature branches must survive repository detach unchanged.
-- GitHub fork-network detach should happen only after the cleanup is committed/merged, so important work exists in ordinary Git history rather than only fork-network metadata.
+- YOLO/CV is not a required runtime and was removed from the core repository.
+- The current learning/skill pipeline is project-owned work and must be preserved.
+- AIRI-named deployment compatibility interfaces remain until a tested compatibility migration replaces them.
