@@ -9,6 +9,12 @@ from run import assert_true, connect_with_retry, decode_json, lua_json, remote_c
 from runtime import verify_free_running_ticks
 
 
+def is_lua_sequence(value: object) -> bool:
+    # Factorio serializes an empty Lua table as {}, while populated array-like
+    # tables serialize as JSON arrays. Accept both representations here.
+    return isinstance(value, list) or value == {}
+
+
 def run(client, results: Path) -> None:
     transcript: list[dict[str, object]] = []
     results.mkdir(parents=True, exist_ok=True)
@@ -36,8 +42,8 @@ def run(client, results: Path) -> None:
     # live Factorio contract instead of only a unit-test assumption.
     learning = call('autorio_swarm_learning_pipeline', 'status')
     assert_true('policy' in learning, f'swarm learning pipeline remote is not live: {learning!r}')
-    assert_true(isinstance(learning.get('opportunities'), list), f'learning status lacks opportunities: {learning!r}')
-    assert_true(isinstance(learning.get('verification_queue'), list), f'learning status lacks verification queue: {learning!r}')
+    assert_true(is_lua_sequence(learning.get('opportunities')), f'learning status lacks opportunities: {learning!r}')
+    assert_true(is_lua_sequence(learning.get('verification_queue')), f'learning status lacks verification queue: {learning!r}')
 
     swarm = call('autorio_swarm', 'status')
     actors = sorted(swarm.get('actors') or [], key=lambda entry: entry['actorId'])
