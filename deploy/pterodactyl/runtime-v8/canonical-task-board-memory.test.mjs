@@ -179,6 +179,80 @@ test('verified final step records proof but leaves whole-goal closure to the exi
   assert.equal(nextBoard.evidence.some(item => item.kind === 'deterministic_verification' && item.ref === 'batch_7'), true)
 })
 
+test('completed durable goals are retired from the current task slot', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', planState({
+    status: 'completed',
+    plan: [],
+    current_step: 0,
+    task_board: { ...board(), status: 'completed' },
+  }))
+
+  assert.equal(memory.currentPlan('npc:airi'), undefined)
+  assert.equal(memory.planByNpc.has('npc:airi'), false)
+  assert.match(memory.planContext('npc:airi'), /No active durable goal/)
+})
+
+test('whole-goal completion returns the final completed receipt but retires it before the next UI sync', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const key = 'npc:airi'
+  memory.planByNpc.set(key, planState())
+  const completion = {
+    chatMessage: 'The requested goal is verified complete.',
+    plan: [],
+    currentStep: 0,
+    operations: [],
+  }
+
+  const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'Build early automation' }, completion, { continuation: true })
+  const reconciled = memory.reconcileTaskBoard(key, board(), completion, recorded)
+
+  assert.equal(reconciled.state.status, 'completed')
+  assert.equal(reconciled.state.task_board.status, 'completed')
+  assert.equal(memory.currentPlan(key), undefined)
+  assert.equal(memory.planByNpc.has(key), false)
+})
+
+test('a new actionable request after an old completed goal gets a fresh goal identity and objective', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const key = 'npc:airi'
+  memory.planByNpc.set(key, planState({
+    goal_id: 'goal_old',
+    objective: 'Smelt ten iron plates',
+    status: 'completed',
+    plan: [],
+    current_step: 0,
+    task_board: { ...board(), goal_id: 'goal_old', status: 'completed' },
+  }))
+
+  const next = memory.recordPlan(key, { sender: 'Louis', text: 'Build a sustained iron plate line' }, {
+    chatMessage: 'Starting a new production goal.',
+    plan: ['Inspect resources', 'Build sustained production'],
+    currentStep: 0,
+    operations: [{ name: 'wait', args: { ticks: 1 } }],
+  })
+
+  assert.equal(next.state.status, 'active')
+  assert.notEqual(next.state.goal_id, 'goal_old')
+  assert.equal(next.state.objective, 'Build a sustained iron plate line')
+})
+
+test('an unfinished durable goal still keeps its identity when a new prompt steers it', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const key = 'npc:airi'
+  memory.planByNpc.set(key, planState({ goal_id: 'goal_active', objective: 'Build early automation' }))
+
+  const steered = memory.recordPlan(key, { sender: 'Louis', text: 'Move the furnace east instead' }, {
+    chatMessage: 'Adjusting the active plan.',
+    plan: ['Find stone', 'Mine stone', 'Craft furnace', 'Build power', 'Start research'],
+    currentStep: 2,
+    operations: [{ name: 'wait', args: { ticks: 1 } }],
+  })
+
+  assert.equal(steered.state.goal_id, 'goal_active')
+  assert.equal(steered.state.objective, 'Build early automation')
+})
+
 test('terminatePlan removes one durable goal without implying completion', () => {
   const memory = new CanonicalTaskBoardMemory()
   memory.planByNpc.set('npc:airi', {
