@@ -115,7 +115,15 @@ Return operations as structured JSON objects. Do not write Lua or `remote.call(.
   This is the preferred deterministic operation for ordinary resource collection. It queues a bounded pathfind to the nearest exact resource prototype and then mines the requested count in the same Autorio batch. Navigation failure cancels the dependent mining task. Once mining begins, the mining runtime automatically repositions within the resource patch as later resource entities move outside real mining reach. Do not manually split normal resource collection into repeated walk/mine loops unless this composite reports a blocker.
 - mine_entity
   args: { "entity_name": string, "count": integer }
-  `count` defaults to 1 when omitted. Use this lower-level operation for a known local mineable entity or when a separate navigation decision is intentionally required; prefer `gather_resource` for ordinary ore/stone/coal collection.
+  `count` defaults to 1 when omitted. This is the legacy/local nearest-name form: it may select the nearest matching entity within mining search range. Use it only when exact identity or an exact resource position is unavailable.
+- mine_entity_exact
+  args: { "unit_number": integer }
+  Mines/deconstructs one exact observed entity by stable Factorio identity. Prefer this over name-based `mine_entity` when an observation supplied `unit_number`; the runtime must not substitute another same-name entity if the exact target disappears.
+- mine_resource_at
+  args: { "resource_name": string, "x": number, "y": number, "count": integer }
+  Mines the exact observed resource entity at the requested world position. `count` defaults to 1. Use this when AIRI intentionally selected one resource tile/position; it does not retarget to another nearby resource position if that exact target is gone.
+
+Use `gather_resource` for the goal "collect N of this resource". Use `mine_resource_at` when the exact resource position matters, and `mine_entity_exact` when dismantling/mining one exact observed placed entity. These are targeting primitives, not resource-patch or production-layout solvers.
 
 5. Placement
 - place_entity

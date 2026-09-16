@@ -112,7 +112,7 @@ function result_for(actor: ControlledActor | undefined, task: BasicTask | undefi
     actor_kind: bound?.actor_kind ?? identity?.kind,
     force_index: bound?.force_index ?? (actor?.is_valid ? actor.force.index : undefined),
     entity_name: task && 'entity_name' in task ? task.entity_name : undefined,
-    target_unit_number: task?.type === TaskStates.MOVING_ITEMS || task?.type === TaskStates.SETTING_RECIPE || task?.type === TaskStates.ROTATING ? task.target_unit_number : undefined,
+    target_unit_number: task?.type === TaskStates.MINING || task?.type === TaskStates.MOVING_ITEMS || task?.type === TaskStates.SETTING_RECIPE || task?.type === TaskStates.ROTATING ? task.target_unit_number : undefined,
     recipe_name: task?.type === TaskStates.SETTING_RECIPE ? task.recipe_name : undefined,
     player_name: task?.type === TaskStates.MOVING_ITEMS ? task.player_name : undefined,
     item_name: task && 'item_name' in task ? task.item_name : undefined,
@@ -122,7 +122,9 @@ function result_for(actor: ControlledActor | undefined, task: BasicTask | undefi
     requested_ticks: task?.type === TaskStates.WAITING ? (task.requested_ticks ?? task.remaining_ticks) : undefined,
     requested_position: task?.type === TaskStates.PLACING && task.position
       ? { x: task.position.x, y: task.position.y }
-      : undefined,
+      : task?.type === TaskStates.MINING && task.requested_position
+        ? { x: task.requested_position.x, y: task.requested_position.y }
+        : undefined,
     direction: task?.type === TaskStates.PLACING ? task.direction : undefined,
     reverse: task?.type === TaskStates.ROTATING ? task.reverse : undefined,
     ...details,
@@ -163,6 +165,52 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
     const task: PlayerParametersMineEntity = {
       type: TaskStates.MINING,
       entity_name,
+      count,
+      requested_count: count,
+    }
+    return queue(task, actor)
+  }
+
+  function submit_mining_exact(target_unit_number: number) {
+    if (!valid_integer(target_unit_number, 1, 9007199254740991)) {
+      result_for(get_actor(), undefined, false, false, 'invalid_unit_number')
+      return false
+    }
+    const actor = actor_for_submission()
+    if (!actor) return false
+    const task: PlayerParametersMineEntity = {
+      type: TaskStates.MINING,
+      target_unit_number,
+      count: 1,
+      requested_count: 1,
+    }
+    return queue(task, actor)
+  }
+
+  function submit_mining_at(resource_name: string, x: number, y: number, count: number = 1) {
+    if (!valid_name(resource_name)) {
+      result_for(get_actor(), undefined, false, false, 'invalid_entity')
+      return false
+    }
+    const prototype = prototypes.entity[resource_name]
+    if (!prototype || prototype.type !== 'resource') {
+      result_for(get_actor(), undefined, false, false, 'invalid_entity')
+      return false
+    }
+    if (!valid_coordinate(x) || !valid_coordinate(y)) {
+      result_for(get_actor(), undefined, false, false, 'invalid_position')
+      return false
+    }
+    if (!valid_integer(count, 1, 1000)) {
+      result_for(get_actor(), undefined, false, false, 'invalid_count')
+      return false
+    }
+    const actor = actor_for_submission()
+    if (!actor) return false
+    const task: PlayerParametersMineEntity = {
+      type: TaskStates.MINING,
+      entity_name: resource_name,
+      requested_position: { x, y },
       count,
       requested_count: count,
     }
@@ -349,6 +397,8 @@ export function new_basic_operation_controller(get_actor: () => ControlledActor 
 
   return {
     submit_mining,
+    submit_mining_exact,
+    submit_mining_at,
     submit_placement,
     submit_rotate_exact,
     submit_move,

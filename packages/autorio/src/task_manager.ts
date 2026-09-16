@@ -218,6 +218,8 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
           ? {
               type: task.type,
               entity_name: task.entity_name,
+              target_unit_number: task.target_unit_number,
+              requested_position: task.requested_position,
               count: task.count,
               position: task.position,
               last_target_amount: task.last_target_amount,

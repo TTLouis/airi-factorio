@@ -176,6 +176,16 @@ remote.add_interface('autorio_operations', {
     if (accepted) log(`[AUTORIO] New mine_entity task: ${entity_name} x${count}`)
     return accepted
   },
+  mine_entity_exact: (unit_number: number) => {
+    const accepted = basic_operation_controller.submit_mining_exact(unit_number)
+    if (accepted) log(`[AUTORIO] New mine_entity_exact task: unit=${unit_number}`)
+    return accepted
+  },
+  mine_resource_at: (resource_name: string, x: number, y: number, count: number = 1) => {
+    const accepted = basic_operation_controller.submit_mining_at(resource_name, x, y, count)
+    if (accepted) log(`[AUTORIO] New mine_resource_at task: ${resource_name} x${count} at (${x}, ${y})`)
+    return accepted
+  },
   gather_resource: (resource_name: string, count: number = 1, search_radius: number = 256): [boolean, string] => {
     const result = composite_operation_controller.gather_resource(resource_name, count, search_radius)
     if (result[0]) log(`[AUTORIO] New gather_resource task: ${resource_name} x${count}, radius=${search_radius}`)

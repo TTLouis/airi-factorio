@@ -90,6 +90,21 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     }).strict(),
   }).strict(),
   z.object({
+    name: z.literal('mine_entity_exact'),
+    args: z.object({
+      unit_number: unitNumber,
+    }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('mine_resource_at'),
+    args: z.object({
+      resource_name: factorioNameSchema,
+      x: placementCoordinate,
+      y: placementCoordinate,
+      count: boundedTaskCount.default(1),
+    }).strict(),
+  }).strict(),
+  z.object({
     name: z.literal('place_entity'),
     args: placementArgs,
   }).strict(),
@@ -243,6 +258,10 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'select_weapon_slot', ${operation.args.slot})`
     case 'mine_entity':
       return `remote.call('autorio_operations', 'mine_entity', ${renderLuaString(operation.args.entity_name)}, ${operation.args.count})`
+    case 'mine_entity_exact':
+      return `remote.call('autorio_operations', 'mine_entity_exact', ${operation.args.unit_number})`
+    case 'mine_resource_at':
+      return `remote.call('autorio_operations', 'mine_resource_at', ${renderLuaString(operation.args.resource_name)}, ${operation.args.x}, ${operation.args.y}, ${operation.args.count})`
     case 'place_entity': {
       const name = renderLuaString(operation.args.entity_name)
       if (operation.args.x !== undefined && operation.args.y !== undefined) {

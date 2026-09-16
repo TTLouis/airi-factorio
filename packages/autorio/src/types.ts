@@ -61,12 +61,17 @@ export interface PlayerParametersMineEntity {
   owner_actor_id?: number
   owner_actor_kind?: string
   owner_force_index?: number
-  entity_name: string
+  /** Prototype name for nearest-name or exact-position mining. Exact-identity mining resolves the name at runtime. */
+  entity_name?: string
+  /** Stable Factorio identity when the caller selected one exact mineable entity. */
+  target_unit_number?: number
+  /** Exact requested resource position. Unlike `position`, this survives mining/reposition recovery. */
+  requested_position?: MapPositionStruct
   /** Remaining mining cycles requested by the operation. */
   count: number
   /** Original requested cycle count, retained while count is decremented. */
   requested_count?: number
-  /** Current target position while a mining cycle is active. */
+  /** Current resolved target position while a mining cycle is active. */
   position?: MapPositionStruct
   /** Resource amount seen on the previous tick for standalone-NPC polling. */
   last_target_amount?: number

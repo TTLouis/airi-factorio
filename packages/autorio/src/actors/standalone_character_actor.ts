@@ -155,7 +155,7 @@ export class StandaloneCharacterActor implements ControlledActor {
 
   get_mining_state(): ActorMiningState {
     const state = this.character_entity.mining_state
-    if (state.mining && (!this.character_entity.selected || this.character_entity.character_mining_progress === 0)) {
+    if (state.mining && !this.character_entity.selected) {
       return { mining: false }
     }
     return state

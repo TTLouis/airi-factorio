@@ -96,7 +96,13 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
 
   function current_mining_target(actor: ControlledActor) {
     const task = manager.player_state.parameters_mine_entity
-    if (!task?.position) return undefined
+    if (!task) return undefined
+    if (task.target_unit_number !== undefined) {
+      const exact = resolve_exact_entity(actor, task.target_unit_number)
+      if (!exact || !exact.valid || exact.surface.index !== actor.surface.index) return undefined
+      return exact
+    }
+    if (!task.position || !task.entity_name) return undefined
     return actor.surface.find_entities_filtered({
       position: task.position,
       radius: 0.25,
@@ -153,7 +159,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
         const mined = math.min(task.count, task.last_target_amount - amount)
         task.count -= mined
         task.last_target_amount = amount
-        log(`[AUTORIO] Standalone actor mined ${mined} ${task.entity_name}, remaining: ${task.count}`)
+        log(`[AUTORIO] Standalone actor mined ${mined} ${target.name}, remaining: ${task.count}`)
       }
     }
 
@@ -175,7 +181,11 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return
     }
 
-    if (!prototypes.entity[task.entity_name]) {
+    if (task.entity_name !== undefined && !prototypes.entity[task.entity_name]) {
+      controller.fail(actor, task, 'invalid_entity')
+      return
+    }
+    if (task.entity_name === undefined && task.target_unit_number === undefined) {
       controller.fail(actor, task, 'invalid_entity')
       return
     }
@@ -202,25 +212,51 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       task.last_target_amount = undefined
     }
 
-    const entities = actor.surface.find_entities_filtered({
-      position: actor.position,
-      radius: MINING_TARGET_SEARCH_RADIUS,
-      name: task.entity_name,
-    })
-    if (entities.length === 0) {
+    let target: LuaEntity | undefined
+    if (task.target_unit_number !== undefined) {
+      target = resolve_exact_entity(actor, task.target_unit_number)
+      if (!target || !target.valid) {
+        controller.fail(actor, task, 'target_gone')
+        return
+      }
+      if (target.surface.index !== actor.surface.index) {
+        controller.fail(actor, task, 'different_surface')
+        return
+      }
+    }
+    else if (task.requested_position !== undefined && task.entity_name !== undefined) {
+      target = actor.surface.find_entities_filtered({
+        position: task.requested_position,
+        radius: 0.25,
+        name: task.entity_name,
+      })[0]
+      if (!target || target.type !== 'resource') {
+        controller.fail(actor, task, 'no_target')
+        return
+      }
+    }
+    else if (task.entity_name !== undefined) {
+      const entities = actor.surface.find_entities_filtered({
+        position: actor.position,
+        radius: MINING_TARGET_SEARCH_RADIUS,
+        name: task.entity_name,
+      })
+      target = nearest_entity(actor, entities) ?? undefined
+      if (!target) {
+        controller.fail(actor, task, 'no_target')
+        return
+      }
+    }
+
+    if (!target) {
       controller.fail(actor, task, 'no_target')
       return
     }
-    const nearest = nearest_entity(actor, entities)
-    if (!nearest) {
-      controller.fail(actor, task, 'no_target')
+    if (!within_mining_reach(actor, target)) {
+      reposition_for_mining(actor, target, task)
       return
     }
-    if (!within_mining_reach(actor, nearest)) {
-      reposition_for_mining(actor, nearest, task)
-      return
-    }
-    start_mining(actor, nearest)
+    start_mining(actor, target)
   }
 
   function on_player_mined_entity(actor: ControlledActor, player_index: number) {

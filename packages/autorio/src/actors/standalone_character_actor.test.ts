@@ -173,14 +173,14 @@ describe('StandaloneCharacterActor as a ControlledActor', () => {
     expect(actor.get_mining_state()).toEqual({ mining: false })
   })
 
-  it('reports mining as effectively stopped when character mining progress returns to zero', () => {
+  it('preserves freshly started mining while Factorio progress is still zero', () => {
     const { actor } = create_actor({
       selected: { name: 'iron-ore' },
       character_mining_progress: 0,
       mining_state: { mining: true, position: { x: 1, y: 1 } },
     })
 
-    expect(actor.get_mining_state()).toEqual({ mining: false })
+    expect(actor.get_mining_state()).toEqual({ mining: true, position: { x: 1, y: 1 } })
   })
 
   it('never claims a LuaPlayer-sourced event, since it has no LuaPlayer behind it', () => {
