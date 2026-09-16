@@ -21,6 +21,14 @@ import {
   type LearningOpportunitySource,
 } from './learning_opportunities'
 import {
+  capture_skill_instance_template_from_block,
+  list_skill_verification_runs,
+  maybe_start_autonomous_bounded_verification,
+  register_skill_verification_runtime,
+  retry_blocked_skill_verification,
+  start_next_skill_verification,
+} from './skill_verification'
+import {
   create_skill_candidate,
   list_skill_definitions,
   put_skill_definition,
@@ -149,15 +157,20 @@ export function process_learning_candidate(candidate: SkillDefinition, source: L
     classification.estimated_cost,
     classification.risk,
     get_learning_policy() === 'autonomous_bounded'
-      ? 'No rebuild/verifier implementation exists on this branch yet; bounded autonomous verification is queued, not faked.'
-      : 'Assisted learning queues rebuild/output verification for an explicit verifier or approval path.',
+      ? 'Bounded translated-rebuild verification is queued; live topology and output evidence are required before promotion.'
+      : 'Assisted learning queues translated rebuild/output verification for an explicit verifier run.',
   )
+  maybe_start_autonomous_bounded_verification(get_controlled_actor)
   return { opportunity: list_learning_opportunities(1)[0], skill: stored, novelty: 'new' as const }
 }
 
 export function process_factory_block_learning(source: LearningOpportunitySource, analysis_id: string, block_id: string, context: LearningContext = {}) {
   const candidate = candidate_for_source(analysis_id, block_id, source, context)
-  return process_learning_candidate(candidate, source, context)
+  const result = process_learning_candidate(candidate, source, context)
+  if (result.skill !== undefined && result.skill.status === 'candidate') {
+    capture_skill_instance_template_from_block(result.skill.id, result.skill.revision, analysis_id, block_id)
+  }
+  return result
 }
 
 export function process_factory_analysis_learning(source: LearningOpportunitySource, analysis_id: string, context: LearningContext = {}) {
@@ -258,11 +271,13 @@ export function record_experiment_learning(value: any = {}) {
 }
 
 export function create_learning_remote_interface() {
+  register_skill_verification_runtime(get_controlled_actor)
   remote.add_interface('autorio_learning', {
     status: () => ({
       policy: get_learning_policy(),
       opportunities: list_learning_opportunities(),
       verification_queue: list_learning_verification_queue(),
+      verification_runs: list_skill_verification_runs(8),
     }),
     set_policy: (policy: unknown) => {
       try { return [true, set_learning_policy(policy)] }
@@ -270,6 +285,8 @@ export function create_learning_remote_interface() {
     },
     observe_area: (request: unknown = {}) => record_observed_factory_learning(request),
     record_experiment: (value: unknown = {}) => record_experiment_learning(value),
+    verify_next: (request: unknown = {}) => start_next_skill_verification(get_controlled_actor, request),
+    retry_verification: (opportunity_id: string) => retry_blocked_skill_verification(opportunity_id),
     learn_block: (analysis_id: string, block_id: string) => {
       try {
         const result = process_factory_block_learning('manual', analysis_id, block_id, { evidence_refs: ['manual:learn-area'], reason: 'Player explicitly requested study of this factory block.' })
