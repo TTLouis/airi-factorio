@@ -317,6 +317,16 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       }
     }
 
+    if (!surface.can_place_entity({
+      name: task.entity_name,
+      position: task.position,
+      direction: task.direction,
+      force: actor.force,
+    })) {
+      controller.fail(actor, task, 'not_placeable')
+      return [false, 'Requested placement is blocked or otherwise not placeable']
+    }
+
     const create_entity_args: SurfaceCreateEntity = {
       name: task.entity_name,
       position: task.position,

@@ -14,7 +14,7 @@ type BasicTask = PlayerParametersMineEntity | PlayerParametersPlaceEntity | Play
 type BasicOperationCode = 'queued' | 'completed' | 'cancelled'
   | 'no_actor' | 'invalid_count' | 'invalid_ticks' | 'invalid_max_count' | 'invalid_position' | 'invalid_direction' | 'invalid_unit_number' | 'invalid_recipe' | 'invalid_reverse'
   | 'actor_changed' | 'no_target' | 'target_gone' | 'no_inventory' | 'wrong_force'
-  | 'invalid_entity' | 'item_missing' | 'no_position' | 'create_failed'
+  | 'invalid_entity' | 'item_missing' | 'no_position' | 'not_placeable' | 'create_failed'
   | 'nothing_moved' | 'player_unavailable' | 'different_surface' | 'too_far'
   | 'not_rotatable' | 'rotation_failed'
   | 'not_recipe_machine' | 'recipe_disabled' | 'incompatible_recipe' | 'set_recipe_failed'
