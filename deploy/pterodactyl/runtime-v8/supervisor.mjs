@@ -37,6 +37,7 @@ const UI_CONTROL_MARKER = '[AIRI_UI_CONTROL]'
 const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow'])
 const UI_PROMPT_MARKER = '[AIRI_UI_PROMPT]'
 const UI_PROMPT_MAX_CHARS = 4000
+const UI_INPUT_POLL_MS = 250
 const SYSTEM_RECOVERY_PAUSE_REASONS = new Set(['npc_identity_or_session_changed', 'actor_replaced'])
 const UI_AGENT_PHASES = new Set(['idle', 'thinking', 'observing', 'executing', 'waiting', 'error'])
 const UI_LIVE_ACTIVITY_LIMIT = 8
@@ -241,6 +242,28 @@ export function parseUiPromptLine(line) {
     text,
     tick: value.tick,
   }
+}
+
+export function parseUiInputBatch(raw) {
+  let values
+  try { values = JSON.parse(String(raw ?? '').trim()) }
+  catch { return [] }
+  if (!Array.isArray(values)) return []
+  const parsed = []
+  for (const value of values.slice(0, 32)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    const { kind, ...payload } = value
+    if (kind === 'control') {
+      const event = parseUiControlLine(`${UI_CONTROL_MARKER} ${JSON.stringify(payload)}`)
+      if (event) parsed.push({ kind: 'control', ...event })
+      continue
+    }
+    if (kind === 'prompt') {
+      const event = parseUiPromptLine(`${UI_PROMPT_MARKER} ${JSON.stringify(payload)}`)
+      if (event) parsed.push({ kind: 'prompt', ...event })
+    }
+  }
+  return parsed
 }
 
 function parseStoredOperation(value) {
@@ -594,6 +617,8 @@ export class Session {
     this.agentLive = { phase: 'idle', detail: '', objective: '', at: 0, activity: [] }
     this.uiSyncDirty = false
     this.uiSyncRunning = null
+    this.uiInputPoll = null
+    this.uiInputPollRunning = false
   }
 
   onAgentActivity(event, data) {
@@ -790,6 +815,37 @@ export class Session {
     }
   }
 
+  async drainTaskBoardUiInputs() {
+    if (!this.rcon || !this.ready || this.stopping || this.uiInputPollRunning) return false
+    this.uiInputPollRunning = true
+    try {
+      const raw = await this.rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_task_board","drain_inputs")))')
+      const inputs = parseUiInputBatch(raw)
+      for (const input of inputs) {
+        if (!chatAuthorized(this.config.chatPlayers, input.player_name)) {
+          this.log(`[AIRI UI] Ignored unauthorized ${input.kind} player=${input.player_name}${input.action ? ` action=${input.action}` : ''}`)
+          continue
+        }
+        if (input.kind === 'control') {
+          this.queueEvent(async () => {
+            await executeUiControl(this, input)
+          }, { reportError: true })
+        }
+        else {
+          this.queuePlayerRequest(input.player_name, input.text)
+        }
+      }
+      return inputs.length > 0
+    }
+    catch (error) {
+      this.log(`Task Board UI input drain failed: ${error instanceof Error ? error.message : error}`)
+      return false
+    }
+    finally {
+      this.uiInputPollRunning = false
+    }
+  }
+
   async applyNavigationObstaclePolicy(text) {
     if (!this.rcon) return
     const policy = navigationObstaclePolicy(text)
@@ -858,6 +914,10 @@ export class Session {
     await this.syncTaskBoardUi()
 
     this.ready = true
+    this.uiInputPoll = setInterval(() => {
+      if (!this.stopping) this.drainTaskBoardUiInputs()
+    }, UI_INPUT_POLL_MS)
+    this.drainTaskBoardUiInputs()
     this.poll = setInterval(() => {
       if (!this.stopping) this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
     }, 2000)
@@ -927,6 +987,9 @@ export class Session {
   onGameLine(line) {
     if (!this.ready || this.stopping || !this.agent) return
 
+    // Legacy stdout marker bridge retained during rolling upgrades. New console
+    // input uses the RCON-drained mod queue because Factorio log() is not a
+    // reliable child-stdout transport.
     const uiControl = parseUiControlLine(line)
     if (uiControl) {
       if (!chatAuthorized(this.config.chatPlayers, uiControl.player_name)) {
@@ -1009,6 +1072,7 @@ export class Session {
     this.expectedStop = ['requested', 'signal', 'console'].includes(reason)
     this.stopping = true
     this.ready = false
+    if (this.uiInputPoll) clearInterval(this.uiInputPoll)
     if (this.poll) clearInterval(this.poll)
     this.stopPromise = (async () => {
       let clean = true
