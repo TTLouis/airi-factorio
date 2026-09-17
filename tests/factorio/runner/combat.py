@@ -242,7 +242,7 @@ def run(client: Rcon, results: Path) -> None:
         "local guns=a.get_inventory(defines.inventory.character_guns); local ammo=a.get_inventory(defines.inventory.character_ammo); "
         "local main=a.get_main_inventory(); guns.clear(); ammo.clear(); main.clear(); "
         "assert(guns.insert{name='pistol',count=1}==1); assert(ammo.insert{name='firearm-magazine',count=60}==60); a.selected_gun_index=1; "
-        "assert(main.insert{name='gun-turret',count=2}==2); assert(main.insert{name='firearm-magazine',count=80}==80); "
+        "assert(main.insert{name='gun-turret',count=8}==8); assert(main.insert{name='firearm-magazine',count=240}==240); "
         "local p=s.find_non_colliding_position('gun-turret',{x=a.position.x-6,y=a.position.y+12},6,0.5); assert(p); "
         "local player_turret=s.create_entity{name='gun-turret',position=p,force=player,raise_built=true}; assert(player_turret); "
         "local first=s.create_entity{name='biter-spawner',position={x=a.position.x+18,y=a.position.y},force=enemy}; assert(first); "
@@ -251,7 +251,7 @@ def run(client: Rcon, results: Path) -> None:
         "gun_turrets=main.get_item_count('gun-turret'),support_ammo=main.get_item_count('firearm-magazine'),actor_position=a.position}))",
         'combat lifecycle fixture',
     )
-    require(lifecycle_fixture['gun_turrets'] == 2 and lifecycle_fixture['support_ammo'] == 80, lifecycle_fixture)
+    require(lifecycle_fixture['gun_turrets'] == 8 and lifecycle_fixture['support_ammo'] == 240, lifecycle_fixture)
 
     first_id = lifecycle_fixture['first_id']
     second_id = lifecycle_fixture['second_id']
@@ -298,9 +298,13 @@ def run(client: Rcon, results: Path) -> None:
     require(cleanup_started['first_alive'] is False, cleanup_started)
     require(cleanup_started['second_alive'] is True, cleanup_started)
     require(cleanup_started['player_turret_alive'] is True, cleanup_started)
-    require(cleanup_started['combat']['encounter_owned_turret_count'] == 2, cleanup_started)
-    require(cleanup_started['owned_valid'] == 2, cleanup_started)
-    require(cleanup_started['main_gun_turrets'] == 0, cleanup_started)
+    deployed_at_cleanup = cleanup_started['combat']['encounter_owned_turret_count']
+    require(deployed_at_cleanup >= 3, cleanup_started)
+    require(cleanup_started['owned_valid'] == deployed_at_cleanup, cleanup_started)
+    require(
+        cleanup_started['main_gun_turrets'] == lifecycle_fixture['gun_turrets'] - deployed_at_cleanup,
+        cleanup_started,
+    )
     require(cleanup_started['owned_ammo_items'] > 0, cleanup_started)
 
     pursuer_fixture = json_command(
@@ -368,7 +372,7 @@ def run(client: Rcon, results: Path) -> None:
     require(resumed_cleanup['second_alive'] is True, resumed_cleanup)
 
     cleanup_finished = None
-    finish_cleanup_deadline = time.monotonic() + 15.0
+    finish_cleanup_deadline = time.monotonic() + 25.0
     while time.monotonic() < finish_cleanup_deadline:
         candidate = lifecycle_observe('finish all owned turret cleanup')
         combat_state = candidate.get('combat') or {}
@@ -380,7 +384,10 @@ def run(client: Rcon, results: Path) -> None:
     require(cleanup_finished['owned_valid'] == 0, cleanup_finished)
     require(cleanup_finished['second_alive'] is True, cleanup_finished)
     require(cleanup_finished['player_turret_alive'] is True, cleanup_finished)
-    require(cleanup_finished['main_gun_turrets'] >= cleanup_started['owned_valid'], (cleanup_started, cleanup_finished))
+    require(
+        cleanup_finished['main_gun_turrets'] >= cleanup_started['main_gun_turrets'] + cleanup_started['owned_valid'],
+        (cleanup_started, cleanup_finished),
+    )
     require(
         cleanup_finished['main_support_ammo'] - cleanup_started['main_support_ammo'] >= cleanup_started['owned_ammo_items'],
         (cleanup_started, cleanup_finished),
