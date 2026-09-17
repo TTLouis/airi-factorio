@@ -26,27 +26,26 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(source).toContain('value_step: PREVIEW_ZOOM_STEP')
   })
 
-  it('sizes the console from the player display so a big screen is used and a small one still fits', () => {
+  it('sizes the console from the player display while keeping the main tracker plan-only', () => {
     expect(task_board_gui_height(2160, 2)).toBe(1080)
     expect(task_board_gui_height(1080, 1)).toBe(1080)
     expect(task_board_gui_height(1080, 0)).toBe(1080)
 
     const small = task_board_tracker_heights(720)
-    expect(small.steps + small.activity).toBe(306)
+    expect(small).toEqual({ steps: 150, activity: 0 })
 
     const tall = task_board_tracker_heights(1440)
-    expect(tall.steps + tall.activity).toBeGreaterThan(600)
-    expect(tall.steps).toBeLessThan(tall.activity)
+    expect(tall).toEqual({ steps: 270, activity: 0 })
 
     const huge = task_board_tracker_heights(4320)
-    expect(huge.steps + huge.activity).toBe(900)
+    expect(huge).toEqual({ steps: 270, activity: 0 })
 
     expect(task_board_preview_min_height(720)).toBe(360)
     expect(task_board_preview_min_height(1440)).toBe(720)
     expect(task_board_preview_min_height(4320)).toBe(900)
   })
 
-  it('spends the plan list leftovers on the activity feed instead of reserving them', () => {
+  it('spends the main tracker height on plan steps and leaves execution activity to Debug', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain('fixed_height: 560,')
     expect(source).not.toContain('const CONSOLE_FIXED_HEIGHT')
@@ -54,14 +53,12 @@ describe('AIRI NPC console compact tracker layout', () => {
 
     const short_plan = task_board_tracker_heights(1286, 6)
     const long_plan = task_board_tracker_heights(1286, 24)
-    expect(short_plan.steps + short_plan.activity).toBe(long_plan.steps + long_plan.activity)
+    expect(short_plan).toEqual({ steps: 180, activity: 0 })
+    expect(long_plan).toEqual({ steps: 270, activity: 0 })
     expect(short_plan.steps).toBeLessThan(long_plan.steps)
-    expect(short_plan.activity).toBeGreaterThan(long_plan.activity)
 
-    expect(task_board_tracker_heights(1286, 1).steps).toBe(120)
-    const no_plan = task_board_tracker_heights(1286, 0)
-    expect(no_plan.steps).toBe(0)
-    expect(no_plan.activity).toBe(long_plan.steps + long_plan.activity)
+    expect(task_board_tracker_heights(1286, 1)).toEqual({ steps: 120, activity: 0 })
+    expect(task_board_tracker_heights(1286, 0)).toEqual({ steps: 0, activity: 0 })
   })
 
   it('spends the left column width on the panel that wraps text, not on the button grid', () => {
@@ -145,24 +142,29 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(refresh_body).not.toContain('.clear()')
   })
 
-  it('uses compact controls and one combined timestamped plan/activity tracker', () => {
+  it('uses compact controls with a plan-only main tracker and keeps timestamped activity as retained history', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain('function compact_button(')
-    expect(source).toContain("'Plan & Activity'")
+    expect(source).toContain("'Plan Tracker'")
     expect(source).toContain('function render_tracker(')
     expect(source).toMatch(/render_tracker\(\w+, board[,)]/)
+    expect(source).toContain('activity_header.visible = false')
+    expect(source).toContain('activity_scroll.visible = false')
     expect(source).toContain('const previous = storage.airi_task_board_ui')
     expect(source).toContain('stamp_activity_times(next, previous, game.tick)')
     expect(source).toContain("caption: entry.timestamp ?? '--:--:--'")
     expect(source).not.toContain('render_steps(left, board)')
     expect(source).not.toContain('render_activity(left, board)')
+
+    const debug_source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+    expect(debug_source).toContain("caption: 'Execution Activity'")
+    expect(debug_source).toContain('activity_state.activity_history()')
   })
 
   // Conversation has always carried its LIVE control in its subheader. The
-  // tracker used to grow a second "Recent activity" header row inside its body
-  // for the same kind of control, which put one selector in a heading and one
-  // below it. Every feed control belongs in its section heading.
-  it('keeps every feed control in its section heading', () => {
+  // tracker still retains its old activity controls invisibly for rolling-save
+  // compatibility, while the visible execution feed now belongs to Debug.
+  it('keeps the retained feed controls structurally stable while moving visible activity to Debug', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     const tracker = source.split('function render_tracker(')[1]?.split('function refresh_tracker(')[0] ?? ''
     expect(tracker).toContain('const activity_header = header.add(')
@@ -170,12 +172,13 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(tracker).not.toContain("caption: 'Recent activity'")
     expect(tracker).toContain('activity_state.style_feed_button(')
     expect(source).toContain('const activity_header = header[TRACKER.activity_header]')
+    expect(source).toContain('activity_header.visible = false')
 
     const debug_source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
     expect(debug_source).toContain('activity_state.style_feed_button(header.add(')
+    expect(debug_source).toContain("caption: 'Execution Activity'")
     expect(debug_source).not.toContain("style: 'mini_button'")
 
-    // One styler for every feed, so the two headings cannot drift apart again.
     const projects = readFileSync(new URL('./projects/project_window.ts', import.meta.url), 'utf8')
     expect(projects).toContain('activity_state.style_feed_button(parent.add(')
     expect(projects).not.toContain("button.style.font = 'default-small-semibold'")
@@ -188,8 +191,6 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(source).toContain("button.tooltip = provider_ui.provider_button_tooltip('AIRI NPC Console')")
     expect(source).toContain('provider_ui.remember_provider_model(stamped.debug?.provider_model)')
 
-    // Joining is where the variant is decided, in synchronized storage, rather
-    // than while drawing - the button must not be a client-local choice.
     expect(source).toContain('provider_ui.roll_provider_avatar(player.index, game.tick)')
   })
 
