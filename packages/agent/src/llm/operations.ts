@@ -15,6 +15,8 @@ const navigationReachDistance = z.number().min(0.25).max(64)
 const equipmentSlot = z.number().int().min(1).max(64)
 const placementCoordinate = z.number().min(-1000000).max(1000000)
 const placementDirection = z.number().int().min(0).max(15)
+const placementCandidateSetId = z.string().regex(/^placement-[1-9][0-9]*$/)
+const placementCandidateId = z.string().regex(/^candidate-[1-9][0-9]*$/)
 const placementArgs = z.object({
   entity_name: factorioNameSchema,
   x: placementCoordinate.optional(),
@@ -118,6 +120,13 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
       x: placementCoordinate,
       y: placementCoordinate,
       count: boundedTaskCount.default(1),
+    }).strict(),
+  }).strict(),
+  z.object({
+    name: z.literal('place_candidate'),
+    args: z.object({
+      candidate_set_id: placementCandidateSetId,
+      candidate_id: placementCandidateId,
     }).strict(),
   }).strict(),
   z.object({
@@ -282,6 +291,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'mine_entity_exact', ${operation.args.unit_number})`
     case 'mine_resource_at':
       return `remote.call('autorio_operations', 'mine_resource_at', ${renderLuaString(operation.args.resource_name)}, ${operation.args.x}, ${operation.args.y}, ${operation.args.count})`
+    case 'place_candidate':
+      return `remote.call('autorio_operations', 'place_candidate', ${renderLuaString(operation.args.candidate_set_id)}, ${renderLuaString(operation.args.candidate_id)})`
     case 'place_entity': {
       const name = renderLuaString(operation.args.entity_name)
       if (operation.args.x !== undefined && operation.args.y !== undefined) {
