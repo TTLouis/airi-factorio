@@ -154,13 +154,21 @@ describe('recent activity follow', () => {
     expect(activity_unseen(['a', 'b', 'c', 'd', 'e'], view.seen_key)).toEqual({ count: 3, overflow: false })
   })
 
-  it('holds still while the cursor is on the feed and catches up once it leaves', () => {
-    const view = set_activity_hover(7, true)
-    expect(activity_should_scroll(view, 2, 'b')).toBe(false)
-    expect(view.behind).toBe(true)
-    set_activity_hover(7, false)
-    expect(activity_should_scroll(view, 0, 'b')).toBe(true)
-    expect(activity_should_scroll(view, 0, 'b')).toBe(false)
+  it('does not let client-local hover mutate synchronized activity state', () => {
+    const stored = activity_view(7)
+    stored.behind = true
+    stored.seen_key = 'a'
+    const before = JSON.parse(JSON.stringify(store.airi_task_board_activity_view))
+
+    const hover = set_activity_hover(7, true)
+    const leave = set_activity_hover(7, false)
+
+    expect(store.airi_task_board_activity_view).toEqual(before)
+    expect(hover.follow).toBe(false)
+    expect(leave.follow).toBe(false)
+    // Persisted legacy hover must not suppress synchronized auto-follow.
+    stored.hover = true
+    expect(activity_should_scroll(stored, 1, 'b')).toBe(true)
   })
 
   it('jumps back to the newest event when follow is turned back on', () => {
@@ -172,7 +180,6 @@ describe('recent activity follow', () => {
 
   it('starts a freshly opened console following again', () => {
     stop_activity_follow(7, 'a')
-    set_activity_hover(7, true)
     const view = reset_activity_view(7)
     expect(view).toEqual({ follow: true, hover: false, behind: false, seen_key: undefined })
   })
