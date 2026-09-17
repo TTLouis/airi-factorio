@@ -247,6 +247,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         owner: cleanMemoryText(requestInfo?.sender ?? previous?.owner ?? 'unknown', 128),
         objective: cleanMemoryText(previous?.objective ?? requestInfo?.text ?? '', 1000),
         status: 'active',
+        admission_status: undefined,
         blocker: '',
         pause_reason: '',
         persistent_runtime: runtime,
@@ -268,6 +269,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       const state = {
         ...previous,
         status: 'blocked',
+        admission_status: undefined,
         blocker: 'no_autorio_operation_for_remaining_plan',
         pause_reason: '',
         persistent_runtime: runtime,
@@ -286,6 +288,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     const state = {
       ...previous,
       status: 'completed',
+      admission_status: undefined,
       blocker: '',
       pause_reason: '',
       persistent_runtime: undefined,
@@ -1331,7 +1334,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       ref: `${this.traceRequest?.id ?? 'request'}/admission`,
       summary: JSON.stringify({
         request_id: this.traceRequest?.id,
-        operation_index: operationIndex,
+        operation_index: operationIndex === undefined ? undefined : operationIndex + 1,
         operation_name: operation?.name,
         operation_args: sanitizeTraceValue(operation?.args ?? {}),
         reason_code: failure?.preflight?.code,
@@ -1468,7 +1471,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         await this.traceEvent('operations.admission_failed', {
           failure_class: 'mutation_admission',
           request_id: this.traceRequest?.id,
-          operation_index: operationIndex,
+          operation_index: operationIndex === undefined ? undefined : operationIndex + 1,
           operation: operationIndex !== undefined ? operations[operationIndex] : undefined,
           factorio_error: error?.factorioError,
           no_replay: true,
