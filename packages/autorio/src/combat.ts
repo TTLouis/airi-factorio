@@ -662,17 +662,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     acquire(actor, task)
   }
 
-  function nearest_mobile_enemy_distance(actor: ControlledActor) {
-    let result = math.huge
-    const local_units = actor.surface.find_entities_filtered({ position: actor.position, radius: TURRET_DANGER_DISTANCE, force: 'enemy', type: 'unit' })
-    for (const entity of local_units) {
-      if (!is_alive(entity)) continue
-      const candidate = distance(actor.position, entity.position)
-      if (candidate < result) result = candidate
-    }
-    return result
-  }
-
   function begin_support_stage(actor: ControlledActor, task: CombatTask, stage_budget: number, owned_count: number) {
     const batch_size = support_stage_batch_size(task.initial_threat_score ?? stage_budget * SUPPORT_THREAT_PER_TURRET)
     if (batch_size <= 0) return false
@@ -689,11 +678,9 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     const stage_budget = task.support_turret_budget ?? 0
     const owned_count = live_owned_turrets(task).length
     if (stage_budget <= 0) return false
-    // A healthy actor can finish a support placement while a non-panic unit is nearby.
-    // This prevents freshly spawned defenders from starving the support stage forever;
-    // panic-range threats still preempt immediately.
-    if (nearest_mobile_enemy_distance(actor) <= PANIC_DISTANCE) return false
-
+    // Placement is an instantaneous defensive action and the low-health branch runs
+    // before this call. Do not let freshly spawned defenders starve the support stage:
+    // after this placement tick, ordinary panic/preemption handling resumes immediately.
     if (!task.support_stage_started) {
       const origin = task.origin_position ?? actor.position
       const advanced = distance(actor.position, origin) >= TURRET_MIN_ADVANCE_DISTANCE
