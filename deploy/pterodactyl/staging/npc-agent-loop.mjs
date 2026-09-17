@@ -225,6 +225,20 @@ export class NpcDialogueMemory {
     const prefix = `${lines[0]}\nCompacted earlier dialogue:\n[older memory compacted]\n`
     return `${prefix}${text.slice(-Math.max(0, this.maxContextChars - prefix.length))}`
   }
+
+  terminatePlan(key) {
+    if (!key || !(this.planByNpc instanceof Map)) return undefined
+    const previous = this.planByNpc.get(key)
+    this.planByNpc.delete(key)
+    return previous
+  }
+
+  clearTaskContext(key) {
+    if (!key) return { cleared_dialogue: false, cleared_plan: false }
+    const cleared_dialogue = this.byNpc.delete(key)
+    const cleared_plan = this.planByNpc instanceof Map ? this.planByNpc.delete(key) : false
+    return { cleared_dialogue, cleared_plan }
+  }
 }
 
 export class NpcAgentLoop {
