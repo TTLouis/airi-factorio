@@ -9,6 +9,10 @@ const config = {
   model: 'test-model',
 }
 const messages = [{ role: 'user', content: 'hello' }]
+const completionMessages = [
+  { role: 'system', content: 'system' },
+  { role: 'user', content: '[MOD] Autorio operation batch completed. Detailed task receipt: {}' },
+]
 
 function hangingFetch(_url, { signal }) {
   return new Promise((resolve, reject) => {
@@ -30,11 +34,11 @@ function successfulFetch(captured) {
   }
 }
 
-function contentFetch(content) {
+function contentFetch(content, finishReason = 'stop') {
   return async () => new Response(JSON.stringify({
     id: 'resp-recovery',
     model: 'test-model',
-    choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }],
+    choices: [{ finish_reason: finishReason, message: { role: 'assistant', content } }],
   }), {
     status: 200,
     headers: { 'content-type': 'application/json' },
@@ -68,6 +72,60 @@ test('recovery requests can disable the tool surface completely', async () => {
   await providerRequest(config, messages, { fetchImpl: successfulFetch(captured), allowTools: true })
   assert.ok(Array.isArray(captured[1].tools))
   assert.equal(captured[1].tool_choice, 'auto')
+})
+
+test('official DeepSeek disables thinking only for successful completion continuation', async () => {
+  const captured = []
+  const deepSeek = { ...config, base: 'https://api.deepseek.com/v1' }
+  await providerRequest(deepSeek, completionMessages, { fetchImpl: successfulFetch(captured) })
+  assert.deepEqual(captured[0].thinking, { type: 'disabled' })
+  assert.equal(captured[0].max_tokens, 1000)
+
+  await providerRequest(deepSeek, messages, { fetchImpl: successfulFetch(captured) })
+  assert.equal('thinking' in captured[1], false)
+  assert.equal(captured[1].max_tokens, 2000)
+})
+
+test('unknown compatible providers use a bounded continuation fallback without private fields', async () => {
+  const captured = []
+  await providerRequest(config, completionMessages, { fetchImpl: successfulFetch(captured) })
+  assert.equal(captured[0].max_tokens, 4000)
+  assert.equal('thinking' in captured[0], false)
+})
+
+test('completion continuation pairs placement candidates with candidate-id execution in the provider contract', async () => {
+  const captured = []
+  await providerRequest(config, completionMessages, { fetchImpl: successfulFetch(captured) })
+  assert.ok(captured[0].tools.some(tool => tool?.function?.name === 'getPlacementCandidates'))
+  const systemPrompt = String(captured[0].messages.find(message => message.role === 'system')?.content ?? '')
+  assert.match(systemPrompt, /place_candidate \{candidate_set_id,candidate_id\}/)
+  assert.match(systemPrompt, /Do not copy candidate coordinates into place_entity/)
+})
+
+test('empty length response with zero tool calls is output-budget exhaustion', async () => {
+  const message = await providerRequest(config, completionMessages, {
+    fetchImpl: contentFetch('', 'length'),
+  })
+  assert.equal(message._airiProvider.diagnostic_code, 'provider_output_budget_exhausted')
+  assert.equal(message._airiProvider.output_budget_exhausted, true)
+  assert.equal(message._airiProvider.content_chars, 0)
+  assert.equal(message._airiProvider.tool_call_count, 0)
+})
+
+test('explicit output-budget recovery retains compact tools and fallback budget', async () => {
+  const captured = []
+  await providerRequest(config, [
+    ...completionMessages,
+    { role: 'user', content: '[HARNESS] retry output budget exhaustion' },
+  ], {
+    fetchImpl: successfulFetch(captured),
+    allowTools: true,
+    recoveryAttempt: 1,
+    recoveryKind: 'output_budget_exhaustion',
+  })
+  assert.equal(captured[0].max_tokens, 4000)
+  assert.ok(Array.isArray(captured[0].tools))
+  assert.equal(captured[0].tool_choice, 'auto')
 })
 
 test('provider strips a single JSON markdown fence before strict plan parsing', async () => {
