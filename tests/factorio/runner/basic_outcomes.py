@@ -86,6 +86,34 @@ def run(client: Rcon, results: Path) -> None:
     require(initial['task_state'] == 'idle' and initial['queue_length'] == 0, initial)
     validate_clock(initial['runtime'])
 
+    # Knowledge/preflight regressions must exercise the real Factorio runtime API,
+    # not only TypeScript mocks. Factorio 2 recipe details are queried through
+    # Autorio's public knowledge contract and must not assume LuaRecipe.categories.
+    for recipe_name in ('burner-mining-drill', 'iron-gear-wheel'):
+        details = json_command(
+            lua_json(remote_call('autorio_knowledge', 'recipe_details', repr(recipe_name))),
+            f'recipe details {recipe_name}',
+        )
+        require(details.get('found') is True, details)
+        matched = next((recipe for recipe in details.get('recipes', []) if recipe.get('name') == recipe_name), None)
+        require(matched is not None, details)
+        require(isinstance(matched.get('categories'), list) and len(matched['categories']) > 0, matched)
+        require(isinstance(matched.get('ingredients'), list) and len(matched['ingredients']) > 0, matched)
+        require(isinstance(matched.get('products'), list) and len(matched['products']) > 0, matched)
+
+    guessed_craft = json_command(
+        lua_json(remote_call('autorio_preflight', 'operation', repr('craft_item'), "{item_name='iron-mining-drill',count=1}")),
+        'unknown craft identity preflight',
+    )
+    require(guessed_craft.get('ok') is False and guessed_craft.get('code') == 'unknown_recipe', guessed_craft)
+
+    tree_resource = json_command(
+        lua_json(remote_call('autorio_preflight', 'operation', repr('gather_resource'), "{resource_name='tree-02-red',count=4,search_radius=64}")),
+        'tree resource identity preflight',
+    )
+    require(tree_resource.get('ok') is False and tree_resource.get('code') == 'invalid_target_kind', tree_resource)
+    require(tree_resource.get('expected_type') == 'resource' and tree_resource.get('observed_type') == 'tree', tree_resource)
+
     # 1. Bounded wait is actor-owned and must produce a concrete completion
     # receipt instead of relying on generic idle.
     wait_admission = json_command(lua_json(remote_call('autorio_operations', 'wait', '30')), 'basic wait admission')
