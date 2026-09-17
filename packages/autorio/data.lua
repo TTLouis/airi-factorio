@@ -81,17 +81,20 @@ data:extend({
 -- and it keeps its default sprite when there is no answer.
 --
 -- Factorio's data stage has no file-exists test and a missing sprite file is a
--- hard load failure, so every id listed here must have a committed PNG. The
--- committed files are flat brand-color placeholders; replacing one with the
--- vendor's own 64x64 icon needs no code change. See the folder's README.
+-- hard load failure, so every id listed here must have a committed PNG. Import
+-- artwork with scripts/import_provider_icon.py, which produces the 128x128 the
+-- prototype below expects and keeps a set framed consistently. See the folder's
+-- README.
 local provider_avatars = {}
-for _, provider in ipairs({"claude", "openai", "deepseek"}) do
+for _, provider in ipairs({"claude", "openai", "deepseek", "gemini", "qwen"}) do
   provider_avatars[#provider_avatars + 1] = {
     type = "sprite",
     name = "airi-provider-" .. provider,
     filename = "__autorio__/graphics/icons/provider/" .. provider .. ".png",
-    size = 64,
-    scale = 0.5,
+    -- 128 source pixels drawn at 32 GUI units, so the avatar stays crisp at the
+    -- 200% UI scale Factorio allows instead of being upscaled from a 1:1 source.
+    size = 128,
+    scale = 0.25,
     flags = {"gui-icon"},
   }
 end

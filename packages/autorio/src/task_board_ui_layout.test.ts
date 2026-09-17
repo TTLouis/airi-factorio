@@ -192,7 +192,7 @@ describe('AIRI NPC console compact tracker layout', () => {
     // control stage can resolve to.
     const data_stage = readFileSync(new URL('../data.lua', import.meta.url), 'utf8')
     const provider_source = readFileSync(new URL('./task_board_provider.ts', import.meta.url), 'utf8')
-    for (const id of ['claude', 'openai', 'deepseek']) {
+    for (const id of ['claude', 'openai', 'deepseek', 'gemini', 'qwen']) {
       expect(provider_source).toContain(`id: '${id}'`)
       expect(data_stage).toContain(`"${id}"`)
     }

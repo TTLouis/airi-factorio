@@ -22,11 +22,24 @@ describe('provider avatar selection', () => {
     expect(task_board_provider_of('anthropic/claude-opus-4-1').id).toBe('claude')
     expect(task_board_provider_of('gpt-4o-mini').id).toBe('openai')
     expect(task_board_provider_of('openai/o3-mini').id).toBe('openai')
+    expect(task_board_provider_of('gemini-2.5-pro').id).toBe('gemini')
+    expect(task_board_provider_of('google/gemini-2.5-flash').id).toBe('gemini')
+    expect(task_board_provider_of('qwen3-max').id).toBe('qwen')
+    expect(task_board_provider_of('qwen-plus').id).toBe('qwen')
+  })
+
+  // Every vendor ships a "flash" tier, so the word says nothing about who is
+  // answering and is deliberately not a match key for any of them.
+  it('does not read a speed tier as a vendor', () => {
+    expect(task_board_provider_of('deepseek-v3-flash').id).toBe('deepseek')
+    expect(task_board_provider_of('gemini-2.5-flash').id).toBe('gemini')
+    expect(task_board_provider_of('some-flash-model').id).toBe('')
   })
 
   it('reads case-insensitively, the way model identifiers are typed', () => {
     expect(task_board_provider_of('DeepSeek-V3').id).toBe('deepseek')
     expect(task_board_provider_of('Claude-Haiku').id).toBe('claude')
+    expect(task_board_provider_of('Qwen3-Max').id).toBe('qwen')
   })
 
   // No house avatar for "none of the above": the button reports which vendor is

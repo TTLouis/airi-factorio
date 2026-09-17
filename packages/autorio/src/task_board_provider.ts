@@ -31,6 +31,8 @@ const UNKNOWN: TaskBoardProvider = { id: '', label: 'Unrecognized provider' }
 const PROVIDERS: Array<TaskBoardProvider & { keys: string[] }> = [
   { id: 'deepseek', label: 'DeepSeek', keys: ['deepseek'] },
   { id: 'claude', label: 'Claude', keys: ['claude', 'anthropic', 'sonnet', 'opus', 'haiku'] },
+  { id: 'qwen', label: 'Qwen', keys: ['qwen', 'qianwen', 'tongyi'] },
+  { id: 'gemini', label: 'Gemini', keys: ['gemini', 'google'] },
   { id: 'openai', label: 'OpenAI', keys: ['openai', 'chatgpt', 'gpt-', 'gpt4', 'gpt3', 'o1-', 'o3-', 'o4-'] },
 ]
 
