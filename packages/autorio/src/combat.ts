@@ -29,6 +29,7 @@ const TURRET_BEHIND_ACTOR_DISTANCE = 3.5
 const TURRET_LATERAL_SPACING = 2.5
 const TURRET_ACTOR_CLEARANCE = 2.5
 const TURRET_TARGET_SAFETY_MARGIN = 0.5
+const TURRET_COVER_MARGIN = 2
 const TURRET_PLACEMENT_SEARCH_RADIUS = 3
 const TURRET_PLACEMENT_CANDIDATES = 6
 const TURRET_LOAD_COUNT = 20
@@ -357,6 +358,25 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     const owned = (task.encounter_owned_turrets ?? []).filter(entity => entity.valid)
     task.encounter_owned_turrets = owned
     return owned
+  }
+
+  function support_cover_goal(actor: ControlledActor, task: CombatTask, target: LuaEntity) {
+    const support = nearest(actor, live_owned_turrets(task))
+    if (!support) return undefined
+    const turret_range = support.prototype.turret_range
+    if (typeof turret_range !== 'number' || turret_range <= 0) return undefined
+    const cover_radius = math.max(COMBAT_PATH_RETREAT_GOAL_RADIUS + 0.5, turret_range - TURRET_COVER_MARGIN)
+    const actor_in_cover = distance(actor.position, support.position) <= cover_radius
+    const desired = actor_in_cover ? retreat_position(actor, target) : copy_position(actor.position)
+    const dx = desired.x - support.position.x
+    const dy = desired.y - support.position.y
+    const desired_distance = math.sqrt(dx * dx + dy * dy)
+    if (desired_distance <= cover_radius) return desired
+    if (desired_distance <= 0.001) return copy_position(support.position)
+    return {
+      x: support.position.x + dx / desired_distance * cover_radius,
+      y: support.position.y + dy / desired_distance * cover_radius,
+    }
   }
 
   function initialize_support_plan(task: CombatTask, enemies: LuaEntity[]) {
@@ -800,7 +820,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       const target = task.target
       return target && is_alive(target) ? target.position : undefined
     }
-    if (task.combat_path_mode === 'retreat') return task.last_turret_position ?? task.combat_path_target_position
+    if (task.combat_path_mode === 'retreat') return task.combat_path_target_position
     return undefined
   }
 
@@ -905,7 +925,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function stable_retreat_goal(actor: ControlledActor, task: CombatTask, target: LuaEntity) {
-    if (task.last_turret_position) return task.last_turret_position
     if (task.combat_path_mode === 'retreat' && task.combat_path_target_position) return task.combat_path_target_position
     return retreat_position(actor, target)
   }
@@ -962,12 +981,17 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     }
 
     if (health_ratio(character) <= LOW_HEALTH_RATIO) {
-      if (task.last_turret_position) {
-        if (can_shoot) shoot_while_retreating(actor, task, target)
+      const cover_goal = support_cover_goal(actor, task, target)
+      if (cover_goal) {
+        if (can_shoot) {
+          actor.update_selected_entity(target.position)
+          actor.set_shooting_state({ state: defines.shooting.shooting_selected, position: target.position })
+        }
         else {
           stop_actor_combat(actor)
-          follow_combat_path(actor, task, task.last_turret_position, 'retreat')
         }
+        follow_combat_path(actor, task, cover_goal, 'retreat')
+        task.last_progress_tick = game.tick
         return
       }
       fail(actor, task, 'low_health')

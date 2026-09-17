@@ -95,12 +95,16 @@ function world() {
   return { actor, target, enemies, character, gun, ammo, guns, magazines, main, surface, identity, get_actor, manager, controller }
 }
 
-function makeTurret(unit_number: number, insertedAmmo?: number) {
+function makeTurret(unit_number: number, insertedAmmo?: number, position = { x: 0, y: 0 }) {
   const turretAmmo = inventory([])
   if (insertedAmmo !== undefined) turretAmmo.insert.mockReturnValue(insertedAmmo)
   const turret: any = {
     valid: true,
+    name: 'gun-turret',
+    type: 'ammo-turret',
     unit_number,
+    position: { ...position },
+    prototype: { turret_range: 18 },
     get_inventory: vi.fn(() => turretAmmo),
     destroy: vi.fn(),
   }
@@ -540,51 +544,59 @@ describe('bounded area-clearing combat', () => {
     })
   })
 
-  it('pathfinds back to the latest support turret while firing instead of retreating blindly through terrain', () => {
-    const { actor, character, manager, surface, controller } = world()
+  it('keeps healthy mobile kiting bounded instead of pulling back to a support turret', () => {
+    const { actor, target, character, manager, surface, controller } = world()
     controller.submit_clear(80)
     const task = manager.player_state.parameters_attack_nearest_enemy!
+    const support = makeTurret(520, undefined, { x: -10, y: 0 }).turret
     task.last_turret_position = { x: -10, y: 0 }
+    ;(task as any).encounter_owned_turrets = [support]
     task.turrets_placed = 1
     character.can_shoot.mockReturnValue(true)
     actor.position = { x: 15, y: 0 }
+    target.position = { x: 20, y: 0 }
 
     controller.tick(actor)
     expect(actor.set_shooting_state).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'shooting_selected' }))
     expect(surface.request_path).toHaveBeenCalledWith(expect.objectContaining({
       start: { x: 15, y: 0 },
-      goal: { x: -10, y: 0 },
+      goal: { x: 8, y: 0 },
       radius: 1.5,
     }))
-    expect(controller.status()).toMatchObject({ path: { mode: 'retreat', attempts: 1 } })
+    expect(surface.request_path).not.toHaveBeenCalledWith(expect.objectContaining({ goal: { x: -10, y: 0 } }))
+    expect(controller.status()).toMatchObject({ path: { mode: 'retreat', attempts: 1, target_position: { x: 8, y: 0 } } })
 
     const requestId = controller.status().path.request_id
-    controller.on_path_finished({ id: requestId, path: [waypoint(10, 4), waypoint(0, 4), waypoint(-10, 0)], try_again_later: false } as any)
+    controller.on_path_finished({ id: requestId, path: [waypoint(12, 4), waypoint(8, 0)], try_again_later: false } as any)
     ;(globalThis as any).game.tick += 1
     controller.tick(actor)
     expect(actor.set_shooting_state).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'shooting_selected' }))
     expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
   })
 
-  it('low health with an established support position retreats by path instead of aborting or walking straight through obstacles', () => {
-    const { actor, character, manager, surface, controller } = world()
+  it('low health retreats only far enough to enter a live support turret firing envelope', () => {
+    const { actor, target, character, manager, surface, controller } = world()
     character.health = 50
     character.max_health = 250
     character.can_shoot.mockReturnValue(false)
     controller.submit_clear(80)
     const task = manager.player_state.parameters_attack_nearest_enemy!
-    task.last_turret_position = { x: -12, y: 3 }
+    const support = makeTurret(530, undefined, { x: 0, y: 0 }).turret
+    task.last_turret_position = { x: 0, y: 0 }
+    ;(task as any).encounter_owned_turrets = [support]
     task.turrets_placed = 1
-    actor.position = { x: 10, y: 0 }
+    actor.position = { x: 25, y: 0 }
+    target.position = { x: 30, y: 0 }
 
     controller.tick(actor)
 
     expect(surface.request_path).toHaveBeenCalledWith(expect.objectContaining({
-      start: { x: 10, y: 0 },
-      goal: { x: -12, y: 3 },
+      start: { x: 25, y: 0 },
+      goal: { x: 16, y: 0 },
       radius: 1.5,
     }))
-    expect(controller.status()).toMatchObject({ path: { mode: 'retreat' } })
+    expect(surface.request_path).not.toHaveBeenCalledWith(expect.objectContaining({ goal: { x: 0, y: 0 } }))
+    expect(controller.status()).toMatchObject({ path: { mode: 'retreat', target_position: { x: 16, y: 0 } } })
     expect(controller.status().last_result).not.toMatchObject({ code: 'low_health' })
   })
 
