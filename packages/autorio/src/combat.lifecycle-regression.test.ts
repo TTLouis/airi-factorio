@@ -256,6 +256,25 @@ describe('combat lifecycle regressions', () => {
     expect(c.controller.status()).toMatchObject({ combat_phase: 'safety', combat_safety_goal: 'cleanup', target: undefined })
   })
 
+  it('lets a ready support placement beat a non-panic reinforcement instead of starving the stage', () => {
+    const first = enemy(90, 'unit-spawner', 30)
+    const c = world([first])
+    c.main.push(itemStack('gun-turret', 1), itemStack('firearm-magazine', 40))
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+
+    c.actor.position = { x: 6, y: 0 }
+    c.enemies.push(enemy(91, 'unit', 14))
+    advance(c, 1)
+
+    expect(c.createdTurrets).toHaveLength(1)
+    expect(c.controller.status()).toMatchObject({
+      combat_phase: 'engage',
+      target: { unit_number: 90 },
+      encounter_owned_turret_count: 1,
+    })
+  })
+
   it('does not let distant mobile reinforcements starve the current static encounter', () => {
     const first = enemy(90, 'unit-spawner', 30)
     const second = enemy(91, 'unit-spawner', 40)
