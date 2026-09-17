@@ -9,6 +9,7 @@ const FAILURE_MARKER = '[MOD] Autorio operation error:'
 const CHAT_MARKER = '[CHAT]'
 const STEERING_MARKER = '[STEERING]'
 const COMPLETION_MAX_TOKENS = 1000
+const FALLBACK_CONTINUATION_MAX_TOKENS = 4000
 const DEFAULT_MAX_TOKENS = 2000
 const PLAN_STATE_MARKER = '[PLAN_STATE]'
 const MEMORY_MARKER = '[MEMORY]'
@@ -31,6 +32,7 @@ Token-efficient continuation rules:
 - Do not insert wait between finite Autorio operations merely to let them finish. The harness resumes you when the submitted batch completes or fails. Use wait only when actual world time must pass and no Autorio-owned finite operation already represents the work.
 - Runtime navigation/reach/obstacle recovery is internal progress, not a new plan step and not a reason to call the model again. Exact transfers, recipe configuration, rotation, and exact placement may auto-approach using the controlled character's real reach.
 - Do not walk AIRI onto an exact future build coordinate just to place there. place_entity can be issued from build range; the runtime approaches only as close as needed and can step AIRI aside when AIRI's own body is the likely placement blocker.
+- For resource-bound, shoreline-bound, or fluid-port-sensitive placement, call getPlacementCandidates and execute the chosen result with place_candidate {candidate_set_id,candidate_id}. Do not copy candidate coordinates into place_entity; candidate-id execution preserves runtime semantic revalidation.
 - A cancelled batch stops the failing operation and its dependent queued operations. If the receipt says placing:not_placeable, that attempted placement did not create an entity. Never invent a new unit_number or claim that a cancelled placement succeeded; observe the world after a successful placement when a later exact operation needs the new identity.
 - For a bounded local construction batch, use validateConstructionPlan on the exact chosen placements, then execute only the returned validation_id and placement_count with execute_construction_plan. Do not edit coordinates or directions after validation; revalidate instead. A clean completed construction batch is deterministic evidence that every validated placement succeeded.
 - research_technology submission is not completed research; verify the actual technology before depending on it. wait is never proof that a world condition became true. Item transfers may be partial and need relevant verification before depending on an exact quantity.
@@ -38,7 +40,7 @@ Token-efficient continuation rules:
 - Never emit Lua, game.*, shell/console commands, or unapproved operations.
 
 Approved operations and bounded arguments:
-walk_to_entity {entity_name,search_radius}; walk_to_entity_exact {unit_number,reach_distance}; walk_to_position {x,y,reach_distance}; walk_to_player {player_name}; follow_player {player_name,follow_distance}; stop_follow_player {}; set_auto_defense {enabled}; equip_weapon {item_name,slot}; equip_ammo {item_name,slot}; equip_armor {item_name}; select_weapon_slot {slot}; mine_entity {entity_name,count}; mine_entity_exact {unit_number}; mine_resource_at {resource_name,x,y,count}; gather_resource {resource_name,count,search_radius}; supply_entity {unit_number,items:[{item_name,count}]}; execute_construction_plan {validation_id,placement_count}; place_entity {entity_name,x?,y?,direction?}; rotate_entity {unit_number,reverse}; move_items {item_name,entity_name,max_count,to_entity}; move_items_exact {item_name,unit_number,max_count,to_entity}; move_items_with_player {item_name,player_name,max_count,to_player}; set_machine_recipe {unit_number,recipe_name}; craft_item {item_name,count}; attack_nearest_enemy {search_radius}; clear_enemy_area {search_radius}; research_technology {technology_name}; wait {ticks}.
+walk_to_entity {entity_name,search_radius}; walk_to_entity_exact {unit_number,reach_distance}; walk_to_position {x,y,reach_distance}; walk_to_player {player_name}; follow_player {player_name,follow_distance}; stop_follow_player {}; set_auto_defense {enabled}; equip_weapon {item_name,slot}; equip_ammo {item_name,slot}; equip_armor {item_name}; select_weapon_slot {slot}; mine_entity {entity_name,count}; mine_entity_exact {unit_number}; mine_resource_at {resource_name,x,y,count}; gather_resource {resource_name,count,search_radius}; supply_entity {unit_number,items:[{item_name,count}]}; execute_construction_plan {validation_id,placement_count}; place_candidate {candidate_set_id,candidate_id}; place_entity {entity_name,x?,y?,direction?}; rotate_entity {unit_number,reverse}; move_items {item_name,entity_name,max_count,to_entity}; move_items_exact {item_name,unit_number,max_count,to_entity}; move_items_with_player {item_name,player_name,max_count,to_player}; set_machine_recipe {unit_number,recipe_name}; craft_item {item_name,count}; attack_nearest_enemy {search_radius}; clear_enemy_area {search_radius}; research_technology {technology_name}; wait {ticks}.
 
 Return exactly one strict JSON object with exactly these fields:
 {"chatMessage":"","plan":["observable step"],"currentStep":0,"operations":[{"name":"approved_operation","args":{}}]}
@@ -259,6 +261,11 @@ function isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAtte
   if (!allowTools || recoveryAttempt > 0 || !Array.isArray(messages)) return false
   const lastUser = [...messages].reverse().find(message => message?.role === 'user')
   return typeof lastUser?.content === 'string' && lastUser.content.startsWith(COMPLETION_MARKER)
+}
+
+function supportsDisabledThinking(base) {
+  try { return new URL(base).hostname.toLowerCase() === 'api.deepseek.com' }
+  catch { return false }
 }
 
 function topLevelJsonObjectSpans(text) {
@@ -675,6 +682,7 @@ export async function providerRequest(config, messages, {
   signal,
   allowTools = true,
   recoveryAttempt = 0,
+  recoveryKind,
   round,
   epoch,
   actorId,
@@ -686,18 +694,24 @@ export async function providerRequest(config, messages, {
   check(Array.isArray(messages) && messages.length > 0 && messages.length <= 50, 'Invalid provider message history')
   check(typeof allowTools === 'boolean', 'Invalid tool availability flag')
   check(Number.isSafeInteger(recoveryAttempt) && recoveryAttempt >= 0 && recoveryAttempt <= 100, 'Invalid provider recovery attempt')
+  check(recoveryKind === undefined || recoveryKind === 'output_budget_exhaustion', 'Invalid provider recovery kind')
   const timeoutMs = config.timeoutMs ?? 120000
   check(Number.isSafeInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 600000, 'Provider timeout must be an integer from 1000 to 600000 ms')
 
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
   const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
-  const compactContinuation = isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAttempt })
+  const outputBudgetRecovery = recoveryKind === 'output_budget_exhaustion'
+  const compactContinuation = outputBudgetRecovery || isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAttempt })
   const compactedMessages = compactContinuation ? compactCompletionMessages(messages) : messages
+  const disableThinking = compactContinuation && supportsDisabledThinking(config.base)
   const body = {
     model: config.model,
     messages: applySteeringMessages(compactedMessages, messages),
-    max_tokens: compactContinuation ? COMPLETION_MAX_TOKENS : DEFAULT_MAX_TOKENS,
+    max_tokens: compactContinuation
+      ? (disableThinking ? COMPLETION_MAX_TOKENS : FALLBACK_CONTINUATION_MAX_TOKENS)
+      : DEFAULT_MAX_TOKENS,
   }
+  if (disableThinking) body.thinking = { type: 'disabled' }
   if (allowTools) {
     body.tools = compactContinuation ? compactCompletionTools(toolDefinitions) : toolDefinitions
     body.tool_choice = 'auto'
@@ -791,7 +805,7 @@ export async function providerRequest(config, messages, {
       : undefined
     const finishReason = choice?.finish_reason
     const diagnosticCode = finishReason === 'length'
-      ? (rawShape.content_chars === 0 && toolCallCount === 0 ? 'provider_output_truncated_empty_content' : 'provider_output_truncated')
+      ? (rawShape.content_chars === 0 && toolCallCount === 0 ? 'provider_output_budget_exhausted' : 'provider_output_truncated')
       : (rawShape.content_chars === 0 && toolCallCount === 0 ? 'provider_empty_content' : 'ok')
     const providerDiagnostics = {
       response_id: typeof data?.id === 'string' ? data.id : undefined,
@@ -799,6 +813,7 @@ export async function providerRequest(config, messages, {
       finish_reason: finishReason,
       usage: data?.usage && typeof data.usage === 'object' ? data.usage : undefined,
       diagnostic_code: diagnosticCode,
+      output_budget_exhausted: diagnosticCode === 'provider_output_budget_exhausted',
       response_bytes: bytes,
       choice_keys: choice && typeof choice === 'object' ? Object.keys(choice) : [],
       message_keys: Object.keys(message),
