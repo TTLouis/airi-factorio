@@ -6,11 +6,16 @@ import path from 'node:path'
 
 import { providerRequest } from './provider.mjs'
 
-function fakeProviderResponse() {
+function fakeProviderResponse({
+  finishReason = 'stop',
+  message = { role: 'assistant', content: '{}' },
+  usage,
+} = {}) {
   return new Response(JSON.stringify({
     id: 'resp-prompt-trace',
     model: 'test-model',
-    choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '{}' } }],
+    choices: [{ finish_reason: finishReason, message }],
+    ...(usage ? { usage } : {}),
   }), {
     status: 200,
     headers: { 'content-type': 'application/json' },
@@ -22,6 +27,11 @@ const config = {
   key: 'test-key',
   model: 'test-model',
   timeoutMs: 5000,
+}
+
+async function readTrace(filename) {
+  const raw = await fsp.readFile(filename, 'utf8')
+  return raw.trim().split('\n').filter(Boolean).map(JSON.parse)
 }
 
 test('prompt trace records the exact final provider body after continuation compaction and steering', async t => {
@@ -47,26 +57,33 @@ test('prompt trace records the exact final provider body after continuation comp
     round: 6,
     epoch: 3,
     actorId: 18,
+    requestId: 'req-test',
     promptTraceFile,
   })
 
-  const raw = await fsp.readFile(promptTraceFile, 'utf8')
-  const rows = raw.trim().split('\n').map(JSON.parse)
-  assert.equal(rows.length, 1)
-  const row = rows[0]
-  assert.equal(row.round, 6)
-  assert.equal(row.actor_id, 18)
-  assert.equal(row.epoch, 3)
-  assert.equal(row.trigger_source, 'completion')
-  assert.equal(row.recovery_attempt, 0)
-  assert.equal(row.allow_tools, true)
-  assert.deepEqual(row.payload, sentBody)
-  assert.equal(row.stats.body_chars, JSON.stringify(sentBody).length)
-  assert.equal(row.stats.message_count, sentBody.messages.length)
-  assert.equal(row.stats.tool_count, sentBody.tools.length)
-  assert.equal(row.payload.max_tokens, 1000)
-  assert.match(row.payload.messages[0].content, /Token-efficient continuation rules/)
-  assert.ok(row.payload.messages.some(message => typeof message.content === 'string' && message.content.startsWith('[STEERING]')))
+  const rows = await readTrace(promptTraceFile)
+  assert.equal(rows.length, 2)
+  const requestRow = rows.find(row => row.event === 'provider.request')
+  const responseRow = rows.find(row => row.event === 'provider.response')
+  assert.ok(requestRow)
+  assert.ok(responseRow)
+  assert.equal(requestRow.request_id, 'req-test')
+  assert.equal(requestRow.round, 6)
+  assert.equal(requestRow.actor_id, 18)
+  assert.equal(requestRow.epoch, 3)
+  assert.equal(requestRow.trigger_source, 'completion')
+  assert.equal(requestRow.recovery_attempt, 0)
+  assert.equal(requestRow.allow_tools, true)
+  assert.deepEqual(requestRow.payload, sentBody)
+  assert.equal(requestRow.stats.body_chars, JSON.stringify(sentBody).length)
+  assert.equal(requestRow.stats.message_count, sentBody.messages.length)
+  assert.equal(requestRow.stats.tool_count, sentBody.tools.length)
+  assert.equal(requestRow.payload.max_tokens, 1000)
+  assert.match(requestRow.payload.messages[0].content, /Token-efficient continuation rules/)
+  assert.ok(requestRow.payload.messages.some(message => typeof message.content === 'string' && message.content.startsWith('[STEERING]')))
+  assert.equal(responseRow.diagnostic_code, 'ok')
+  assert.equal(responseRow.response_id, 'resp-prompt-trace')
+  assert.equal(responseRow.finish_reason, 'stop')
   assert.equal((await fsp.stat(promptTraceFile)).mode & 0o777, 0o600)
 })
 
@@ -92,7 +109,92 @@ test('prompt trace redacts common secrets without redacting max_tokens', async t
   const raw = await fsp.readFile(promptTraceFile, 'utf8')
   assert.doesNotMatch(raw, /abcdefghijklmnop/)
   assert.match(raw, /\[REDACTED\]/)
-  const row = JSON.parse(raw.trim())
-  assert.equal(row.payload.max_tokens, 2000)
-  assert.equal(row.trigger_source, 'request')
+  const rows = await readTrace(promptTraceFile)
+  const requestRow = rows.find(row => row.event === 'provider.request')
+  assert.ok(requestRow)
+  assert.equal(requestRow.payload.max_tokens, 2000)
+  assert.equal(requestRow.trigger_source, 'request')
+})
+
+test('response trace distinguishes truncated empty content from language or UTF-8 damage', async t => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-provider-diagnostics-'))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  const promptTraceFile = path.join(dir, 'airi-prompts.jsonl')
+  const reasoning = '先分析发电布局，再输出严格 JSON。'.repeat(20)
+  const fetchImpl = async () => fakeProviderResponse({
+    finishReason: 'length',
+    message: {
+      role: 'assistant',
+      content: '',
+      reasoning_content: reasoning,
+    },
+    usage: {
+      prompt_tokens: 13982,
+      completion_tokens: 2000,
+      total_tokens: 15982,
+    },
+  })
+
+  const message = await providerRequest(config, [
+    { role: 'system', content: 'Return strict JSON.' },
+    { role: 'user', content: '[CHAT] TTLouis: 继续搭建发电' },
+  ], {
+    fetchImpl,
+    allowTools: false,
+    recoveryAttempt: 2,
+    round: 5,
+    epoch: 84,
+    actorId: 10,
+    requestId: 'req-length-zero-content',
+    promptTraceFile,
+  })
+
+  assert.equal(message.content, '')
+  assert.equal(message._airiProvider.diagnostic_code, 'provider_output_truncated_empty_content')
+  assert.equal(message._airiProvider.reasoning_content_chars, reasoning.length)
+  assert.equal(message._airiProvider.content_chars, 0)
+  assert.equal(message._airiProvider.content_replacement_chars, 0)
+
+  const rows = await readTrace(promptTraceFile)
+  const responseRow = rows.find(row => row.event === 'provider.response')
+  assert.ok(responseRow)
+  assert.equal(responseRow.request_id, 'req-length-zero-content')
+  assert.equal(responseRow.finish_reason, 'length')
+  assert.equal(responseRow.diagnostic_code, 'provider_output_truncated_empty_content')
+  assert.equal(responseRow.content_chars, 0)
+  assert.equal(responseRow.reasoning_content_chars, reasoning.length)
+  assert.ok(responseRow.message_keys.includes('reasoning_content'))
+  assert.equal(responseRow.structured_content.error, 'empty content')
+})
+
+test('response trace reports malformed provider HTTP JSON without recording its raw body', async t => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-provider-invalid-json-'))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  const promptTraceFile = path.join(dir, 'airi-prompts.jsonl')
+  const fetchImpl = async () => new Response('{"choices":[', {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+
+  await assert.rejects(
+    providerRequest(config, [
+      { role: 'system', content: 'Return strict JSON.' },
+      { role: 'user', content: '[CHAT] TTLouis: test malformed provider response' },
+    ], {
+      fetchImpl,
+      allowTools: false,
+      round: 1,
+      requestId: 'req-malformed-provider-json',
+      promptTraceFile,
+    }),
+    /Provider returned invalid JSON/,
+  )
+
+  const rows = await readTrace(promptTraceFile)
+  const errorRow = rows.find(row => row.event === 'provider.response_error')
+  assert.ok(errorRow)
+  assert.equal(errorRow.diagnostic_code, 'provider_body_invalid_json')
+  assert.match(errorRow.parse_error, /JSON|Unexpected|end/i)
+  assert.equal(errorRow.response_first_nonspace, '{')
+  assert.equal(Object.hasOwn(errorRow, 'response_preview'), false)
 })
