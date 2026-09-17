@@ -76,6 +76,7 @@ type CombatTask = PlayerParametersAttackNearestEnemy & {
   support_stage_start_turret_count?: number
   support_stage_target_turret_count?: number
   support_stage_batch_size?: number
+  support_pressure_preemptions?: number
 }
 
 interface CombatResult {
@@ -454,7 +455,10 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.combat_phase = 'engage'
     task.local_safe_since_tick = undefined
     task.target = target
-    if (is_static_enemy(target)) task.encounter_static_target = target
+    if (is_static_enemy(target)) {
+      if (task.encounter_static_target !== target) task.support_pressure_preemptions = 0
+      task.encounter_static_target = target
+    }
     task.target_name = target.name
     task.target_unit_number = target.unit_number
     task.target_initial_health = target.health ?? undefined
@@ -523,6 +527,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       task.support_stage_start_turret_count = undefined
       task.support_stage_target_turret_count = undefined
       task.support_stage_batch_size = undefined
+      task.support_pressure_preemptions = undefined
       task.initial_static_threats = undefined
       task.initial_threat_score = undefined
       enter_safety(actor, task, 'resume')
@@ -625,6 +630,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     const threat = nearby_mobile_threat(actor, TURRET_DANGER_DISTANCE)
     if (!threat || threat === target) return false
     if (!mobile_threat_requires_preemption(actor, task, threat)) return false
+    if (!task.support_stage_started) task.support_pressure_preemptions = (task.support_pressure_preemptions ?? 0) + 1
     bind_target(actor, task, threat, 'preempted')
     stop_actor_combat(actor)
     return true
@@ -683,12 +689,14 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     // after this placement tick, ordinary panic/preemption handling resumes immediately.
     if (!task.support_stage_started) {
       const origin = task.origin_position ?? actor.position
-      const advanced = distance(actor.position, origin) >= TURRET_MIN_ADVANCE_DISTANCE
+      const advance_distance = distance(actor.position, origin)
+      const advanced = advance_distance >= TURRET_MIN_ADVANCE_DISTANCE
+      const pressure_override = (task.support_pressure_preemptions ?? 0) >= 2
       const staged = distance(actor.position, target.position) <= TURRET_STAGING_DISTANCE
-      if (!advanced || !staged) return false
+      if ((!advanced && !pressure_override) || !staged) return false
       task.support_stage_started = true
       if (!begin_support_stage(actor, task, stage_budget, owned_count)) return false
-      log(`[AUTORIO] Combat support staging established after advancing ${distance(actor.position, origin)} tiles; stage_budget=${stage_budget}`)
+      log(`[AUTORIO] Combat support staging established after advancing ${advance_distance} tiles; pressure_preemptions=${task.support_pressure_preemptions ?? 0}; stage_budget=${stage_budget}`)
     }
     else {
       const stage_target = task.support_stage_target_turret_count ?? owned_count
@@ -1181,6 +1189,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       support_stage_start_turret_count: task?.support_stage_start_turret_count,
       support_stage_target_turret_count: task?.support_stage_target_turret_count,
       support_stage_batch_size: task?.support_stage_batch_size ?? 0,
+      support_pressure_preemptions: task?.support_pressure_preemptions ?? 0,
       last_turret_position: task?.last_turret_position,
       last_turret_unit_number: task?.last_turret_unit_number,
       turret_ammo_name: task?.turret_ammo_name,
