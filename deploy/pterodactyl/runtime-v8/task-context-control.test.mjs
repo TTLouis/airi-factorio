@@ -155,14 +155,16 @@ test('new task clears only the target NPC dialogue and durable plan after cancel
     'ui:clear',
   ])
   assert.equal(memory.currentPlan('npc:airi'), undefined)
-  assert.equal(memory.context('npc:airi'), '')
+  assert.equal(memory.byNpc.has('npc:airi'), false)
+  assert.doesNotMatch(memory.context('npc:airi'), /remember AIRI old context/)
   assert.equal(memory.currentPlan('npc:other')?.goal_id, 'goal_other')
   assert.match(memory.context('npc:other'), /remember other NPC context/)
 
   const restarted = persistentAgent(stateFile)
   await restarted.loadPersistentState()
   assert.equal(restarted.memory.currentPlan('npc:airi'), undefined)
-  assert.equal(restarted.memory.context('npc:airi'), '')
+  assert.equal(restarted.memory.byNpc.has('npc:airi'), false)
+  assert.doesNotMatch(restarted.memory.context('npc:airi'), /remember AIRI old context/)
   assert.equal(restarted.memory.currentPlan('npc:other')?.goal_id, 'goal_other')
   assert.match(restarted.memory.context('npc:other'), /remember other NPC context/)
 })
