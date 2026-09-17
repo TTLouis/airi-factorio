@@ -18,7 +18,15 @@ test('runtime structured policy works with only files copied by the installer', 
     const policy = await import(`${pathToFileURL(path.join(root, 'runtime-v8', 'structured-policy.mjs')).href}?copy-contract=${Date.now()}`)
     assert.ok(policy.toolDefinitions.some(tool => tool.function.name === 'solveProduction'))
     assert.ok(policy.toolDefinitions.some(tool => tool.function.name === 'getTransportCapacity'))
+    assert.ok(policy.toolDefinitions.some(tool => tool.function.name === 'getPlacementCandidates'))
     assert.equal(policy.toolCommand('getActorStatus', {}), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor","status")))')
+    assert.equal(
+      policy.renderOperation({
+        name: 'place_candidate',
+        args: { candidate_set_id: 'placement-4', candidate_id: 'candidate-2' },
+      }),
+      "remote.call('autorio_operations','place_candidate','placement-4','candidate-2')",
+    )
   }
   finally {
     await fsp.rm(root, { recursive: true, force: true })
