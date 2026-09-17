@@ -17,6 +17,7 @@ const COMBAT_PHYSICAL_SAMPLE_TICKS = 30
 const COMBAT_PHYSICAL_PROGRESS_DISTANCE = 0.12
 const DISTANCE_PROGRESS_EPSILON = 0.25
 const MOBILE_THREAT_PRIORITY_RADIUS = 28
+const LOCAL_SAFETY_WINDOW_TICKS = 120
 const KITE_DISTANCE = 12
 const PANIC_DISTANCE = 7
 const LOW_HEALTH_RATIO = 0.35
@@ -45,11 +46,14 @@ const COMBAT_PATH_TARGET_REPATH_DISTANCE = 2
 const COMBAT_RECOVERY_REACHED_DISTANCE = 0.75
 
 type CombatPathMode = 'approach' | 'retreat'
+type CombatPhase = 'engage' | 'safety'
 type CombatCode = 'started' | 'target_destroyed' | 'area_cleared' | 'no_actor' | 'invalid_radius'
   | 'no_target' | 'no_weapon_or_ammo' | 'actor_changed' | 'low_health' | 'stuck' | 'timeout'
   | 'path_unreachable' | 'path_timeout'
 
 type CombatTask = PlayerParametersAttackNearestEnemy & {
+  combat_phase?: CombatPhase
+  local_safe_since_tick?: number
   combat_recovery_position?: { x: number, y: number }
   combat_recovery_stage?: 'escape' | 'repath'
   combat_last_recovery_reason?: string
@@ -238,6 +242,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       owner_force_index: actor.force.index,
       targets_destroyed: 0,
       turrets_placed: 0,
+      combat_phase: 'engage',
       combat_path: null,
       combat_path_attempts: 0,
       started_tick: game.tick,
@@ -338,6 +343,8 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
 
   function bind_target(actor: ControlledActor, task: CombatTask, target: LuaEntity, reason: 'acquired' | 'preempted') {
     if (task.target !== target) clear_combat_path(task, true)
+    task.combat_phase = 'engage'
+    task.local_safe_since_tick = undefined
     task.target = target
     task.target_name = target.name
     task.target_unit_number = target.unit_number
@@ -348,17 +355,12 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     log(`[AUTORIO] Combat target ${reason}: ${result.target_name} unit=${result.target_unit_number ?? 'n/a'} mode=${task.combat_mode ?? 'single'}`)
   }
 
-  function acquire(actor: ControlledActor, task: CombatTask) {
-    const enemies = area_enemies(actor, task)
-    initialize_support_plan(task, enemies)
-    const target = preferred_target(actor, enemies)
-    if (!target) {
-      if (task.combat_mode === 'clear_area') complete_area(actor, task)
-      else fail(actor, task, 'no_target')
-      return false
-    }
-    bind_target(actor, task, target, 'acquired')
-    return true
+  function enter_safety(actor: ControlledActor, task: CombatTask) {
+    clear_combat_path(task, true)
+    task.combat_phase = 'safety'
+    if (task.local_safe_since_tick === undefined) task.local_safe_since_tick = game.tick
+    stop_actor_combat(actor)
+    actor.set_walking_state({ walking: false, direction: defines.direction.north })
   }
 
   function nearby_mobile_threat(actor: ControlledActor) {
@@ -374,6 +376,40 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       }
     }
     return threat
+  }
+
+  function tick_safety(actor: ControlledActor, task: CombatTask) {
+    const immediate_threat = nearby_mobile_threat(actor)
+    if (immediate_threat) {
+      bind_target(actor, task, immediate_threat, 'preempted')
+      return
+    }
+
+    const enemies = area_enemies(actor, task).filter(is_alive)
+    initialize_support_plan(task, enemies)
+    const target = preferred_target(actor, enemies)
+    if (target) {
+      bind_target(actor, task, target, 'acquired')
+      return
+    }
+
+    stop_actor_combat(actor)
+    actor.set_walking_state({ walking: false, direction: defines.direction.north })
+    if (task.local_safe_since_tick === undefined) task.local_safe_since_tick = game.tick
+    if (game.tick - task.local_safe_since_tick >= LOCAL_SAFETY_WINDOW_TICKS) complete_area(actor, task)
+  }
+
+  function acquire(actor: ControlledActor, task: CombatTask) {
+    const enemies = area_enemies(actor, task).filter(is_alive)
+    initialize_support_plan(task, enemies)
+    const target = preferred_target(actor, enemies)
+    if (!target) {
+      if (task.combat_mode === 'clear_area') enter_safety(actor, task)
+      else fail(actor, task, 'no_target')
+      return false
+    }
+    bind_target(actor, task, target, 'acquired')
+    return true
   }
 
   function preempt_static_target_for_mobile_threat(actor: ControlledActor, task: CombatTask) {
@@ -783,6 +819,10 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       fail(actor, task, 'actor_changed')
       return
     }
+    if (task.combat_mode === 'clear_area' && task.combat_phase === 'safety') {
+      tick_safety(actor, task)
+      return
+    }
     if (!task.target && !acquire(actor, task)) return
     if (is_alive(task.target)) preempt_static_target_for_mobile_threat(actor, task)
     const target = task.target
@@ -870,6 +910,8 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       task_active: manager.player_state.task_state === TaskStates.ATTACKING,
       actor: actor?.status_snapshot(),
       mode: task?.combat_mode,
+      combat_phase: task?.combat_phase,
+      local_safe_since_tick: task?.local_safe_since_tick,
       origin_position: task?.origin_position,
       targets_destroyed: task?.targets_destroyed ?? 0,
       turrets_placed: task?.turrets_placed ?? 0,
