@@ -29,6 +29,8 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
       model: 'deepseek-flash',
       finish_reason: 'length',
       diagnostic_code: 'provider_output_truncated_empty_content',
+      content_chars: 0,
+      reasoning_content_chars: 8241,
     },
   }, debug, {
     usage: {
@@ -39,6 +41,10 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
     },
   })
   assert.equal(debug.provider_latency_ms, 10954)
+  assert.equal(debug.provider_diagnostic_code, 'provider_output_truncated_empty_content')
+  assert.equal(debug.provider_finish_reason, 'length')
+  assert.equal(debug.content_chars, 0)
+  assert.equal(debug.reasoning_content_chars, 8241)
   assert.equal(debug.input_units, 13982)
   assert.equal(debug.cached_input_units, 13568)
   assert.equal(debug.output_units, 2000)
@@ -52,7 +58,7 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
 })
 
 test('request failure snapshot wins over transient debug state and remains displayable', () => {
-  const debug = liveAgentDebugEvent('request.failed', {
+  let debug = liveAgentDebugEvent('request.failed', {
     message: 'Provider response recovery exhausted after 3 attempts: Invalid provider content JSON',
     failure_snapshot: {
       request_id: 'req-final',
@@ -67,6 +73,8 @@ test('request failure snapshot wins over transient debug state and remains displ
           model: 'deepseek-flash',
           finish_reason: 'length',
           diagnostic_code: 'provider_output_truncated_empty_content',
+          content_chars: 0,
+          reasoning_content_chars: 9172,
         },
       },
       recovery: { attempt: 3 },
@@ -89,11 +97,23 @@ test('request failure snapshot wins over transient debug state and remains displ
   assert.equal(debug.recovery_attempt, 3)
   assert.equal(debug.provider_model, 'deepseek-flash')
   assert.equal(debug.provider_latency_ms, 10639)
+  assert.equal(debug.provider_diagnostic_code, 'provider_output_truncated_empty_content')
+  assert.equal(debug.provider_finish_reason, 'length')
+  assert.equal(debug.content_chars, 0)
+  assert.equal(debug.reasoning_content_chars, 9172)
   assert.equal(debug.last_tool, 'getEntityGeometry')
   assert.equal(debug.actor_id, 27)
   assert.equal(debug.actor_epoch, 84)
   assert.equal(debug.total_units, 126902)
   assert.match(debug.last_error, /recovery exhausted after 3 attempts/i)
+
+  // Heartbeats/status refreshes must not erase the frozen failure diagnostics.
+  debug = liveAgentDebugEvent('factorio.status', { observation_mode: 'unchanged' }, debug)
+  assert.equal(debug.request_id, 'req-final')
+  assert.equal(debug.provider_diagnostic_code, 'provider_output_truncated_empty_content')
+  assert.equal(debug.provider_finish_reason, 'length')
+  assert.equal(debug.reasoning_content_chars, 9172)
+  assert.equal(debug.last_error, 'Provider response recovery exhausted after 3 attempts: Invalid provider content JSON')
 })
 
 test('task board UI snapshot includes live debug diagnostics', () => {
@@ -123,6 +143,10 @@ test('task board UI snapshot includes live debug diagnostics', () => {
       provider_model: 'deepseek-flash',
       provider_round: 6,
       provider_latency_ms: 10000,
+      provider_diagnostic_code: 'provider_output_truncated_empty_content',
+      provider_finish_reason: 'length',
+      content_chars: 0,
+      reasoning_content_chars: 8123,
       input_units: 100,
       cached_input_units: 80,
       output_units: 20,
@@ -139,6 +163,10 @@ test('task board UI snapshot includes live debug diagnostics', () => {
   const snapshot = taskBoardUiSnapshot(state, live)
   assert.equal(snapshot.debug.request_id, 'req-1')
   assert.equal(snapshot.debug.provider_round, 6)
+  assert.equal(snapshot.debug.provider_diagnostic_code, 'provider_output_truncated_empty_content')
+  assert.equal(snapshot.debug.provider_finish_reason, 'length')
+  assert.equal(snapshot.debug.content_chars, 0)
+  assert.equal(snapshot.debug.reasoning_content_chars, 8123)
   assert.equal(snapshot.debug.recovery_attempt, 3)
   assert.equal(snapshot.debug.last_event, 'request.failed')
 })
