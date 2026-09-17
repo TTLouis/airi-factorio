@@ -306,6 +306,10 @@ describe('combat lifecycle regressions', () => {
     c.enemies.push(pursuer)
     advance(c, 1)
 
+    expect(c.controller.status()).toMatchObject({ target: { unit_number: 92 } })
+    // Preemption binds the mobile target first; retreat planning starts on the
+    // next tick so no stale static-target work leaks across the handoff.
+    advance(c, 1)
     expect(c.controller.status()).toMatchObject({ target: { unit_number: 92 }, path: { mode: 'retreat' } })
     expect(c.surface.request_path).toHaveBeenLastCalledWith(expect.objectContaining({
       start: { x: 6, y: 0 },
