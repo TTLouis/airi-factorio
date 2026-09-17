@@ -190,6 +190,61 @@ test('output-budget recovery keeps the canonical Task Board at the evidenced ste
   assert.equal(agent.messages.some(message => String(message.content ?? '').includes('immediately preceding provider response exhausted its output budget')), false)
 })
 
+test('output-budget recovery rejects replay of a completed mutation before admission and falls through the bounded recovery path', async () => {
+  const canonical = ['Wait for the machine cycle', 'Inspect the result']
+  const calls = []
+  const rcon = new FakeRcon()
+  const agent = makeAgent({
+    rcon,
+    provider: async (messages, context) => {
+      calls.push({ messages, context })
+      if (calls.length === 1) {
+        return planMessage({
+          chatMessage: 'Waiting first.',
+          plan: canonical,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 60 } }],
+        })
+      }
+      if (calls.length === 2) return exhaustedMessage()
+      if (calls.length === 3) {
+        assert.equal(context.allowTools, true)
+        assert.equal(context.recoveryKind, 'output_budget_exhaustion')
+        return planMessage({
+          chatMessage: 'I will wait again.',
+          plan: canonical,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 60 } }],
+        })
+      }
+
+      assert.equal(context.allowTools, false)
+      assert.equal(context.recoveryKind, undefined)
+      const boundedRecoveryContext = messages.map(message => message.content ?? '').join('\n')
+      assert.match(boundedRecoveryContext, /attempted to replay a completed world mutation without fresh tool evidence/)
+      return planMessage({
+        chatMessage: 'I will not replay the completed wait without a fresh observation.',
+        plan: canonical,
+        currentStep: 0,
+        operations: [],
+      })
+    },
+  })
+
+  await agent.request('run the safe two-step check', { sender: 'TTLouis' })
+  assert.equal(rcon.mutations.length, 1)
+
+  const recovered = await agent.completed()
+
+  assert.equal(calls.length, 4)
+  assert.equal(rcon.mutations.length, 1)
+  assert.equal(rcon.mutations.filter(text => text.includes("'wait'")).length, 1)
+  assert.equal(recovered.goalStatus, 'blocked')
+  assert.equal(recovered.taskBoard.status, 'blocked')
+  assert.equal(recovered.taskBoard.active_index, 0)
+  assert.deepEqual(recovered.plan, canonical)
+})
+
 test('empty recovery content cannot retire an active canonical Task Board without evidence', async () => {
   const canonical = ['Wait for the machine cycle', 'Inspect the result', 'Finish']
   const replies = [
