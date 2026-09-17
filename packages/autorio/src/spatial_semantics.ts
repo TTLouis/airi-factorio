@@ -2,6 +2,7 @@ import type { LuaEntity } from 'factorio:runtime'
 
 const MAX_FLUID_STORAGES = 8
 const MAX_PIPE_CONNECTIONS_PER_STORAGE = 8
+const MAX_MINING_RESOURCE_TYPES = 8
 
 function entity_identity(entity: LuaEntity | undefined) {
   if (!entity || !entity.valid) return undefined
@@ -11,6 +12,17 @@ function entity_identity(entity: LuaEntity | undefined) {
     unit_number: entity.unit_number,
     position: entity.position,
   }
+}
+
+function finite(value: number) {
+  return value === value && value !== math.huge && value !== -math.huge
+}
+
+function rotate_cardinal(vector: { x: number, y: number }, direction: number) {
+  if (direction === 4) return { x: -vector.y, y: vector.x }
+  if (direction === 8) return { x: -vector.x, y: -vector.y }
+  if (direction === 12) return { x: vector.y, y: -vector.x }
+  return { x: vector.x, y: vector.y }
 }
 
 function compact_fluidbox_prototype(value: any) {
@@ -91,21 +103,91 @@ function compact_item_io(entity: LuaEntity) {
   return undefined
 }
 
+function mining_radius(prototype: any) {
+  if (typeof prototype?.get_mining_drill_radius === 'function') {
+    const radius = prototype.get_mining_drill_radius()
+    if (typeof radius === 'number' && radius > 0 && finite(radius)) return radius
+  }
+  const radius = prototype?.mining_drill_radius
+  return typeof radius === 'number' && radius > 0 && finite(radius) ? radius : undefined
+}
+
+function mining_offset(prototype: any, direction: number) {
+  const raw = prototype?.radius_visualisation_specification?.offset
+  if (!raw || typeof raw.x !== 'number' || typeof raw.y !== 'number') return { x: 0, y: 0 }
+  if (!finite(raw.x) || !finite(raw.y)) return { x: 0, y: 0 }
+  return rotate_cardinal({ x: raw.x, y: raw.y }, direction)
+}
+
+function mining_categories(prototype: any) {
+  const result: Record<string, boolean> = {}
+  for (const [name, enabled] of pairs(prototype?.resource_categories ?? {})) if (enabled) result[name] = true
+  return result
+}
+
+function compact_mining_coverage(entity: LuaEntity) {
+  if (entity.type !== 'mining-drill') return undefined
+  const prototype: any = entity.prototype
+  const radius = mining_radius(prototype)
+  if (radius === undefined) return undefined
+  const offset = mining_offset(prototype, entity.direction)
+  const center = { x: entity.position.x + offset.x, y: entity.position.y + offset.y }
+  const categories = mining_categories(prototype)
+  const resources = entity.surface.find_entities_filtered({
+    area: [
+      { x: center.x - radius, y: center.y - radius },
+      { x: center.x + radius, y: center.y + radius },
+    ],
+    type: 'resource',
+  })
+
+  const by_name: Record<string, { name: string, entities: number, amount: number }> = {}
+  for (const resource of resources) {
+    if (!resource.valid || resource.type !== 'resource') continue
+    const category = (resource.prototype as any).resource_category
+    if (category !== undefined && categories[category] !== true) continue
+    const amount = typeof resource.amount === 'number' ? resource.amount : 0
+    const existing = by_name[resource.name]
+    if (existing) {
+      existing.entities += 1
+      existing.amount += amount
+    }
+    else {
+      by_name[resource.name] = { name: resource.name, entities: 1, amount }
+    }
+  }
+
+  const coverage: Array<{ name: string, entities: number, amount: number }> = []
+  for (const [, value] of pairs(by_name)) coverage.push(value)
+  coverage.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+  const truncated = coverage.length > MAX_MINING_RESOURCE_TYPES
+  if (truncated) coverage.splice(MAX_MINING_RESOURCE_TYPES)
+  return {
+    radius,
+    search_center: center,
+    resource_coverage: coverage,
+    resource_types_truncated: truncated,
+  }
+}
+
 /**
  * Return only spatial semantics that the running Factorio instance actually
  * exposes for this placed entity. Keep the result compact so nearby scans can
  * include useful geometry without forcing a second LLM observation round.
  *
  * This intentionally does not encode vanilla prototype names or remembered
- * orientation rules. Geometry is read from the current LuaEntity/LuaFluidBox.
+ * orientation rules. Geometry is read from the current LuaEntity/LuaFluidBox
+ * and mining coverage is calculated from the live surface/prototype.
  */
 export function compact_spatial_summary(entity: LuaEntity) {
   const item_io = compact_item_io(entity)
   const fluid = compact_fluid_ports(entity)
-  if (item_io === undefined && fluid === undefined) return undefined
+  const mining = compact_mining_coverage(entity)
+  if (item_io === undefined && fluid === undefined && mining === undefined) return undefined
 
   const result: Record<string, unknown> = {}
   if (item_io !== undefined) result.item_io = item_io
   if (fluid !== undefined) result.fluid = fluid
+  if (mining !== undefined) result.mining = mining
   return result
 }
