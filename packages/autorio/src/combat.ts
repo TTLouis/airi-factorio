@@ -3,6 +3,7 @@ import type { ControlledActor } from './actors/types'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersAttackNearestEnemy } from './types'
 import { plan_placement, select_navigation_escape_point } from './construction_planning'
+import { entity_interaction_reach } from './interaction_range'
 import { TaskStates } from './types'
 import { direction_towards } from './utils/direction'
 import { distance } from './utils/math'
@@ -46,15 +47,18 @@ const COMBAT_PATH_TARGET_REPATH_DISTANCE = 2
 const COMBAT_RECOVERY_REACHED_DISTANCE = 0.75
 
 type CombatPathMode = 'approach' | 'retreat'
-type CombatPhase = 'engage' | 'safety'
+type CombatPhase = 'engage' | 'safety' | 'cleanup'
+type CombatSafetyGoal = 'cleanup' | 'resume'
 type CombatCode = 'started' | 'target_destroyed' | 'area_cleared' | 'no_actor' | 'invalid_radius'
   | 'no_target' | 'no_weapon_or_ammo' | 'actor_changed' | 'low_health' | 'stuck' | 'timeout'
   | 'path_unreachable' | 'path_timeout'
 
 type CombatTask = PlayerParametersAttackNearestEnemy & {
   combat_phase?: CombatPhase
+  combat_safety_goal?: CombatSafetyGoal
   local_safe_since_tick?: number
   encounter_owned_turrets?: LuaEntity[]
+  cleanup_target_unit_number?: number
   combat_recovery_position?: { x: number, y: number }
   combat_recovery_stage?: 'escape' | 'repath'
   combat_last_recovery_reason?: string
@@ -264,6 +268,10 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
   }
 
+  function stop_actor_cleanup(actor: ControlledActor) {
+    actor.set_mining_state({ mining: false })
+  }
+
   function clear_combat_path(task: CombatTask, reset_attempts = false) {
     task.combat_path_mode = undefined
     task.combat_path = null
@@ -305,6 +313,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
 
   function fail(actor: ControlledActor, task: CombatTask, code: CombatCode) {
     stop_actor_combat(actor)
+    stop_actor_cleanup(actor)
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
     record(actor, task, false, false, code)
     manager.cancel_all_tasks()
@@ -313,6 +322,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
 
   function complete_single(actor: ControlledActor, task: CombatTask) {
     stop_actor_combat(actor)
+    stop_actor_cleanup(actor)
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
     record(actor, task, true, true, 'target_destroyed')
     manager.reset_task_state()
@@ -322,6 +332,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
 
   function complete_area(actor: ControlledActor, task: CombatTask) {
     stop_actor_combat(actor)
+    stop_actor_cleanup(actor)
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
     record(actor, task, true, true, 'area_cleared')
     manager.reset_task_state()
@@ -332,6 +343,12 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   function area_enemies(actor: ControlledActor, task: CombatTask) {
     const origin = task.origin_position ?? actor.position
     return actor.surface.find_entities_filtered({ position: origin, radius: task.search_radius, force: 'enemy' })
+  }
+
+  function live_owned_turrets(task: CombatTask) {
+    const owned = (task.encounter_owned_turrets ?? []).filter(entity => entity.valid)
+    task.encounter_owned_turrets = owned
+    return owned
   }
 
   function initialize_support_plan(task: CombatTask, enemies: LuaEntity[]) {
@@ -357,11 +374,13 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     log(`[AUTORIO] Combat target ${reason}: ${result.target_name} unit=${result.target_unit_number ?? 'n/a'} mode=${task.combat_mode ?? 'single'}`)
   }
 
-  function enter_safety(actor: ControlledActor, task: CombatTask) {
+  function enter_safety(actor: ControlledActor, task: CombatTask, goal?: CombatSafetyGoal) {
     clear_combat_path(task, true)
     task.combat_phase = 'safety'
+    task.combat_safety_goal = goal
     if (task.local_safe_since_tick === undefined) task.local_safe_since_tick = game.tick
     stop_actor_combat(actor)
+    stop_actor_cleanup(actor)
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
   }
 
@@ -380,6 +399,51 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return threat
   }
 
+  function enter_cleanup(actor: ControlledActor, task: CombatTask) {
+    clear_combat_path(task, true)
+    task.combat_phase = 'cleanup'
+    task.combat_safety_goal = 'cleanup'
+    task.local_safe_since_tick = undefined
+    task.cleanup_target_unit_number = undefined
+    stop_actor_combat(actor)
+    stop_actor_cleanup(actor)
+    actor.set_walking_state({ walking: false, direction: defines.direction.north })
+  }
+
+  function tick_cleanup(actor: ControlledActor, task: CombatTask) {
+    const owned = live_owned_turrets(task)
+    if (owned.length === 0) {
+      stop_actor_cleanup(actor)
+      task.cleanup_target_unit_number = undefined
+      task.last_turret_position = undefined
+      task.last_turret_unit_number = undefined
+      enter_safety(actor, task, 'resume')
+      return
+    }
+
+    const turret = owned[0]
+    if (task.cleanup_target_unit_number !== turret.unit_number) {
+      stop_actor_cleanup(actor)
+      task.cleanup_target_unit_number = turret.unit_number
+    }
+
+    stop_actor_combat(actor)
+    const reach = entity_interaction_reach(actor)
+    if (distance(actor.position, turret.position) > reach) {
+      stop_actor_cleanup(actor)
+      actor.update_selected_entity(turret.position)
+      actor.set_walking_state({ walking: true, direction: direction_towards(actor.position, turret.position) })
+      return
+    }
+
+    actor.set_walking_state({ walking: false, direction: defines.direction.north })
+    actor.update_selected_entity(turret.position)
+    if (!actor.get_mining_state().mining) {
+      actor.set_mining_state({ mining: true, position: turret.position })
+      log(`[AUTORIO] Combat cleanup mining owned support turret unit=${turret.unit_number ?? 'n/a'} at ${serpent.line(turret.position)}`)
+    }
+  }
+
   function tick_safety(actor: ControlledActor, task: CombatTask) {
     const immediate_threat = nearby_mobile_threat(actor)
     if (immediate_threat) {
@@ -387,18 +451,35 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       return
     }
 
+    stop_actor_combat(actor)
+    stop_actor_cleanup(actor)
+    actor.set_walking_state({ walking: false, direction: defines.direction.north })
+    if (task.local_safe_since_tick === undefined) task.local_safe_since_tick = game.tick
+    if (game.tick - task.local_safe_since_tick < LOCAL_SAFETY_WINDOW_TICKS) return
+
+    if (task.combat_safety_goal === 'cleanup') {
+      enter_cleanup(actor, task)
+      tick_cleanup(actor, task)
+      return
+    }
+
     const enemies = area_enemies(actor, task).filter(is_alive)
     initialize_support_plan(task, enemies)
     const target = preferred_target(actor, enemies)
+    if (task.combat_safety_goal === 'resume') {
+      task.combat_safety_goal = undefined
+      task.local_safe_since_tick = undefined
+      if (target) bind_target(actor, task, target, 'acquired')
+      else complete_area(actor, task)
+      return
+    }
+
     if (target) {
       bind_target(actor, task, target, 'acquired')
       return
     }
 
-    stop_actor_combat(actor)
-    actor.set_walking_state({ walking: false, direction: defines.direction.north })
-    if (task.local_safe_since_tick === undefined) task.local_safe_since_tick = game.tick
-    if (game.tick - task.local_safe_since_tick >= LOCAL_SAFETY_WINDOW_TICKS) complete_area(actor, task)
+    complete_area(actor, task)
   }
 
   function acquire(actor: ControlledActor, task: CombatTask) {
@@ -435,6 +516,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function target_destroyed(actor: ControlledActor, task: CombatTask) {
+    const destroyed_was_static = !!task.target && is_static_enemy(task.target)
     task.targets_destroyed = (task.targets_destroyed ?? 0) + 1
     if (task.combat_mode !== 'clear_area') {
       complete_single(actor, task)
@@ -442,6 +524,10 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     }
     clear_bound_target(task)
     stop_actor_combat(actor)
+    if (destroyed_was_static || live_owned_turrets(task).length > 0 || task.combat_safety_goal === 'cleanup') {
+      enter_safety(actor, task, 'cleanup')
+      return
+    }
     acquire(actor, task)
   }
 
@@ -826,6 +912,10 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       tick_safety(actor, task)
       return
     }
+    if (task.combat_mode === 'clear_area' && task.combat_phase === 'cleanup') {
+      tick_cleanup(actor, task)
+      return
+    }
     if (!task.target && !acquire(actor, task)) return
     if (is_alive(task.target)) preempt_static_target_for_mobile_threat(actor, task)
     const target = task.target
@@ -915,9 +1005,11 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       actor: actor?.status_snapshot(),
       mode: task?.combat_mode,
       combat_phase: task?.combat_phase,
+      combat_safety_goal: task?.combat_safety_goal,
       local_safe_since_tick: task?.local_safe_since_tick,
       encounter_owned_turret_count: encounter_owned_turrets.length,
       encounter_owned_turret_unit_numbers: encounter_owned_turrets.map(entity => entity.unit_number),
+      cleanup_target_unit_number: task?.cleanup_target_unit_number,
       origin_position: task?.origin_position,
       targets_destroyed: task?.targets_destroyed ?? 0,
       turrets_placed: task?.turrets_placed ?? 0,
