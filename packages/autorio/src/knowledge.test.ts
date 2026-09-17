@@ -110,8 +110,8 @@ describe('recipe knowledge', () => {
         expect.objectContaining({ type: 'fluid', name: 'petroleum-gas', amount: 55, fluidbox_index: 3 }),
       ]),
       crafting_machines: [
-        expect.objectContaining({ name: 'refinery-a', crafting_speed: 1 }),
-        expect.objectContaining({ name: 'refinery-z', crafting_speed: 2 }),
+        expect.objectContaining({ name: 'refinery-a', type: 'assembling-machine' }),
+        expect.objectContaining({ name: 'refinery-z', type: 'assembling-machine' }),
       ],
     })
   })
