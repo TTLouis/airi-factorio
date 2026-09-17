@@ -132,7 +132,7 @@ export interface PlayerParametersSetRecipe {
   owner_force_index?: number
   /** Stable Factorio entity identity. Recipe configuration never falls back to a same-name machine. */
   target_unit_number: number
-  /** Exact Factorio recipe prototype name to set on the target assembling machine. */
+  /** Exact Factorio rotate direction: false clockwise, true counter-clockwise. */
   recipe_name: string
 }
 
@@ -157,6 +157,10 @@ export interface PlayerParametersAttackNearestEnemy {
   /** One-shot preserves the original behavior; clear_area keeps reacquiring
    * enemies until the bounded origin area is clear. */
   combat_mode?: 'single' | 'clear_area'
+  /** Runtime lifecycle phase for deterministic clear-area handoff. */
+  combat_phase?: 'engage' | 'safety'
+  /** First tick of the current uninterrupted local-safety window. */
+  local_safe_since_tick?: number
   origin_position?: MapPositionStruct
   target: LuaEntity | null
   owner_actor_id?: number
