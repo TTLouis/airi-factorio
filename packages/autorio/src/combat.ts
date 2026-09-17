@@ -54,6 +54,7 @@ type CombatCode = 'started' | 'target_destroyed' | 'area_cleared' | 'no_actor' |
 type CombatTask = PlayerParametersAttackNearestEnemy & {
   combat_phase?: CombatPhase
   local_safe_since_tick?: number
+  encounter_owned_turrets?: LuaEntity[]
   combat_recovery_position?: { x: number, y: number }
   combat_recovery_stage?: 'escape' | 'repath'
   combat_last_recovery_reason?: string
@@ -243,6 +244,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       targets_destroyed: 0,
       turrets_placed: 0,
       combat_phase: 'engage',
+      encounter_owned_turrets: [],
       combat_path: null,
       combat_path_attempts: 0,
       started_tick: game.tick,
@@ -571,6 +573,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.last_turret_unit_number = turret.unit_number
     task.turret_ammo_name = ammo.name
     task.last_turret_ammo_loaded = inserted_ammo
+    ;(task.encounter_owned_turrets ??= []).push(turret)
     log(`[AUTORIO] Combat support turret ${task.turrets_placed}/${task.support_turret_budget ?? 0} placed at ${serpent.line(position)} unit=${turret.unit_number ?? 'n/a'} with ${inserted_ammo} ${ammo.name}`)
     return true
   }
@@ -906,12 +909,15 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     const actor = get_actor()
     const task = manager.player_state.parameters_attack_nearest_enemy as CombatTask | undefined
     const target = task?.target
+    const encounter_owned_turrets = task?.encounter_owned_turrets?.filter(entity => entity.valid) ?? []
     return {
       task_active: manager.player_state.task_state === TaskStates.ATTACKING,
       actor: actor?.status_snapshot(),
       mode: task?.combat_mode,
       combat_phase: task?.combat_phase,
       local_safe_since_tick: task?.local_safe_since_tick,
+      encounter_owned_turret_count: encounter_owned_turrets.length,
+      encounter_owned_turret_unit_numbers: encounter_owned_turrets.map(entity => entity.unit_number),
       origin_position: task?.origin_position,
       targets_destroyed: task?.targets_destroyed ?? 0,
       turrets_placed: task?.turrets_placed ?? 0,
