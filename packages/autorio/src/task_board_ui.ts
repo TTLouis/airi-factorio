@@ -68,6 +68,7 @@ const BUTTON_SPRITE: SpritePath = 'item/logistic-robot'
 const CLOSE_BUTTON_NAME = 'airi_task_board_close'
 const PAUSE_BUTTON_NAME = 'airi_task_board_pause'
 const TERMINATE_BUTTON_NAME = 'airi_task_board_terminate'
+const NEW_TASK_BUTTON_NAME = 'airi_task_board_new_task'
 const FOLLOW_BUTTON_NAME = 'airi_task_board_follow'
 const PROMPT_FIELD_NAME = 'airi_task_board_prompt'
 const PROMPT_SEND_BUTTON_NAME = 'airi_task_board_prompt_send'
@@ -168,7 +169,7 @@ const PROMPT_SEND_WIDTH = 84
 const PROMPT_FIELD_WIDTH = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 8 - PROMPT_SEND_WIDTH
 const SKILLS_POPOUT_WIDTH = 720
 
-type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow'
+type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow' | 'new_task'
 type TaskBoardUiActivityKind = 'observation' | 'decision' | 'action' | 'result' | 'blocker' | 'system' | 'note'
 type TaskBoardUiAgentPhase = 'idle' | 'thinking' | 'observing' | 'executing' | 'waiting' | 'error'
 type Tone = 'good' | 'info' | 'warn' | 'bad' | 'muted'
@@ -573,7 +574,7 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   compact_button(controls.add({ type: 'button', name: SKILLS_BUTTON_NAME, caption: skills_open ? 'CLOSE' : 'LEARN', style: 'dialog_button', tooltip: skills_open ? 'Close the area learning window.' : 'Open area learning and saved skill candidates in a separate movable window.' }))
   const debug_open = debug_ui.debug_ui_is_open(player.index)
   compact_button(controls.add({ type: 'button', name: debug_ui.DEBUG_BUTTON_NAME, caption: debug_ui.debug_button_caption(player.index), style: debug_open ? 'confirm_button' : 'dialog_button', tooltip: debug_open ? 'Close the AIRI runtime diagnostics window.' : 'Open structured AIRI runtime diagnostics, provider usage, actor state, and UI sync information.' }))
-  controls.add({ type: 'empty-widget' }).style.width = COMPACT_BUTTON_WIDTH
+  compact_button(controls.add({ type: 'button', name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK', style: 'dialog_button', tooltip: "Stop current work and clear this NPC's conversation and durable plan. Learned skills and Factorio world state are kept." }))
   // A blank last_failure is still truthy, which drew a lone warning triangle with
   // no message next to it. Render the row only when there is something to read.
   const issue_text = text(follow?.last_failure ?? '', 100)
@@ -956,6 +957,7 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
   if (element_name === PAUSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); if (storage.airi_task_board_ui?.status === 'paused') emit_resume(player); else emit_control(player, 'pause'); return true }
   if (element_name === TERMINATE_BUTTON_NAME) { if (task_board_ui_terminate_is_armed(player.index, game.tick)) { clear_terminate_confirmation(player.index); emit_control(player, 'terminate') } else { arm_terminate(player.index); render_panel(player) }; return true }
   if (element_name === FOLLOW_BUTTON_NAME) { clear_terminate_confirmation(player.index); const follow = read_follow_status(); emit_control(player, follow?.active ? 'stop_follow' : 'follow'); return true }
+  if (element_name === NEW_TASK_BUTTON_NAME) { clear_terminate_confirmation(player.index); emit_control(player, 'new_task'); return true }
   if (element_name === PROMPT_SEND_BUTTON_NAME) { submit_prompt(player, task_board_ui_prompt_draft(player.index)); return true }
   return false
 }
