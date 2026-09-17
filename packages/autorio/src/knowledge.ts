@@ -71,7 +71,10 @@ function categories_for(recipe: any): string[] {
   const categories: string[] = []
   if (!prototypes.recipe_category || typeof recipe?.has_category !== 'function') return categories
   for (const [, category] of pairs(prototypes.recipe_category)) {
-    if (recipe.has_category(category)) categories.push(category.name)
+    // Pass the stable runtime identifier rather than the prototype object. Factorio's
+    // RecipeCategoryID boundary accepts the category name directly and this avoids
+    // Lua/TSTL wrapper identity mismatches seen in real runtime RCON calls.
+    if (recipe.has_category(category.name)) categories.push(category.name)
   }
   sort_strings(categories)
   return categories
