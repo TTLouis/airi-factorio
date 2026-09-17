@@ -171,8 +171,8 @@ test('authorized dependency batch admits every operation in one RCON/Lua transac
   const first = rcon.commands[0].indexOf('autorio_operations","mine_entity"')
   const second = rcon.commands[0].indexOf('autorio_operations","wait"')
   assert.ok(first >= 0 && second > first)
-  assert.match(rcon.commands[0], /local r1=remote\.call/)
-  assert.match(rcon.commands[0], /local r2=remote\.call/)
+  assert.match(rcon.commands[0], /local ok1,r1=pcall\(function\(\) return remote\.call/)
+  assert.match(rcon.commands[0], /local ok2,r2=pcall\(function\(\) return remote\.call/)
   assert.match(rcon.commands[0], /type\(r1\)=="table" and r1\[1\]==false/)
 })
 
