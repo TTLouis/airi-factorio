@@ -181,7 +181,6 @@ test('getNearbyEntities preserves spatial semantics in full snapshots and diffs'
   const firstSpatial = {
     item_io: {
       drop_position: { x: 4.5, y: 5.5 },
-      drop_target: undefined,
     },
     mining: {
       search_center: { x: 4.5, y: 4.5 },
