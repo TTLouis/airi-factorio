@@ -28,7 +28,7 @@ const config = {
   timeoutMs: 5000,
 }
 
-test('successful operation completion uses compact system prompt, plan state and lower output budget', async () => {
+test('successful operation completion uses compact context and bounded fallback output budget', async () => {
   let body
   const fetchImpl = async (_url, options) => {
     body = JSON.parse(options.body)
@@ -84,7 +84,7 @@ test('successful operation completion uses compact system prompt, plan state and
     { role: 'user', content: `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt)}` },
   ], { fetchImpl, allowTools: true, recoveryAttempt: 0 })
 
-  assert.equal(body.max_tokens, 1000)
+  assert.equal(body.max_tokens, 4000)
   assert.notEqual(body.messages[0].content, 'FULL SYSTEM PROMPT '.repeat(500))
   assert.match(body.messages[0].content, /Token-efficient continuation rules/)
   assert.match(body.messages[0].content, /deterministic_verification/)
