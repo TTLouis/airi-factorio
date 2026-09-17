@@ -1,5 +1,6 @@
-import type { LuaEntity, UnitNumber } from 'factorio:runtime'
+import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
+import { resolve_exact_entity } from './entity_reference'
 
 const MAX_RECIPE_MATCHES = 8
 const MAX_MACHINE_MATCHES = 32
@@ -278,7 +279,7 @@ export function entity_geometry_for_actor(actor: ControlledActor, unit_number: n
     }
   }
 
-  const entity = game.get_entity_by_unit_number(unit_number as UnitNumber)
+  const entity = resolve_exact_entity(actor, unit_number)
   if (!entity || !entity.valid) {
     return {
       found: false,
@@ -339,7 +340,7 @@ export function logistics_topology_for_actor(actor: ControlledActor, unit_number
     return { found: false, unit_number, radius, error: `radius must be an integer from 1 to ${MAX_TOPOLOGY_RADIUS}` }
   }
 
-  const center = game.get_entity_by_unit_number(unit_number as UnitNumber)
+  const center = resolve_exact_entity(actor, unit_number)
   if (!center || !center.valid) return { found: false, unit_number, error: 'entity not found' }
   if (center.surface.index !== actor.surface.index) return { found: false, unit_number, error: 'entity is on another surface' }
 
