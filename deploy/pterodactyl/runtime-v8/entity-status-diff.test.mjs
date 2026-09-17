@@ -20,24 +20,25 @@ function deployment() {
   }
 }
 
-function entityStatus(unitNumber, inventoryCount) {
+function entityStatus(unitNumber, inventoryCount, overrides = {}) {
   return {
     found: true,
     actor_position: { x: 0, y: 0 },
     radius: 8,
     entity: {
-      name: 'assembling-machine-1',
-      type: 'assembling-machine',
-      position: { x: 4.5, y: 2.5 },
+      name: overrides.name ?? 'assembling-machine-1',
+      type: overrides.type ?? 'assembling-machine',
+      position: overrides.position ?? { x: 4.5, y: 2.5 },
       force: 'player',
       unit_number: unitNumber,
-      direction: 4,
+      direction: overrides.direction ?? 4,
       supports_direction: true,
       rotatable: true,
-      recipe: 'electronic-circuit',
+      ...(overrides.recipe === null ? {} : { recipe: overrides.recipe ?? 'electronic-circuit' }),
       inventories: [{ index: 1, items: [{ name: 'iron-plate', quality: 'normal', count: inventoryCount }] }],
       inventories_truncated: false,
       inventory_items_truncated: false,
+      ...(overrides.spatial === undefined ? {} : { spatial: overrides.spatial }),
     },
   }
 }
@@ -72,13 +73,13 @@ class FakeRcon {
   }
 }
 
-function entityTool(id) {
+function entityTool(id, name = 'assembling-machine-1') {
   return {
     content: null,
     tool_calls: [{
       id,
       type: 'function',
-      function: { name: 'getEntityStatus', arguments: '{"name":"assembling-machine-1","radius":8}' },
+      function: { name: 'getEntityStatus', arguments: JSON.stringify({ name, radius: 8 }) },
     }],
   }
 }
@@ -98,13 +99,13 @@ function toolResult(messages, id) {
   return messages.find(message => message.role === 'tool' && message.tool_call_id === id)
 }
 
-async function runTwoObservations(statuses) {
+async function runTwoObservations(statuses, name = 'assembling-machine-1') {
   const rcon = new FakeRcon(statuses)
   const providerInputs = []
   const replies = [
-    entityTool('entity-first'),
+    entityTool('entity-first', name),
     planMessage([{ name: 'wait', args: { ticks: 1 } }], 'Wait once.'),
-    entityTool('entity-second'),
+    entityTool('entity-second', name),
     planMessage([], 'Done.'),
   ]
   const agent = new NpcAgentLoop({
@@ -118,7 +119,7 @@ async function runTwoObservations(statuses) {
     },
   })
 
-  await agent.request('observe the assembler twice', { sender: 'TTLouis' })
+  await agent.request('observe the machine twice', { sender: 'TTLouis' })
   assert.equal(rcon.entityReads, 1)
   const final = await agent.completed()
   assert.equal(final.chatMessage, '[Plan complete] Done.')
@@ -148,6 +149,50 @@ test('getEntityStatus keeps a bounded continuation baseline and returns a live d
   assert.equal(second.reference, 'entity:101')
   assert.equal(second.changes.entity.inventories[0].items[0].count, 12)
   assert.equal(second.entity, undefined)
+})
+
+test('getEntityStatus preserves miner spatial semantics across full and diff observations', async () => {
+  const firstSpatial = {
+    item_io: {
+      drop_position: { x: 4.5, y: 5.5 },
+    },
+    mining: {
+      search_center: { x: 4.5, y: 4.5 },
+      radius: 1.5,
+      resources: [{ name: 'modded-ore', entities: 8, amount: 8200 }],
+    },
+  }
+  const secondSpatial = {
+    item_io: {
+      drop_position: { x: 4.5, y: 5.5 },
+      drop_target: {
+        name: 'modded-chest',
+        type: 'container',
+        unit_number: 202,
+        position: { x: 4.5, y: 5.5 },
+      },
+    },
+    mining: {
+      ...firstSpatial.mining,
+      resources: [{ name: 'modded-ore', entities: 7, amount: 7350 }],
+    },
+  }
+
+  const { providerInputs } = await runTwoObservations([
+    entityStatus(201, 0, { name: 'modded-miner', type: 'mining-drill', recipe: null, spatial: firstSpatial }),
+    entityStatus(201, 0, { name: 'modded-miner', type: 'mining-drill', recipe: null, spatial: secondSpatial }),
+  ], 'modded-miner')
+
+  const first = JSON.parse(toolResult(providerInputs[1], 'entity-first').content)
+  assert.deepEqual(first.entity.spatial, firstSpatial)
+
+  const continuation = providerInputs[2].map(message => String(message.content ?? '')).join('\n')
+  assert.match(continuation, /modded-ore/)
+  assert.match(continuation, /drop_position/)
+
+  const second = JSON.parse(toolResult(providerInputs[3], 'entity-second').content)
+  assert.equal(second.observation_mode, 'diff')
+  assert.deepEqual(second.changes.entity.spatial, secondSpatial)
 })
 
 test('getEntityStatus returns unchanged only after a second live read confirms the same snapshot', async () => {
