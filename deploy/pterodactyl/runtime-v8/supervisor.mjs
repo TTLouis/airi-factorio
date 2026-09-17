@@ -382,6 +382,10 @@ function emptyAgentDebug(fallback = {}) {
     provider_model: uiText(fallback.provider_model, 160),
     provider_round: 0,
     provider_latency_ms: 0,
+    provider_diagnostic_code: '',
+    provider_finish_reason: '',
+    content_chars: 0,
+    reasoning_content_chars: 0,
     input_units: 0,
     cached_input_units: 0,
     output_units: 0,
@@ -429,6 +433,10 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
     debug.provider_latency_ms = debugInteger(providerEvent.latency_ms ?? debug.provider_latency_ms)
     debug.recovery_attempt = debugInteger(providerEvent.recovery_attempt ?? debug.recovery_attempt)
     debug.provider_model = uiText(provider?.model ?? fallback.provider_model ?? debug.provider_model, 160)
+    debug.provider_diagnostic_code = uiText(provider?.diagnostic_code ?? debug.provider_diagnostic_code, 160)
+    debug.provider_finish_reason = uiText(provider?.finish_reason ?? debug.provider_finish_reason, 80)
+    debug.content_chars = debugInteger(provider?.content_chars ?? debug.content_chars)
+    debug.reasoning_content_chars = debugInteger(provider?.reasoning_content_chars ?? debug.reasoning_content_chars)
     const diagnostic = uiText(provider?.diagnostic_code, 160)
     if (diagnostic && diagnostic !== 'ok') {
       const finish = uiText(provider?.finish_reason, 80)
