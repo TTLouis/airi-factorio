@@ -149,6 +149,18 @@ function product_summary(product: any) {
   }
 }
 
+function ingredient_summaries(recipe: any) {
+  const result: Array<Record<string, unknown>> = []
+  for (const ingredient of recipe.ingredients ?? []) result.push(ingredient_summary(ingredient))
+  return result
+}
+
+function product_summaries(recipe: any) {
+  const result: Array<Record<string, unknown>> = []
+  for (const product of recipe.products ?? []) result.push(product_summary(product))
+  return result
+}
+
 function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
@@ -286,8 +298,8 @@ export function recipe_details_for_actor(actor: ControlledActor, item_or_recipe:
         categories,
         hand_craftable_category: character_can_craft(actor, categories),
         hidden_from_player_crafting: recipe.prototype?.hidden_from_player_crafting,
-        ingredients: recipe.ingredients.map(ingredient_summary),
-        products: recipe.products.map(product_summary),
+        ingredients: ingredient_summaries(recipe),
+        products: product_summaries(recipe),
         crafting_machine_count: machine_result.matched_count,
         crafting_machines: machine_result.machines,
         crafting_machines_truncated: machine_result.truncated,

@@ -86,4 +86,16 @@ describe('recipe details use Factorio 2.0 recipe category fields', () => {
     expect(result.recipes[0].ingredients[0]).toMatchObject({ name: 'iron-plate', amount: 1 })
     expect(result.recipes[0].products[0]).toMatchObject({ name: 'iron-gear-wheel', amount: 1 })
   })
+
+  it('does not require JavaScript map methods on runtime recipe ingredient/product arrays', () => {
+    const runtimeRecipe = recipe('runtime-array-shape', 'runtime-array-shape') as any
+    runtimeRecipe.ingredients.map = undefined
+    runtimeRecipe.products.map = undefined
+    const actor = actorWithRecipes({ 'runtime-array-shape': runtimeRecipe })
+
+    const result = recipe_details_for_actor(actor, 'runtime-array-shape')
+    expect(result.found).toBe(true)
+    expect(result.recipes[0].ingredients).toEqual([{ type: 'item', name: 'iron-plate', amount: 1 }])
+    expect(result.recipes[0].products).toEqual([{ type: 'item', name: 'runtime-array-shape', amount: 1 }])
+  })
 })
