@@ -586,6 +586,45 @@ function accumulateProviderUsage(summary, usage) {
   summary.total_units += usage.total_units
 }
 
+function compactProviderMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined
+  const structured = metadata.structured_content && typeof metadata.structured_content === 'object'
+    ? {
+        json_valid: metadata.structured_content.json_valid,
+        plan_valid: metadata.structured_content.plan_valid,
+        error: cleanMemoryText(metadata.structured_content.error, 800),
+      }
+    : undefined
+  return {
+    response_id: metadata.response_id,
+    model: metadata.model,
+    finish_reason: metadata.finish_reason,
+    diagnostic_code: metadata.diagnostic_code,
+    response_bytes: finiteNonNegative(metadata.response_bytes),
+    content_chars: finiteNonNegative(metadata.content_chars),
+    content_utf8_bytes: finiteNonNegative(metadata.content_utf8_bytes),
+    content_non_ascii_chars: finiteNonNegative(metadata.content_non_ascii_chars),
+    content_replacement_chars: finiteNonNegative(metadata.content_replacement_chars),
+    normalized_content_chars: finiteNonNegative(metadata.normalized_content_chars),
+    reasoning_content_chars: finiteNonNegative(metadata.reasoning_content_chars),
+    tool_call_count: finiteNonNegative(metadata.tool_call_count),
+    structured_content: structured,
+    content_preview: typeof metadata.content_preview === 'string' ? metadata.content_preview.slice(0, 1200) : undefined,
+  }
+}
+
+function compactPlanFailureState(state) {
+  if (!state || typeof state !== 'object') return undefined
+  return {
+    goal_id: state.goal_id,
+    status: state.status,
+    blocker: cleanMemoryText(state.blocker, 300),
+    revision: state.revision,
+    current_step: state.current_step,
+    current_step_text: currentPlanStep(state.plan, state.current_step),
+  }
+}
+
 function compactTaskBatch(batch) {
   if (!batch || typeof batch !== 'object' || Array.isArray(batch)) return undefined
   return {
@@ -732,6 +771,24 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     return this.requestInfo?.memoryKey ?? this.lastMemoryKey ?? `npc:${this.npcId}`
   }
 
+  failureSnapshot(stage, message) {
+    const request = this.traceRequest
+    const planState = this.memory.currentPlan?.(this.activePlanKey())
+    return {
+      stage,
+      message: cleanMemoryText(message, 2000),
+      request_id: request?.id,
+      turn: request ? this.continuations + 1 : undefined,
+      actor_id: this.epoch?.actor_id,
+      epoch: this.epoch?.epoch,
+      provider: request?.last_provider_event,
+      recovery: request?.recovery,
+      last_tool: request?.last_tool,
+      plan: compactPlanFailureState(planState),
+      usage: request?.usage,
+    }
+  }
+
   async request(text, options = {}) {
     await this.loadPersistentState()
     this.lastMemoryKey = `npc:${this.npcId}`
@@ -752,10 +809,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     catch (error) {
       if (this.traceRequest) {
+        const message = error instanceof Error ? error.message : String(error)
         await this.traceEvent('request.failed', {
           stage: 'bind',
-          message: error instanceof Error ? error.message : String(error),
+          message,
           usage: this.traceRequest.usage,
+          failure_snapshot: this.failureSnapshot('bind', message),
         })
         this.traceRequest = null
       }
@@ -801,10 +860,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     catch (error) {
       if (this.traceRequest) {
+        const message = error instanceof Error ? error.message : String(error)
         await this.traceEvent('request.failed', {
           stage: 'runtime',
-          message: error instanceof Error ? error.message : String(error),
+          message,
           usage: this.traceRequest.usage,
+          failure_snapshot: this.failureSnapshot('runtime', message),
         })
         this.traceRequest = null
       }
@@ -950,6 +1011,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.providerAbort = controller
     const providerMessages = this.providerMessages()
     const startedAt = Date.now()
+    if (recoveryAttempt > 0 && this.traceRequest) {
+      this.traceRequest.recovery = {
+        ...(this.traceRequest.recovery ?? {}),
+        attempt: recoveryAttempt,
+        round,
+      }
+    }
     await this.traceEvent('provider.request', {
       round,
       trigger_source: this.planUpdateReason,
@@ -970,32 +1038,34 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
       const usage = normalizedProviderUsage(message?._airiProvider?.usage)
       accumulateProviderUsage(this.traceRequest?.usage, usage)
-      await this.traceEvent('provider.response', {
+      const responseTrace = {
+        kind: 'response',
         round,
         trigger_source: this.planUpdateReason,
+        recovery_attempt: recoveryAttempt,
         latency_ms: Date.now() - startedAt,
         has_tool_calls: message?.tool_calls !== undefined,
         content_chars: typeof message?.content === 'string' ? message.content.length : 0,
         usage,
-        provider: message?._airiProvider
-          ? {
-              response_id: message._airiProvider.response_id,
-              model: message._airiProvider.model,
-              finish_reason: message._airiProvider.finish_reason,
-            }
-          : undefined,
-      })
+        provider: compactProviderMetadata(message?._airiProvider),
+      }
+      if (this.traceRequest) this.traceRequest.last_provider_event = responseTrace
+      await this.traceEvent('provider.response', responseTrace)
     }
     catch (error) {
       const messageText = error instanceof Error ? error.message : String(error)
-      await this.traceEvent('provider.error', {
+      const errorTrace = {
+        kind: 'error',
         round,
         trigger_source: this.planUpdateReason,
+        recovery_attempt: recoveryAttempt,
         latency_ms: Date.now() - startedAt,
         message: messageText,
         timeout: /timed out/i.test(messageText),
         cancelled: /cancelled/i.test(messageText),
-      })
+      }
+      if (this.traceRequest) this.traceRequest.last_provider_event = errorTrace
+      await this.traceEvent('provider.error', errorTrace)
       throw error
     }
     finally {
@@ -1025,12 +1095,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         this.traceRequest.usage.tool_calls++
         if (cachedBefore[index]) this.traceRequest.usage.duplicate_tool_calls++
       }
-      await this.traceEvent('tool.call', {
+      const toolTrace = {
+        phase: 'call',
         tool_call_id: entry.tool.id,
         name: entry.tool.function.name,
         args: entry.args,
         cached: cachedBefore[index],
-      })
+      }
+      if (this.traceRequest) this.traceRequest.last_tool = toolTrace
+      await this.traceEvent('tool.call', toolTrace)
     }
     const beforeCount = this.messages.length
     try {
@@ -1046,14 +1119,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       if (cachedBefore[index]) results[index].content = DUPLICATE_OBSERVATION_MESSAGE
       const output = String(results[index].content ?? '')
       if (this.traceRequest?.usage) this.traceRequest.usage.tool_result_chars += output.length
-      await this.traceEvent('tool.result', {
+      const toolTrace = {
+        phase: 'result',
         tool_call_id: prepared[index]?.tool.id,
         name: prepared[index]?.tool.function.name,
         cached: cachedBefore[index],
         original_output_chars: original.length,
         output_chars: output.length,
-        output,
-      })
+      }
+      if (this.traceRequest) this.traceRequest.last_tool = toolTrace
+      await this.traceEvent('tool.result', { ...toolTrace, output })
     }
     this.compactWorkingContext()
   }
@@ -1150,10 +1225,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   async recoverPlan(generation, reason, roundBase) {
-    await this.traceEvent('replan.started', {
+    const recovery = {
       reason: reason instanceof Error ? reason.message : String(reason),
       round_base: roundBase,
-    })
+      attempt: 0,
+    }
+    if (this.traceRequest) this.traceRequest.recovery = recovery
+    await this.traceEvent('replan.started', recovery)
     return super.recoverPlan(generation, reason, roundBase)
   }
 }
