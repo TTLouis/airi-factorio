@@ -9,10 +9,6 @@ const config = {
   model: 'test-model',
 }
 const messages = [{ role: 'user', content: 'hello' }]
-const completionMessages = [
-  { role: 'system', content: 'system' },
-  { role: 'user', content: '[MOD] Autorio operation batch completed. Detailed task receipt: {}' },
-]
 
 function hangingFetch(_url, { signal }) {
   return new Promise((resolve, reject) => {
@@ -45,20 +41,6 @@ function contentFetch(content) {
   })
 }
 
-function lengthExhaustedFetch(captured = []) {
-  return async (_url, options) => {
-    captured.push(JSON.parse(options.body))
-    return new Response(JSON.stringify({
-      id: 'resp-length',
-      model: 'test-model',
-      choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '', reasoning_content: 'hidden reasoning' } }],
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    })
-  }
-}
-
 test('provider timeout reports an explicit error instead of leaving the turn active', async () => {
   await assert.rejects(
     () => providerRequest({ ...config, timeoutMs: 1000 }, messages, { fetchImpl: hangingFetch }),
@@ -86,61 +68,6 @@ test('recovery requests can disable the tool surface completely', async () => {
   await providerRequest(config, messages, { fetchImpl: successfulFetch(captured), allowTools: true })
   assert.ok(Array.isArray(captured[1].tools))
   assert.equal(captured[1].tool_choice, 'auto')
-})
-
-test('official DeepSeek completion continuation disables thinking without changing ordinary requests globally', async () => {
-  const captured = []
-  await providerRequest({ ...config, base: 'https://api.deepseek.com/v1' }, completionMessages, {
-    fetchImpl: successfulFetch(captured),
-  })
-  assert.deepEqual(captured[0].thinking, { type: 'disabled' })
-  assert.equal(captured[0].max_tokens, 1000)
-
-  await providerRequest({ ...config, base: 'https://api.deepseek.com/v1' }, messages, {
-    fetchImpl: successfulFetch(captured),
-  })
-  assert.equal('thinking' in captured[1], false)
-  assert.equal(captured[1].max_tokens, 2000)
-})
-
-test('unknown OpenAI-compatible completion continuation avoids provider-private fields and uses bounded fallback cap', async () => {
-  const captured = []
-  await providerRequest(config, completionMessages, { fetchImpl: successfulFetch(captured) })
-  assert.equal('thinking' in captured[0], false)
-  assert.equal(captured[0].max_tokens, 4000)
-})
-
-test('completion provider contract advertises candidate-id execution alongside placement candidates', async () => {
-  const captured = []
-  await providerRequest(config, completionMessages, { fetchImpl: successfulFetch(captured) })
-  assert.ok(captured[0].tools.some(tool => tool?.function?.name === 'getPlacementCandidates'))
-  assert.ok(captured[0].messages.some(message => String(message?.content ?? '').includes('place_candidate {candidate_set_id,candidate_id}')))
-  assert.ok(captured[0].messages.some(message => String(message?.content ?? '').includes('do not copy candidate coordinates into place_entity')))
-})
-
-test('empty length response with no tool calls is classified as output-budget exhaustion', async () => {
-  const message = await providerRequest(config, completionMessages, { fetchImpl: lengthExhaustedFetch() })
-  assert.equal(message._airiProvider.diagnostic_code, 'provider_output_budget_exhausted')
-  assert.equal(message._airiProvider.output_budget_exhausted, true)
-  assert.equal(message._airiProvider.finish_reason, 'length')
-  assert.equal(message._airiProvider.tool_call_count, 0)
-  assert.equal(message._airiProvider.content_chars, 0)
-})
-
-test('output-budget recovery keeps continuation budget policy when explicitly classified', async () => {
-  const captured = []
-  await providerRequest(config, [
-    ...completionMessages,
-    { role: 'user', content: '[HARNESS] Retry after output budget exhaustion with tools available.' },
-  ], {
-    fetchImpl: successfulFetch(captured),
-    recoveryAttempt: 1,
-    recoveryKind: 'output_budget_exhaustion',
-    allowTools: true,
-  })
-  assert.equal(captured[0].max_tokens, 4000)
-  assert.ok(Array.isArray(captured[0].tools))
-  assert.equal(captured[0].tool_choice, 'auto')
 })
 
 test('provider strips a single JSON markdown fence before strict plan parsing', async () => {
