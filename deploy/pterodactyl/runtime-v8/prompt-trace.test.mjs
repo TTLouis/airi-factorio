@@ -78,7 +78,7 @@ test('prompt trace records the exact final provider body after continuation comp
   assert.equal(requestRow.stats.body_chars, JSON.stringify(sentBody).length)
   assert.equal(requestRow.stats.message_count, sentBody.messages.length)
   assert.equal(requestRow.stats.tool_count, sentBody.tools.length)
-  assert.equal(requestRow.payload.max_tokens, 1000)
+  assert.equal(requestRow.payload.max_tokens, 4000)
   assert.match(requestRow.payload.messages[0].content, /Token-efficient continuation rules/)
   assert.ok(requestRow.payload.messages.some(message => typeof message.content === 'string' && message.content.startsWith('[STEERING]')))
   assert.equal(responseRow.diagnostic_code, 'ok')
@@ -116,7 +116,7 @@ test('prompt trace redacts common secrets without redacting max_tokens', async t
   assert.equal(requestRow.trigger_source, 'request')
 })
 
-test('response trace distinguishes truncated empty content from language or UTF-8 damage', async t => {
+test('response trace distinguishes output-budget exhaustion from language or UTF-8 damage', async t => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-provider-diagnostics-'))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
   const promptTraceFile = path.join(dir, 'airi-prompts.jsonl')
@@ -150,7 +150,8 @@ test('response trace distinguishes truncated empty content from language or UTF-
   })
 
   assert.equal(message.content, '')
-  assert.equal(message._airiProvider.diagnostic_code, 'provider_output_truncated_empty_content')
+  assert.equal(message._airiProvider.diagnostic_code, 'provider_output_budget_exhausted')
+  assert.equal(message._airiProvider.output_budget_exhausted, true)
   assert.equal(message._airiProvider.reasoning_content_chars, reasoning.length)
   assert.equal(message._airiProvider.content_chars, 0)
   assert.equal(message._airiProvider.content_replacement_chars, 0)
@@ -160,7 +161,7 @@ test('response trace distinguishes truncated empty content from language or UTF-
   assert.ok(responseRow)
   assert.equal(responseRow.request_id, 'req-length-zero-content')
   assert.equal(responseRow.finish_reason, 'length')
-  assert.equal(responseRow.diagnostic_code, 'provider_output_truncated_empty_content')
+  assert.equal(responseRow.diagnostic_code, 'provider_output_budget_exhausted')
   assert.equal(responseRow.content_chars, 0)
   assert.equal(responseRow.reasoning_content_chars, reasoning.length)
   assert.ok(responseRow.message_keys.includes('reasoning_content'))
