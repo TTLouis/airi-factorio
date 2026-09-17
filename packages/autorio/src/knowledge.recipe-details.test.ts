@@ -11,7 +11,10 @@ function recipe(name: string, product: string, category = 'crafting') {
     ingredients: [{ type: 'item', name: 'iron-plate', amount: 1 }],
     products: [{ type: 'item', name: product, amount: 1 }],
     prototype: { hidden_from_player_crafting: false },
-    has_category: (candidate: any) => (typeof candidate === 'string' ? candidate : candidate?.name) === category,
+    has_category: (candidate: any) => {
+      if (typeof candidate !== 'string') throw new Error('Factorio runtime category IDs must cross this boundary as strings')
+      return candidate === category
+    },
   }
 }
 
