@@ -603,11 +603,28 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return true
   }
 
+  function support_covers_mobile_threat(task: CombatTask, threat: LuaEntity) {
+    for (const support of live_owned_turrets(task)) {
+      const turret_range = support.prototype.turret_range
+      if (typeof turret_range !== 'number' || turret_range <= 0) continue
+      if (distance(support.position, threat.position) <= turret_range) return true
+    }
+    return false
+  }
+
+  function mobile_threat_requires_preemption(actor: ControlledActor, task: CombatTask, threat: LuaEntity) {
+    const character = actor.character
+    if (!character || health_ratio(character) <= LOW_HEALTH_RATIO) return true
+    if (distance(actor.position, threat.position) <= PANIC_DISTANCE) return true
+    return !support_covers_mobile_threat(task, threat)
+  }
+
   function preempt_static_target_for_mobile_threat(actor: ControlledActor, task: CombatTask) {
     const target = task.target
     if (task.combat_mode !== 'clear_area' || !target || !is_alive(target) || !is_static_enemy(target)) return false
     const threat = nearby_mobile_threat(actor, TURRET_DANGER_DISTANCE)
     if (!threat || threat === target) return false
+    if (!mobile_threat_requires_preemption(actor, task, threat)) return false
     bind_target(actor, task, threat, 'preempted')
     stop_actor_combat(actor)
     return true
