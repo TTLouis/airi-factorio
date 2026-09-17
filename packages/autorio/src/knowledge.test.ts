@@ -19,6 +19,7 @@ function recipe(name: string, options: {
     hidden: false,
     energy: options.energy,
     categories: options.categories,
+    has_category: (category: string) => options.categories.includes(category),
     ingredients: options.ingredients,
     products: options.products,
     prototype: {
@@ -30,9 +31,14 @@ function recipe(name: string, options: {
 describe('recipe knowledge', () => {
   const originalPairs = (globalThis as any).pairs
   const originalGetEntityFiltered = (globalThis as any).prototypes.get_entity_filtered
+  const originalRecipeCategory = (globalThis as any).prototypes.recipe_category
 
   beforeEach(() => {
     ;(globalThis as any).pairs = luaPairs
+    ;(globalThis as any).prototypes.recipe_category = {
+      crafting: { name: 'crafting' },
+      'oil-processing': { name: 'oil-processing' },
+    }
     ;(globalThis as any).prototypes.get_entity_filtered = (filters: Array<Record<string, unknown>>) => {
       const category = filters[0]?.crafting_category
       if (category === 'oil-processing') {
@@ -64,6 +70,7 @@ describe('recipe knowledge', () => {
 
   afterEach(() => {
     ;(globalThis as any).pairs = originalPairs
+    ;(globalThis as any).prototypes.recipe_category = originalRecipeCategory
     ;(globalThis as any).prototypes.get_entity_filtered = originalGetEntityFiltered
   })
 
