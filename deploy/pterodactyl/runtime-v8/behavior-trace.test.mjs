@@ -220,11 +220,20 @@ test('provider response metadata is available to tracing without changing assist
     model: 'test-model',
   }, [{ role: 'user', content: 'hello' }], { fetchImpl, allowTools: false })
 
-  assert.deepEqual(message._airiProvider, {
-    response_id: 'resp_123',
-    model: 'test-model-v2',
-    finish_reason: 'stop',
-    usage: { prompt_tokens: 12, completion_tokens: 4 },
+  assert.equal(message._airiProvider.response_id, 'resp_123')
+  assert.equal(message._airiProvider.model, 'test-model-v2')
+  assert.equal(message._airiProvider.finish_reason, 'stop')
+  assert.deepEqual(message._airiProvider.usage, { prompt_tokens: 12, completion_tokens: 4 })
+  assert.equal(message._airiProvider.diagnostic_code, 'ok')
+  assert.equal(message._airiProvider.content_chars, 2)
+  assert.equal(message._airiProvider.content_utf8_bytes, 2)
+  assert.equal(message._airiProvider.reasoning_content_chars, 0)
+  assert.equal(message._airiProvider.tool_call_count, 0)
+  assert.deepEqual(message._airiProvider.message_keys, ['content'])
+  assert.deepEqual(message._airiProvider.structured_content, {
+    json_valid: true,
+    plan_valid: false,
+    error: 'Invalid chatMessage',
   })
   assert.equal(Object.keys(message).includes('_airiProvider'), false)
   assert.equal(JSON.stringify(message), '{"content":"{}"}')
