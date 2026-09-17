@@ -275,3 +275,29 @@ The work is complete when all of the following are true:
 6. The LLM selects a candidate by ID and runtime revalidates it before placement.
 7. Modded entities with equivalent capabilities automatically participate without adding prototype-name special cases.
 8. AIRI cannot truthfully claim a downstream logistics connection from proximity alone; verification uses output/transfer/fluid topology evidence.
+
+## Implementation checkpoint (2026-09-16)
+
+### Implemented on `feat/npc-transition-work`
+
+- Nearby/entity-status observations attach compact runtime `spatial` only when the placed entity exposes relevant capability. Inserters expose pickup/drop geometry, mining drills expose runtime drop geometry plus live compatible resource coverage, and fluid-capable entities expose current fluidbox pipe connections without a vanilla prototype-name whitelist.
+- Runtime-v8 nearby/entity-status full/diff observation handling preserves `spatial`, so geometry/resource changes can be sent as bounded diffs rather than forcing repeated full observations.
+- Exact geometry/topology observation uses the resilient exact-entity resolver and observed entity-reference hints.
+- Generic placement candidates are generated locally from the current entity prototype and live surface. Candidate search uses `surface.can_place_entity`, current mining radius/resource categories, modded directional mining offsets, current resource amounts, current-prototype fluid ports, and bounded candidate diversity.
+- Candidate sets are short-lived and bounded in storage. `place_candidate` executes by candidate identity and revalidates candidate lifetime, surface/force, live placeability, and requested resource coverage before queueing low-level placement.
+- Runtime-v8 now exposes `getPlacementCandidates` and admits/renders `place_candidate`; existing operations such as `supply_entity` continue to delegate through the established staging operation policy.
+- Shoreline/terrain validity is deliberately delegated to native live `surface.can_place_entity` rather than encoded as an offshore-pump name rule.
+- Learned-skill novelty now includes semantic preconditions/constraints/acceptance meaning. Semantically different constraints are not merged only because they share the same broad constraint kind.
+- Skill trust/evidence is tracked per revision outside the V1 skill JSON. Semantic verification failure quarantines the exact revision, execution failure is recorded without semantic quarantine, and successful verification activates the promoted revision.
+- Regression tests have been added for modded mining offsets, fluid candidate orientation, native shoreline validity, candidate execution/revalidation, spatial observation preservation, semantic skill evidence, and runtime-v8 placement policy/copy contracts.
+
+### Partially implemented
+
+- `skill_semantic_evidence.ts` understands optional machine-readable constraint predicates when computing semantic signatures, but `skills.ts` canonical constraint serialization still strips unknown predicate fields. Predicate persistence therefore still needs an explicit schema/canonicalization migration before learned skills can rely on predicates as durable executable authority.
+- The existing V1 skill verifier can quarantine semantic counterexamples through the trust/evidence bridge, but automatic synthesis of a revised constraint from that counterexample is still a later learning step.
+
+### Architecture debt / follow-up
+
+- Pterodactyl runtime prompt assembly and the packages/agent development prompt assembly do not yet have a single source of truth. The development agent composes `prompt.md`, `production-planning-prompt.md`, and `spatial-placement-prompt.md`; the Pterodactyl installer currently copies only `prompt.md`, while runtime-v8 supplements behavior through runtime guidance and tool descriptions. This should be unified once for production + spatial policy instead of adding another one-off prompt copy.
+- Approved operation/tool contracts still exist in more than one layer. Current source admits `supply_entity`, but older deployment logs showed `Unapproved tool: supply_entity`, demonstrating that deployment/prompt/policy skew is possible. A generated registry/contract test should eventually drive provider tool definitions, operation parsing/rendering, and runtime availability from one source.
+- The current connector session has no executed CI/test result for these commits. Tests and copy/import contracts are committed and code/diffs have been reviewed, but engine-level Factorio E2E remains the final authority for runtime semantics.
