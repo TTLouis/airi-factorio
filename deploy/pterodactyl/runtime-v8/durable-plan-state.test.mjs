@@ -32,6 +32,7 @@ class FakeRcon {
 
   async command(text) {
     if (text.includes('remote.call("airi_deployment","status")')) return JSON.stringify(this.status)
+    if (text.includes('remote.call("autorio_preflight","operation"')) return JSON.stringify({ ok: true })
     if (text.includes('remote.call("autorio_operations","status")')) {
       return JSON.stringify({
         task_state: 'idle',
