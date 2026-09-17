@@ -74,6 +74,26 @@ describe('autonomous learning opportunity state', () => {
     expect(skill_novelty_key(skill(10, 'item_transfer'))).not.toBe(skill_novelty_key(skill(10, 'belt_output')))
   })
 
+  it('does not deduplicate constraints that share kind/validation but have different semantics', () => {
+    const weakCoverage = skill(10)
+    weakCoverage.constraints = [{
+      kind: 'resource',
+      description: 'Mining placement must cover at least one target resource tile.',
+      validation: 'validated',
+      evidence_refs: ['coverage:1'],
+    }]
+    const strongCoverage = skill(10)
+    strongCoverage.constraints = [{
+      kind: 'resource',
+      description: 'Mining placement must cover at least eight target resource tiles.',
+      validation: 'validated',
+      evidence_refs: ['coverage:8'],
+    }]
+
+    expect(skill_novelty_key(weakCoverage)).not.toBe(skill_novelty_key(strongCoverage))
+    expect(() => merge_duplicate_skill(weakCoverage, strongCoverage)).toThrow('different semantic novelty keys')
+  })
+
   it('rejects trivial single-node candidates but accepts reusable multi-entity structure', () => {
     expect(assess_skill_reusability(skill()).reusable).toBe(true)
     const trivial = skill()
