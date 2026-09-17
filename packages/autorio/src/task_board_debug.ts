@@ -32,6 +32,10 @@ export interface TaskBoardUiDebugSnapshot {
   provider_model: string
   provider_round: number
   provider_latency_ms: number
+  provider_diagnostic_code: string
+  provider_finish_reason: string
+  content_chars: number
+  reasoning_content_chars: number
   input_units: number
   cached_input_units: number
   output_units: number
@@ -68,6 +72,10 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     provider_model: clean_text(debug.provider_model, 160),
     provider_round: integer(debug.provider_round),
     provider_latency_ms: integer(debug.provider_latency_ms),
+    provider_diagnostic_code: clean_text(debug.provider_diagnostic_code, 160),
+    provider_finish_reason: clean_text(debug.provider_finish_reason, 80),
+    content_chars: integer(debug.content_chars),
+    reasoning_content_chars: integer(debug.reasoning_content_chars),
     input_units: integer(debug.input_units),
     cached_input_units: integer(debug.cached_input_units),
     output_units: integer(debug.output_units),
@@ -374,7 +382,7 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const note = body.add({ type: 'label', caption: 'Structured runtime diagnostics only — no hidden chain-of-thought or secrets are exposed.' })
   note.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }; note.style.single_line = false
   const table = body.add({ type: 'table', column_count: 2 }); table.style.horizontal_spacing = 12; table.style.vertical_spacing = 5
-  const debug = board?.debug ?? {}; const follow = runtime?.follow; const world = runtime?.world_task; const version = current_sync_version()
+  const debug = sanitize_debug_snapshot(board?.debug); const follow = runtime?.follow; const world = runtime?.world_task; const version = current_sync_version()
   const step = board !== undefined && board.total_steps > 0 ? `${math.min(board.active_index + 1, board.total_steps)}/${board.total_steps} (${board.completed_count} done)` : '—'
   const phase = board?.agent?.phase ? String(board.agent.phase).toUpperCase() : 'IDLE'; const detail = clean_text(board?.agent?.detail, 300)
   const provider = clean_text(debug.provider_model, 160); const latency = integer(debug.provider_latency_ms)
@@ -392,6 +400,10 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Provider', provider.length > 0 ? `${provider} · round ${integer(debug.provider_round) + 1}` : '—')
   add_row(table, 'Latency', latency > 0 ? `${latency} ms` : '—')
   add_row(table, 'Tokens', tokens)
+  add_row(table, 'Provider diag', clean_text(debug.provider_diagnostic_code, 160) || '—')
+  add_row(table, 'Finish', clean_text(debug.provider_finish_reason, 80) || '—')
+  add_row(table, 'Content chars', `${integer(debug.content_chars)}`)
+  add_row(table, 'Reasoning chars', `${integer(debug.reasoning_content_chars)}`)
   add_row(table, 'Last tool', clean_text(debug.last_tool, 120) || '—')
   add_row(table, 'Last event', clean_text(debug.last_event, 120) || '—')
   add_row(table, 'Recovery', integer(debug.recovery_attempt) > 0 ? `attempt ${integer(debug.recovery_attempt)}` : 'none')
