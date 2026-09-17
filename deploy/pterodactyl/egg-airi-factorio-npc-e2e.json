@@ -31,7 +31,7 @@
         {
             "name": "AIRI Source Ref",
             "description": "Git branch, tag, or exact 40-character commit SHA followed when this npc-e2e egg is reinstalled. Restart does not resolve or update this ref.",
-            "env_variable": "AIRI_SOURCE_REE",
+            "env_variable": "AIRI_SOURCE_REF",
             "default_value": "feat/npc-transition-work",
             "user_viewable": true,
             "user_editable": true,
