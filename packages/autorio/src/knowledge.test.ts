@@ -19,7 +19,7 @@ function recipe(name: string, options: {
     hidden: false,
     energy: options.energy,
     categories: options.categories,
-    has_category: (category: string) => options.categories.includes(category),
+    has_category: (category: any) => options.categories.includes(typeof category === 'string' ? category : category?.name),
     ingredients: options.ingredients,
     products: options.products,
     prototype: {
