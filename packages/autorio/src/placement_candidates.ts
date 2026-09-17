@@ -3,6 +3,8 @@ import type { ControlledActor } from './actors/types'
 const MAX_RADIUS = 24
 const MAX_LIMIT = 8
 const MAX_SCANNED_POSITIONS = 10000
+const MAX_CANDIDATE_SETS = 16
+const CANDIDATE_TTL_TICKS = 60 * 60
 const CARDINAL_DIRECTIONS = [0, 4, 8, 12]
 
 export interface PlacementCandidateRequest {
@@ -24,7 +26,47 @@ export interface PlacementCandidate {
   position: { x: number, y: number }
   direction: number
   distance_from_center: number
+  item_output_position?: { x: number, y: number }
   resource_coverage?: ResourceCoverage[]
+}
+
+interface PlacementCandidateSet {
+  id: string
+  generated_tick: number
+  entity_name: string
+  surface_index: number
+  force_index: number
+  target_resource?: string
+  candidates: PlacementCandidate[]
+}
+
+declare const storage: {
+  airi_placement_candidate_sets?: Record<string, PlacementCandidateSet>
+  airi_placement_candidate_set_order?: string[]
+  airi_placement_candidate_next_id?: number
+}
+
+function candidate_sets() {
+  storage.airi_placement_candidate_sets ??= {}
+  storage.airi_placement_candidate_set_order ??= []
+  return storage.airi_placement_candidate_sets
+}
+
+function next_candidate_set_id() {
+  const next = storage.airi_placement_candidate_next_id ?? 1
+  storage.airi_placement_candidate_next_id = next + 1
+  return `placement-${next}`
+}
+
+function store_candidate_set(value: PlacementCandidateSet) {
+  const sets = candidate_sets()
+  const order = storage.airi_placement_candidate_set_order as string[]
+  sets[value.id] = value
+  order.push(value.id)
+  while (order.length > MAX_CANDIDATE_SETS) {
+    const removed = order.shift()
+    if (removed !== undefined) delete sets[removed]
+  }
 }
 
 function finite(value: number) {
@@ -138,6 +180,21 @@ function directions_for(prototype: any) {
   return CARDINAL_DIRECTIONS
 }
 
+function rotate_cardinal(vector: { x: number, y: number }, direction: number) {
+  if (direction === 4) return { x: -vector.y, y: vector.x }
+  if (direction === 8) return { x: -vector.x, y: -vector.y }
+  if (direction === 12) return { x: vector.y, y: -vector.x }
+  return { x: vector.x, y: vector.y }
+}
+
+function item_output_position(prototype: any, position: { x: number, y: number }, direction: number) {
+  const raw = prototype?.vector_to_place_result
+  if (!raw || typeof raw.x !== 'number' || typeof raw.y !== 'number') return undefined
+  if (!finite(raw.x) || !finite(raw.y) || (raw.x === 0 && raw.y === 0)) return undefined
+  const rotated = rotate_cardinal({ x: raw.x, y: raw.y }, direction)
+  return { x: position.x + rotated.x, y: position.y + rotated.y }
+}
+
 function diverse_top(values: PlacementCandidate[], limit: number) {
   const result: PlacementCandidate[] = []
   for (const candidate of values) {
@@ -153,6 +210,13 @@ function diverse_top(values: PlacementCandidate[], limit: number) {
     if (result.length >= limit) break
   }
   return result
+}
+
+function candidate_has_target_resource(candidate: PlacementCandidate, target_resource: string) {
+  for (const coverage of candidate.resource_coverage ?? []) {
+    if (coverage.name === target_resource && coverage.entities > 0) return true
+  }
+  return false
 }
 
 /**
@@ -203,6 +267,8 @@ export function placement_candidates_for_actor(actor: ControlledActor, request: 
           direction,
           distance_from_center: math.sqrt(squared_distance(position, center)),
         }
+        const output = item_output_position(prototype, position, direction)
+        if (output !== undefined) candidate.item_output_position = output
         if (coverage !== undefined && coverage.length > 0) candidate.resource_coverage = coverage
         candidates.push(candidate)
       }
@@ -226,4 +292,70 @@ export function placement_candidates_for_actor(actor: ControlledActor, request: 
     returned_candidate_count: selected.length,
     candidates: selected,
   }
+}
+
+export function create_placement_candidate_set(actor: ControlledActor, request: PlacementCandidateRequest) {
+  const result = placement_candidates_for_actor(actor, request)
+  if (!result.ok) return result
+
+  const id = next_candidate_set_id()
+  const set: PlacementCandidateSet = {
+    id,
+    generated_tick: game.tick,
+    entity_name: result.entity_name,
+    surface_index: actor.surface.index,
+    force_index: actor.force.index,
+    target_resource: result.target_resource,
+    candidates: result.candidates,
+  }
+  store_candidate_set(set)
+  return {
+    ...result,
+    candidate_set_id: id,
+    generated_tick: set.generated_tick,
+    expires_tick: set.generated_tick + CANDIDATE_TTL_TICKS,
+  }
+}
+
+export function execute_placement_candidate(
+  actor: ControlledActor,
+  candidate_set_id: string,
+  candidate_id: string,
+  submit_placement: (entity_name: string, x?: number, y?: number, direction?: number) => boolean,
+): [boolean, string] {
+  const set = candidate_sets()[candidate_set_id]
+  if (!set) return [false, 'placement candidate set is unavailable']
+  if (game.tick - set.generated_tick > CANDIDATE_TTL_TICKS) return [false, 'placement candidate set expired']
+  if (actor.surface.index !== set.surface_index || actor.force.index !== set.force_index) return [false, 'placement candidate belongs to another actor surface/force']
+
+  let candidate: PlacementCandidate | undefined
+  for (const value of set.candidates) {
+    if (value.id === candidate_id) {
+      candidate = value
+      break
+    }
+  }
+  if (!candidate) return [false, 'placement candidate is unavailable']
+
+  const prototype = prototypes.entity[set.entity_name]
+  if (!prototype) return [false, 'entity prototype is no longer available']
+  if (!actor.surface.can_place_entity({
+    name: set.entity_name,
+    position: candidate.position,
+    direction: candidate.direction,
+    force: actor.force,
+  })) return [false, 'placement candidate is no longer placeable']
+
+  if (set.target_resource !== undefined) {
+    const coverage = resource_coverage(actor, prototype, candidate.position, set.target_resource)
+    const live_candidate: PlacementCandidate = { ...candidate, resource_coverage: coverage }
+    if (!candidate_has_target_resource(live_candidate, set.target_resource)) {
+      return [false, 'placement candidate no longer covers the requested resource']
+    }
+  }
+
+  const accepted = submit_placement(set.entity_name, candidate.position.x, candidate.position.y, candidate.direction)
+  return accepted
+    ? [true, `placement candidate accepted: ${candidate_set_id}/${candidate_id}`]
+    : [false, 'placement candidate could not be queued']
 }
