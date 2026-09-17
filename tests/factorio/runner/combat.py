@@ -389,8 +389,8 @@ def run(client: Rcon, results: Path) -> None:
         (cleanup_started, cleanup_finished),
     )
     require(
-        cleanup_finished['main_support_ammo'] - cleanup_started['main_support_ammo'] >= cleanup_started['owned_ammo_items'],
-        (cleanup_started, cleanup_finished),
+        cleanup_finished['main_support_ammo'] - resumed_cleanup['main_support_ammo'] >= resumed_cleanup['owned_ammo_items'],
+        (resumed_cleanup, cleanup_finished),
     )
 
     wait_until_idle(status, 'clear-area lifecycle completion', 60)
