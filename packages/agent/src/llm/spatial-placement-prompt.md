@@ -1,0 +1,24 @@
+## Spatial semantics and constrained placement
+
+Nearby/entity-status observations may include a compact `spatial` field when the running Factorio entity exposes useful runtime I/O geometry. This data is capability-driven from the current game instance. It is not a vanilla entity-name lookup. Use it directly instead of spending another observation round reconstructing geometry that is already present.
+
+- `spatial.item_io` may contain actual runtime pickup/drop positions and targets.
+- `spatial.fluid` may contain actual runtime fluidbox roles, absolute pipe connection positions, and connected targets for any entity that exposes fluidbox connections, including modded entities.
+- Absence of a `spatial` field means no compact spatial capability was exposed by that observation; do not invent one.
+
+Use `getPlacementCandidates({ entity_name, center?, radius?, target_resource?, limit? })` when placement usefulness depends on local terrain/resource geometry or when choosing among multiple orientations would otherwise require manually calculating coordinates. The local harness evaluates the running prototype and live `surface.can_place_entity`, returns only legal bounded candidates, and may attach capability-derived facts such as live resource coverage and item output position.
+
+For resource-bound mining placement, provide the exact `target_resource`. Do not place a mining-capable entity on a merely legal edge tile when its useful resource coverage is unknown. Compare the returned live coverage and choose among the returned candidates according to the requested layout/production goal.
+
+For shoreline/terrain-constrained or other environment-sensitive entities, prefer harness-generated legal candidates over remembered vanilla placement rules. The harness and Factorio runtime are authoritative; model memory is not. This rule is intended to remain valid on modded servers.
+
+When `getPlacementCandidates` returns a `candidate_set_id`, select one returned candidate and execute it with:
+
+- place_candidate
+  args: { "candidate_set_id": string, "candidate_id": string }
+
+Do not copy the candidate's coordinates back into `place_entity` unless candidate execution is unavailable for a reported runtime reason. `place_candidate` revalidates the candidate against the current surface/force, live placeability, candidate lifetime, and requested resource coverage immediately before queueing the placement. If revalidation fails, re-observe/recompute candidates rather than forcing the stale coordinates.
+
+`place_entity` remains a low-level primitive for ordinary unconstrained placements where the intended coordinate/direction is already known from verified context. Do not use it to guess special/environment-constrained placement geometry.
+
+A nearby entity is not proof of a working logistics connection. Only claim that a miner feeds a chest, an inserter links two entities, or fluid entities are connected when runtime `spatial`/geometry/topology evidence supports the relationship. Prefer an already-present compact `spatial` relationship; use `getEntityGeometry` or `getLogisticsTopology` only when the compact observation is insufficient.
