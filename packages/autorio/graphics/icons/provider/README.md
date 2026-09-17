@@ -5,6 +5,11 @@ model AIRI is currently calling. The file name is the provider id that
 `src/task_board_provider.ts` resolves from the configured model identifier, and
 `data.lua` declares one `sprite` prototype per file.
 
+**The artwork in this folder is AI-generated.** It is not the work of a human
+illustrator, and it is not any vendor's official artwork - each avatar is an
+original character wearing that vendor's mark as a hair clip. Say so anywhere
+these are shown or redistributed.
+
 | file | shown for models matching |
 | --- | --- |
 | `claude.png` | `claude`, `anthropic`, `sonnet`, `opus`, `haiku` |

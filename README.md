@@ -145,3 +145,5 @@ The guiding boundary is:
 Factorio NPC was originally derived from [`moeru-ai/airi-factorio`](https://github.com/moeru-ai/airi-factorio) and the original `autorio` work. The Git history is intentionally retained so the lineage remains auditable.
 
 The repository remains MIT-licensed. The existing upstream copyright notice in [`LICENSE`](./LICENSE) is preserved. Project-specific attribution may be added without removing upstream attribution as the independent codebase evolves.
+
+The provider avatars in [`packages/autorio/graphics/icons/provider/`](./packages/autorio/graphics/icons/provider/) - the character art the console's top-left button shows for whichever model is answering - are AI-generated images. They are not the work of a human illustrator and are not any vendor's official artwork.
