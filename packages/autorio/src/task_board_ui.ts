@@ -68,7 +68,7 @@ const SKILLS_POPOUT_TITLE = 'Area Learning & Skills'
 // Only the fallback the button is created with. What it wears is the avatar of
 // whichever provider AIRI is currently talking to, which task_board_provider
 // resolves from the reported model identifier on every render.
-const BUTTON_SPRITE: SpritePath = 'item/logistic-robot'
+const BUTTON_SPRITE: SpritePath = 'entity/character'
 const CLOSE_BUTTON_NAME = 'airi_task_board_close'
 const PAUSE_BUTTON_NAME = 'airi_task_board_pause'
 const TERMINATE_BUTTON_NAME = 'airi_task_board_terminate'

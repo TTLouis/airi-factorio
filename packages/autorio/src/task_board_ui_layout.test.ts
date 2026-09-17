@@ -192,6 +192,8 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(source).toContain('provider_ui.remember_provider_model(stamped.debug?.provider_model)')
 
     expect(source).toContain('provider_ui.roll_provider_avatar(player.index, game.tick)')
+    expect(source).toContain("const BUTTON_SPRITE: SpritePath = 'entity/character'")
+    expect(source).not.toContain("const BUTTON_SPRITE: SpritePath = 'item/logistic-robot'")
   })
 
   // The avatars are prototypes, so the data stage has to declare every variant
