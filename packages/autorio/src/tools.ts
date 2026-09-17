@@ -1,6 +1,6 @@
 import { create_actor_remote_interface, get_controlled_actor } from './actors/actor_controller'
 import { remember_entity_reference } from './entity_reference'
-import { placement_candidates_for_actor, type PlacementCandidateRequest } from './placement_candidates'
+import { create_placement_candidate_set, type PlacementCandidateRequest } from './placement_candidates'
 import { compact_spatial_summary } from './spatial_semantics'
 import { get_actor_inventory_items } from './utils/inventory'
 
@@ -245,7 +245,7 @@ export function create_tools_remote_interface() {
     get_placement_candidates: (request: PlacementCandidateRequest) => {
       const actor = get_controlled_actor()
       if (!actor) return { ok: false, error: 'no controlled actor' }
-      return placement_candidates_for_actor(actor, request)
+      return create_placement_candidate_set(actor, request)
     },
   })
 }
