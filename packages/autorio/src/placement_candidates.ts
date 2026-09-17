@@ -80,6 +80,13 @@ function squared_distance(a: { x: number, y: number }, b: { x: number, y: number
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
 
+function rotate_cardinal(vector: { x: number, y: number }, direction: number) {
+  if (direction === 4) return { x: -vector.y, y: vector.x }
+  if (direction === 8) return { x: -vector.x, y: -vector.y }
+  if (direction === 12) return { x: vector.y, y: -vector.x }
+  return { x: vector.x, y: vector.y }
+}
+
 function sorted_resource_coverages(values: Record<string, ResourceCoverage>) {
   const result: ResourceCoverage[] = []
   for (const [, value] of pairs(values)) result.push(value)
@@ -103,15 +110,39 @@ function resource_categories(prototype: any) {
   return result
 }
 
-function resource_coverage(actor: ControlledActor, prototype: any, position: { x: number, y: number }, target_resource?: string) {
+function mining_radius(prototype: any) {
+  if (typeof prototype?.get_mining_drill_radius === 'function') {
+    const radius = prototype.get_mining_drill_radius()
+    if (typeof radius === 'number' && radius > 0 && finite(radius)) return radius
+  }
   const radius = prototype?.mining_drill_radius
-  if (typeof radius !== 'number' || radius <= 0 || !finite(radius)) return undefined
+  return typeof radius === 'number' && radius > 0 && finite(radius) ? radius : undefined
+}
+
+function mining_offset(prototype: any, direction: number) {
+  const raw = prototype?.radius_visualisation_specification?.offset
+  if (!raw || typeof raw.x !== 'number' || typeof raw.y !== 'number') return { x: 0, y: 0 }
+  if (!finite(raw.x) || !finite(raw.y)) return { x: 0, y: 0 }
+  return rotate_cardinal({ x: raw.x, y: raw.y }, direction)
+}
+
+function resource_coverage(
+  actor: ControlledActor,
+  prototype: any,
+  position: { x: number, y: number },
+  direction: number,
+  target_resource?: string,
+) {
+  const radius = mining_radius(prototype)
+  if (radius === undefined) return undefined
+  const offset = mining_offset(prototype, direction)
+  const search_center = { x: position.x + offset.x, y: position.y + offset.y }
 
   const allowed_categories = resource_categories(prototype)
   const resources = actor.surface.find_entities_filtered({
     area: [
-      { x: position.x - radius, y: position.y - radius },
-      { x: position.x + radius, y: position.y + radius },
+      { x: search_center.x - radius, y: search_center.y - radius },
+      { x: search_center.x + radius, y: search_center.y + radius },
     ],
     type: 'resource',
   })
@@ -181,13 +212,6 @@ function snapped(value: number, offset: number) {
 function directions_for(prototype: any) {
   if (prototype?.supports_direction === false || prototype?.rotatable === false) return [0]
   return CARDINAL_DIRECTIONS
-}
-
-function rotate_cardinal(vector: { x: number, y: number }, direction: number) {
-  if (direction === 4) return { x: -vector.y, y: vector.x }
-  if (direction === 8) return { x: -vector.x, y: -vector.y }
-  if (direction === 12) return { x: vector.y, y: -vector.x }
-  return { x: vector.x, y: vector.y }
 }
 
 function item_output_position(prototype: any, position: { x: number, y: number }, direction: number) {
@@ -266,9 +290,9 @@ function candidate_has_target_resource(candidate: PlacementCandidate, target_res
 
 /**
  * Enumerate legal placement choices locally using the running game's entity
- * prototype and LuaSurface.can_place_entity. Resource coverage and fluid-port
- * geometry are derived from the active prototype/runtime data, so modded
- * entities participate without name-based special cases.
+ * prototype and LuaSurface.can_place_entity. Resource coverage, mining search
+ * offsets, output vectors, and fluid-port geometry are derived from active
+ * prototype/runtime data so modded entities participate without name cases.
  */
 export function placement_candidates_for_actor(actor: ControlledActor, request: PlacementCandidateRequest) {
   const prototype = prototypes.entity[request.entity_name]
@@ -299,7 +323,7 @@ export function placement_candidates_for_actor(actor: ControlledActor, request: 
           force: actor.force,
         })) continue
 
-        const coverage = resource_coverage(actor, prototype, position, request.target_resource)
+        const coverage = resource_coverage(actor, prototype, position, direction, request.target_resource)
         if (request.target_resource !== undefined) {
           let covered = false
           for (const value of coverage ?? []) if (value.name === request.target_resource && value.entities > 0) covered = true
@@ -394,7 +418,7 @@ export function execute_placement_candidate(
   })) return [false, 'placement candidate is no longer placeable']
 
   if (set.target_resource !== undefined) {
-    const coverage = resource_coverage(actor, prototype, candidate.position, set.target_resource)
+    const coverage = resource_coverage(actor, prototype, candidate.position, candidate.direction, set.target_resource)
     const live_candidate: PlacementCandidate = { ...candidate, resource_coverage: coverage }
     if (!candidate_has_target_resource(live_candidate, set.target_resource)) {
       return [false, 'placement candidate no longer covers the requested resource']
