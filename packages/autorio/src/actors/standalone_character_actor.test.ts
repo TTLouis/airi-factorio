@@ -8,6 +8,7 @@ function fake_character(overrides: Record<string, unknown> = {}) {
     position: { x: 10, y: 20 },
     surface: { name: 'nauvis' },
     force: { name: 'player' },
+    color: undefined,
     selected: undefined,
     mining_state: { mining: false },
     character_mining_progress: 0,
@@ -44,6 +45,7 @@ describe('StandaloneCharacterActor.create', () => {
     expect(surface.create_entity).toHaveBeenCalledWith({ name: 'character', position: { x: 10, y: 20 }, force })
     expect(actor).toBeDefined()
     expect(actor!.character).toBe(character)
+    expect((character as any).color).toEqual({ r: 0.35, g: 0.65, b: 1, a: 1 })
     expect((globalThis as any).storage.standalone_character_unit_number).toBe(42)
     expect((globalThis as any).storage.standalone_npc_identity).toEqual({ id: 'npc-1', name: 'Aster-1' })
   })
@@ -92,6 +94,7 @@ describe('StandaloneCharacterActor.reacquire', () => {
 
     expect(actor).toBeDefined()
     expect(actor!.character).toBe(character)
+    expect((character as any).color).toEqual({ r: 0.35, g: 0.65, b: 1, a: 1 })
     expect(actor!.status_snapshot()).toMatchObject({ npc_id: 'npc-1', name: 'Aster-1' })
   })
 

@@ -26,6 +26,15 @@ const NPC_NAMES = [
   'Vale',
 ]
 
+// Temporary vanilla-character tint until the NPC gets its own character art.
+// Keep this identity-level rather than provider-level: switching models should
+// not make the companion's body suddenly change color.
+const DEFAULT_NPC_CHARACTER_COLOR = { r: 0.35, g: 0.65, b: 1, a: 1 }
+
+function apply_default_character_color(entity: LuaEntity) {
+  entity.color = DEFAULT_NPC_CHARACTER_COLOR
+}
+
 export function allocate_standalone_npc_identity(): StandaloneNpcIdentity {
   const serial = storage.standalone_npc_identity_serial ?? 1
   storage.standalone_npc_identity_serial = serial + 1
@@ -68,6 +77,7 @@ export class StandaloneCharacterActor implements ControlledActor {
 
     if (!entity) return undefined
 
+    apply_default_character_color(entity)
     const identity = ensure_identity()
     storage.standalone_character_unit_number = entity.unit_number
     return new StandaloneCharacterActor(entity, identity)
@@ -85,6 +95,7 @@ export class StandaloneCharacterActor implements ControlledActor {
       force,
     })
     if (!entity) return undefined
+    apply_default_character_color(entity)
     return new StandaloneCharacterActor(entity, identity)
   }
 
@@ -103,6 +114,8 @@ export class StandaloneCharacterActor implements ControlledActor {
 
     if (!entity) return undefined
 
+    // Also migrates an already-running save onto the nicer companion tint.
+    apply_default_character_color(entity)
     return new StandaloneCharacterActor(entity, ensure_identity())
   }
 
@@ -182,7 +195,7 @@ export class StandaloneCharacterActor implements ControlledActor {
   }
 
   cancel_crafting(params: { index: number, count: number }) {
-    this.character_entity.cancel_crafting(params)
+    return this.character_entity.cancel_crafting(params)
   }
 
   get_crafting_queue(): ActorCraftingQueueItem[] {
