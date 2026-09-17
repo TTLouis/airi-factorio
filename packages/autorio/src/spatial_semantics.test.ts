@@ -1,7 +1,21 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { compact_spatial_summary } from './spatial_semantics'
 
+function luaPairs(value: Record<string, unknown>) {
+  return Object.entries(value)
+}
+
 describe('compact spatial semantics', () => {
+  const originalPairs = (globalThis as any).pairs
+
+  beforeEach(() => {
+    ;(globalThis as any).pairs = luaPairs
+  })
+
+  afterEach(() => {
+    ;(globalThis as any).pairs = originalPairs
+  })
+
   it('omits spatial data for entities without relevant runtime geometry', () => {
     const chest = {
       valid: true,
@@ -47,6 +61,53 @@ describe('compact spatial semantics', () => {
         },
       },
     })
+  })
+
+  it('reports live directional resource coverage for a modded mining drill', () => {
+    const resource = {
+      valid: true,
+      name: 'modded-ore',
+      type: 'resource',
+      amount: 2400,
+      prototype: { resource_category: 'modded-ore-category' },
+    }
+    let observedArea: any
+    const drill = {
+      valid: true,
+      name: 'offset-modded-miner',
+      type: 'mining-drill',
+      unit_number: 13,
+      position: { x: 10, y: 20 },
+      direction: 4,
+      fluids_count: 0,
+      fluidbox: { length: 0 },
+      drop_position: { x: 12, y: 20 },
+      drop_target: undefined,
+      prototype: {
+        get_mining_drill_radius: () => 1.5,
+        radius_visualisation_specification: { offset: { x: 0, y: -2 } },
+        resource_categories: { 'modded-ore-category': true },
+      },
+      surface: {
+        find_entities_filtered: ({ area }: any) => {
+          observedArea = area
+          return [resource]
+        },
+      },
+    } as any
+
+    const result = compact_spatial_summary(drill) as any
+    expect(result.item_io.drop_position).toEqual({ x: 12, y: 20 })
+    expect(result.mining).toEqual({
+      radius: 1.5,
+      search_center: { x: 12, y: 20 },
+      resource_coverage: [{ name: 'modded-ore', entities: 1, amount: 2400 }],
+      resource_types_truncated: false,
+    })
+    expect(observedArea).toEqual([
+      { x: 10.5, y: 18.5 },
+      { x: 13.5, y: 21.5 },
+    ])
   })
 
   it('reports inserter pickup/drop targets from the placed runtime entity', () => {
