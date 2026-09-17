@@ -66,6 +66,12 @@ export function renderOperation(value) {
   return base.renderOperation(operation)
 }
 
+export function renderOperationPreflight(value) {
+  const operation = parseOperation(value)
+  if (operation.name === 'place_candidate') return null
+  return base.renderOperationPreflight(operation)
+}
+
 export function parsePlan(value) {
   check(value && typeof value === 'object' && !Array.isArray(value), 'Provider response must be an object')
   exactKeys(value, ['chatMessage', 'plan', 'currentStep', 'operations'])
