@@ -1,5 +1,6 @@
-import type { FrameGuiElement, LuaGuiElement, LuaPlayer } from 'factorio:runtime'
+import type { FrameGuiElement, LuaGuiElement, LuaPlayer, ScrollPaneGuiElement } from 'factorio:runtime'
 
+import * as activity_state from './task_board_activity'
 import * as project_ui from './projects/project_window'
 
 export const DEBUG_BUTTON_NAME = 'airi_task_board_debug'
@@ -12,6 +13,16 @@ const DEBUG_VALUE_WIDTH = DEBUG_WIDTH - DEBUG_KEY_WIDTH - 54
 const CONVERSATION_HEIGHT = 170
 const COMPACT_BUTTON_WIDTH = 119
 const COMPACT_BUTTON_HEIGHT = 32
+const CONVERSATION = {
+  section: 'airi_task_board_conversation_section',
+  header: 'airi_task_board_conversation_header',
+  state: 'airi_task_board_activity_live',
+  count: 'airi_task_board_conversation_count',
+  body: 'airi_task_board_conversation_body',
+  empty: 'airi_task_board_conversation_empty',
+  scroll: 'airi_task_board_activity_scroll',
+  table: 'airi_task_board_activity_table',
+}
 
 declare const storage: {
   airi_task_board_debug_open?: Record<number, boolean>
@@ -322,43 +333,116 @@ export function render_ai_reply(parent: LuaGuiElement, response: string, width: 
   ensure_projects_button(parent)
   if (storage.airi_task_board_ui !== undefined) project_ui.record_project_snapshot(storage.airi_task_board_ui, game.tick)
 
-  const section = parent.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame' })
-  section.style.width = width
-  section.style.horizontally_stretchable = false
-  const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
-  header.style.horizontally_stretchable = true
-  header.add({ type: 'label', caption: 'Current Task Conversation', style: 'subheader_caption_label' })
-  const body = section.add({ type: 'flow', direction: 'vertical' })
-  body.style.padding = 10
-  body.style.horizontally_stretchable = true
+  // Status/Controls live in a dynamic flow that is cleared once a second. The
+  // conversation must not live inside that flow: rebuilding a scroll-pane loses
+  // the player's scroll position. Place it beside the dynamic flow in the left
+  // column and refresh its rows in place, matching Recent activity's behavior.
+  const host = parent.parent?.valid ? parent.parent : parent
+  let section = host[CONVERSATION.section]
+  let created = false
+  if (!section?.valid) {
+    created = true
+    section = host.add({ type: 'frame', name: CONVERSATION.section, direction: 'vertical', style: 'inside_shallow_frame' })
+    section.style.width = width
+    section.style.horizontally_stretchable = false
+    const header = section.add({ type: 'frame', name: CONVERSATION.header, direction: 'horizontal', style: 'subheader_frame' })
+    header.style.horizontally_stretchable = true
+    header.style.vertical_align = 'center'
+    header.add({ type: 'label', caption: 'Current Task Conversation', style: 'subheader_caption_label' })
+    const filler = header.add({ type: 'empty-widget' }); filler.style.horizontally_stretchable = true
+    header.add({ type: 'button', name: CONVERSATION.state, caption: '[img=utility/status_working] LIVE', style: 'mini_button', tooltip: 'Conversation follows the same LIVE/PAUSED reading mode as Activity. Click to pause or resume both feeds.' })
+    const count = header.add({ type: 'label', name: CONVERSATION.count, caption: '0 messages', style: 'semibold_label' }); count.style.left_padding = 6; count.style.right_padding = 4
+    const body = section.add({ type: 'flow', name: CONVERSATION.body, direction: 'vertical' })
+    body.style.padding = 10
+    body.style.horizontally_stretchable = true
+    const empty = body.add({ type: 'label', name: CONVERSATION.empty, caption: 'No current task conversation.' }); empty.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
+    const scroll = body.add({ type: 'scroll-pane', name: CONVERSATION.scroll, style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' })
+    scroll.style.horizontally_stretchable = true
+    scroll.style.maximal_height = CONVERSATION_HEIGHT
+    const table = scroll.add({ type: 'table', name: CONVERSATION.table, column_count: 3, tags: { keys: [], chat_seen: '', was_following: true } })
+    table.style.horizontal_spacing = 8
+    table.style.vertical_spacing = 5
+  }
+
+  const header = section[CONVERSATION.header]
+  const body = section[CONVERSATION.body]
+  const empty = body?.valid ? body[CONVERSATION.empty] : undefined
+  const scroll = body?.valid ? body[CONVERSATION.scroll] : undefined
+  const table = scroll?.valid ? scroll[CONVERSATION.table] : undefined
+  if (!header?.valid || !empty?.valid || !scroll?.valid || !table?.valid) return
+
   const messages = task_conversation_messages(storage.airi_task_board_ui)
   const explicit = clean_text(response, 2000)
-  if (messages.length === 0 && explicit.length === 0) {
-    const empty = body.add({ type: 'label', caption: storage.airi_task_board_ui === undefined ? 'No current task conversation.' : 'No player/AIRI messages recorded for this task yet.' })
-    empty.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
-    return
-  }
   const visible = [...messages]
   if (explicit.length > 0 && (visible.length === 0 || visible[visible.length - 1].role !== 'assistant' || visible[visible.length - 1].text !== explicit)) {
-    visible.push({ key: 'explicit-response', role: 'assistant', sender: 'AIRI', text: explicit, timestamp: '' })
+    visible.push({ key: `explicit-response:${explicit}`, role: 'assistant', sender: 'AIRI', text: explicit, timestamp: '' })
   }
-  const scroll = body.add({ type: 'scroll-pane', style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' })
-  scroll.style.horizontally_stretchable = true
-  scroll.style.maximal_height = CONVERSATION_HEIGHT
-  const table = scroll.add({ type: 'table', column_count: 3 })
-  table.style.horizontal_spacing = 8
-  table.style.vertical_spacing = 5
-  for (const message of visible) {
-    const timestamp = table.add({ type: 'label', caption: message.timestamp || '--:--:--' })
+  const keys = visible.map(message => message.key)
+  empty.visible = visible.length === 0
+  empty.caption = storage.airi_task_board_ui === undefined ? 'No current task conversation.' : 'No player/AIRI messages recorded for this task yet.'
+  scroll.visible = visible.length > 0
+
+  const add_message = (message: TaskConversationMessage) => {
+    const timestamp = table.add({ type: 'label', caption: message.timestamp || '--:--:--', ignored_by_interaction: true })
     timestamp.style.minimal_width = 66
     timestamp.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
-    const speaker = table.add({ type: 'label', caption: message.role === 'assistant' ? 'AIRI' : message.sender, style: 'semibold_label' })
+    const speaker = table.add({ type: 'label', caption: message.role === 'assistant' ? 'AIRI' : message.sender, style: 'semibold_label', ignored_by_interaction: true })
     speaker.style.minimal_width = 72
-    const line = table.add({ type: 'label', caption: message.text })
+    const line = table.add({ type: 'label', caption: message.text, ignored_by_interaction: true })
     line.style.single_line = false
     line.style.maximal_width = width - 190
   }
-  scroll.scroll_to_bottom()
+
+  const shown = (table.tags.keys ?? []) as string[]
+  const previous_follow = table.tags.was_following !== false
+  let seen = String(table.tags.chat_seen ?? '')
+  const diff = activity_state.activity_rows_diff(shown, keys)
+  let appended = 0
+  if (diff === undefined) {
+    table.clear()
+    for (const message of visible) add_message(message)
+    appended = visible.length
+  } else {
+    const children = table.children
+    for (let index = 0; index < diff.drop * 3 && index < children.length; index++) children[index].destroy()
+    for (let index = visible.length - diff.append; index < visible.length; index++) add_message(visible[index])
+    appended = diff.append
+  }
+
+  const view = activity_state.activity_view((parent as any).player_index)
+  const last_key = keys.length > 0 ? keys[keys.length - 1] : ''
+  if (!view.follow && previous_follow) seen = shown.length > 0 ? shown[shown.length - 1] : ''
+  if (view.follow && !view.hover) {
+    if (created || !previous_follow || appended > 0) (scroll as ScrollPaneGuiElement).scroll_to_bottom()
+    seen = last_key
+  } else if (created) {
+    (scroll as ScrollPaneGuiElement).scroll_to_bottom()
+    seen = last_key
+  }
+
+  table.tags = { keys, chat_seen: seen, was_following: view.follow }
+  let unseen_count = 0
+  let overflow = false
+  if ((!view.follow || view.hover) && keys.length > 0 && seen !== last_key) {
+    const unseen = activity_state.activity_unseen(keys, seen.length > 0 ? seen : undefined)
+    unseen_count = unseen.count
+    overflow = unseen.overflow
+  }
+  const state = header[CONVERSATION.state]
+  if (state?.valid) {
+    if (view.follow && unseen_count === 0) {
+      state.caption = '[img=utility/status_working] LIVE'
+      state.tooltip = 'Following the newest conversation. Click to pause both Conversation and Activity at their current positions.'
+    } else if (unseen_count > 0) {
+      state.caption = `[img=utility/status_yellow] ${unseen_count}${overflow ? '+' : ''} NEW`
+      state.tooltip = 'New conversation messages arrived without moving your reading position. Click to jump both feeds back to live.'
+    } else {
+      state.caption = '[img=utility/status_inactive] PAUSED'
+      state.tooltip = 'Conversation and Activity are paused at your reading position. Click to jump back to live.'
+    }
+  }
+  const count = header[CONVERSATION.count]
+  if (count?.valid) count.caption = `${visible.length} message${visible.length === 1 ? '' : 's'}`
 }
 
 function destroy_debug_popout(player: LuaPlayer) {
@@ -384,7 +468,7 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const table = body.add({ type: 'table', column_count: 2 }); table.style.horizontal_spacing = 12; table.style.vertical_spacing = 5
   const debug = sanitize_debug_snapshot(board?.debug); const follow = runtime?.follow; const world = runtime?.world_task; const version = current_sync_version()
   const step = board !== undefined && board.total_steps > 0 ? `${math.min(board.active_index + 1, board.total_steps)}/${board.total_steps} (${board.completed_count} done)` : '—'
-  const phase = board?.agent?.phase ? String(board.agent.phase).toUpperCase() : 'IDLE'; const detail = clean_text(board?.agent?.detail, 300)
+  const phase = board?.agent.phase ? String(board.agent.phase).toUpperCase() : 'IDLE'; const detail = clean_text(board?.agent.detail, 300)
   const provider = clean_text(debug.provider_model, 160); const latency = integer(debug.provider_latency_ms)
   const tokens = integer(debug.total_units) > 0 ? `${integer(debug.input_units)} in / ${integer(debug.cached_input_units)} cached / ${integer(debug.output_units)} out / ${integer(debug.total_units)} total` : '—'
   const actor = integer(debug.actor_id) > 0 ? `${runtime?.actor_name ?? 'AIRI'} · id ${integer(debug.actor_id)} · epoch ${integer(debug.actor_epoch)}` : `${runtime?.actor_name ?? 'AIRI'} · ${runtime?.actor_kind ?? 'unknown'}`
