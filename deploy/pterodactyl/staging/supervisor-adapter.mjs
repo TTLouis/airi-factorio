@@ -2,6 +2,25 @@ import crypto from 'node:crypto'
 
 export class StagingSessionError extends Error {}
 
+export class OperationBatchAdmissionError extends StagingSessionError {
+  constructor(message, { operationIndex, factorioError, output } = {}) {
+    super(message)
+    this.operationIndex = operationIndex
+    this.factorioError = factorioError
+    this.output = output
+    this.noReplay = true
+  }
+}
+
+function sanitizedAdmissionText(value, max = 2000) {
+  return String(value ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
+    .replace(/\b(OPENAI_API_KEY|FACTORIO_TOKEN|API_KEY|PASSWORD|SECRET)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
+    .slice(0, max)
+}
+
 function check(ok, message) {
   if (!ok) throw new StagingSessionError(message)
 }
@@ -115,10 +134,20 @@ export async function executeAuthorizedBatch(rcon, epoch, commands, marker = `AI
 
   const admissions = validated.map((command, index) => {
     const slot = index + 1
-    return `local r${slot}=${command}; if r${slot}==false or (type(r${slot})=="table" and r${slot}[1]==false) then error("autorio rejected operation ${slot}") end; results[${slot}]=r${slot}`
+    return `local ok${slot},r${slot}=pcall(function() return ${command} end); if not ok${slot} then error("autorio operation ${slot} failed: "..tostring(r${slot}),0) end; if r${slot}==false or (type(r${slot})=="table" and r${slot}[1]==false) then error("autorio rejected operation ${slot}: "..helpers.table_to_json(r${slot}),0) end; results[${slot}]=r${slot}`
   }).join('; ')
-  const wrapped = `/silent-command local ok,result=pcall(function() if not remote.call("airi_deployment","authorize",${epoch}) then error("stale npc actor epoch") end; local results={}; ${admissions}; return results end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
-  const parsed = acknowledgement(await rcon.command(wrapped), marker, 'operation batch')
+  const wrapped = `/silent-command local ok,result=pcall(function() if not remote.call("airi_deployment","authorize",${epoch}) then error("stale npc actor epoch",0) end; local results={}; ${admissions}; return results end); rcon.print(${luaString(marker)}..helpers.table_to_json({ok=ok,result=result}))`
+  const parsed = parseAcknowledgement(await rcon.command(wrapped), marker)
+  check(parsed, 'Game command acknowledgement missing; operation batch will not be retried')
+  if (parsed.data.ok !== true) {
+    const factorioError = sanitizedAdmissionText(parsed.data.result)
+    const match = /autorio (?:operation|rejected operation) (\d+)/i.exec(factorioError)
+    const operationIndex = match ? Number(match[1]) - 1 : undefined
+    throw new OperationBatchAdmissionError(
+      `Game command failed; operation batch was not replayed because earlier operations may have produced side effects: ${factorioError || 'unknown Factorio/Autorio error'}`,
+      { operationIndex, factorioError, output: sanitizedAdmissionText(parsed.output) },
+    )
+  }
   check(Array.isArray(parsed.data.result) && parsed.data.result.length === validated.length, 'Invalid Autorio batch acknowledgement')
   return {
     results: parsed.data.result,
