@@ -162,6 +162,33 @@ function parsePlacement(args) {
   return parsed
 }
 
+function parseConstructionSites(args) {
+  exactKeys(args, ['width', 'height', 'anchor_unit_number', 'position', 'search_radius', 'max_candidates'])
+  const parsed = {
+    width: optionalInteger(args.width, 'width', 2, 32),
+    height: optionalInteger(args.height, 'height', 2, 32),
+  }
+  if (args.anchor_unit_number !== undefined) parsed.anchor_unit_number = positiveInteger(args.anchor_unit_number, 'anchor_unit_number')
+  if (args.position !== undefined) parsed.position = position(args.position)
+  check(!(parsed.anchor_unit_number !== undefined && parsed.position !== undefined), 'provide anchor_unit_number or position, not both')
+  if (args.search_radius !== undefined) parsed.search_radius = optionalInteger(args.search_radius, 'search_radius', 2, 64)
+  if (args.max_candidates !== undefined) parsed.max_candidates = optionalInteger(args.max_candidates, 'max_candidates', 1, 8)
+  return parsed
+}
+
+function renderConstructionSites(args) {
+  const parsed = parseConstructionSites(args)
+  const fields = [
+    `width=${parsed.width}`,
+    `height=${parsed.height}`,
+  ]
+  if (parsed.anchor_unit_number !== undefined) fields.push(`anchor_unit_number=${parsed.anchor_unit_number}`)
+  if (parsed.position !== undefined) fields.push(`position={x=${parsed.position.x},y=${parsed.position.y}}`)
+  if (parsed.search_radius !== undefined) fields.push(`search_radius=${parsed.search_radius}`)
+  if (parsed.max_candidates !== undefined) fields.push(`max_candidates=${parsed.max_candidates}`)
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","find_construction_sites",{${fields.join(',')}})))`
+}
+
 function parseConstructionPlan(args) {
   exactKeys(args, ['plan_id', 'placements'])
   check(Array.isArray(args.placements) && args.placements.length >= 1 && args.placements.length <= 16, 'placements must contain between 1 and 16 entries')
@@ -355,6 +382,25 @@ const placementPlannerDefinition = {
   },
 }
 
+const constructionSiteDefinition = {
+  type: 'function',
+  function: {
+    name: 'findConstructionSites',
+    description: 'Find a small bounded set of clear rectangular construction envelopes on AIRI\'s current surface. The model chooses width/height and anchor; the tool only reports deterministic free-site candidates and aggregate rejection counts. A site is not a machine layout or construction approval: choose exact placements separately and validateConstructionPlan before execution.',
+    parameters: {
+      type: 'object', additionalProperties: false, required: ['width', 'height'],
+      properties: {
+        width: { type: 'integer', minimum: 2, maximum: 32 },
+        height: { type: 'integer', minimum: 2, maximum: 32 },
+        anchor_unit_number: { type: 'integer', minimum: 1 },
+        position: positionSchema,
+        search_radius: { type: 'integer', minimum: 2, maximum: 64 },
+        max_candidates: { type: 'integer', minimum: 1, maximum: 8 },
+      },
+    },
+  },
+}
+
 const constructionPlanValidationDefinition = {
   type: 'function',
   function: {
@@ -428,6 +474,7 @@ export const toolDefinitions = [
   transportCapacityDefinition,
   localSpatialObservationDefinition,
   placementPlannerDefinition,
+  constructionSiteDefinition,
   constructionPlanValidationDefinition,
   constructionIntentDefinition,
   researchPathDefinition,
@@ -438,6 +485,7 @@ export function toolCommand(name, args) {
   if (name === 'getTransportCapacity') return renderTransportCapacity(args)
   if (name === 'getLocalSpatialObservation') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","spatial_observation",${luaTable(parseSpatialObservation(args))})))`
   if (name === 'planPlacement') return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","plan_placement",${luaTable(parsePlacement(args))})))`
+  if (name === 'findConstructionSites') return renderConstructionSites(args)
   if (name === 'validateConstructionPlan') return renderConstructionPlan(args)
   if (name === 'inspectConstructionIntent') return renderConstructionIntent(args)
   if (name === 'getResearchPath') return renderResearchPath(args)
