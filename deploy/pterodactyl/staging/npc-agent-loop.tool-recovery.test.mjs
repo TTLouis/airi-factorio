@@ -87,12 +87,12 @@ test('malformed tool arguments are rejected before RCON and may be repaired', as
 
   const result = await agent.request('inspect then act', { sender: 'TTLouis' })
   assert.equal(result.operations[0].name, 'wait')
-  assert.ok(seen[1].some(message => String(message.content).includes('Tool call rejected (1/3)')))
+  assert.ok(seen[1].some(message => String(message.content).includes('Tool-validation failure (1/3')))
   const actorReads = rcon.commands.filter(command => command.includes('remote.call("autorio_actor","status")'))
   assert.equal(actorReads.length, 1)
 })
 
-test('unapproved tools get at most three tool-enabled repair attempts before recovery', async () => {
+test('unapproved tools exhaust bounded tool-validation repair without disabling tools or mutating', async () => {
   const rcon = new FakeRcon()
   const contexts = []
   let call = 0
@@ -102,23 +102,13 @@ test('unapproved tools get at most three tool-enabled repair attempts before rec
     provider: async (_messages, context) => {
       contexts.push(context)
       call++
-      if (call <= 4) {
-        return {
-          content: null,
-          tool_calls: [{
-            id: `bad-${call}`,
-            type: 'function',
-            function: { name: 'notApproved', arguments: '{}' },
-          }],
-        }
-      }
       return {
-        content: JSON.stringify({
-          chatMessage: 'I cannot use that tool.',
-          plan: ['Report blocker'],
-          currentStep: 0,
-          operations: [],
-        }),
+        content: null,
+        tool_calls: [{
+          id: `bad-${call}`,
+          type: 'function',
+          function: { name: 'notApproved', arguments: '{}' },
+        }],
       }
     },
     systemPrompt: 'NPC test prompt',
@@ -126,8 +116,9 @@ test('unapproved tools get at most three tool-enabled repair attempts before rec
 
   const result = await agent.request('do something unsupported', { sender: 'TTLouis' })
   assert.equal(result.operations.length, 0)
-  assert.equal(contexts.slice(0, 4).every(context => context.allowTools === true), true)
-  assert.equal(contexts[4].allowTools, false)
-  assert.equal(contexts[4].recoveryAttempt, 1)
+  assert.equal(result.blocked, true)
+  assert.equal(result.blocker.class, 'tool_validation')
+  assert.equal(contexts.length, 4)
+  assert.equal(contexts.every(context => context.allowTools === true), true)
   assert.equal(rcon.mutations.length, 0)
 })
