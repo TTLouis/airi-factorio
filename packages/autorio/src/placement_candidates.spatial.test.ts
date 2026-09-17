@@ -131,4 +131,51 @@ describe('placement candidate spatial behavior', () => {
       direction: 4,
     })
   })
+
+  it('rotates a modded mining search offset before evaluating target-resource coverage', () => {
+    ;(globalThis as any).prototypes.entity = {
+      'offset-miner': {
+        name: 'offset-miner',
+        type: 'mining-drill',
+        tile_width: 1,
+        tile_height: 1,
+        get_mining_drill_radius: () => 0.75,
+        radius_visualisation_specification: { offset: { x: 0, y: -2 } },
+        resource_categories: { ore: true },
+      },
+    }
+    const ore = {
+      valid: true,
+      name: 'offset-ore',
+      type: 'resource',
+      amount: 500,
+      prototype: { resource_category: 'ore' },
+    }
+    const actor = {
+      position: { x: 0, y: 0 },
+      force: { index: 1 },
+      surface: {
+        can_place_entity: ({ position }: any) => position.x === 0.5 && position.y === 0.5,
+        find_entities_filtered: ({ area }: any) => {
+          const centerX = (area[0].x + area[1].x) / 2
+          return centerX > 1 ? [ore] : []
+        },
+      },
+    } as any
+
+    const result = placement_candidates_for_actor(actor, {
+      entity_name: 'offset-miner',
+      center: { x: 0, y: 0 },
+      radius: 1,
+      target_resource: 'offset-ore',
+      limit: 8,
+    }) as any
+
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0]).toMatchObject({
+      position: { x: 0.5, y: 0.5 },
+      direction: 4,
+      resource_coverage: [{ name: 'offset-ore', entities: 1, amount: 500 }],
+    })
+  })
 })
