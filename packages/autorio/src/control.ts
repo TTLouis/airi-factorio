@@ -25,6 +25,7 @@ import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
 import { new_navigation_obstacle_recovery } from './navigation_obstacle_recovery'
 import { new_orientation_runtime } from './orientation_runtime'
+import { execute_placement_candidate } from './placement_candidates'
 import { create_production_planning_remote_interface } from './production_planning_remote'
 import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
 import { new_recipe_configuration_runtime } from './recipe_configuration'
@@ -217,6 +218,18 @@ remote.add_interface('autorio_operations', {
       task_manager,
     )
     if (result[0]) log(`[AUTORIO] New execute_construction_plan task: validation=${validation_id}, placements=${placement_count}`)
+    return result
+  },
+  place_candidate: (candidate_set_id: string, candidate_id: string): [boolean, string] => {
+    const actor = get_controlled_actor()
+    if (!actor) return [false, 'controlled actor is unavailable']
+    const result = execute_placement_candidate(
+      actor,
+      candidate_set_id,
+      candidate_id,
+      (entity_name, x, y, direction) => basic_operation_controller.submit_placement(entity_name, x, y, direction),
+    )
+    if (result[0]) log(`[AUTORIO] New place_candidate task: ${candidate_set_id}/${candidate_id}`)
     return result
   },
   place_entity: (entity_name: string, x?: number, y?: number, direction?: number) => {
