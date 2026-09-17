@@ -31,6 +31,7 @@ describe('agent observation tools', () => {
       'getEquipmentStatus',
       'getRecipe',
       'getRecipeDetails',
+      'discoverPrototypes',
       'getPrototypeDetails',
       'getPlayerStatus',
       'getNearbyEntities',
@@ -90,6 +91,17 @@ describe('agent observation tools', () => {
 
     mocks.raw.mockClear()
     await expect(getTool('getRecipeDetails').fn({ parameters: { item_or_recipe: 'oil\n/c game.clear()' } })).rejects.toThrow()
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('renders bounded prototype capability discovery without arbitrary Lua', async () => {
+    await getTool('discoverPrototypes').fn({ parameters: { capability: 'mining', resource_name: "iron-ore", limit: 6 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command local request=helpers.json_to_table(\'{"capability":"mining","resource_name":"iron-ore","availability":"force-available","limit":6}\'); rcon.print(helpers.table_to_json(remote.call("autorio_prototypes", "discover", request)))',
+    } })
+
+    mocks.raw.mockClear()
+    await expect(getTool('discoverPrototypes').fn({ parameters: { capability: 'mining', resource_name: 'iron-ore', limit: 13 } })).rejects.toThrow()
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 
@@ -253,7 +265,7 @@ describe('crafting, research, and combat observation tools', () => {
 
 describe('prompt contract', () => {
   it('documents equipment, discovery, static prototype knowledge, recipe knowledge, geometry, topology, player interaction, follow, defense, navigation, crafting, research, and combat tools', () => {
-    for (const name of ['getEquipmentStatus', 'getPrototypeDetails', 'getRecipeDetails', 'getEntityGeometry', 'getLogisticsTopology', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
+    for (const name of ['getEquipmentStatus', 'discoverPrototypes', 'getPrototypeDetails', 'getRecipeDetails', 'getEntityGeometry', 'getLogisticsTopology', 'getPlayerStatus', 'findLongRangeEntities', 'findNearestEnemy', 'getFollowStatus', 'getDefenseStatus', 'getNavigationStatus', 'getCraftingStatus', 'getResearchStatus', 'getTechnology', 'getCombatStatus']) {
       expect(tools.some(tool => tool.name === name)).toBe(true)
       expect(prompt).toContain(name)
     }

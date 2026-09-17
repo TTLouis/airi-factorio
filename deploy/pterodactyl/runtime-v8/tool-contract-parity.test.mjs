@@ -29,6 +29,7 @@ const toolSamples = {
   getEquipmentStatus: {},
   getRecipe: { item: 'iron-plate' },
   getRecipeDetails: { item_or_recipe: 'iron-plate' },
+  discoverPrototypes: { capability: 'mining', resource_name: 'iron-ore' },
   getPrototypeDetails: { name: 'transport-belt' },
   getPlayerStatus: { player_name: 'Louis' },
   getNearbyEntities: {},

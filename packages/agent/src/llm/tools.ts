@@ -16,7 +16,7 @@ const nearbyEntitiesSchema = z.object({
   radius: z.number().int().min(1).max(64).default(20),
   name: factorioNameSchema.optional(),
   type: factorioNameSchema.optional(),
-  limit: z.number().int().min(1).max(100).default(50),
+  limit: z.number().int().min(1).max(40).default(20),
 }).strict()
 
 const longRangeEntitiesSchema = z.object({
@@ -53,6 +53,17 @@ const recipeDetailsSchema = z.object({
 
 const prototypeDetailsSchema = z.object({
   name: factorioNameSchema,
+}).strict()
+
+const prototypeDiscoverySchema = z.object({
+  capability: z.enum(['mining', 'crafting', 'entity-type']),
+  resource_name: factorioNameSchema.optional(),
+  resource_category: factorioNameSchema.optional(),
+  crafting_category: factorioNameSchema.optional(),
+  entity_type: factorioNameSchema.optional(),
+  energy_source: z.enum(['burner', 'electric', 'heat', 'fluid', 'void', 'none']).optional(),
+  availability: z.enum(['force-available', 'all']).default('force-available'),
+  limit: z.number().int().min(1).max(12).default(6),
 }).strict()
 
 const placementCandidatesSchema = z.object({
@@ -136,6 +147,19 @@ export const tools: ToolFunction[] = [
       const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "recipe_details", ${renderLuaString(parsed.item_or_recipe)})))`
       const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
       logger.withFields({ output: response.data.output, parameters: parsed }).debug('Detailed recipe knowledge')
+      return response.data.output
+    },
+  },
+  {
+    name: 'discoverPrototypes',
+    description: 'Discover a small canonical set of current-game entity prototype identities by engine-backed capability/type instead of guessing names. Mining accepts resource_name or resource_category; crafting accepts crafting_category; entity-type accepts entity_type. Defaults to force-available candidates only and fails with LIMIT_EXCEEDED instead of dumping large modded sets.',
+    schema: prototypeDiscoverySchema,
+    fn: async ({ parameters }) => {
+      const parsed = prototypeDiscoverySchema.parse(parameters)
+      const request = renderLuaString(JSON.stringify(parsed))
+      const input = `/silent-command local request=helpers.json_to_table(${request}); rcon.print(helpers.table_to_json(remote.call("autorio_prototypes", "discover", request)))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Prototype capability discovery')
       return response.data.output
     },
   },

@@ -51,6 +51,20 @@ describe('recipe details use the Factorio 2 runtime category predicate', () => {
     })
   })
 
+  it('caps compatible machine summaries at eight and reports the full match count', () => {
+    const machines: Record<string, any> = {}
+    for (let i = 1; i <= 12; i++) machines[`assembler-${String(i).padStart(2, '0')}`] = {
+      name: `assembler-${String(i).padStart(2, '0')}`, type: 'assembling-machine', crafting_speed: i,
+    }
+    ;(globalThis as any).prototypes.get_entity_filtered = () => machines
+    const actor = actorWithRecipes({ widget: recipe('widget', 'widget') })
+    const result = recipe_details_for_actor(actor, 'widget') as any
+    expect(result.recipes[0].crafting_machine_count).toBe(12)
+    expect(result.recipes[0].crafting_machines).toHaveLength(8)
+    expect(result.recipes[0].crafting_machines_truncated).toBe(true)
+    expect(result.recipes[0].crafting_machines[0]).toEqual({ name: 'assembler-01', type: 'assembling-machine', crafting_speed: 1 })
+  })
+
   it('returns another ordinary enabled recipe with deterministic categories', () => {
     const actor = actorWithRecipes({
       'iron-gear-wheel': recipe('iron-gear-wheel', 'iron-gear-wheel'),

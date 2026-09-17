@@ -355,6 +355,21 @@ export const toolDefinitions = [
   functionTool('getRecipeDetails', 'Read bounded deterministic recipe knowledge, including categories, ingredients/products and compatible crafting-machine prototypes.', {
     type: 'object', properties: { item_or_recipe: nameStringSchema }, required: ['item_or_recipe'], additionalProperties: false,
   }),
+  functionTool('discoverPrototypes', 'Discover a small canonical set of current-game entity prototype identities by engine-backed capability/type instead of guessing names. Defaults to force-available candidates and fails bounded on oversized modded sets.', {
+    type: 'object',
+    properties: {
+      capability: { type: 'string', enum: ['mining', 'crafting', 'entity-type'] },
+      resource_name: nameStringSchema,
+      resource_category: nameStringSchema,
+      crafting_category: nameStringSchema,
+      entity_type: nameStringSchema,
+      energy_source: { type: 'string', enum: ['burner', 'electric', 'heat', 'fluid', 'void', 'none'] },
+      availability: { type: 'string', enum: ['force-available', 'all'], default: 'force-available' },
+      limit: { type: 'integer', minimum: 1, maximum: 12, default: 6 },
+    },
+    required: ['capability'],
+    additionalProperties: false,
+  }),
   functionTool('getPrototypeDetails', 'Read bounded static prototype/build knowledge for an item, fluid, or entity: stack/place result, footprint, crafting/mining capability, belt speed, inserter offsets, fluidbox roles, and selected energy metadata.', {
     type: 'object', properties: { name: nameStringSchema }, required: ['name'], additionalProperties: false,
   }),
@@ -367,7 +382,7 @@ export const toolDefinitions = [
       radius: { type: 'integer', minimum: 1, maximum: 64, default: 20 },
       name: nameStringSchema,
       type: nameStringSchema,
-      limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+      limit: { type: 'integer', minimum: 1, maximum: 40, default: 20 },
     },
     additionalProperties: false,
   }),
@@ -457,6 +472,25 @@ export function toolCommand(name, rawArgs = {}) {
     case 'getRecipeDetails':
       noExtra(args, ['item_or_recipe'])
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","recipe_details",${luaString(factorioName(args.item_or_recipe))})))`
+    case 'discoverPrototypes': {
+      noExtra(args, ['capability', 'resource_name', 'resource_category', 'crafting_category', 'entity_type', 'energy_source', 'availability', 'limit'])
+      check(['mining', 'crafting', 'entity-type'].includes(args.capability), 'Invalid prototype discovery capability')
+      const request = { capability: args.capability }
+      if (args.resource_name !== undefined) request.resource_name = factorioName(args.resource_name)
+      if (args.resource_category !== undefined) request.resource_category = factorioName(args.resource_category)
+      if (args.crafting_category !== undefined) request.crafting_category = factorioName(args.crafting_category)
+      if (args.entity_type !== undefined) request.entity_type = factorioName(args.entity_type)
+      if (args.energy_source !== undefined) {
+        check(['burner', 'electric', 'heat', 'fluid', 'void', 'none'].includes(args.energy_source), 'Invalid prototype discovery energy_source')
+        request.energy_source = args.energy_source
+      }
+      if (args.availability !== undefined) {
+        check(args.availability === 'force-available' || args.availability === 'all', 'Invalid prototype discovery availability')
+        request.availability = args.availability
+      }
+      if (args.limit !== undefined) request.limit = integer(args.limit, 'limit', 1, 12)
+      return `/silent-command local request=helpers.json_to_table(${luaString(JSON.stringify(request))}); rcon.print(helpers.table_to_json(remote.call("autorio_prototypes","discover",request)))`
+    }
     case 'getPrototypeDetails':
       noExtra(args, ['name'])
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_prototypes","details",${luaString(factorioName(args.name))})))`
@@ -466,7 +500,7 @@ export function toolCommand(name, rawArgs = {}) {
     case 'getNearbyEntities': {
       noExtra(args, ['radius', 'name', 'type', 'limit'])
       const radius = integer(args.radius ?? 20, 'radius', 1, 64)
-      const limit = integer(args.limit ?? 50, 'limit', 1, 100)
+      const limit = integer(args.limit ?? 20, 'limit', 1, 40)
       const entityName = args.name === undefined ? 'nil' : luaString(factorioName(args.name))
       const entityType = args.type === undefined ? 'nil' : luaString(factorioName(args.type))
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_nearby_entities",${radius},${entityName},${entityType},${limit})))`

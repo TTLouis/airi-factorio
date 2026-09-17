@@ -3,7 +3,7 @@ import type { ControlledActor } from './actors/types'
 import { resolve_exact_entity } from './entity_reference'
 
 const MAX_RECIPE_MATCHES = 8
-const MAX_MACHINE_MATCHES = 32
+const MAX_MACHINE_MATCHES = 8
 const MAX_FLUID_STORAGES = 16
 const MAX_PIPE_CONNECTIONS = 16
 const MAX_TOPOLOGY_RADIUS = 16
@@ -94,12 +94,12 @@ function machine_summaries(categories: string[]) {
 
   sort_named(candidates)
   return {
+    matched_count: candidates.length,
     truncated: candidates.length > MAX_MACHINE_MATCHES,
     machines: candidates.slice(0, MAX_MACHINE_MATCHES).map(({ name, prototype }) => ({
       name,
       type: prototype.type,
       crafting_speed: prototype.crafting_speed,
-      crafting_categories: prototype.crafting_categories,
     })),
   }
 }
@@ -277,6 +277,7 @@ export function recipe_details_for_actor(actor: ControlledActor, item_or_recipe:
         hidden_from_player_crafting: recipe.prototype?.hidden_from_player_crafting,
         ingredients: recipe.ingredients.map(ingredient_summary),
         products: recipe.products.map(product_summary),
+        crafting_machine_count: machine_result.matched_count,
         crafting_machines: machine_result.machines,
         crafting_machines_truncated: machine_result.truncated,
       }

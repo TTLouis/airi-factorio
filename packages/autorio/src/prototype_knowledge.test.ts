@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { prototype_details } from './prototype_knowledge'
+import type { ControlledActor } from './actors/types'
+import { discover_prototypes_for_actor, prototype_details } from './prototype_knowledge'
 
 function luaPairs(value: Record<string, unknown>) {
   return Object.entries(value)
@@ -12,6 +13,22 @@ describe('prototype build knowledge', () => {
   beforeEach(() => {
     ;(globalThis as any).pairs = luaPairs
 
+    const burnerMiningDrill = {
+      name: 'burner-mining-drill',
+      type: 'mining-drill',
+      is_building: true,
+      tile_width: 2,
+      tile_height: 2,
+      collision_box: {},
+      selection_box: {},
+      items_to_place_this: [{ name: 'burner-mining-drill', count: 1 }],
+      fluidbox_prototypes: [],
+      mining_speed: 0.25,
+      mining_drill_radius: 1.99,
+      resource_categories: { 'basic-solid': true },
+      energy_usage: 150000,
+      burner_prototype: {},
+    }
     const electricMiningDrill = {
       name: 'electric-mining-drill',
       type: 'mining-drill',
@@ -26,6 +43,7 @@ describe('prototype build knowledge', () => {
       mining_drill_radius: 2.49,
       resource_categories: { 'basic-solid': true },
       energy_usage: 90000,
+      electric_energy_source_prototype: {},
     }
     const chemicalPlant = {
       name: 'chemical-plant',
@@ -78,12 +96,15 @@ describe('prototype build knowledge', () => {
 
     ;(globalThis as any).prototypes = {
       entity: {
+        'iron-ore': { name: 'iron-ore', type: 'resource', resource_category: 'basic-solid' },
+        'burner-mining-drill': burnerMiningDrill,
         'electric-mining-drill': electricMiningDrill,
         'chemical-plant': chemicalPlant,
         'transport-belt': belt,
         inserter,
       },
       item: {
+        'burner-mining-drill': { name: 'burner-mining-drill', stack_size: 50, place_result: burnerMiningDrill },
         'electric-mining-drill': { name: 'electric-mining-drill', stack_size: 50, place_result: electricMiningDrill },
         'chemical-plant': { name: 'chemical-plant', stack_size: 10, place_result: chemicalPlant },
         'transport-belt': { name: 'transport-belt', stack_size: 100, place_result: belt },
@@ -92,12 +113,72 @@ describe('prototype build knowledge', () => {
       fluid: {
         water: { name: 'water', default_temperature: 15, max_temperature: 100, heat_capacity: 200, fuel_value: 0 },
       },
+      resource_category: { 'basic-solid': { name: 'basic-solid' } },
+      recipe_category: { crafting: { name: 'crafting' }, chemistry: { name: 'chemistry' } },
+      get_entity_filtered: (filters: any[]) => {
+        const filter = filters[0]
+        if (filter?.filter === 'type' && filter.type === 'mining-drill') {
+          return { 'burner-mining-drill': burnerMiningDrill, 'electric-mining-drill': electricMiningDrill }
+        }
+        if (filter?.filter === 'crafting-category' && filter.crafting_category === 'chemistry') return { 'chemical-plant': chemicalPlant }
+        return {}
+      },
     }
   })
 
   afterEach(() => {
     ;(globalThis as any).pairs = originalPairs
     ;(globalThis as any).prototypes = originalPrototypes
+  })
+
+  it('discovers force-available mining prototypes from a resource identity without guessing names', () => {
+    const actor = {
+      is_valid: true,
+      force: {
+        recipes: {
+          'burner-mining-drill': {
+            name: 'burner-mining-drill', enabled: true, hidden: false,
+            products: [{ type: 'item', name: 'burner-mining-drill', amount: 1 }],
+          },
+        },
+      },
+      get_main_inventory: () => ({ get_contents: () => [] }),
+    } as unknown as ControlledActor
+
+    expect(discover_prototypes_for_actor(actor, { capability: 'mining', resource_name: 'iron-ore' })).toMatchObject({
+      ok: true,
+      inferred_resource_category: 'basic-solid',
+      matched_count: 2,
+      available_count: 1,
+      returned_count: 1,
+      candidates: [{
+        name: 'burner-mining-drill',
+        type: 'mining-drill',
+        energy_source: 'burner',
+        enabled_recipe: 'burner-mining-drill',
+        force_available: true,
+      }],
+    })
+  })
+
+  it('returns explicit bounded narrowing evidence instead of dumping oversized candidate sets', () => {
+    const entities: Record<string, any> = {}
+    for (let i = 1; i <= 13; i++) entities[`mod-drill-${String(i).padStart(2, '0')}`] = {
+      name: `mod-drill-${String(i).padStart(2, '0')}`, type: 'mining-drill', resource_categories: { 'basic-solid': true },
+      items_to_place_this: [{ name: `mod-drill-${String(i).padStart(2, '0')}`, count: 1 }], electric_energy_source_prototype: {},
+    }
+    ;(globalThis as any).prototypes.get_entity_filtered = () => entities
+    const recipes: Record<string, any> = {}
+    for (const name of Object.keys(entities)) recipes[name] = { name, enabled: true, hidden: false, products: [{ type: 'item', name, amount: 1 }] }
+    const actor = { is_valid: true, force: { recipes }, get_main_inventory: () => ({ get_contents: () => [] }) } as unknown as ControlledActor
+
+    expect(discover_prototypes_for_actor(actor, { capability: 'mining', resource_name: 'iron-ore', limit: 12 })).toMatchObject({
+      ok: false,
+      error: { code: 'LIMIT_EXCEEDED' },
+      available_count: 13,
+      max_limit: 12,
+      narrowing: { energy_sources: ['electric'] },
+    })
   })
 
   it('describes mining drill footprint, speed, radius and resource categories', () => {

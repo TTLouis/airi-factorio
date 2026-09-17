@@ -1,8 +1,29 @@
-const MAX_PLACE_ITEMS = 16
-const MAX_FLUIDBOX_PROTOTYPES = 16
-const MAX_PIPE_CONNECTIONS = 16
-const MAX_PIPE_POSITIONS = 8
-const MAX_CONNECTION_CATEGORIES = 8
+import type { ControlledActor } from './actors/types'
+import { get_actor_inventory_items } from './utils/inventory'
+
+const MAX_PLACE_ITEMS = 4
+const MAX_FLUIDBOX_PROTOTYPES = 8
+const MAX_PIPE_CONNECTIONS = 8
+const MAX_PIPE_POSITIONS = 4
+const MAX_CONNECTION_CATEGORIES = 4
+const DEFAULT_DISCOVERY_LIMIT = 6
+const MAX_DISCOVERY_LIMIT = 12
+const MAX_DISCOVERY_PLACE_ITEMS = 2
+
+type PrototypeDiscoveryCapability = 'mining' | 'crafting' | 'entity-type'
+type PrototypeDiscoveryAvailability = 'force-available' | 'all'
+type PrototypeEnergySource = 'burner' | 'electric' | 'heat' | 'fluid' | 'void' | 'none'
+
+export interface PrototypeDiscoveryRequest {
+  capability: PrototypeDiscoveryCapability
+  resource_name?: string
+  resource_category?: string
+  crafting_category?: string
+  entity_type?: string
+  energy_source?: PrototypeEnergySource
+  availability?: PrototypeDiscoveryAvailability
+  limit?: number
+}
 
 function sort_strings(values: string[]) {
   for (let i = 0; i < values.length; i++) {
@@ -169,6 +190,197 @@ function fluid_details(prototype: any) {
   }
 }
 
+
+function energy_source_kind(prototype: any): PrototypeEnergySource {
+  if (prototype?.burner_prototype) return 'burner'
+  if (prototype?.electric_energy_source_prototype) return 'electric'
+  if (prototype?.heat_energy_source_prototype) return 'heat'
+  if (prototype?.fluid_energy_source_prototype) return 'fluid'
+  if (prototype?.void_energy_source_prototype) return 'void'
+  return 'none'
+}
+
+function sorted_place_items(prototype: any) {
+  const values = (prototype?.items_to_place_this ?? []).slice()
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      if (values[j].name < values[i].name) {
+        const swap = values[i]
+        values[i] = values[j]
+        values[j] = swap
+      }
+    }
+  }
+  return values
+}
+
+function enabled_item_recipes(actor: ControlledActor) {
+  const result: Record<string, string> = {}
+  for (const [recipe_name, recipe] of pairs(actor.force.recipes)) {
+    if (!recipe || recipe.enabled !== true || recipe.hidden === true) continue
+    for (const product of recipe.products ?? []) {
+      if (product?.type !== 'item' || typeof product?.name !== 'string') continue
+      const existing = result[product.name]
+      if (!existing || recipe_name < existing) result[product.name] = recipe_name
+    }
+  }
+  return result
+}
+
+function inventory_counts(actor: ControlledActor) {
+  const result: Record<string, number> = {}
+  for (const item of get_actor_inventory_items(actor)) result[item.name] = item.count
+  return result
+}
+
+function discovery_limit(value: number | undefined) {
+  if (value === undefined) return DEFAULT_DISCOVERY_LIMIT
+  if (typeof value !== 'number' || value !== value || math.floor(value) !== value || value < 1 || value > MAX_DISCOVERY_LIMIT) return undefined
+  return value
+}
+
+function discovery_error(request: PrototypeDiscoveryRequest, code: 'INVALID_REQUEST' | 'LIMIT_EXCEEDED', message: string, extra: Record<string, unknown> = {}) {
+  return { ok: false, query: request, error: { code, message }, ...extra }
+}
+
+function discovery_candidates(request: PrototypeDiscoveryRequest) {
+  let inferred_resource_category: string | undefined
+  let matches: Record<string, any> = {}
+
+  if (request.capability === 'mining') {
+    const has_resource_name = typeof request.resource_name === 'string' && request.resource_name.length > 0
+    const has_resource_category = typeof request.resource_category === 'string' && request.resource_category.length > 0
+    if (has_resource_name === has_resource_category) {
+      return { error: 'mining discovery requires exactly one of resource_name or resource_category' }
+    }
+    if (has_resource_name) {
+      const resource = prototypes.entity[request.resource_name as string]
+      if (!resource || resource.type !== 'resource' || !resource.resource_category) {
+        return { error: 'resource_name must identify a current-game resource prototype' }
+      }
+      inferred_resource_category = resource.resource_category
+    }
+    else {
+      inferred_resource_category = request.resource_category
+      if (!inferred_resource_category || !prototypes.resource_category[inferred_resource_category]) {
+        return { error: 'resource_category must identify a current-game resource category' }
+      }
+    }
+
+    const drills = prototypes.get_entity_filtered([{ filter: 'type', type: 'mining-drill' }])
+    for (const [name, prototype] of pairs(drills)) {
+      if (prototype.resource_categories?.[inferred_resource_category] === true) matches[name] = prototype
+    }
+  }
+  else if (request.capability === 'crafting') {
+    if (!request.crafting_category || !prototypes.recipe_category[request.crafting_category]) {
+      return { error: 'crafting discovery requires a current-game crafting_category' }
+    }
+    matches = prototypes.get_entity_filtered([{ filter: 'crafting-category', crafting_category: request.crafting_category }])
+  }
+  else if (request.capability === 'entity-type') {
+    if (!request.entity_type) return { error: 'entity-type discovery requires entity_type' }
+    matches = prototypes.get_entity_filtered([{ filter: 'type', type: request.entity_type }])
+  }
+  else {
+    return { error: 'unsupported discovery capability' }
+  }
+
+  const values: Array<{ name: string, prototype: any }> = []
+  for (const [name, prototype] of pairs(matches)) {
+    if (request.energy_source && energy_source_kind(prototype) !== request.energy_source) continue
+    values.push({ name, prototype })
+  }
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      if (values[j].name < values[i].name) {
+        const swap = values[i]
+        values[i] = values[j]
+        values[j] = swap
+      }
+    }
+  }
+  return { values, inferred_resource_category }
+}
+
+export function discover_prototypes_for_actor(actor: ControlledActor, request: PrototypeDiscoveryRequest) {
+  const limit = discovery_limit(request?.limit)
+  if (!request || limit === undefined) {
+    return discovery_error(request ?? ({ capability: 'entity-type' } as PrototypeDiscoveryRequest), 'INVALID_REQUEST', `limit must be an integer from 1 to ${MAX_DISCOVERY_LIMIT}`)
+  }
+  const availability = request.availability ?? 'force-available'
+  if (availability !== 'force-available' && availability !== 'all') {
+    return discovery_error(request, 'INVALID_REQUEST', 'availability must be force-available or all')
+  }
+
+  const discovered = discovery_candidates(request)
+  if (discovered.error) return discovery_error(request, 'INVALID_REQUEST', discovered.error)
+
+  const enabled_recipes = enabled_item_recipes(actor)
+  const inventory = inventory_counts(actor)
+  const available: Array<Record<string, unknown>> = []
+  const all = discovered.values ?? []
+  const energy_sources: Record<string, boolean> = {}
+
+  for (const { name, prototype } of all) {
+    const energy_source = energy_source_kind(prototype)
+    energy_sources[energy_source] = true
+    const raw_place_items = sorted_place_items(prototype)
+    const place_items = raw_place_items.slice(0, MAX_DISCOVERY_PLACE_ITEMS)
+    let held_count = 0
+    let enabled_recipe: string | undefined
+    for (const item of raw_place_items) {
+      held_count += inventory[item.name] ?? 0
+      const recipe_name = enabled_recipes[item.name]
+      if (recipe_name && (!enabled_recipe || recipe_name < enabled_recipe)) enabled_recipe = recipe_name
+    }
+    const force_available = held_count > 0 || enabled_recipe !== undefined
+    if (availability === 'force-available' && !force_available) continue
+
+    const candidate: Record<string, unknown> = {
+      name,
+      type: prototype.type,
+      energy_source,
+      place_items: place_items.map((item: any) => ({ name: item.name, count: item.count })),
+      place_items_truncated: raw_place_items.length > MAX_DISCOVERY_PLACE_ITEMS,
+      force_available,
+    }
+    if (held_count > 0) candidate.held_count = held_count
+    if (enabled_recipe) candidate.enabled_recipe = enabled_recipe
+    if (request.capability === 'mining') {
+      candidate.mining_speed = prototype.mining_speed
+      candidate.mining_radius = prototype.mining_drill_radius
+    }
+    else if (request.capability === 'crafting') {
+      candidate.crafting_speed = prototype.crafting_speed
+    }
+    available.push(candidate)
+  }
+
+  if (available.length > limit) {
+    const sources: string[] = []
+    for (const [source] of pairs(energy_sources)) sources.push(source)
+    sort_strings(sources)
+    return discovery_error(request, 'LIMIT_EXCEEDED', `candidate count ${available.length} exceeds requested limit ${limit}; narrow by energy_source or raise limit up to ${MAX_DISCOVERY_LIMIT}`, {
+      matched_count: all.length,
+      available_count: available.length,
+      max_limit: MAX_DISCOVERY_LIMIT,
+      narrowing: { energy_sources: sources },
+      inferred_resource_category: discovered.inferred_resource_category,
+    })
+  }
+
+  return {
+    ok: true,
+    query: request,
+    inferred_resource_category: discovered.inferred_resource_category,
+    matched_count: all.length,
+    available_count: available.length,
+    returned_count: available.length,
+    candidates: available,
+  }
+}
+
 export function prototype_details(name: string) {
   const item = prototypes.item[name]
   const fluid = prototypes.fluid[name]
@@ -189,8 +401,13 @@ export function prototype_details(name: string) {
   }
 }
 
-export function create_prototype_knowledge_remote_interface() {
+export function create_prototype_knowledge_remote_interface(get_actor: () => ControlledActor | undefined) {
   remote.add_interface('autorio_prototypes', {
     details: (name: string) => prototype_details(name),
+    discover: (request: PrototypeDiscoveryRequest) => {
+      const actor = get_actor()
+      if (!actor || !actor.is_valid) return discovery_error(request, 'INVALID_REQUEST', 'controlled actor is unavailable')
+      return discover_prototypes_for_actor(actor, request)
+    },
   })
 }

@@ -5,10 +5,10 @@ import { compact_spatial_summary } from './spatial_semantics'
 import { get_actor_inventory_items } from './utils/inventory'
 
 const MAX_NEARBY_RADIUS = 64
-const MAX_NEARBY_RESULTS = 100
+const MAX_NEARBY_RESULTS = 40
 const MAX_ENTITY_STATUS_RADIUS = 32
 const MAX_ENTITY_INVENTORIES = 8
-const MAX_ENTITY_INVENTORY_ITEMS = 50
+const MAX_ENTITY_INVENTORY_ITEMS = 20
 
 function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2

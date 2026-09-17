@@ -39,6 +39,7 @@
     "getEquipmentStatus": { "remote": ["autorio_equipment", "status"], "category": "equipment", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
     "getRecipe": { "remote": ["autorio_tools", "get_recipe"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
     "getRecipeDetails": { "remote": ["autorio_knowledge", "recipe_details"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
+    "discoverPrototypes": { "remote": ["autorio_prototypes", "discover"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
     "getPrototypeDetails": { "remote": ["autorio_prototypes", "details"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
     "getPlayerStatus": { "remote": ["autorio_tools", "get_player_status"], "category": "status", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
     "getNearbyEntities": { "remote": ["autorio_tools", "get_nearby_entities"], "category": "observation", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },

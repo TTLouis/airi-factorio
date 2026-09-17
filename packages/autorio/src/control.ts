@@ -41,7 +41,7 @@ import { get_actor_inventory_items } from './utils/inventory'
 create_tools_remote_interface()
 create_discovery_remote_interface(get_controlled_actor)
 create_knowledge_remote_interface(get_controlled_actor)
-create_prototype_knowledge_remote_interface()
+create_prototype_knowledge_remote_interface(get_controlled_actor)
 create_production_planning_remote_interface(get_controlled_actor)
 create_task_board_ui_remote_interface()
 
