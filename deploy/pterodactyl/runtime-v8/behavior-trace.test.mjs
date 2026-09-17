@@ -96,6 +96,32 @@ function withProviderUsage(message, usage = {
   return message
 }
 
+function truncatedProviderMessage(responseId) {
+  const message = { content: '' }
+  Object.defineProperty(message, '_airiProvider', {
+    configurable: true,
+    enumerable: false,
+    value: {
+      response_id: responseId,
+      model: 'test-model',
+      finish_reason: 'length',
+      diagnostic_code: 'provider_output_truncated_empty_content',
+      usage: { prompt_tokens: 1000, completion_tokens: 2000, total_tokens: 3000 },
+      response_bytes: 512,
+      content_chars: 0,
+      content_utf8_bytes: 0,
+      content_non_ascii_chars: 0,
+      content_replacement_chars: 0,
+      normalized_content_chars: 0,
+      reasoning_content_chars: 8400,
+      tool_call_count: 0,
+      structured_content: { json_valid: false, plan_valid: false, error: 'empty content' },
+      content_preview: '',
+    },
+  })
+  return message
+}
+
 test('behavior trace correlates request through verification, records usage, and redacts secrets', async t => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-behavior-trace-'))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
@@ -237,4 +263,49 @@ test('provider response metadata is available to tracing without changing assist
   })
   assert.equal(Object.keys(message).includes('_airiProvider'), false)
   assert.equal(JSON.stringify(message), '{"content":"{}"}')
+})
+
+test('request failure freezes the final provider diagnostics and last tool into one snapshot', async t => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-failure-snapshot-'))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  const traceFile = path.join(dir, 'airi-behavior.jsonl')
+  let providerCalls = 0
+  const agent = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    provider: async () => {
+      providerCalls++
+      if (providerCalls === 1) return toolMessage()
+      return truncatedProviderMessage(`resp-truncated-${providerCalls}`)
+    },
+    systemPrompt: 'NPC test prompt',
+    traceFile,
+  })
+
+  await assert.rejects(
+    agent.request('inspect once, then answer', { sender: 'TTLouis' }),
+    /Invalid provider content JSON|recovery exhausted/i,
+  )
+
+  const rows = (await fsp.readFile(traceFile, 'utf8')).trim().split('\n').map(JSON.parse)
+  const failed = rows.findLast(row => row.event === 'request.failed')
+  assert.ok(failed)
+  assert.equal(failed.data.stage, 'runtime')
+  assert.equal(failed.data.failure_snapshot.provider.kind, 'response')
+  assert.equal(failed.data.failure_snapshot.provider.recovery_attempt, 3)
+  assert.equal(failed.data.failure_snapshot.provider.provider.finish_reason, 'length')
+  assert.equal(failed.data.failure_snapshot.provider.provider.diagnostic_code, 'provider_output_truncated_empty_content')
+  assert.equal(failed.data.failure_snapshot.provider.provider.content_chars, 0)
+  assert.equal(failed.data.failure_snapshot.provider.provider.reasoning_content_chars, 8400)
+  assert.deepEqual(failed.data.failure_snapshot.provider.provider.structured_content, {
+    json_valid: false,
+    plan_valid: false,
+    error: 'empty content',
+  })
+  assert.equal(failed.data.failure_snapshot.recovery.attempt, 3)
+  assert.match(failed.data.failure_snapshot.recovery.reason, /Invalid provider content JSON/i)
+  assert.equal(failed.data.failure_snapshot.last_tool.phase, 'result')
+  assert.equal(failed.data.failure_snapshot.last_tool.name, 'getActorStatus')
+  assert.ok(failed.data.failure_snapshot.last_tool.output_chars > 0)
+  assert.equal(failed.data.failure_snapshot.actor_id, 18)
+  assert.equal(failed.data.failure_snapshot.epoch, 3)
 })
