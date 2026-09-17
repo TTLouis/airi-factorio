@@ -31,6 +31,7 @@ function entity(unitNumber, name, x, y, extra = {}) {
     supports_direction: true,
     rotatable: true,
     ...(extra.amount === undefined ? {} : { amount: extra.amount }),
+    ...(extra.spatial === undefined ? {} : { spatial: extra.spatial }),
   }
 }
 
@@ -174,6 +175,52 @@ test('getNearbyEntities returns canonical added removed and changed sets', async
   assert.deepEqual(diff.changed.map(item => item.reference), ['entity:101'])
   assert.equal(diff.changed[0].changes.direction, 4)
   assert.equal(diff.changed[0].changes.name, undefined)
+})
+
+test('getNearbyEntities preserves spatial semantics in full snapshots and diffs', async () => {
+  const firstSpatial = {
+    item_io: {
+      drop_position: { x: 4.5, y: 5.5 },
+      drop_target: undefined,
+    },
+    mining: {
+      search_center: { x: 4.5, y: 4.5 },
+      radius: 1.5,
+      resources: [{ name: 'modded-ore', entities: 6, amount: 6000 }],
+    },
+  }
+  const secondSpatial = {
+    ...firstSpatial,
+    item_io: {
+      drop_position: { x: 5.5, y: 4.5 },
+      drop_target: {
+        name: 'modded-chest',
+        type: 'container',
+        unit_number: 202,
+        position: { x: 5.5, y: 4.5 },
+      },
+    },
+    mining: {
+      ...firstSpatial.mining,
+      resources: [{ name: 'modded-ore', entities: 5, amount: 5100 }],
+    },
+  }
+
+  const { providerInputs } = await runTwoObservations([
+    nearbySnapshot([entity(201, 'modded-miner', 4.5, 4.5, { type: 'mining-drill', spatial: firstSpatial })]),
+    nearbySnapshot([entity(201, 'modded-miner', 4.5, 4.5, { type: 'mining-drill', spatial: secondSpatial })]),
+  ])
+
+  const first = JSON.parse(toolResult(providerInputs[1], 'nearby-first').content)
+  assert.deepEqual(first.entities[0].spatial, firstSpatial)
+
+  const second = JSON.parse(toolResult(providerInputs[3], 'nearby-second').content)
+  assert.equal(second.observation_mode, 'diff')
+  assert.deepEqual(second.changed[0].changes.spatial, secondSpatial)
+
+  const continuation = providerInputs[2].map(message => String(message.content ?? '')).join('\n')
+  assert.match(continuation, /modded-ore/)
+  assert.match(continuation, /drop_position/)
 })
 
 test('getNearbyEntities refuses to diff truncated scans', async () => {
