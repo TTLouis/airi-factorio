@@ -387,6 +387,44 @@ describe('bounded area-clearing combat', () => {
     expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
   })
 
+  it('returns to the locked static encounter after a mobile preemption instead of chaining to distant units', () => {
+    const { actor, target, enemies, controller } = world()
+    target.type = 'unit-spawner'
+    target.name = 'biter-spawner'
+    target.unit_number = 92
+    target.position = { x: 30, y: 0 }
+
+    controller.submit_clear(80)
+    controller.tick(actor)
+
+    const immediate: any = {
+      valid: true,
+      name: 'small-biter',
+      type: 'unit',
+      unit_number: 93,
+      position: { x: 8, y: 0 },
+      health: 15,
+    }
+    const distant: any = {
+      valid: true,
+      name: 'medium-biter',
+      type: 'unit',
+      unit_number: 94,
+      position: { x: 20, y: 0 },
+      health: 75,
+    }
+    enemies.push(immediate, distant)
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+    expect(controller.status()).toMatchObject({ target: { unit_number: 93 } })
+
+    immediate.valid = false
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+
+    expect(controller.status()).toMatchObject({ target: { name: 'biter-spawner', unit_number: 92 } })
+  })
+
   it('does not place the first support turret at the task origin and stages only after advancing toward a nest', () => {
     const c = world()
     c.target.type = 'unit-spawner'
@@ -401,6 +439,7 @@ describe('bounded area-clearing combat', () => {
     expect(c.surface.create_entity).not.toHaveBeenCalled()
     expect(c.controller.status()).toMatchObject({
       initial_static_threats: 1,
+      initial_threat_score: 4,
       support_turret_budget: 1,
       support_stage_started: false,
     })
@@ -431,7 +470,44 @@ describe('bounded area-clearing combat', () => {
     expect(c.controller.status()).toMatchObject({ turrets_placed: 0, support_stage_started: true })
   })
 
-  it('scales the deterministic support budget with static nest size and places the bounded staged batch', () => {
+  it('scales support budget with enemy count and tier, capped at eight turrets', () => {
+    const c = world()
+    c.enemies.length = 0
+    c.enemies.push(
+      { valid: true, name: 'biter-spawner', type: 'unit-spawner', unit_number: 600, position: { x: 30, y: 0 }, health: 350 },
+      { valid: true, name: 'medium-biter', type: 'unit', unit_number: 601, position: { x: 34, y: 1 }, health: 75 },
+      { valid: true, name: 'big-spitter', type: 'unit', unit_number: 602, position: { x: 36, y: -1 }, health: 200 },
+      { valid: true, name: 'behemoth-worm-turret', type: 'turret', unit_number: 603, position: { x: 38, y: 2 }, health: 750 },
+    )
+
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+    expect(c.controller.status()).toMatchObject({
+      initial_static_threats: 2,
+      initial_threat_score: 18,
+      support_turret_budget: 5,
+    })
+
+    c.enemies.length = 0
+    for (let i = 0; i < 8; i++) {
+      c.enemies.push({
+        valid: true,
+        name: 'behemoth-worm-turret',
+        type: 'turret',
+        unit_number: 700 + i,
+        position: { x: 30 + i, y: i },
+        health: 750,
+      })
+    }
+    const c2 = world()
+    c2.enemies.length = 0
+    c2.enemies.push(...c.enemies)
+    c2.controller.submit_clear(80)
+    c2.controller.tick(c2.actor)
+    expect(c2.controller.status()).toMatchObject({ initial_threat_score: 64, support_turret_budget: 8 })
+  })
+
+  it('advances the firing line between support placements instead of dumping the whole budget at one point', () => {
     const c = world()
     c.enemies.length = 0
     for (let i = 0; i < 5; i++) {
@@ -439,35 +515,35 @@ describe('bounded area-clearing combat', () => {
         valid: true,
         name: i % 2 === 0 ? 'biter-spawner' : 'small-worm-turret',
         type: i % 2 === 0 ? 'unit-spawner' : 'turret',
-        unit_number: 600 + i,
+        unit_number: 800 + i,
         position: { x: 30 + i * 2, y: i },
         health: 350,
       })
     }
-    c.main.push(itemStack('gun-turret', 4), itemStack('piercing-rounds-magazine', 100))
-    let nextTurret = 700
-    c.surface.create_entity.mockImplementation(() => makeTurret(nextTurret++).turret)
+    c.main.push(itemStack('gun-turret', 8), itemStack('piercing-rounds-magazine', 200))
+    let nextTurret = 900
+    c.surface.create_entity.mockImplementation(({ position }: { position: { x: number, y: number } }) => makeTurret(nextTurret++, undefined, position).turret)
 
     c.controller.submit_clear(80)
     c.controller.tick(c.actor)
-    expect(c.controller.status()).toMatchObject({ initial_static_threats: 5, support_turret_budget: 3, turrets_placed: 0 })
+    expect(c.controller.status()).toMatchObject({ initial_threat_score: 16, support_turret_budget: 4, turrets_placed: 0 })
 
     c.actor.position = { x: 6, y: 0 }
+    ;(globalThis as any).game.tick += 1
+    c.controller.tick(c.actor)
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(1)
+
     for (let i = 0; i < 3; i++) {
       ;(globalThis as any).game.tick += 1
       c.controller.tick(c.actor)
     }
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(1)
 
-    expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
-    expect(c.controller.status()).toMatchObject({
-      support_turret_budget: 3,
-      turrets_placed: 3,
-      support_stage_started: true,
-    })
-
+    c.actor.position = { x: 11, y: 0 }
     ;(globalThis as any).game.tick += 1
     c.controller.tick(c.actor)
-    expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(2)
+    expect(c.controller.status()).toMatchObject({ support_turret_budget: 4, turrets_placed: 2, encounter_owned_turret_count: 2 })
   })
 
   it('places and loads a paid gun turret only after support staging is established', () => {
