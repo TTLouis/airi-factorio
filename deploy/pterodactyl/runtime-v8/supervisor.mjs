@@ -34,7 +34,7 @@ import { configureNpcSession } from './supervisor-adapter.mjs'
 import { luaString } from './structured-policy.mjs'
 
 const UI_CONTROL_MARKER = '[AIRI_UI_CONTROL]'
-const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow'])
+const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow', 'new_task'])
 const UI_PROMPT_MARKER = '[AIRI_UI_PROMPT]'
 const UI_PROMPT_MAX_CHARS = 4000
 const UI_INPUT_POLL_MS = 250
@@ -470,7 +470,7 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
     }
   }
   else if (!debug.provider_model) {
-    debug.provider_model = uiText(fallback.provider_model, 160)
+    debug.provider_model = uiText(fallback.provider_model ?? debug.provider_model, 160)
   }
 
   const usage = failure?.usage ?? fallback.usage ?? data?.usage ?? providerEvent?.usage
@@ -638,15 +638,36 @@ async function pausePlanIfPresent(session, reason) {
   return session.agent.pausePersistentPlan(reason)
 }
 
-async function terminatePlan(session, reason) {
+function resetLiveTaskContext(session) {
+  if (!session.agentLive || typeof session.agentLive !== 'object') return
+  Object.assign(session.agentLive, {
+    phase: 'idle',
+    detail: '',
+    objective: '',
+    at: Date.now(),
+    activity: [],
+  })
+}
+
+async function discardTaskContext(session, reason, { clearDialogue = false } = {}) {
   const agent = session.agent
   if (!agent) return undefined
   await agent.loadPersistentState?.()
   const key = typeof agent.activePlanKey === 'function' ? agent.activePlanKey() : `npc:${session.npcId ?? 'airi'}`
-  const previous = agent.memory?.terminatePlan?.(key, reason)
+
+  // Cancellation is deliberately first: an in-flight provider response must not
+  // race the destructive context update, and no new Autorio work may be admitted
+  // while the server is clearing the durable slot.
   agent.cancel?.(reason)
+  await stopWorldWork(session)
+
+  const cleared = clearDialogue
+    ? agent.memory?.clearTaskContext?.(key)
+    : agent.memory?.terminatePlan?.(key)
   await agent.persistState?.()
-  return previous
+  resetLiveTaskContext(session)
+  await session.clearTaskBoardUi()
+  return cleared
 }
 
 export async function executeUiControl(session, event) {
@@ -661,10 +682,14 @@ export async function executeUiControl(session, event) {
   }
 
   if (event.action === 'terminate') {
-    await terminatePlan(session, 'ui_terminate')
-    await stopWorldWork(session)
-    await session.clearTaskBoardUi()
+    await discardTaskContext(session, 'ui_terminate')
     await session.printChat('Terminated the current AIRI goal. Its durable plan was discarded and will not resume.')
+    return true
+  }
+
+  if (event.action === 'new_task') {
+    await discardTaskContext(session, 'ui_new_task', { clearDialogue: true })
+    await session.printChat('Started a new task context for this NPC. Previous conversation and durable plan were cleared; learned skills and Factorio world state were kept.')
     return true
   }
 
