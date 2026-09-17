@@ -34,6 +34,7 @@ describe('agent observation tools', () => {
       'getPrototypeDetails',
       'getPlayerStatus',
       'getNearbyEntities',
+      'getPlacementCandidates',
       'findLongRangeEntities',
       'findNearestEnemy',
       'getEntityStatus',
