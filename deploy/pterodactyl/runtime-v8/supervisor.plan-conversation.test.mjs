@@ -4,13 +4,19 @@ import test from 'node:test'
 
 import { liveAgentEvent } from './supervisor.mjs'
 
-test('plan.accepted publishes only initial and failure-replan public chat', () => {
+test('plan.accepted retains each non-empty public decision in the current task conversation', () => {
   const initial = liveAgentEvent('plan.accepted', { chat_message: 'I will bootstrap coal first.', trigger_source: 'request' })
   assert.deepEqual(initial.activity, { kind: 'decision', text: 'I will bootstrap coal first.' })
   const replan = liveAgentEvent('plan.accepted', { chat_message: 'I will use the east patch.', trigger_source: 'failure' })
   assert.deepEqual(replan.activity, { kind: 'decision', text: 'I will use the east patch.' })
-  assert.equal(liveAgentEvent('plan.accepted', { chat_message: 'Continuing.', trigger_source: 'continuation' }).activity, undefined)
-  assert.equal(liveAgentEvent('plan.accepted', { chat_message: 'Checking.', trigger_source: 'completion' }).activity, undefined)
+  assert.deepEqual(
+    liveAgentEvent('plan.accepted', { chat_message: 'Continuing.', trigger_source: 'continuation' }).activity,
+    { kind: 'decision', text: 'Continuing.' },
+  )
+  assert.deepEqual(
+    liveAgentEvent('plan.accepted', { chat_message: 'Checking.', trigger_source: 'completion' }).activity,
+    { kind: 'decision', text: 'Checking.' },
+  )
 })
 
 test('NpcAgentLoop carries the trigger source on plan.accepted', () => {
