@@ -41,7 +41,7 @@ describe('project history model', () => {
     expect(project_history()).toEqual([])
   })
 
-  it('upserts one durable project per goal and keeps newest first', () => {
+  it('upserts one durable project per goal and keeps newest semantic update first', () => {
     record_project_snapshot(snapshot('goal-a', 'Build power'), 60)
     record_project_snapshot(snapshot('goal-b', 'Build green circuits'), 120)
     record_project_snapshot({ ...snapshot('goal-a', 'Build power'), status: 'completed', completed_count: 3 }, 180)
@@ -50,6 +50,30 @@ describe('project history model', () => {
     expect(project_by_id('goal-a')?.status).toBe('completed')
     expect(project_by_id('goal-a')?.created_tick).toBe(60)
     expect(project_by_id('goal-a')?.updated_tick).toBe(180)
+  })
+
+  it('treats an unchanged heartbeat as a no-op', () => {
+    expect(record_project_snapshot(snapshot('goal-a', 'Build power'), 60)).toBe(true)
+    expect(record_project_snapshot(snapshot('goal-a', 'Build power'), 120)).toBe(false)
+    expect(project_by_id('goal-a')?.updated_tick).toBe(60)
+  })
+
+  it('keeps completed projects frozen until their content actually changes', () => {
+    const completed = { ...snapshot('goal-a', 'Build power'), status: 'completed', completed_count: 3, active_index: 2 }
+    record_project_snapshot(completed, 60)
+    record_project_snapshot(snapshot('goal-b', 'Build circuits'), 120)
+
+    expect(record_project_snapshot(completed, 180)).toBe(false)
+    expect(project_by_id('goal-a')?.updated_tick).toBe(60)
+    expect(project_history().map(project => project.id)).toEqual(['goal-b', 'goal-a'])
+
+    const changed = {
+      ...completed,
+      activity: [{ id: 'done', kind: 'result', text: 'Power build verified', timestamp: '00:03:00' }],
+    }
+    expect(record_project_snapshot(changed, 240)).toBe(true)
+    expect(project_by_id('goal-a')?.updated_tick).toBe(240)
+    expect(project_history().map(project => project.id)).toEqual(['goal-a', 'goal-b'])
   })
 
   it('merges retained activity without duplicating the same event', () => {
