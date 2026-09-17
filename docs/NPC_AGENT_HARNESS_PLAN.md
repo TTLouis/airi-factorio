@@ -58,6 +58,8 @@ Do not substitute lower layers for higher layers when the failure mode is engine
 
 Turn real gameplay failures into reproducible regressions. Prefer fixes in observations, tools, runtime semantics, receipts, recovery, and deterministic game knowledge over indefinitely expanding the system prompt.
 
+The detailed learning/bootstrap E2E sequence and acceptance gates are maintained in `docs/NPC_LEARNING_BOOTSTRAP_E2E.md`. That document is the handoff for fresh-start research progression, automated red science, skill verification/reuse, and the later Coal Snake discovery benchmark.
+
 Keep end-to-end behavior traceable:
 
 ```text
