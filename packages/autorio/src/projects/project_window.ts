@@ -1,4 +1,4 @@
-import type { FrameGuiElement, LuaGuiElement, LuaPlayer } from 'factorio:runtime'
+import type { FrameGuiElement, LuaGuiElement, LuaPlayer, ScrollPaneGuiElement } from 'factorio:runtime'
 
 // The main Task Board already owns on_gui_click. PROJECTS intentionally reuses
 // its existing debug-close click route for the sixth 3x2 control slot; project
@@ -10,11 +10,22 @@ export const PROJECT_LIST_NAME = 'airi_task_board_project_list'
 
 const ROOT_NAME = 'airi_task_board_projects_panel'
 const BODY_NAME = 'airi_task_board_projects_body'
+const COLUMNS_NAME = 'airi_task_board_projects_columns'
+const LIST_FRAME_NAME = 'airi_task_board_projects_list_frame'
+const DETAIL_FRAME_NAME = 'airi_task_board_projects_detail_frame'
+const DETAIL_BODY_NAME = 'airi_task_board_projects_detail_body'
+const DETAIL_META_NAME = 'airi_task_board_projects_detail_meta'
+const DETAIL_STEPS_SCROLL_NAME = 'airi_task_board_projects_steps_scroll'
+const DETAIL_STEPS_FLOW_NAME = 'airi_task_board_projects_steps_flow'
+const DETAIL_ACTIVITY_SCROLL_NAME = 'airi_task_board_projects_activity_scroll'
+const DETAIL_ACTIVITY_FLOW_NAME = 'airi_task_board_projects_activity_flow'
 const PROJECTS_WIDTH = 900
+const PROJECTS_HEIGHT = 620
 const PROJECT_LIST_WIDTH = 250
 const PROJECT_DETAIL_WIDTH = PROJECTS_WIDTH - PROJECT_LIST_WIDTH - 12
 const MAX_PROJECTS = 64
 const MAX_ACTIVITY = 160
+const MAX_ACTIVITY_VISIBLE = 48
 const MAX_STEPS = 48
 const MAX_TEXT = 2000
 
@@ -132,11 +143,46 @@ function project_name(objective: string, goal_id: string) {
   return objective.length <= 56 ? objective : `${objective.slice(0, 55)}…`
 }
 
+function same_steps(left: ProjectHistoryStep[], right: ProjectHistoryStep[]) {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index++) {
+    if (left[index].id !== right[index].id || left[index].description !== right[index].description || left[index].status !== right[index].status) return false
+  }
+  return true
+}
+
+function same_activity(left: ProjectHistoryActivity[], right: ProjectHistoryActivity[]) {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index++) {
+    if (activity_key(left[index]) !== activity_key(right[index])) return false
+  }
+  return true
+}
+
+function same_project_content(previous: ProjectHistoryRecord, next: ProjectHistoryRecord) {
+  return previous.name === next.name
+    && previous.objective === next.objective
+    && previous.status === next.status
+    && previous.response === next.response
+    && previous.blocker === next.blocker
+    && previous.pause_reason === next.pause_reason
+    && previous.completed_count === next.completed_count
+    && previous.total_steps === next.total_steps
+    && previous.active_index === next.active_index
+    && same_steps(previous.steps, next.steps)
+    && same_activity(previous.activity, next.activity)
+}
+
 /**
  * Durable goals are the first useful project boundary we have today. Keeping
  * the archive behind a ProjectHistoryRecord makes the UI useful immediately,
  * while leaving room for a later Project -> Tasks layer without changing the
  * main Task Board or the runtime heartbeat schema.
+ *
+ * A heartbeat is not a project update. Only semantic changes advance
+ * `updated_tick` or move the project to the top of history. This matters most
+ * for completed projects: once finished they remain visually stable instead of
+ * being rebuilt once per console refresh and stealing the reader's scroll.
  */
 export function record_project_snapshot(board: any, tick: number) {
   const goal_id = clean_text(board?.goal_id, 100)
@@ -161,6 +207,7 @@ export function record_project_snapshot(board: any, tick: number) {
     created_tick: previous?.created_tick ?? tick,
     updated_tick: tick,
   }
+  if (previous !== undefined && same_project_content(previous, record)) return false
   records[goal_id] = record
 
   for (let index = order.length - 1; index >= 0; index--) {
@@ -236,19 +283,8 @@ function render_titlebar(root: FrameGuiElement) {
   titlebar.add({ type: 'sprite-button', name: PROJECTS_CLOSE_BUTTON_NAME, sprite: 'utility/close', style: 'frame_action_button', tooltip: 'Close Projects' })
 }
 
-function render_project_list(parent: LuaGuiElement, selected_id: string) {
-  const frame = parent.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame' })
-  frame.style.width = PROJECT_LIST_WIDTH
-  const header = frame.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
-  header.style.horizontally_stretchable = true
-  header.add({ type: 'label', caption: 'PROJECTS', style: 'subheader_caption_label' })
+function project_list_values(selected_id: string) {
   const history = project_history()
-  if (history.length === 0) {
-    const empty = frame.add({ type: 'label', caption: 'No durable AIRI projects recorded yet.' })
-    empty.style.single_line = false
-    empty.style.maximal_width = PROJECT_LIST_WIDTH - 24
-    return
-  }
   const items: string[] = []
   const ids: string[] = []
   let selected_index = 0
@@ -258,15 +294,47 @@ function render_project_list(parent: LuaGuiElement, selected_id: string) {
     ids.push(project.id)
     if (project.id === selected_id) selected_index = index + 1
   }
+  return { history, items, ids, selected_index }
+}
+
+function render_project_list(parent: LuaGuiElement, selected_id: string) {
+  const frame = parent.add({ type: 'frame', name: LIST_FRAME_NAME, direction: 'vertical', style: 'inside_shallow_frame' })
+  frame.style.width = PROJECT_LIST_WIDTH
+  frame.style.height = PROJECTS_HEIGHT
+  frame.style.vertically_stretchable = true
+  const header = frame.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
+  header.style.horizontally_stretchable = true
+  header.add({ type: 'label', caption: 'PROJECTS', style: 'subheader_caption_label' })
+  const values = project_list_values(selected_id)
+  if (values.history.length === 0) {
+    const empty = frame.add({ type: 'label', caption: 'No durable AIRI projects recorded yet.' })
+    empty.style.single_line = false
+    empty.style.maximal_width = PROJECT_LIST_WIDTH - 16
+    return
+  }
   const list = frame.add({
     type: 'list-box',
     name: PROJECT_LIST_NAME,
-    items,
-    selected_index,
-    tags: { airi_project_ids: ids },
+    items: values.items,
+    selected_index: values.selected_index,
+    tags: { airi_project_ids: values.ids },
   }) as any
-  list.style.width = PROJECT_LIST_WIDTH - 20
-  list.style.maximal_height = 620
+  // Stretch into the frame instead of reserving the old 20 px strip on the
+  // right. The selected-row highlight now reaches the usable panel edge.
+  list.style.horizontally_stretchable = true
+  list.style.vertically_stretchable = true
+  list.style.minimal_width = PROJECT_LIST_WIDTH - 8
+  list.style.maximal_height = PROJECTS_HEIGHT - 40
+}
+
+function refresh_project_list(frame: LuaGuiElement, selected_id: string) {
+  const list = frame[PROJECT_LIST_NAME] as any
+  if (!list?.valid) return false
+  const values = project_list_values(selected_id)
+  list.items = values.items
+  list.tags = { airi_project_ids: values.ids }
+  list.selected_index = values.selected_index
+  return true
 }
 
 function add_detail_row(parent: LuaGuiElement, key: string, value: string) {
@@ -279,65 +347,145 @@ function add_detail_row(parent: LuaGuiElement, key: string, value: string) {
   content.style.maximal_width = PROJECT_DETAIL_WIDTH - 120
 }
 
-function render_project_detail(parent: LuaGuiElement, project: ProjectHistoryRecord | undefined) {
-  const frame = parent.add({ type: 'frame', direction: 'vertical', style: 'inside_shallow_frame' })
+function step_signature(project: ProjectHistoryRecord) {
+  let signature = `${project.id}|${project.total_steps}|${project.active_index}`
+  for (const step of project.steps) signature = `${signature}|${step.id}:${step.status}:${step.description}`
+  return signature
+}
+
+function activity_rows_diff(shown: string[], wanted: string[]) {
+  for (let overlap = math.min(shown.length, wanted.length); overlap >= 0; overlap--) {
+    if (overlap === 0 && shown.length > 0) return undefined
+    let matches = true
+    for (let index = 0; index < overlap; index++) {
+      if (shown[shown.length - overlap + index] !== wanted[index]) { matches = false; break }
+    }
+    if (matches) return { drop: shown.length - overlap, append: wanted.length - overlap }
+  }
+  return undefined
+}
+
+function add_activity_line(parent: LuaGuiElement, entry: ProjectHistoryActivity) {
+  const prefix = entry.timestamp !== undefined ? `${entry.timestamp} · ` : ''
+  const line = parent.add({ type: 'label', caption: `${prefix}${entry.kind.toUpperCase()} · ${entry.text}` })
+  line.style.single_line = false
+  line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60
+}
+
+function render_project_detail_skeleton(parent: LuaGuiElement, project: ProjectHistoryRecord | undefined) {
+  const frame = parent.add({ type: 'frame', name: DETAIL_FRAME_NAME, direction: 'vertical', style: 'inside_shallow_frame' })
   frame.style.width = PROJECT_DETAIL_WIDTH
+  frame.style.height = PROJECTS_HEIGHT
+  frame.style.vertically_stretchable = true
   const header = frame.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
   header.style.horizontally_stretchable = true
   header.add({ type: 'label', caption: 'Project Detail', style: 'subheader_caption_label' })
-  const body = frame.add({ type: 'flow', direction: 'vertical' })
+  const body = frame.add({ type: 'flow', name: DETAIL_BODY_NAME, direction: 'vertical' })
   body.style.padding = 10
   body.style.vertical_spacing = 6
-  if (project === undefined) {
-    body.add({ type: 'label', caption: 'Select a project from the left.' })
-    return
-  }
+  body.style.horizontally_stretchable = true
+  body.style.vertically_stretchable = true
+  body.tags = { project_id: project?.id ?? '' }
 
-  add_detail_row(body, 'GOAL', project.objective)
-  add_detail_row(body, 'STATUS', project.status.toUpperCase())
-  add_detail_row(body, 'PROGRESS', `${project.completed_count}/${project.total_steps}`)
-  if (project.blocker.length > 0) add_detail_row(body, 'BLOCKER', project.blocker)
-  if (project.pause_reason.length > 0) add_detail_row(body, 'PAUSED', project.pause_reason)
-  if (project.response.length > 0) add_detail_row(body, 'AIRI', project.response)
-
+  const meta = body.add({ type: 'flow', name: DETAIL_META_NAME, direction: 'vertical' })
+  meta.style.horizontally_stretchable = true
+  meta.style.vertical_spacing = 6
   body.add({ type: 'line' })
   body.add({ type: 'label', caption: 'Tasks / Steps', style: 'semibold_label' })
-  const step_scroll = body.add({ type: 'scroll-pane', horizontal_scroll_policy: 'never' })
+  const step_scroll = body.add({ type: 'scroll-pane', name: DETAIL_STEPS_SCROLL_NAME, horizontal_scroll_policy: 'never' })
   step_scroll.style.maximal_height = 190
   step_scroll.style.width = PROJECT_DETAIL_WIDTH - 30
-  if (project.steps.length === 0) step_scroll.add({ type: 'label', caption: 'No durable steps recorded.' })
-  else {
-    for (let index = 0; index < project.steps.length; index++) {
-      const step = project.steps[index]
-      const line = step_scroll.add({ type: 'label', caption: `${index + 1}. [${step.status.toUpperCase()}] ${step.description}` })
-      line.style.single_line = false
-      line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60
-    }
-  }
+  const step_flow = step_scroll.add({ type: 'flow', name: DETAIL_STEPS_FLOW_NAME, direction: 'vertical', tags: { signature: '' } })
+  step_flow.style.horizontally_stretchable = true
+  step_flow.style.vertical_spacing = 2
 
   body.add({ type: 'label', caption: 'Activity / Evidence', style: 'semibold_label' })
-  const activity_scroll = body.add({ type: 'scroll-pane', horizontal_scroll_policy: 'never' })
-  activity_scroll.style.maximal_height = 250
+  const activity_scroll = body.add({ type: 'scroll-pane', name: DETAIL_ACTIVITY_SCROLL_NAME, horizontal_scroll_policy: 'never' })
   activity_scroll.style.width = PROJECT_DETAIL_WIDTH - 30
-  if (project.activity.length === 0) activity_scroll.add({ type: 'label', caption: 'No retained activity recorded for this project.' })
-  else {
-    const start = math.max(0, project.activity.length - 32)
-    for (let index = start; index < project.activity.length; index++) {
-      const entry = project.activity[index]
-      const prefix = entry.timestamp !== undefined ? `${entry.timestamp} · ` : ''
-      const line = activity_scroll.add({ type: 'label', caption: `${prefix}${entry.kind.toUpperCase()} · ${entry.text}` })
-      line.style.single_line = false
-      line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60
-    }
+  activity_scroll.style.vertically_stretchable = true
+  activity_scroll.style.minimal_height = 220
+  const activity_flow = activity_scroll.add({ type: 'flow', name: DETAIL_ACTIVITY_FLOW_NAME, direction: 'vertical', tags: { keys: [] } })
+  activity_flow.style.horizontally_stretchable = true
+  activity_flow.style.vertical_spacing = 2
+}
+
+function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRecord | undefined, force_activity_latest = false) {
+  const body = frame[DETAIL_BODY_NAME]
+  if (!body?.valid) return false
+  const current_id = String(body.tags.project_id ?? '')
+  const next_id = project?.id ?? ''
+  if (current_id !== next_id) return false
+  const meta = body[DETAIL_META_NAME]
+  const step_scroll = body[DETAIL_STEPS_SCROLL_NAME]
+  const activity_scroll = body[DETAIL_ACTIVITY_SCROLL_NAME]
+  const step_flow = step_scroll?.valid ? step_scroll[DETAIL_STEPS_FLOW_NAME] : undefined
+  const activity_flow = activity_scroll?.valid ? activity_scroll[DETAIL_ACTIVITY_FLOW_NAME] : undefined
+  if (!meta?.valid || !step_scroll?.valid || !activity_scroll?.valid || !step_flow?.valid || !activity_flow?.valid) return false
+
+  meta.clear()
+  if (project === undefined) {
+    meta.add({ type: 'label', caption: 'Select a project from the left.' })
+    step_flow.clear()
+    activity_flow.clear()
+    step_flow.tags = { signature: '' }
+    activity_flow.tags = { keys: [] }
+    return true
   }
+  add_detail_row(meta, 'GOAL', project.objective)
+  add_detail_row(meta, 'STATUS', project.status.toUpperCase())
+  add_detail_row(meta, 'PROGRESS', `${project.completed_count}/${project.total_steps}`)
+  if (project.blocker.length > 0) add_detail_row(meta, 'BLOCKER', project.blocker)
+  if (project.pause_reason.length > 0) add_detail_row(meta, 'PAUSED', project.pause_reason)
+  if (project.response.length > 0) add_detail_row(meta, 'AIRI', project.response)
+
+  const signature = step_signature(project)
+  if (step_flow.tags.signature !== signature) {
+    step_flow.clear()
+    if (project.steps.length === 0) step_flow.add({ type: 'label', caption: 'No durable steps recorded.' })
+    else {
+      for (let index = 0; index < project.steps.length; index++) {
+        const step = project.steps[index]
+        const line = step_flow.add({ type: 'label', caption: `${index + 1}. [${step.status.toUpperCase()}] ${step.description}` })
+        line.style.single_line = false
+        line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60
+      }
+    }
+    step_flow.tags = { signature }
+  }
+
+  const start = math.max(0, project.activity.length - MAX_ACTIVITY_VISIBLE)
+  const entries = project.activity.slice(start)
+  const keys = entries.map(activity_key)
+  const shown = (activity_flow.tags.keys ?? []) as string[]
+  const diff = activity_rows_diff(shown, keys)
+  if (diff === undefined) {
+    activity_flow.clear()
+    for (const entry of entries) add_activity_line(activity_flow, entry)
+  }
+  else {
+    for (let index = 0; index < diff.drop; index++) {
+      const first = activity_flow.children[0]
+      if (first?.valid) first.destroy()
+    }
+    for (let index = entries.length - diff.append; index < entries.length; index++) add_activity_line(activity_flow, entries[index])
+  }
+  activity_flow.tags = { keys }
+  if (entries.length === 0 && activity_flow.children.length === 0) activity_flow.add({ type: 'label', caption: 'No retained activity recorded for this project.' })
+  if (force_activity_latest && entries.length > 0) (activity_scroll as ScrollPaneGuiElement).scroll_to_bottom()
+  return true
 }
 
 function build_projects_body(body: LuaGuiElement, player: LuaPlayer, current_goal_id: string) {
   const selected_id = selected_project_id(player.index, current_goal_id)
-  const columns = body.add({ type: 'flow', direction: 'horizontal' })
+  const selected = selected_id.length > 0 ? project_by_id(selected_id) : undefined
+  const columns = body.add({ type: 'flow', name: COLUMNS_NAME, direction: 'horizontal' })
   columns.style.horizontal_spacing = 12
+  columns.style.height = PROJECTS_HEIGHT
+  columns.style.vertical_align = 'top'
   render_project_list(columns, selected_id)
-  render_project_detail(columns, selected_id.length > 0 ? project_by_id(selected_id) : undefined)
+  render_project_detail_skeleton(columns, selected)
+  const detail = columns[DETAIL_FRAME_NAME]
+  if (detail?.valid) refresh_project_detail(detail, selected, true)
 }
 
 function build_projects_popout(player: LuaPlayer, current_goal_id: string) {
@@ -348,6 +496,7 @@ function build_projects_popout(player: LuaPlayer, current_goal_id: string) {
   render_titlebar(root)
   const body = root.add({ type: 'flow', name: BODY_NAME, direction: 'vertical' })
   body.style.width = PROJECTS_WIDTH
+  body.style.height = PROJECTS_HEIGHT
   build_projects_body(body, player, current_goal_id)
   root.bring_to_front()
 }
@@ -359,12 +508,28 @@ export function render_projects_popout(player: LuaPlayer, task_board_open: boole
   }
   const root = player.gui.screen[ROOT_NAME]
   const body = root?.valid ? root[BODY_NAME] : undefined
-  if (body?.valid) {
-    body.clear()
-    build_projects_body(body, player, current_goal_id)
+  const columns = body?.valid ? body[COLUMNS_NAME] : undefined
+  const list_frame = columns?.valid ? columns[LIST_FRAME_NAME] : undefined
+  const detail_frame = columns?.valid ? columns[DETAIL_FRAME_NAME] : undefined
+  if (!body?.valid || !columns?.valid || !list_frame?.valid || !detail_frame?.valid) {
+    build_projects_popout(player, current_goal_id)
     return
   }
-  build_projects_popout(player, current_goal_id)
+
+  const selected_id = selected_project_id(player.index, current_goal_id)
+  const selected = selected_id.length > 0 ? project_by_id(selected_id) : undefined
+  refresh_project_list(list_frame, selected_id)
+  const current_detail_id = String(detail_frame[DETAIL_BODY_NAME]?.tags.project_id ?? '')
+  if (current_detail_id !== selected_id) {
+    detail_frame.destroy()
+    render_project_detail_skeleton(columns, selected)
+    const rebuilt = columns[DETAIL_FRAME_NAME]
+    if (rebuilt?.valid) refresh_project_detail(rebuilt, selected, true)
+    return
+  }
+  // Routine heartbeats now update labels/rows in place. Scroll panes survive,
+  // so reading an older completed project no longer jumps back to the top.
+  refresh_project_detail(detail_frame, selected)
 }
 
 function handle_project_selection(player: LuaPlayer, element: any) {
