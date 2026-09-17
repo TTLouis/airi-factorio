@@ -62,6 +62,17 @@ function toolMessage(id, name, args = {}) {
   }
 }
 
+function toolBatchMessage(prefix, count, name = 'getActorStatus') {
+  return {
+    content: null,
+    tool_calls: Array.from({ length: count }, (_, index) => ({
+      id: `${prefix}-${index + 1}`,
+      type: 'function',
+      function: { name, arguments: '{}' },
+    })),
+  }
+}
+
 function planMessage(operations, chatMessage = 'Working.') {
   return {
     content: JSON.stringify({
@@ -146,7 +157,7 @@ test('tool-budget exhaustion gets up to three no-tool recovery attempts', async 
   assert.equal(contexts[2].recoveryAttempt, 1)
 })
 
-test('duplicate observation loops reuse cached output then switch to no-tool recovery after one no-progress round', async () => {
+test('duplicate observation loops preserve grounded evidence and never force tools-disabled mutation recovery', async () => {
   const rcon = new FakeRcon()
   const contexts = []
   let calls = 0
@@ -156,7 +167,6 @@ test('duplicate observation loops reuse cached output then switch to no-tool rec
     provider: async (_messages, context) => {
       contexts.push(context)
       calls++
-      if (context.allowTools === false) return planMessage([], 'I will use the collected state.')
       return toolMessage(`tool-${calls}`, 'getActorStatus')
     },
     systemPrompt: 'NPC test prompt',
@@ -164,12 +174,38 @@ test('duplicate observation loops reuse cached output then switch to no-tool rec
 
   const result = await agent.request('keep looking')
   const actorReads = rcon.commands.filter(command => command.includes('remote.call("autorio_actor","status")'))
-  assert.equal(result.chatMessage, 'I will use the collected state.')
+  assert.equal(result.blocked, true)
+  assert.equal(result.blocker.class, 'observation_no_progress')
   assert.equal(actorReads.length, 1)
   assert.equal(calls, 3)
-  assert.equal(contexts[2].allowTools, false)
-  assert.equal(contexts[2].recoveryAttempt, 1)
-  assert.ok(agent.messages.some(message => message.role === 'user' && /Repeated tool observation loop after 1 no-progress round/.test(message.content)))
+  assert.ok(contexts.every(context => context.allowTools === true))
+  assert.ok(agent.messages.some(message => message.role === 'tool' && /"actor_id":18/.test(message.content)))
+  assert.ok(agent.messages.some(message => message.role === 'user' && /duplicate result was suppressed/i.test(message.content)))
+})
+
+test('two consecutive five-tool observation batches get bounded tools-on validation recovery', async () => {
+  const rcon = new FakeRcon()
+  const contexts = []
+  let calls = 0
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async (_messages, context) => {
+      contexts.push(context)
+      calls++
+      if (calls <= 2) return toolBatchMessage(`oversized-${calls}`, 5)
+      if (calls === 3) return toolBatchMessage('valid', 2)
+      return planMessage([], 'Observed enough; no mutation required.')
+    },
+    systemPrompt: 'NPC test prompt',
+  })
+
+  const result = await agent.request('observe safely')
+  assert.equal(result.chatMessage, 'Observed enough; no mutation required.')
+  assert.equal(rcon.mutations.length, 0)
+  assert.equal(calls, 4)
+  assert.ok(contexts.every(context => context.allowTools === true))
+  assert.equal(rcon.commands.filter(command => command.includes('remote.call("autorio_actor","status")')).length, 1)
+  assert.ok(agent.messages.some(message => message.role === 'user' && /at most 4 observation tool calls/.test(message.content)))
 })
 
 test('dialogue memory belongs to the logical NPC and survives body replacement', async () => {
@@ -350,10 +386,21 @@ test('malformed tool arguments and arbitrary tool names fail before RCON tool ex
   ]) {
     const rcon = new FakeRcon()
     const baseline = rcon.commands.length
-    const agent = new NpcAgentLoop({ rcon, provider: async () => message, systemPrompt: 'NPC test prompt' })
-    await assert.rejects(() => agent.request('bad tool'))
+    const contexts = []
+    const agent = new NpcAgentLoop({
+      rcon,
+      provider: async (_messages, context) => {
+        contexts.push(context)
+        return message
+      },
+      systemPrompt: 'NPC test prompt',
+    })
+    const result = await agent.request('bad tool')
+    assert.equal(result.blocked, true)
+    assert.equal(result.blocker.class, 'tool_validation')
     assert.equal(rcon.mutations.length, 0)
     assert.ok(rcon.commands.length > baseline)
     assert.equal(rcon.commands.some(command => command.includes('autorio_tools')), false)
+    assert.ok(contexts.every(context => context.allowTools === true))
   }
 })
