@@ -89,6 +89,8 @@ Before adding a new API, audit whether an existing recipe/prototype/planning que
 
 A representative E2E acceptance case should start from a high-level goal with no prototype names (for example early automatic resource extraction) and prove that a weaker model can reach valid exact identities entirely through deterministic game queries, without remembered Factorio wiki knowledge.
 
+Validation evidence from the 2026-09-17 early-resource E2E is recorded in `docs/validation/NPC_GROUNDED_BOOTSTRAP_E2E_2026-09-17.md`. That capture also exposed a separate high-severity Task Board correctness issue: a successful operation receipt must not, by positional plan advancement alone, mark an unrelated semantic step complete. Keep batch completion and semantic step completion as separate evidence claims.
+
 ### 1. Promotion cleanup and baseline freeze
 
 - keep ordinary CI green;
