@@ -256,6 +256,23 @@ describe('combat lifecycle regressions', () => {
     expect(c.controller.status()).toMatchObject({ combat_phase: 'safety', combat_safety_goal: 'cleanup', target: undefined })
   })
 
+  it('does not let distant mobile reinforcements starve the current static encounter', () => {
+    const first = enemy(90, 'unit-spawner', 30)
+    const second = enemy(91, 'unit-spawner', 40)
+    const c = world([first, second])
+    stageTwoOwnedTurrets(c)
+
+    c.enemies.push(enemy(92, 'unit', 18))
+    advance(c, 1)
+
+    expect(c.controller.status()).toMatchObject({
+      combat_phase: 'engage',
+      target: { unit_number: 90 },
+      encounter_owned_turret_count: 2,
+    })
+    expect(c.actor.get_mining_state().mining).toBe(false)
+  })
+
   it('interrupts turret recovery when a mobile threat reappears and resumes cleanup only after safety is stable again', () => {
     const first = enemy(100, 'unit-spawner', 30)
     const c = world([first])

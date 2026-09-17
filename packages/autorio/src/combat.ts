@@ -387,10 +387,10 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     actor.set_walking_state({ walking: false, direction: defines.direction.north })
   }
 
-  function nearby_mobile_threat(actor: ControlledActor) {
+  function nearby_mobile_threat(actor: ControlledActor, radius = MOBILE_THREAT_PRIORITY_RADIUS) {
     let threat: LuaEntity | undefined
     let best = math.huge
-    const local_units = actor.surface.find_entities_filtered({ position: actor.position, radius: MOBILE_THREAT_PRIORITY_RADIUS, force: 'enemy', type: 'unit' })
+    const local_units = actor.surface.find_entities_filtered({ position: actor.position, radius, force: 'enemy', type: 'unit' })
     for (const entity of local_units) {
       if (!is_alive(entity)) continue
       const candidate = distance(actor.position, entity.position)
@@ -511,7 +511,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   function preempt_static_target_for_mobile_threat(actor: ControlledActor, task: CombatTask) {
     const target = task.target
     if (task.combat_mode !== 'clear_area' || !target || !is_alive(target) || !is_static_enemy(target)) return false
-    const threat = nearby_mobile_threat(actor)
+    const threat = nearby_mobile_threat(actor, TURRET_DANGER_DISTANCE)
     if (!threat || threat === target) return false
     bind_target(actor, task, threat, 'preempted')
     stop_actor_combat(actor)
