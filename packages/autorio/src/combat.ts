@@ -58,6 +58,7 @@ type CombatTask = PlayerParametersAttackNearestEnemy & {
   combat_safety_goal?: CombatSafetyGoal
   local_safe_since_tick?: number
   encounter_owned_turrets?: LuaEntity[]
+  encounter_static_target?: LuaEntity
   cleanup_target_unit_number?: number
   combat_recovery_position?: { x: number, y: number }
   combat_recovery_stage?: 'escape' | 'repath'
@@ -366,6 +367,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.combat_phase = 'engage'
     task.local_safe_since_tick = undefined
     task.target = target
+    if (is_static_enemy(target)) task.encounter_static_target = target
     task.target_name = target.name
     task.target_unit_number = target.unit_number
     task.target_initial_health = target.health ?? undefined
@@ -425,6 +427,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     if (owned.length === 0) {
       stop_actor_cleanup(actor)
       task.cleanup_target_unit_number = undefined
+      task.encounter_static_target = undefined
       task.last_turret_position = undefined
       task.last_turret_unit_number = undefined
       enter_safety(actor, task, 'resume')
@@ -531,9 +534,11 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       complete_single(actor, task)
       return
     }
+    const encounter_static_destroyed = task.encounter_static_target !== undefined && !is_alive(task.encounter_static_target)
     clear_bound_target(task)
     stop_actor_combat(actor)
-    if (live_owned_turrets(task).length > 0 || task.combat_safety_goal === 'cleanup') {
+    const owned_turrets = live_owned_turrets(task)
+    if (task.combat_safety_goal === 'cleanup' || (owned_turrets.length > 0 && encounter_static_destroyed)) {
       enter_safety(actor, task, 'cleanup')
       return
     }
