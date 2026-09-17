@@ -55,6 +55,17 @@ const prototypeDetailsSchema = z.object({
   name: factorioNameSchema,
 }).strict()
 
+const placementCandidatesSchema = z.object({
+  entity_name: factorioNameSchema,
+  center: z.object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+  }).strict().optional(),
+  radius: z.number().int().min(1).max(24).default(8),
+  target_resource: factorioNameSchema.optional(),
+  limit: z.number().int().min(1).max(8).default(5),
+}).strict()
+
 async function readRemoteStatus(interfaceName: 'autorio_actor' | 'autorio_operations' | 'autorio_navigation' | 'autorio_crafting' | 'autorio_research' | 'autorio_combat' | 'autorio_follow' | 'autorio_defense' | 'autorio_equipment') {
   const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("${interfaceName}", "status")))`
   const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
@@ -154,7 +165,7 @@ export const tools: ToolFunction[] = [
   },
   {
     name: 'getNearbyEntities',
-    description: 'Inspect a bounded area around AIRI and return compact nearby entity summaries. Use optional exact prototype name/type filters to reduce noise.',
+    description: 'Inspect a bounded area around AIRI and return compact nearby entity summaries. Entities with runtime item-transfer/output or fluid connection geometry may include a compact spatial field from the current game instance. Use optional exact prototype name/type filters to reduce noise.',
     schema: nearbyEntitiesSchema,
     fn: async ({ parameters }) => {
       const parsed = nearbyEntitiesSchema.parse(parameters ?? {})
@@ -163,6 +174,19 @@ export const tools: ToolFunction[] = [
       const input = `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_nearby_entities", ${parsed.radius}, ${name}, ${entityType}, ${parsed.limit})))`
       const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
       logger.withFields({ output: response.data.output, parameters: parsed }).debug('Nearby entities')
+      return response.data.output
+    },
+  },
+  {
+    name: 'getPlacementCandidates',
+    description: 'Ask the local Factorio harness to enumerate a small set of live legal placement candidates for an entity using the running game prototype and surface.can_place_entity. For resource-bound mining placement, provide target_resource so candidates without live target-resource coverage are rejected and remaining candidates include current coverage. Use this instead of manually guessing coordinates for terrain/resource-constrained placement.',
+    schema: placementCandidatesSchema,
+    fn: async ({ parameters }) => {
+      const parsed = placementCandidatesSchema.parse(parameters ?? {})
+      const request = renderLuaString(JSON.stringify(parsed))
+      const input = `/silent-command local request=helpers.json_to_table(${request}); rcon.print(helpers.table_to_json(remote.call("autorio_tools", "get_placement_candidates", request)))`
+      const response = await v2FactorioConsoleCommandRawPost({ body: { input } })
+      logger.withFields({ output: response.data.output, parameters: parsed }).debug('Placement candidates')
       return response.data.output
     },
   },
@@ -192,7 +216,7 @@ export const tools: ToolFunction[] = [
   },
   {
     name: 'getEntityStatus',
-    description: 'Inspect the nearest local entity with an exact prototype name and return bounded inventory summaries. Use this to verify placed chests and nearby machines without dumping the map.',
+    description: 'Inspect the nearest local entity with an exact prototype name and return bounded inventory summaries plus compact runtime spatial semantics when the entity exposes relevant I/O geometry. Use this to verify placed chests and nearby machines without dumping the map.',
     schema: entityStatusSchema,
     fn: async ({ parameters }) => {
       const parsed = entityStatusSchema.parse(parameters)
