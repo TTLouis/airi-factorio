@@ -20,6 +20,7 @@ const SENSITIVE_TRACE_KEY = /(?:authorization|api.?key|token|password|secret|coo
 const STATE_SCHEMA = 1
 const PLAN_HISTORY_LIMIT = 24
 const DUPLICATE_OBSERVATION_MESSAGE = '[HARNESS] Duplicate observation suppressed. The result is unchanged from the earlier identical tool call already present in this decision context; reuse it and act or report a blocker.'
+const OUTPUT_BUDGET_RECOVERY_MESSAGE = '[HARNESS] The immediately preceding provider response exhausted its output budget before emitting content or tool calls. Continue the same logical request and goal from this unchanged harness context. Tools remain available. Do not treat the empty response as an action, plan update, completion, or evidence. Do not replay any world mutation already proven complete by the supplied receipts or canonical Task Board. Return the next necessary tool call(s) or one valid strict-JSON plan.'
 
 const DURABLE_PLAN_PROMPT = `
 ## Durable goal and plan state
@@ -715,6 +716,44 @@ function planProgress(plan, stateResult) {
   return plan.chatMessage
 }
 
+function providerOutputBudgetExhausted(message) {
+  return message?._airiProvider?.output_budget_exhausted === true
+    || message?._airiProvider?.diagnostic_code === 'provider_output_budget_exhausted'
+}
+
+function latestDeterministicCompletionEvidence(state) {
+  const latest = state?.task_board?.evidence?.at(-1)
+  if (latest?.kind !== 'deterministic_verification') return false
+  try {
+    const summary = JSON.parse(latest.summary)
+    return summary?.verdict === 'verified_complete'
+  }
+  catch {
+    return false
+  }
+}
+
+function outputBudgetRecoveryEvidenceAvailable(state, reason) {
+  if (reason === 'failure') return true
+  return reason === 'completion' && latestDeterministicCompletionEvidence(state)
+}
+
+function protectOutputBudgetRecoveryPlan(plan, state, guard) {
+  if (!guard || guard.world_evidence_observed || !state?.task_board || (guard.goal_id && guard.goal_id !== state.goal_id)) return plan
+  const canonical = Array.isArray(state.task_board.steps)
+    ? state.task_board.steps.map(step => String(step?.description ?? '')).filter(Boolean)
+    : []
+  if (canonical.length === 0) return plan
+  const currentStep = Number.isSafeInteger(state.task_board.active_index)
+    ? Math.min(Math.max(state.task_board.active_index, 0), canonical.length - 1)
+    : 0
+  return {
+    ...plan,
+    plan: canonical,
+    currentStep,
+  }
+}
+
 export class NpcAgentLoop extends BaseNpcAgentLoop {
   constructor(options) {
     const memory = options.memory ?? new NpcDialogueMemory()
@@ -731,6 +770,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.planUpdateReason = 'request'
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
+    this.outputBudgetRecoveryUsed = false
+    this.outputBudgetRecoveryGuard = null
     this.onActivity = typeof options.onActivity === 'function' ? options.onActivity : null
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
@@ -795,6 +836,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.planUpdateReason = 'request'
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
+    this.outputBudgetRecoveryUsed = false
+    this.outputBudgetRecoveryGuard = null
     if (this.traceRequest) await this.traceEvent('request.superseded', { usage: this.traceRequest.usage })
     this.traceRequest = {
       id: `req_${Date.now().toString(36)}_${(++this.traceRequestSequence).toString(36)}`,
@@ -936,6 +979,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.toolCache.clear()
     this.duplicateToolRounds = 0
     this.toolValidationRetries = 0
+    this.outputBudgetRecoveryUsed = false
+    this.outputBudgetRecoveryGuard = null
     this.messages.push({ role: 'user', content: cleanMemoryText(modMessage, 18000) })
     await this.traceEvent(traceEventName)
     return this.runGuarded()
@@ -990,10 +1035,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   cancel(reason = 'cancelled') {
     void this.traceEvent('request.cancelled', { reason, usage: this.traceRequest?.usage })
     this.traceRequest = null
+    this.outputBudgetRecoveryUsed = false
+    this.outputBudgetRecoveryGuard = null
     return super.cancel()
   }
 
-  async callProvider(current, generation, { round, allowTools = true, recoveryAttempt = 0 }) {
+  async callProvider(current, generation, {
+    round,
+    allowTools = true,
+    recoveryAttempt = 0,
+    recoveryKind,
+    providerMessagesOverride,
+  }) {
     const budgetStartedAt = Date.now()
     let budget
     try {
@@ -1009,13 +1062,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     const controller = new AbortController()
     this.providerAbort = controller
-    const providerMessages = this.providerMessages()
+    const providerMessages = providerMessagesOverride ?? this.providerMessages()
     const startedAt = Date.now()
     if (recoveryAttempt > 0 && this.traceRequest) {
       this.traceRequest.recovery = {
         ...(this.traceRequest.recovery ?? {}),
         attempt: recoveryAttempt,
         round,
+        ...(recoveryKind ? { kind: recoveryKind } : {}),
       }
     }
     await this.traceEvent('provider.request', {
@@ -1023,6 +1077,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       trigger_source: this.planUpdateReason,
       allow_tools: allowTools,
       recovery_attempt: recoveryAttempt,
+      recovery_kind: recoveryKind,
       message_count: providerMessages.length,
       message_chars: providerMessages.reduce((total, message) => total + messageChars(message), 0),
     })
@@ -1034,6 +1089,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         round,
         allowTools,
         recoveryAttempt,
+        recoveryKind,
         signal: controller.signal,
       })
       const usage = normalizedProviderUsage(message?._airiProvider?.usage)
@@ -1043,6 +1099,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         round,
         trigger_source: this.planUpdateReason,
         recovery_attempt: recoveryAttempt,
+        recovery_kind: recoveryKind,
         latency_ms: Date.now() - startedAt,
         has_tool_calls: message?.tool_calls !== undefined,
         content_chars: typeof message?.content === 'string' ? message.content.length : 0,
@@ -1059,6 +1116,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         round,
         trigger_source: this.planUpdateReason,
         recovery_attempt: recoveryAttempt,
+        recovery_kind: recoveryKind,
         latency_ms: Date.now() - startedAt,
         message: messageText,
         timeout: /timed out/i.test(messageText),
@@ -1074,6 +1132,41 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (generation !== this.generation || !this.active) throw new AgentLoopError('Model turn was cancelled or superseded')
     await this.assertCurrent()
     if (!message || typeof message !== 'object') throw new AgentLoopError('Provider returned no message')
+
+    if (allowTools && recoveryAttempt === 0 && !this.outputBudgetRecoveryUsed && providerOutputBudgetExhausted(message)) {
+      this.outputBudgetRecoveryUsed = true
+      const state = this.memory.currentPlan?.(this.activePlanKey())
+      this.outputBudgetRecoveryGuard = {
+        goal_id: state?.goal_id,
+        world_evidence_observed: outputBudgetRecoveryEvidenceAvailable(state, this.planUpdateReason),
+      }
+      if (this.traceRequest) {
+        this.traceRequest.recovery = {
+          reason: 'provider_output_budget_exhausted',
+          attempt: 1,
+          round,
+          kind: 'output_budget_exhaustion',
+        }
+      }
+      await this.traceEvent('provider.output_budget_recovery_started', {
+        round,
+        recovery_attempt: 1,
+        recovery_kind: 'output_budget_exhaustion',
+        canonical_goal_id: state?.goal_id,
+        canonical_step: state?.task_board?.active_index,
+        world_evidence_observed: this.outputBudgetRecoveryGuard.world_evidence_observed,
+      })
+      return this.callProvider(current, generation, {
+        round,
+        allowTools: true,
+        recoveryAttempt: 1,
+        recoveryKind: 'output_budget_exhaustion',
+        providerMessagesOverride: [
+          ...providerMessages.map(item => ({ ...item })),
+          { role: 'user', content: OUTPUT_BUDGET_RECOVERY_MESSAGE },
+        ],
+      })
+    }
     return message
   }
 
@@ -1114,6 +1207,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       throw error
     }
     const results = this.messages.slice(beforeCount + 1).filter(item => item.role === 'tool')
+    if (this.outputBudgetRecoveryGuard && results.length > 0) {
+      this.outputBudgetRecoveryGuard.world_evidence_observed = true
+    }
     for (let index = 0; index < results.length; index++) {
       const original = String(results[index].content ?? '')
       if (cachedBefore[index]) results[index].content = DUPLICATE_OBSERVATION_MESSAGE
@@ -1167,21 +1263,32 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.lastMemoryKey = this.requestInfo.memoryKey
       const previousState = this.memory.currentPlan?.(this.requestInfo.memoryKey)
       const previousBoard = previousState?.task_board
+      const durablePlan = protectOutputBudgetRecoveryPlan(plan, previousState, this.outputBudgetRecoveryGuard)
+      if (durablePlan !== plan) {
+        await this.traceEvent('provider.output_budget_recovery_plan_guarded', {
+          goal_id: previousState?.goal_id,
+          canonical_step: durablePlan.currentStep,
+          incoming_step: plan.currentStep,
+          incoming_plan_length: plan.plan.length,
+          canonical_plan_length: durablePlan.plan.length,
+        })
+      }
       this.memory.remember(this.requestInfo.memoryKey, this.requestInfo.turnId, {
         sender: this.requestInfo.sender,
         user: this.requestInfo.text,
         assistant: plan.chatMessage,
         operations: plan.operations,
       })
-      stateResult = this.memory.recordPlan?.(this.requestInfo.memoryKey, this.requestInfo, plan, {
+      stateResult = this.memory.recordPlan?.(this.requestInfo.memoryKey, this.requestInfo, durablePlan, {
         continuation: this.continuations > 0,
         persistentRuntime,
       })
-      stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, plan, stateResult, {
+      stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
         allowReplan: this.planUpdateReason === 'failure',
       }) ?? stateResult
       await this.persistState()
     }
+    this.outputBudgetRecoveryGuard = null
 
     if (commands.length === 0) {
       this.active = false
