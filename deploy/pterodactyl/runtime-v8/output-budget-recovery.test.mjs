@@ -49,7 +49,7 @@ class FakeRcon {
       assert.ok(marker)
       this.mutations.push(text)
       this.batchId++
-      const admissions = [...text.matchAll(/local r\d+=remote\.call/g)].length
+      const admissions = [...text.matchAll(/return remote\.call\('autorio_operations'/g)].length
       return `${marker}${JSON.stringify({ ok: true, result: Array.from({ length: admissions }, () => [true, 'Task started']) })}`
     }
     return 'tool-output'
