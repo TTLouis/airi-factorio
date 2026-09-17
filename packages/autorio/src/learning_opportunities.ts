@@ -1,5 +1,9 @@
 import type { SkillDefinition } from './skills'
-import { skill_semantic_signature } from './skill_semantic_evidence'
+import {
+  mark_skill_revision_reverified,
+  record_skill_evidence,
+  skill_semantic_signature,
+} from './skill_semantic_evidence'
 
 export type LearningOpportunitySource = 'completed_goal' | 'observed_factory' | 'experiment' | 'manual'
 export type LearningOpportunityState = 'detected' | 'analyzing' | 'candidate_created' | 'duplicate' | 'awaiting_verification' | 'verified' | 'rejected' | 'failed'
@@ -41,12 +45,31 @@ export interface LearningVerificationQueueItem {
   reason: string
 }
 
+interface VerificationEvidenceSnapshot {
+  id: string
+  skill_id: string
+  skill_revision: number
+  state?: string
+  failure_kind?: 'execution' | 'semantic'
+  reason?: string
+  evidence_refs?: string[]
+}
+
+interface StoredSkillRevision {
+  id: string
+  revision: number
+  status?: string
+}
+
 declare const storage: {
   airi_learning_opportunities?: Record<string, LearningOpportunity>
   airi_learning_opportunity_order?: string[]
   airi_learning_next_id?: number
   airi_learning_verification_queue?: LearningVerificationQueueItem[]
   airi_learning_policy?: LearningPolicy
+  airi_skill_verification_runs?: Record<string, VerificationEvidenceSnapshot>
+  airi_skill_definitions?: Record<string, StoredSkillRevision>
+  airi_learning_terminal_evidence_processed?: Record<string, string>
 }
 
 export const MAX_LEARNING_OPPORTUNITIES = 32
@@ -88,6 +111,54 @@ function ensure_records() {
 function ensure_queue() {
   if (storage.airi_learning_verification_queue === undefined) storage.airi_learning_verification_queue = []
   return storage.airi_learning_verification_queue
+}
+
+function terminal_evidence_processed() {
+  storage.airi_learning_terminal_evidence_processed ??= {}
+  return storage.airi_learning_terminal_evidence_processed
+}
+
+/**
+ * Verification owns the execution state machine, while learning owns the
+ * semantic evidence/trust overlay. Verification writes its terminal run before
+ * updating the linked learning opportunity, so this bridge can classify the
+ * completed run without introducing another polling loop or coupling the
+ * verifier to trust storage.
+ */
+function bridge_terminal_verification_evidence(opportunity: LearningOpportunity) {
+  if ((opportunity.state !== 'failed' && opportunity.state !== 'verified') || opportunity.verification_run_id === undefined) return
+  const run = storage.airi_skill_verification_runs?.[opportunity.verification_run_id]
+  if (!run || (run.state !== 'failed' && run.state !== 'verified')) return
+
+  const terminal_key = `${run.id}:${run.state}`
+  const processed = terminal_evidence_processed()
+  if (processed[run.id] === terminal_key) return
+
+  const refs = unique_strings([...(run.evidence_refs ?? []), ...opportunity.evidence_refs])
+  if (run.state === 'failed') {
+    const semantic = run.failure_kind === 'semantic'
+    record_skill_evidence(
+      run.skill_id,
+      run.skill_revision,
+      semantic ? 'semantic_failure' : 'execution_failure',
+      run.reason ?? opportunity.reason,
+      refs,
+    )
+    processed[run.id] = terminal_key
+    return
+  }
+
+  const promoted = storage.airi_skill_definitions?.[run.skill_id]
+  if (!promoted || promoted.status !== 'verified' || promoted.revision <= run.skill_revision) return
+  record_skill_evidence(
+    promoted.id,
+    promoted.revision,
+    'success',
+    `Verification ${run.id} promoted revision ${promoted.revision} after live semantic checks.`,
+    refs,
+  )
+  mark_skill_revision_reverified(promoted.id, promoted.revision, refs)
+  processed[run.id] = terminal_key
 }
 
 export function get_learning_policy(): LearningPolicy {
@@ -133,6 +204,7 @@ export function create_learning_opportunity(value: Omit<LearningOpportunity, 'id
     const removed = order.shift()
     if (removed !== undefined) delete records[removed]
   }
+  bridge_terminal_verification_evidence(opportunity)
   return opportunity
 }
 
@@ -144,6 +216,7 @@ export function update_learning_opportunity(id: string, patch: Partial<LearningO
   if (patch.reason !== undefined) next.reason = clean_text(patch.reason)
   if (patch.evidence_refs !== undefined) next.evidence_refs = unique_strings(patch.evidence_refs)
   records[id] = next
+  bridge_terminal_verification_evidence(next)
   return next
 }
 
