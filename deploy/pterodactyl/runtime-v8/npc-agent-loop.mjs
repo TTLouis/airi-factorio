@@ -721,6 +721,16 @@ function providerOutputBudgetExhausted(message) {
     || message?._airiProvider?.diagnostic_code === 'provider_output_budget_exhausted'
 }
 
+function operationSignature(operation) {
+  return cleanMemoryText(`${operation?.name ?? ''} ${JSON.stringify(operation?.args ?? {})}`, 800)
+}
+
+function replayedCompletedOperations(plan, guard) {
+  if (!guard || guard.fresh_tool_evidence || !Array.isArray(guard.completed_operations) || guard.completed_operations.length === 0) return []
+  const completed = new Set(guard.completed_operations)
+  return (plan?.operations ?? []).map(operationSignature).filter(signature => completed.has(signature))
+}
+
 function latestDeterministicCompletionEvidence(state) {
   const latest = state?.task_board?.evidence?.at(-1)
   if (latest?.kind !== 'deterministic_verification') return false
@@ -1139,6 +1149,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.outputBudgetRecoveryGuard = {
         goal_id: state?.goal_id,
         world_evidence_observed: outputBudgetRecoveryEvidenceAvailable(state, this.planUpdateReason),
+        fresh_tool_evidence: false,
+        completed_operations: this.planUpdateReason === 'completion' && Array.isArray(state?.last_operations)
+          ? state.last_operations.slice(0, 16)
+          : [],
       }
       if (this.traceRequest) {
         this.traceRequest.recovery = {
@@ -1155,6 +1169,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         canonical_goal_id: state?.goal_id,
         canonical_step: state?.task_board?.active_index,
         world_evidence_observed: this.outputBudgetRecoveryGuard.world_evidence_observed,
+        completed_operation_count: this.outputBudgetRecoveryGuard.completed_operations.length,
       })
       return this.callProvider(current, generation, {
         round,
@@ -1168,6 +1183,19 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
     }
     return message
+  }
+
+  parsePlanMessage(message) {
+    const plan = super.parsePlanMessage(message)
+    const replayed = replayedCompletedOperations(plan, this.outputBudgetRecoveryGuard)
+    if (replayed.length > 0) {
+      void this.traceEvent('provider.output_budget_recovery_replay_rejected', {
+        replayed_operation_count: replayed.length,
+        replayed_operations: replayed,
+      })
+      throw new AgentLoopError('Output-budget recovery attempted to replay a completed world mutation without fresh tool evidence')
+    }
+    return plan
   }
 
   prepareToolBatch(message) {
@@ -1209,6 +1237,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const results = this.messages.slice(beforeCount + 1).filter(item => item.role === 'tool')
     if (this.outputBudgetRecoveryGuard && results.length > 0) {
       this.outputBudgetRecoveryGuard.world_evidence_observed = true
+      this.outputBudgetRecoveryGuard.fresh_tool_evidence = true
     }
     for (let index = 0; index < results.length; index++) {
       const original = String(results[index].content ?? '')
