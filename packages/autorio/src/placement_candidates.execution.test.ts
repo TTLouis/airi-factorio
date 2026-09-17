@@ -24,7 +24,7 @@ describe('placement candidate execution', () => {
     ;(globalThis as any).prototypes.entity = originalEntityPrototypes
   })
 
-  function actor(canPlace: () => boolean = () => true) {
+  function actor(canPlace: (args?: any) => boolean = () => true) {
     return {
       position: { x: 0, y: 0 },
       force: { index: 2 },
