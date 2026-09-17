@@ -726,7 +726,7 @@ function operationSignature(operation) {
 }
 
 function replayedCompletedOperations(plan, guard) {
-  if (!guard || guard.fresh_tool_evidence || !Array.isArray(guard.completed_operations) || guard.completed_operations.length === 0) return []
+  if (!guard || !Array.isArray(guard.completed_operations) || guard.completed_operations.length === 0) return []
   const completed = new Set(guard.completed_operations)
   return (plan?.operations ?? []).map(operationSignature).filter(signature => completed.has(signature))
 }
@@ -1193,7 +1193,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         replayed_operation_count: replayed.length,
         replayed_operations: replayed,
       })
-      throw new AgentLoopError('Output-budget recovery attempted to replay a completed world mutation without fresh tool evidence')
+      throw new AgentLoopError('Output-budget recovery attempted to replay a completed world mutation')
     }
     return plan
   }
@@ -1210,6 +1210,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   async handleToolBatch(message, prepared = this.prepareToolBatch(message)) {
     const cachedBefore = prepared.map(entry => this.toolCache.has(entry.signature))
+    const staticCachedBefore = prepared.map(entry => entry.tool.function.name === 'getPrototypeDetails' && this.staticPrototypeCache.has(entry.signature))
     for (let index = 0; index < prepared.length; index++) {
       const entry = prepared[index]
       if (this.traceRequest?.usage) {
@@ -1235,7 +1236,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       throw error
     }
     const results = this.messages.slice(beforeCount + 1).filter(item => item.role === 'tool')
-    const freshResultObserved = results.some((_, index) => cachedBefore[index] !== true)
+    const freshResultObserved = results.some((_, index) => cachedBefore[index] !== true && staticCachedBefore[index] !== true)
     if (this.outputBudgetRecoveryGuard && freshResultObserved) {
       this.outputBudgetRecoveryGuard.world_evidence_observed = true
       this.outputBudgetRecoveryGuard.fresh_tool_evidence = true
