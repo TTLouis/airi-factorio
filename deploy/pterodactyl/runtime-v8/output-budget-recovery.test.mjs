@@ -281,3 +281,33 @@ test('empty recovery content cannot retire an active canonical Task Board withou
   assert.deepEqual(durable.plan, canonical)
   assert.equal(durable.current_step, 0)
 })
+
+test('cached recovery observation does not count as fresh world evidence', async () => {
+  const agent = makeAgent({ provider: async () => planMessage() })
+  agent.active = true
+  agent.epoch = deployment()
+  agent.messages = []
+  agent.outputBudgetRecoveryGuard = {
+    goal_id: 'goal_test',
+    world_evidence_observed: false,
+    fresh_tool_evidence: false,
+    completed_operations: ['wait {"ticks":60}'],
+  }
+
+  const message = {
+    content: null,
+    tool_calls: [{
+      id: 'cached-actor-status',
+      type: 'function',
+      function: { name: 'getActorStatus', arguments: '{}' },
+    }],
+  }
+  const prepared = agent.prepareToolBatch(message)
+  agent.toolCache.set(prepared[0].signature, '{"actor":{"actor_id":18}}')
+
+  await agent.handleToolBatch(message, prepared)
+
+  assert.equal(agent.outputBudgetRecoveryGuard.world_evidence_observed, false)
+  assert.equal(agent.outputBudgetRecoveryGuard.fresh_tool_evidence, false)
+  assert.match(agent.messages.at(-1).content, /Duplicate observation suppressed/)
+})
