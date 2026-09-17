@@ -320,7 +320,7 @@ describe('bounded combat controller', () => {
 })
 
 describe('bounded area-clearing combat', () => {
-  it('reacquires enemies until the bounded area is actually clear', () => {
+  it('reacquires enemies until the bounded area is actually clear, then waits for stable local safety', () => {
     const { actor, target, enemies, manager, controller } = world()
     const second: any = {
       valid: true,
@@ -340,6 +340,16 @@ describe('bounded area-clearing combat', () => {
     expect(controller.status()).toMatchObject({ mode: 'clear_area', targets_destroyed: 1, target: { name: 'biter-spawner' } })
 
     second.valid = false
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+    expect(controller.status()).toMatchObject({ combat_phase: 'safety', targets_destroyed: 2 })
+    expect(controller.status().last_result).not.toMatchObject({ code: 'area_cleared' })
+    expect(manager.player_state.task_state).toBe(TaskStates.ATTACKING)
+
+    ;(globalThis as any).game.tick += 119
+    controller.tick(actor)
+    expect(manager.player_state.task_state).toBe(TaskStates.ATTACKING)
+
     ;(globalThis as any).game.tick += 1
     controller.tick(actor)
     expect(controller.status()).toMatchObject({ last_result: { code: 'area_cleared', completed: true, targets_destroyed: 2 } })
