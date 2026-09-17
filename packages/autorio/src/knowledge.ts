@@ -68,13 +68,22 @@ function sort_strings(values: string[]) {
 }
 
 function categories_for(recipe: any): string[] {
+  // The deterministic/runtime floor is Factorio 2.0.77. In 2.0 a recipe exposes
+  // its primary category plus optional additional categories directly; reading
+  // those fields avoids calling the LuaRecipe category predicate through a
+  // transpiled wrapper and avoids scanning the global recipe-category table.
   const categories: string[] = []
-  if (!prototypes.recipe_category || typeof recipe?.has_category !== 'function') return categories
-  for (const [, category] of pairs(prototypes.recipe_category)) {
-    // Pass the stable runtime identifier rather than the prototype object. Factorio's
-    // RecipeCategoryID boundary accepts the category name directly and this avoids
-    // Lua/TSTL wrapper identity mismatches seen in real runtime RCON calls.
-    if (recipe.has_category(category.name)) categories.push(category.name)
+  if (typeof recipe.category === 'string') categories.push(recipe.category)
+  for (const category of recipe.additional_categories ?? []) {
+    if (typeof category !== 'string') continue
+    let duplicate = false
+    for (const existing of categories) {
+      if (existing === category) {
+        duplicate = true
+        break
+      }
+    }
+    if (!duplicate) categories.push(category)
   }
   sort_strings(categories)
   return categories
