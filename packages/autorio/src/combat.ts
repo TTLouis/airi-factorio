@@ -412,6 +412,15 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function tick_cleanup(actor: ControlledActor, task: CombatTask) {
+    const immediate_threat = nearby_mobile_threat(actor)
+    if (immediate_threat) {
+      stop_actor_cleanup(actor)
+      actor.set_walking_state({ walking: false, direction: defines.direction.north })
+      task.combat_safety_goal = 'cleanup'
+      bind_target(actor, task, immediate_threat, 'preempted')
+      return
+    }
+
     const owned = live_owned_turrets(task)
     if (owned.length === 0) {
       stop_actor_cleanup(actor)
