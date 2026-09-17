@@ -161,6 +161,8 @@ export interface PlayerParametersAttackNearestEnemy {
   combat_phase?: 'engage' | 'safety'
   /** First tick of the current uninterrupted local-safety window. */
   local_safe_since_tick?: number
+  /** Exact support-turret entities created and paid for by the current combat encounter. */
+  encounter_owned_turrets?: LuaEntity[]
   origin_position?: MapPositionStruct
   target: LuaEntity | null
   owner_actor_id?: number
