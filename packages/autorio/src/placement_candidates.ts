@@ -198,20 +198,62 @@ function item_output_position(prototype: any, position: { x: number, y: number }
   return { x: position.x + rotated.x, y: position.y + rotated.y }
 }
 
+function same_position(left: PlacementCandidate, right: PlacementCandidate) {
+  return left.position.x === right.position.x && left.position.y === right.position.y
+}
+
+function port_signature(port: CandidateFluidPort) {
+  return `${port.storage_index}:${port.connection_index}:${port.production_type ?? ''}:${port.filter ?? ''}:${port.flow_direction ?? ''}:${port.position.x}:${port.position.y}:${port.direction ?? ''}`
+}
+
+function spatial_signature(candidate: PlacementCandidate) {
+  const parts: string[] = []
+  if (candidate.item_output_position) {
+    parts.push(`out:${candidate.item_output_position.x}:${candidate.item_output_position.y}`)
+  }
+  for (const port of candidate.fluid_ports ?? []) parts.push(`fluid:${port_signature(port)}`)
+  return parts.join('|')
+}
+
+/**
+ * Keep the returned set compact but useful: reserve most slots for different
+ * legal positions, then use remaining slots for alternate orientations only
+ * when those orientations produce materially different output/fluid geometry.
+ */
 function diverse_top(values: PlacementCandidate[], limit: number) {
   const result: PlacementCandidate[] = []
+  const primary_position_limit = limit <= 2 ? limit : limit - 2
+
   for (const candidate of values) {
-    let duplicate_location = false
+    let position_seen = false
     for (const existing of result) {
-      if (existing.position.x === candidate.position.x && existing.position.y === candidate.position.y && existing.direction === candidate.direction) {
-        duplicate_location = true
+      if (same_position(existing, candidate)) {
+        position_seen = true
         break
       }
     }
-    if (duplicate_location) continue
+    if (position_seen) continue
     result.push(candidate)
-    if (result.length >= limit) break
+    if (result.length >= primary_position_limit) break
   }
+
+  for (const candidate of values) {
+    if (result.length >= limit) break
+    let exact_selected = false
+    let same_position_same_spatial = false
+    for (const existing of result) {
+      if (existing.position.x === candidate.position.x && existing.position.y === candidate.position.y && existing.direction === candidate.direction) {
+        exact_selected = true
+        break
+      }
+      if (same_position(existing, candidate) && spatial_signature(existing) === spatial_signature(candidate)) {
+        same_position_same_spatial = true
+      }
+    }
+    if (exact_selected || same_position_same_spatial) continue
+    result.push(candidate)
+  }
+
   return result
 }
 
