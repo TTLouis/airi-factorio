@@ -123,17 +123,16 @@ const RESOURCE_LAYOUT = {
   slot_rows_max: 8,
   scrollbar_width: 12,
 }
-// The console is exactly as tall as its left column, because the world preview
-// stretches to match it. So the two tracker scroll panes and the camera's floor
-// are what decide the window's height, and sizing them from the player's own
-// display lets a large screen be used properly without producing a window a
-// small screen cannot show. Both display properties are synchronized, so this
-// stays identical on every peer.
+// Control-stage GUI mutations are synchronized game state. They must not branch
+// on client display resolution or UI scale, because different peers may report
+// different display settings. Use one deterministic layout baseline everywhere;
+// Factorio can still render that same synchronized geometry at each local scale.
 //
 // Behind one table for the same reason as RESOURCE_LAYOUT: TSTL emits every
 // module-scope constant as a Lua local, and Factorio's parser allows 200 per
 // function.
 const CONSOLE_LAYOUT = {
+  synced_gui_height: 1080,
   screen_fraction: 0.92,
   // Everything in the LEFT column that is not a tracker list: titlebar, the
   // status/controls row, the tracker's own header/progress/divider chrome and
@@ -582,9 +581,9 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
 }
 
 /**
- * Usable GUI height for this player, in the units Factorio styles are measured
- * in. `display_resolution` is physical pixels, so it has to be divided by the
- * player's UI scale before it means anything to a style.
+ * Pure conversion helper retained for layout tests and future non-runtime
+ * callers. The synchronized control-stage rendering path deliberately does not
+ * read LuaPlayer display properties; see player_gui_height below.
  */
 export function task_board_gui_height(resolution_height: number, scale: number) {
   const safe_scale = scale > 0 ? scale : 1
@@ -630,8 +629,8 @@ export function task_board_preview_min_height(gui_height: number) {
   return math.max(CONSOLE_LAYOUT.preview_min_height, math.min(CONSOLE_LAYOUT.preview_max_height, math.floor(gui_height * CONSOLE_LAYOUT.preview_screen_fraction)))
 }
 
-function player_gui_height(player: LuaPlayer) {
-  return task_board_gui_height(player.display_resolution.height, player.display_scale)
+function player_gui_height(_player: LuaPlayer) {
+  return CONSOLE_LAYOUT.synced_gui_height
 }
 
 function preview_position_caption(preview: TaskBoardUiWorldPreview) { return `X ${math.floor(preview.position.x)} · Y ${math.floor(preview.position.y)}` }
