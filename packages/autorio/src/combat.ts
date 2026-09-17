@@ -689,7 +689,10 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     const stage_budget = task.support_turret_budget ?? 0
     const owned_count = live_owned_turrets(task).length
     if (stage_budget <= 0) return false
-    if (nearest_mobile_enemy_distance(actor) <= TURRET_DANGER_DISTANCE) return false
+    // A healthy actor can finish a support placement while a non-panic unit is nearby.
+    // This prevents freshly spawned defenders from starving the support stage forever;
+    // panic-range threats still preempt immediately.
+    if (nearest_mobile_enemy_distance(actor) <= PANIC_DISTANCE) return false
 
     if (!task.support_stage_started) {
       const origin = task.origin_position ?? actor.position
@@ -1073,7 +1076,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       return
     }
     if (!task.target && !acquire(actor, task)) return
-    if (is_alive(task.target)) preempt_static_target_for_mobile_threat(actor, task)
     const target = task.target
     if (!is_alive(target)) {
       target_destroyed(actor, task)
@@ -1123,6 +1125,11 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       task.last_progress_tick = game.tick
       return
     }
+
+    // Give a ready support placement one tick of priority over a non-panic mobile
+    // reinforcement. If placement is unavailable or fails, fall back to the normal
+    // preemption path immediately instead of ignoring the threat.
+    if (preempt_static_target_for_mobile_threat(actor, task)) return
 
     if (can_shoot) {
       if (is_static_enemy(target)) clear_combat_path(task, false)
