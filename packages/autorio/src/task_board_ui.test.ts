@@ -165,7 +165,7 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain("style: 'slot_window_frame'")
     expect(source).toContain("style: 'mod_gui_inside_deep_frame'")
     expect(source).toMatch(/type: 'sprite-button',\s+name: BUTTON_NAME,\s+sprite: BUTTON_SPRITE/)
-    expect(source).not.toContain("'entity/character'")
+    expect(source).toContain("const BUTTON_SPRITE: SpritePath = 'entity/character'")
     expect(source).toContain("style: 'slot_button'")
     expect(source).toContain('button.toggled = task_board_ui_is_open(player.index)')
     expect(source).not.toContain("caption: 'AIRI',")
