@@ -5,6 +5,16 @@ import { parsePlan, renderOperation, toolCommand } from './structured-policy.mjs
 
 export class AgentLoopError extends Error {}
 
+class ToolValidationError extends AgentLoopError {
+  constructor(message, code, details = {}) {
+    super(message)
+    this.code = code
+    this.failureClass = 'tool_validation'
+    this.details = details
+  }
+}
+
+const MAX_TOOL_CALLS_PER_BATCH = 4
 const THROUGHPUT_MEASUREMENT_TOOL = 'measureTransportThroughput'
 const STATIC_PROTOTYPE_TOOL = 'getPrototypeDetails'
 const STATIC_PROTOTYPE_CACHE_LIMIT = 64
@@ -298,6 +308,7 @@ export class NpcAgentLoop {
     this.staticPrototypeCache ??= new Map()
     this.prototypeRefsThisRequest = []
     this.duplicateToolRounds = 0
+    this.observationRecoveryRounds = 0
     this.toolValidationRetries = 0
     this.requestInfo = null
     this.generation = (this.generation ?? 0) + 1
@@ -548,7 +559,16 @@ export class NpcAgentLoop {
   }
 
   prepareToolBatch(message) {
-    check(Array.isArray(message.tool_calls) && message.tool_calls.length >= 1 && message.tool_calls.length <= 4, 'Invalid tool call batch')
+    if (!Array.isArray(message.tool_calls) || message.tool_calls.length < 1) {
+      throw new ToolValidationError('Invalid tool call batch', 'invalid_tool_batch')
+    }
+    if (message.tool_calls.length > MAX_TOOL_CALLS_PER_BATCH) {
+      throw new ToolValidationError(
+        `Tool call batch exceeds the maximum of ${MAX_TOOL_CALLS_PER_BATCH}`,
+        'tool_batch_too_large',
+        { observed_count: message.tool_calls.length, maximum: MAX_TOOL_CALLS_PER_BATCH },
+      )
+    }
     const prepared = message.tool_calls.map((tool) => {
       check(tool && tool.type === 'function' && typeof tool.id === 'string' && tool.id.length >= 1 && tool.id.length <= 200, 'Invalid tool call')
       check(tool.function && typeof tool.function.name === 'string' && typeof tool.function.arguments === 'string', 'Invalid tool function')
@@ -677,14 +697,29 @@ export class NpcAgentLoop {
       this.messages.push({ role: 'tool', tool_call_id: entry.tool.id, content: String(output).slice(0, 16000) })
     }
 
-    if (duplicateThisRound) {
-      this.duplicateToolRounds++
-      check(this.duplicateToolRounds <= this.maxToolLoopRetries, `Repeated tool observation loop after ${this.maxToolLoopRetries} retries`)
-    }
+    if (duplicateThisRound) this.duplicateToolRounds++
     else {
       this.duplicateToolRounds = 0
+      this.observationRecoveryRounds = 0
     }
     this.compactWorkingContext()
+  }
+
+  async recoveryDiagnostic(_details) {}
+
+  async blockedWithoutMutation(reason, failureClass = 'harness_blocker') {
+    const current = await this.assertCurrent()
+    this.active = false
+    return {
+      chatMessage: `Blocked before mutation: ${cleanMemoryText(reason, 800)}`,
+      plan: [],
+      currentStep: 0,
+      operations: [],
+      epoch: current.epoch,
+      actorId: current.actor_id,
+      blocked: true,
+      blocker: { class: failureClass, reason: cleanMemoryText(reason, 1200) },
+    }
   }
 
   async runTurn() {
@@ -700,24 +735,55 @@ export class NpcAgentLoop {
         }
         catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
+          const code = typeof error?.code === 'string' ? error.code : 'invalid_tool_call'
           this.toolValidationRetries++
+          await this.recoveryDiagnostic({
+            failure_class: 'tool_validation',
+            reason_code: code,
+            reason,
+            retry: this.toolValidationRetries,
+            retry_limit: this.maxToolValidationRetries,
+            tools_enabled: true,
+            ...(error?.details && typeof error.details === 'object' ? error.details : {}),
+          })
           if (this.toolValidationRetries > this.maxToolValidationRetries) {
-            return this.recoverPlan(generation, error, round + 1)
+            return this.blockedWithoutMutation(
+              `Tool validation failed repeatedly (${code}): ${reason}. Deterministic observations collected earlier were preserved.`,
+              'tool_validation',
+            )
           }
+          const instruction = code === 'tool_batch_too_large'
+            ? `The runtime allows at most ${MAX_TOOL_CALLS_PER_BATCH} observation tool calls in one provider turn. Keep the observations already collected, choose the smallest necessary subset, and retry with no more than ${MAX_TOOL_CALLS_PER_BATCH} tool calls. Tools remain enabled; do not emit a world mutation merely to recover from this formatting error.`
+            : 'Retry using only an approved observation tool name and strict JSON arguments matching its schema. Tools remain enabled; do not repeat the rejected payload.'
           this.messages.push({
             role: 'user',
-            content: `[HARNESS] Tool call rejected (${this.toolValidationRetries}/${this.maxToolValidationRetries}): ${reason}. Retry using only an approved tool name and strict JSON arguments matching its schema. Do not repeat the rejected payload.`,
+            content: `[HARNESS] Tool-validation failure (${this.toolValidationRetries}/${this.maxToolValidationRetries}; ${code}): ${reason}. ${instruction}`,
           })
           continue
         }
         this.toolValidationRetries = 0
         await this.handleToolBatch(message, prepared)
         if (this.duplicateToolRounds >= this.maxToolLoopRetries && this.duplicateToolRounds > 0) {
-          return this.recoverPlan(
-            generation,
-            new AgentLoopError(`Repeated tool observation loop after ${this.duplicateToolRounds} no-progress round${this.duplicateToolRounds === 1 ? '' : 's'}`),
-            round + 1,
-          )
+          const reason = `Repeated tool observation loop after ${this.duplicateToolRounds} no-progress round${this.duplicateToolRounds === 1 ? '' : 's'}`
+          this.observationRecoveryRounds++
+          await this.recoveryDiagnostic({
+            failure_class: 'observation_no_progress',
+            reason_code: 'duplicate_observation',
+            reason,
+            retry: this.observationRecoveryRounds,
+            retry_limit: this.maxToolLoopRetries + 1,
+            tools_enabled: true,
+          })
+          if (this.duplicateToolRounds > this.maxToolLoopRetries) {
+            return this.blockedWithoutMutation(
+              `${reason}. Reuse the deterministic observations already collected; no mutation was submitted.`,
+              'observation_no_progress',
+            )
+          }
+          this.messages.push({
+            role: 'user',
+            content: `[HARNESS] ${reason}. The duplicate result was suppressed and earlier deterministic observations remain available. Tools stay enabled: use a different approved read-only tool only if a missing fact is still required, otherwise return a strict-JSON plan or a truthful blocker. Do not guess an unobserved Factorio identity and do not force a mutation just to make progress.`,
+          })
         }
         continue
       }
