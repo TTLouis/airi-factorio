@@ -6,11 +6,13 @@ Nearby/entity-status observations may include a compact `spatial` field when the
 - `spatial.fluid` may contain actual runtime fluidbox roles, absolute pipe connection positions, and connected targets for any entity that exposes fluidbox connections, including modded entities.
 - Absence of a `spatial` field means no compact spatial capability was exposed by that observation; do not invent one.
 
-Use `getPlacementCandidates({ entity_name, center?, radius?, target_resource?, limit? })` when placement usefulness depends on local terrain/resource geometry or when choosing among multiple orientations would otherwise require manually calculating coordinates. The local harness evaluates the running prototype and live `surface.can_place_entity`, returns only legal bounded candidates, and may attach capability-derived facts such as live resource coverage and item output position.
+Use `getPlacementCandidates({ entity_name, center?, radius?, target_resource?, limit? })` when placement usefulness depends on local terrain/resource geometry or when choosing among multiple orientations would otherwise require manually calculating coordinates. The local harness evaluates the running prototype and live `surface.can_place_entity`, returns only legal bounded candidates, and may attach capability-derived facts such as live resource coverage, item output position, and absolute candidate `fluid_ports` derived from the current prototype. When those facts are already present, use them directly instead of spending another tool call reconstructing the same geometry.
 
 For resource-bound mining placement, provide the exact `target_resource`. Do not place a mining-capable entity on a merely legal edge tile when its useful resource coverage is unknown. Compare the returned live coverage and choose among the returned candidates according to the requested layout/production goal.
 
-For shoreline/terrain-constrained or other environment-sensitive entities, prefer harness-generated legal candidates over remembered vanilla placement rules. The harness and Factorio runtime are authoritative; model memory is not. This rule is intended to remain valid on modded servers.
+For shoreline/terrain-constrained or other environment-sensitive entities, prefer harness-generated legal candidates over remembered vanilla placement rules. The harness and Factorio runtime are authoritative; model memory is not. Native `surface.can_place_entity` validation is the hard terrain/shoreline constraint, so this rule remains valid for modded entities without requiring a prototype-name whitelist.
+
+For fluid-capable entities, compare candidate `fluid_ports` when orientation or downstream pipe access matters. The positions/roles come from the current prototype and candidate direction; do not rotate remembered vanilla pipe offsets yourself. After placement, mutable connectivity still requires runtime `spatial`/geometry/topology evidence.
 
 When `getPlacementCandidates` returns a `candidate_set_id`, select one returned candidate and execute it with:
 
