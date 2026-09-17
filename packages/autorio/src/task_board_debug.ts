@@ -10,7 +10,7 @@ const DEBUG_BODY_NAME = 'airi_task_board_debug_body'
 const DEBUG_WIDTH = 720
 const DEBUG_KEY_WIDTH = 118
 const DEBUG_VALUE_WIDTH = DEBUG_WIDTH - DEBUG_KEY_WIDTH - 54
-const CONVERSATION_HEIGHT = 170
+const CONVERSATION_HEIGHT = 300
 const COMPACT_BUTTON_WIDTH = 119
 const COMPACT_BUTTON_HEIGHT = 32
 const CONVERSATION = {
@@ -241,7 +241,10 @@ export function task_conversation_messages(board: any): TaskConversationMessage[
   const messages: TaskConversationMessage[] = []
   for (const entry of raw_history) {
     const message = activity_conversation_message(entry)
-    if (message !== undefined) messages.push(message)
+    if (message === undefined) continue
+    const previous = messages.length > 0 ? messages[messages.length - 1] : undefined
+    if (message.role === 'assistant' && previous?.role === 'assistant' && previous.text === message.text) continue
+    messages.push(message)
   }
   if (messages.length === 0) return []
 
@@ -516,7 +519,35 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Follow', follow_text, clean_text(follow?.last_failure, 300))
   add_row(table, 'UI sync', `gen ${version.generation} · rev ${version.revision} · age ${sync_age(synced_tick)}`)
   if (clean_text(debug.last_error, 500).length > 0) add_row(table, 'Last error', clean_text(debug.last_error, 500), clean_text(debug.last_error, 500))
+
+  body.add({ type: 'line' })
+  const activity_header = body.add({ type: 'flow', direction: 'horizontal' })
+  activity_header.style.horizontally_stretchable = true
+  activity_header.add({ type: 'label', caption: 'Execution Activity', style: 'semibold_label' })
+  const activity = activity_state.activity_history()
+  const filler = activity_header.add({ type: 'empty-widget' }); filler.style.horizontally_stretchable = true
+  activity_header.add({ type: 'label', caption: `${activity.length} event${activity.length === 1 ? '' : 's'}`, style: 'semibold_label' })
+  const scroll = body.add({ type: 'scroll-pane', horizontal_scroll_policy: 'never' })
+  scroll.style.width = DEBUG_WIDTH - 20
+  scroll.style.maximal_height = 280
+  const feed = scroll.add({ type: 'flow', direction: 'vertical' })
+  feed.style.horizontally_stretchable = true
+  feed.style.vertical_spacing = 3
+  const start = math.max(0, activity.length - 48)
+  if (activity.length === 0) {
+    const empty = feed.add({ type: 'label', caption: 'No retained execution activity.' })
+    empty.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
+  }
+  for (let index = start; index < activity.length; index++) {
+    const entry = activity[index]
+    const timestamp = clean_text(entry.timestamp, 16) || '--:--:--'
+    const kind = clean_text(entry.kind, 32).toUpperCase()
+    const line = feed.add({ type: 'label', caption: `${timestamp} · ${kind} · ${clean_text(entry.text, 1200)}` })
+    line.style.single_line = false
+    line.style.maximal_width = DEBUG_WIDTH - 50
+  }
 }
+
 
 function build_debug_popout(player: LuaPlayer, board: any, runtime: any, synced_tick: number | undefined) {
   const previous_location = destroy_debug_popout(player)
