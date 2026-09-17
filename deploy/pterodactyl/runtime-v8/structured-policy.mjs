@@ -39,6 +39,67 @@ function side(value, label) {
   check(['north', 'south', 'east', 'west', 'any'].includes(value), `${label} must be north, south, east, west, or any`)
   return value
 }
+function candidateReference(value, label, prefix) {
+  check(typeof value === 'string' && new RegExp(`^${prefix}-[1-9][0-9]*$`).test(value), `${label} is invalid`)
+  return value
+}
+
+export function parseOperation(value) {
+  if (value?.name !== 'place_candidate') return base.parseOperation(value)
+  check(value && typeof value === 'object' && !Array.isArray(value), 'Operation must be an object')
+  exactKeys(value, ['name', 'args'])
+  exactKeys(value.args, ['candidate_set_id', 'candidate_id'])
+  return {
+    name: 'place_candidate',
+    args: {
+      candidate_set_id: candidateReference(value.args.candidate_set_id, 'candidate_set_id', 'placement'),
+      candidate_id: candidateReference(value.args.candidate_id, 'candidate_id', 'candidate'),
+    },
+  }
+}
+
+export function renderOperation(value) {
+  const operation = parseOperation(value)
+  if (operation.name === 'place_candidate') {
+    return `remote.call('autorio_operations','place_candidate',${base.luaString(operation.args.candidate_set_id)},${base.luaString(operation.args.candidate_id)})`
+  }
+  return base.renderOperation(operation)
+}
+
+export function parsePlan(value) {
+  check(value && typeof value === 'object' && !Array.isArray(value), 'Provider response must be an object')
+  exactKeys(value, ['chatMessage', 'plan', 'currentStep', 'operations'])
+  check(typeof value.chatMessage === 'string' && value.chatMessage.length <= 2000, 'Invalid chatMessage')
+  check(Array.isArray(value.plan) && value.plan.length <= 30 && value.plan.every(item => typeof item === 'string' && item.length <= 500), 'Invalid plan')
+  optionalInteger(value.currentStep, 'currentStep', 0, 30)
+  check(Array.isArray(value.operations) && value.operations.length <= 16, 'Invalid operations')
+  return {
+    chatMessage: value.chatMessage,
+    plan: [...value.plan],
+    currentStep: value.currentStep,
+    operations: value.operations.map(parseOperation),
+  }
+}
+
+function parsePlacementCandidates(args) {
+  exactKeys(args, ['entity_name', 'center', 'radius', 'target_resource', 'limit'])
+  const parsed = { entity_name: base.factorioName(args.entity_name) }
+  if (args.center !== undefined) parsed.center = position(args.center)
+  if (args.radius !== undefined) parsed.radius = optionalInteger(args.radius, 'radius', 1, 24)
+  if (args.target_resource !== undefined) parsed.target_resource = base.factorioName(args.target_resource)
+  if (args.limit !== undefined) parsed.limit = optionalInteger(args.limit, 'limit', 1, 8)
+  return parsed
+}
+
+function renderPlacementCandidates(args) {
+  const parsed = parsePlacementCandidates(args)
+  const fields = [`entity_name=${base.luaString(parsed.entity_name)}`]
+  if (parsed.center !== undefined) fields.push(`center={x=${parsed.center.x},y=${parsed.center.y}}`)
+  if (parsed.radius !== undefined) fields.push(`radius=${parsed.radius}`)
+  if (parsed.target_resource !== undefined) fields.push(`target_resource=${base.luaString(parsed.target_resource)}`)
+  if (parsed.limit !== undefined) fields.push(`limit=${parsed.limit}`)
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_placement_candidates",{${fields.join(',')}})))`
+}
 
 function parseProductionScope(args) {
   exactKeys(args, ['calculation_id', 'target', 'max_depth', 'max_materials'])
@@ -272,6 +333,24 @@ function renderResearchPath(args) {
   return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_planning","research_path",${base.luaString(parsed.name)},${parsed.max_nodes})))`
 }
 
+const placementCandidatesDefinition = {
+  type: 'function',
+  function: {
+    name: 'getPlacementCandidates',
+    description: 'Ask the local Factorio harness for a bounded set of live legal placement candidates derived from the current prototype and surface. For resource-bound mining placement, provide target_resource so non-covering placements are rejected; candidates may include live resource coverage, direct item output position, and current-prototype fluid port geometry. Use returned candidate ids with place_candidate rather than retyping coordinates.',
+    parameters: {
+      type: 'object', additionalProperties: false, required: ['entity_name'],
+      properties: {
+        entity_name: { type: 'string', minLength: 1, maxLength: 200 },
+        center: positionSchema,
+        radius: { type: 'integer', minimum: 1, maximum: 24, default: 8 },
+        target_resource: { type: 'string', minLength: 1, maxLength: 200 },
+        limit: { type: 'integer', minimum: 1, maximum: 8, default: 5 },
+      },
+    },
+  },
+}
+
 const productionScopeDefinition = {
   type: 'function',
   function: {
@@ -368,7 +447,7 @@ const placementPlannerDefinition = {
   type: 'function',
   function: {
     name: 'planPlacement',
-    description: 'Deterministically select collision-free, locally reachable placement candidates from the live spatial map. Returns explicit rejection causes plus reserved input/output/power/future-extension corridor intent. Use the best returned coordinate instead of guessing tiles.',
+    description: 'Deterministically select collision-free, locally reachable placement candidates from the live spatial map. Returns explicit rejection causes plus reserved input/output/power/future-extension corridor intent. Use the best returned coordinate instead of guessing tiles. For resource-bound, shoreline-bound, or fluid-port-sensitive entities prefer getPlacementCandidates because it uses current prototype/runtime semantic constraints and candidate-id execution.',
     parameters: {
       type: 'object', additionalProperties: false, required: ['entity_name'],
       properties: {
@@ -469,6 +548,7 @@ const researchPathDefinition = {
 
 export const toolDefinitions = [
   ...base.toolDefinitions,
+  placementCandidatesDefinition,
   productionScopeDefinition,
   solveProductionDefinition,
   transportCapacityDefinition,
@@ -480,6 +560,7 @@ export const toolDefinitions = [
   researchPathDefinition,
 ]
 export function toolCommand(name, args) {
+  if (name === 'getPlacementCandidates') return renderPlacementCandidates(args)
   if (name === 'getProductionScope') return renderProductionScope(args)
   if (name === 'solveProduction') return renderSolveProduction(args)
   if (name === 'getTransportCapacity') return renderTransportCapacity(args)
