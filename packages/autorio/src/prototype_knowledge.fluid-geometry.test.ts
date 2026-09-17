@@ -96,6 +96,6 @@ describe('prototype fluid connection geometry', () => {
     const result = prototype_details('boiler') as any
     expect(result.entity.fluidboxes[0].pipe_connection_count).toBe(20)
     expect(result.entity.fluidboxes[0].pipe_connections_truncated).toBe(true)
-    expect(result.entity.fluidboxes[0].pipe_connections).toHaveLength(16)
+    expect(result.entity.fluidboxes[0].pipe_connections).toHaveLength(8)
   })
 })

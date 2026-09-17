@@ -82,7 +82,7 @@ function nearbyTool(id) {
     tool_calls: [{
       id,
       type: 'function',
-      function: { name: 'getNearbyEntities', arguments: '{"radius":20,"limit":50}' },
+      function: { name: 'getNearbyEntities', arguments: '{"radius":20,"limit":20}' },
     }],
   }
 }
@@ -154,7 +154,7 @@ test('getNearbyEntities treats return-order churn as unchanged after a second li
 
   const second = JSON.parse(toolResult(providerInputs[3], 'nearby-second').content)
   assert.equal(second.observation_mode, 'unchanged')
-  assert.deepEqual(second.query, { radius: 20, limit: 50 })
+  assert.deepEqual(second.query, { radius: 20, limit: 20 })
 })
 
 test('getNearbyEntities returns canonical added removed and changed sets', async () => {
