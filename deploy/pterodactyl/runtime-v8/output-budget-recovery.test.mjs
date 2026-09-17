@@ -184,8 +184,8 @@ test('output-budget recovery keeps the canonical Task Board at the evidenced ste
   assert.equal(continued.taskBoard.evidence.some(item => item.kind === 'deterministic_verification'), false)
 
   assert.equal(rcon.mutations.length, 2)
-  assert.equal(rcon.mutations.filter(text => text.includes('"wait"')).length, 1)
-  assert.equal(rcon.mutations.filter(text => text.includes('"mine_entity"')).length, 1)
+  assert.equal(rcon.mutations.filter(text => text.includes("'wait'")).length, 1)
+  assert.equal(rcon.mutations.filter(text => text.includes("'mine_entity'")).length, 1)
   assert.equal(agent.traceRequest.usage.provider_calls, 3)
   assert.equal(agent.messages.some(message => String(message.content ?? '').includes('immediately preceding provider response exhausted its output budget')), false)
 })
