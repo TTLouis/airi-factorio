@@ -39,21 +39,11 @@ const UI_PROMPT_MARKER = '[AIRI_UI_PROMPT]'
 const UI_PROMPT_MAX_CHARS = 4000
 const UI_INPUT_POLL_MS = 250
 const UI_HEARTBEAT_MS = 2000
-// luaString refuses payloads past 16 KiB. That refusal used to surface only as a
-// generic caught failure, so one long plan froze the console for as long as the
-// plan stayed long. Stay under the limit by trimming instead of sending nothing.
 const UI_SNAPSHOT_MAX_BYTES = 15360
-// The console is drained four times a second, so a persistent fault would
-// otherwise repeat the same line forever.
 const UI_FAILURE_LOG_INTERVAL_MS = 60000
 const SYSTEM_RECOVERY_PAUSE_REASONS = new Set(['npc_identity_or_session_changed', 'actor_replaced'])
 const UI_AGENT_PHASES = new Set(['idle', 'thinking', 'observing', 'executing', 'waiting', 'error'])
 const UI_LIVE_ACTIVITY_LIMIT = 14
-// The console's activity pane is sized from the player's display and now
-// absorbs whatever the plan tracker does not need, so a taller screen can show
-// more history than the old fixed twelve. Oversized snapshots are still trimmed
-// from the front by taskBoardUiJson, so this raises the ceiling, not the
-// guaranteed wire size.
 const UI_ACTIVITY_LIMIT = 18
 const UI_SYNC_BATCH_MS = 50
 const UI_STALE_THINKING_MS = 5000
@@ -277,9 +267,6 @@ export function parseUiInputBatch(raw) {
       if (event) parsed.push({ kind: 'prompt', ...event })
       continue
     }
-    // A poll asks for a snapshot. It carries no player identity and causes a
-    // read plus a push, never a state change, so unlike controls and prompts it
-    // is not attributable to a player and needs no authorization.
     if (kind === 'poll') {
       if (!exactUiObjectKeys(payload, ['version', 'tick'])) continue
       if (payload.version !== 1) continue
@@ -342,7 +329,6 @@ function activityKindFromEvidence(kind) {
   return 'observation'
 }
 
-// Receipts are stored as JSON for the model; render them as one readable line for players.
 export function evidenceText(item) {
   const summary = uiText(item?.summary, 1000)
   if (!summary.startsWith('{')) return summary
@@ -385,8 +371,102 @@ export function deriveActivity(state) {
   return entries.slice(-UI_ACTIVITY_LIMIT)
 }
 
-// Maps agent-loop trace events onto the live phase shown in the in-game console.
-// Returns undefined for events that do not change what the player should see.
+function debugInteger(value) {
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0
+}
+
+function emptyAgentDebug(fallback = {}) {
+  return {
+    request_id: uiText(fallback.request_id, 120),
+    turn: debugInteger(fallback.turn),
+    provider_model: uiText(fallback.provider_model, 160),
+    provider_round: 0,
+    provider_latency_ms: 0,
+    input_units: 0,
+    cached_input_units: 0,
+    output_units: 0,
+    total_units: 0,
+    last_tool: '',
+    last_event: '',
+    recovery_attempt: 0,
+    last_error: '',
+    actor_id: debugInteger(fallback.actor_id),
+    actor_epoch: debugInteger(fallback.actor_epoch),
+  }
+}
+
+function applyDebugUsage(debug, usage) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return debug
+  return {
+    ...debug,
+    input_units: debugInteger(usage.input_units),
+    cached_input_units: debugInteger(usage.cached_input_units),
+    output_units: debugInteger(usage.output_units),
+    total_units: debugInteger(usage.total_units),
+  }
+}
+
+export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = {}) {
+  const failure = data?.failure_snapshot && typeof data.failure_snapshot === 'object' ? data.failure_snapshot : undefined
+  let debug = event === 'request.received'
+    ? emptyAgentDebug(fallback)
+    : { ...emptyAgentDebug(fallback), ...(previous && typeof previous === 'object' ? previous : {}) }
+
+  debug.last_event = uiText(event, 120)
+  debug.request_id = uiText(failure?.request_id ?? data?.request_id ?? fallback.request_id ?? debug.request_id, 120)
+  debug.turn = debugInteger(failure?.turn ?? data?.turn ?? fallback.turn ?? debug.turn)
+  debug.actor_id = debugInteger(failure?.actor_id ?? data?.actor_id ?? fallback.actor_id ?? debug.actor_id)
+  debug.actor_epoch = debugInteger(failure?.epoch ?? data?.epoch ?? fallback.actor_epoch ?? debug.actor_epoch)
+
+  const providerEvent = failure?.provider ?? (event === 'provider.response' ? data : undefined)
+  const provider = providerEvent?.provider
+  if (event === 'provider.request') {
+    debug.provider_round = debugInteger(data.round)
+    debug.recovery_attempt = debugInteger(data.recovery_attempt)
+  }
+  if (providerEvent && typeof providerEvent === 'object') {
+    debug.provider_round = debugInteger(providerEvent.round ?? debug.provider_round)
+    debug.provider_latency_ms = debugInteger(providerEvent.latency_ms ?? debug.provider_latency_ms)
+    debug.recovery_attempt = debugInteger(providerEvent.recovery_attempt ?? debug.recovery_attempt)
+    debug.provider_model = uiText(provider?.model ?? fallback.provider_model ?? debug.provider_model, 160)
+    const diagnostic = uiText(provider?.diagnostic_code, 160)
+    if (diagnostic && diagnostic !== 'ok') {
+      const finish = uiText(provider?.finish_reason, 80)
+      debug.last_error = finish ? `${diagnostic} · finish=${finish}` : diagnostic
+    }
+  }
+  else if (!debug.provider_model) {
+    debug.provider_model = uiText(fallback.provider_model, 160)
+  }
+
+  const usage = failure?.usage ?? fallback.usage ?? data?.usage ?? providerEvent?.usage
+  debug = applyDebugUsage(debug, usage)
+
+  if (event === 'tool.call' || event === 'tool.result') debug.last_tool = uiText(data.name, 120)
+  if (event === 'actor.bound') {
+    debug.actor_id = debugInteger(data.actor_id)
+    debug.actor_epoch = debugInteger(data.epoch)
+  }
+  if (event === 'replan.started') {
+    debug.recovery_attempt = debugInteger(data.attempt ?? debug.recovery_attempt)
+    const reason = uiText(data.reason, 500)
+    if (reason) debug.last_error = reason
+  }
+  if (event === 'provider.error') {
+    const message = uiText(data.message, 500)
+    if (message) debug.last_error = message
+  }
+  if (event === 'request.failed') {
+    const message = uiText(failure?.message ?? data.message, 500)
+    if (message) debug.last_error = message
+    debug.recovery_attempt = debugInteger(failure?.recovery?.attempt ?? debug.recovery_attempt)
+    const lastTool = failure?.last_tool
+    if (lastTool?.name) debug.last_tool = uiText(lastTool.name, 120)
+  }
+
+  return debug
+}
+
 export function liveAgentEvent(event, data = {}) {
   const count = value => Array.isArray(value) ? value.length : 0
   switch (event) {
@@ -433,7 +513,6 @@ export function liveAgentEvent(event, data = {}) {
     case 'request.cancelled':
       return { phase: 'idle', detail: `Cancelled (${uiText(data.reason, 64) || 'cancelled'})` }
     case 'factorio.status':
-      // Task receipts update board evidence and may advance the active step.
       return { refresh: true }
     default:
       return undefined
@@ -446,9 +525,9 @@ export function taskBoardUiSnapshot(state, live) {
     phase: UI_AGENT_PHASES.has(live?.phase) ? live.phase : 'idle',
     detail: uiText(live?.detail, 300),
   }
+  const debug = live?.debug && typeof live.debug === 'object' ? live.debug : emptyAgentDebug()
   const liveActivity = Array.isArray(live?.activity) ? live.activity : []
   if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps)) {
-    // No durable plan yet (or a chat-only reply): still show what AIRI is doing.
     if (!live || (agent.phase === 'idle' && liveActivity.length === 0)) return undefined
     return {
       goal_id: '',
@@ -463,6 +542,7 @@ export function taskBoardUiSnapshot(state, live) {
       activity: liveActivity.slice(-UI_ACTIVITY_LIMIT),
       wanted_items: [],
       agent,
+      debug,
     }
   }
   return {
@@ -482,16 +562,10 @@ export function taskBoardUiSnapshot(state, live) {
     activity: [...deriveActivity(state), ...liveActivity].slice(-UI_ACTIVITY_LIMIT),
     wanted_items: deriveWantedItems(state),
     agent,
+    debug,
   }
 }
 
-/**
- * Serialises a snapshot small enough to survive the RCON command path.
- *
- * Activity goes first because the oldest lines have already scrolled out of the
- * console, then step text, which the console truncates for display anyway. A
- * shortened board beats the previous behaviour of silently sending nothing.
- */
 export function taskBoardUiJson(snapshot) {
   let candidate = snapshot
   let json = JSON.stringify(candidate)
@@ -629,9 +703,6 @@ export async function recoverInterruptedAgentPlan(agent, reason, details = {}) {
     text: uiText(state.objective || 'Resume interrupted AIRI goal', 4000),
   }
   agent.active = true
-  // Recovery is semantically a continuation of the durable goal. This matters
-  // because an empty operation batch must either complete/block the existing
-  // plan, never leave an "active" Task Board with no live runtime work.
   agent.continuations = 1
   if (typeof agent.traceEvent === 'function') {
     agent.traceRequest = { id: `recovery_${Date.now().toString(36)}`, seq: 0 }
@@ -660,7 +731,7 @@ export class Session {
     this.authorizationPromise = null
     this.npcName = 'AIRI'
     this.npcId = 'airi'
-    this.agentLive = { phase: 'idle', detail: '', objective: '', at: 0, activity: [] }
+    this.agentLive = { phase: 'idle', detail: '', objective: '', at: 0, activity: [], debug: emptyAgentDebug({ provider_model: this.config?.model }) }
     this.activitySequence = 0
     this.uiSyncDirty = false
     this.uiSyncRunning = null
@@ -672,32 +743,36 @@ export class Session {
   }
 
   onAgentActivity(event, data) {
+    const fallback = {
+      request_id: this.agent?.traceRequest?.id,
+      turn: this.agent?.traceRequest ? this.agent.continuations + 1 : 0,
+      provider_model: this.config?.model,
+      actor_id: this.agent?.epoch?.actor_id ?? this.lastStatus?.actor_id,
+      actor_epoch: this.agent?.epoch?.epoch ?? this.lastStatus?.epoch,
+      usage: this.agent?.traceRequest?.usage,
+    }
+    this.agentLive.debug = liveAgentDebugEvent(event, data, this.agentLive.debug, fallback)
     const update = liveAgentEvent(event, data)
-    if (!update) return
-    if (update.phase) Object.assign(this.agentLive, { phase: update.phase, detail: update.detail ?? '', at: Date.now() })
-    if (update.objective) this.agentLive.objective = update.objective
-    if (update.activity) {
+    if (update?.phase) Object.assign(this.agentLive, { phase: update.phase, detail: update.detail ?? '', at: Date.now() })
+    if (update?.objective) this.agentLive.objective = update.objective
+    if (update?.activity) {
       const activity = { ...update.activity, id: `live_${++this.activitySequence}` }
       this.agentLive.activity = [...this.agentLive.activity, activity].slice(-UI_LIVE_ACTIVITY_LIMIT)
     }
-    this.requestTaskBoardUiSync()
+    if (update || event === 'provider.response' || event === 'tool.result' || event === 'actor.bound') this.requestTaskBoardUiSync()
   }
 
   liveAgentStatus() {
     const live = this.agentLive
     let { phase, detail } = live
-    // Pausing or cancelling resets the loop without a trace event, so an inactive
-    // agent must not keep advertising work it is no longer doing.
     const inactive = !this.agent?.active
     if (inactive && (phase === 'executing' || phase === 'waiting' || (phase === 'thinking' && Date.now() - live.at > UI_STALE_THINKING_MS))) {
       phase = 'idle'
       detail = ''
     }
-    return { phase, detail, objective: live.objective, activity: live.activity }
+    return { phase, detail, objective: live.objective, activity: live.activity, debug: live.debug }
   }
 
-  // Coalesces bursts of trace events into sequential snapshot pushes so the
-  // console follows the agent live without flooding RCON or reordering state.
   requestTaskBoardUiSync() {
     this.uiSyncDirty = true
     if (this.uiSyncRunning) return this.uiSyncRunning
@@ -712,9 +787,6 @@ export class Session {
       finally {
         const reschedule = this.uiSyncDirty && this.rcon && !this.stopping
         this.uiSyncRunning = null
-        // Do not lose a refresh that arrives after the loop decided it was clean
-        // but before the running promise is cleared. Poll/trace bursts can hit
-        // exactly that window and otherwise leave the console stale indefinitely.
         if (reschedule) this.requestTaskBoardUiSync()
       }
     })()
@@ -723,9 +795,6 @@ export class Session {
 
   taskBoardUiHeartbeat() {
     if (!this.rcon || !this.ready || this.stopping) return false
-    // Liveness must not depend on the game UI successfully producing/draining a
-    // poll. A small runtime-owned heartbeat keeps synced_tick current and also
-    // republishes canonical plan progress during long world operations.
     this.requestTaskBoardUiSync()
     return true
   }
@@ -764,11 +833,6 @@ export class Session {
     return parseStatus(await this.rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("airi_deployment","status")))'))
   }
 
-  // Autorio cannot safely reconcile a loaded save from `script.on_load`: that
-  // handler runs per peer, so a joining client would stop engine control states
-  // the server is still driving and desync the game. An RCON command is
-  // replicated to every peer as a single input action, so the mod defers the
-  // work to this explicit call once the server has finished loading.
   async reconcileNpcAfterLoad() {
     if (!this.rcon) return false
     try {
@@ -855,14 +919,6 @@ export class Session {
     }
   }
 
-  /**
-   * Writes one console update and confirms the mod actually accepted it.
-   *
-   * `/silent-command` reports a Lua error in the RCON response body instead of
-   * failing the command, and the mod answers a rejected snapshot with `false`.
-   * An unchecked write therefore reports success even when the console never saw
-   * it, which is exactly how this path could sit broken while looking healthy.
-   */
   async writeTaskBoardUi(command, label) {
     if (!this.rcon) return false
     try {
@@ -880,8 +936,6 @@ export class Session {
     }
   }
 
-  // Report a new fault at once, then stay quiet about it until it changes or the
-  // interval elapses, so a real diagnostic cannot drown out the log.
   logTaskBoardUiFailure(message) {
     const now = Date.now()
     if (this.lastUiFailure === message && now - this.lastUiFailureAt < UI_FAILURE_LOG_INTERVAL_MS) return
@@ -916,8 +970,6 @@ export class Session {
       const raw = await this.rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_task_board","drain_inputs")))')
       const inputs = parseUiInputBatch(raw)
       for (const input of inputs) {
-        // Answer every poll, even when nothing changed: a refreshed synced_tick
-        // is what lets the console tell a quiet AIRI from a dead one.
         if (input.kind === 'poll') {
           this.requestTaskBoardUiSync()
           continue
@@ -1089,9 +1141,6 @@ export class Session {
   onGameLine(line) {
     if (!this.ready || this.stopping || !this.agent) return
 
-    // Legacy stdout marker bridge retained during rolling upgrades. New console
-    // input uses the RCON-drained mod queue because Factorio log() is not a
-    // reliable child-stdout transport.
     const uiControl = parseUiControlLine(line)
     if (uiControl) {
       if (!chatAuthorized(this.config.chatPlayers, uiControl.player_name)) {
