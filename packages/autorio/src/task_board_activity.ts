@@ -3,10 +3,12 @@ import type { TaskBoardUiActivity } from './task_board_ui'
 /**
  * Filtering and follow state for the console's Recent activity feed.
  *
- * Everything here is plain logic over synchronized `storage`, so every peer
- * reaches the same answer. It lives apart from task_board_ui because TSTL emits
- * each module-scope constant and helper as a Lua local, and that module is
- * already close to Factorio's 200-locals-per-function limit.
+ * Everything persisted here is driven only by synchronized game input/state.
+ * Client-local pointer hover must never be written to `storage`: different
+ * peers can observe different mouse/GUI hover state and would then desync.
+ * This module lives apart from task_board_ui because TSTL emits each
+ * module-scope constant and helper as a Lua local, and that module is already
+ * close to Factorio's 200-locals-per-function limit.
  */
 
 type ActivityKind = TaskBoardUiActivity['kind']
@@ -30,9 +32,9 @@ const ACTIVITY_HISTORY_LIMIT = 160
 export interface ActivityView {
   // Scroll to each new event as it arrives.
   follow: boolean
-  // The cursor is over the feed, so it must not move under the player.
+  // Legacy persisted field. Hover is client-local and is deliberately ignored.
   hover: boolean
-  // New rows were appended while the feed could not move; catch up once it can.
+  // New rows were appended while follow was paused; catch up once it resumes.
   behind: boolean
   // The last event the player has seen. Everything after it counts as new.
   seen_key?: string
@@ -220,7 +222,8 @@ export function reset_activity_view(player_index: number) {
 
 /**
  * Take follow away the moment the player scrolls the feed themselves,
- * remembering the newest event they could see at that point.
+ * remembering the newest event they could see at that point. Custom-input
+ * activation is synchronized; unlike raw pointer hover it is safe to persist.
  */
 export function stop_activity_follow(player_index: number, last_shown_key: string | undefined) {
   const view = activity_view(player_index)
@@ -243,24 +246,27 @@ export function resume_activity_follow(player_index: number, last_shown_key: str
   return view
 }
 
-export function set_activity_hover(player_index: number, hover: boolean) {
-  const view = activity_view(player_index)
-  view.hover = hover
-  return view
+/**
+ * Compatibility shim for the existing hover handlers.
+ *
+ * Hover/leave is pointer-local state, so this must be completely side-effect
+ * free. Returning follow=false also makes the old on_gui_leave handler exit
+ * without rendering from a client-local event. Once the UI module is next
+ * touched for layout work these handlers can be removed entirely.
+ */
+export function set_activity_hover(player_index: number, _hover: boolean): ActivityView {
+  const view = storage.airi_task_board_activity_view?.[player_index]
+  return { follow: false, hover: false, behind: false, seen_key: view?.seen_key }
 }
 
 /**
- * Whether the feed should scroll to its newest row after a refresh. Records
- * anything the player still has to catch up on, and keeps `seen_key` at the
- * newest row for as long as the feed is following.
+ * Whether the feed should scroll to its newest row after a synchronized refresh.
+ * Pointer hover is deliberately ignored; only explicit follow/pause state is
+ * allowed to affect synchronized behavior.
  */
 export function activity_should_scroll(view: ActivityView, appended: number, last_key: string | undefined) {
   if (!view.follow) return false
   view.seen_key = last_key
-  if (view.hover) {
-    if (appended > 0) view.behind = true
-    return false
-  }
   const scroll = appended > 0 || view.behind
   view.behind = false
   return scroll
