@@ -210,5 +210,29 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(resolved.size).toBe(5)
     expect([...declared.entries()].sort()).toEqual([...resolved.entries()].sort())
     expect(data_stage).toContain('"__autorio__/graphics/icons/provider/" .. id .. ".png"')
+    expect(data_stage).toContain('local provider_avatar_source_size = 128')
+    expect(data_stage).toContain('local provider_avatar_gui_size = 40')
+    expect(data_stage).toContain('scale = provider_avatar_gui_size / provider_avatar_source_size')
+    expect(data_stage).not.toContain('scale = 0.25')
+  })
+
+  it('keeps avatar optical corrections in asset metadata instead of runtime UI branches', () => {
+    const importer = readFileSync(new URL('../scripts/import_provider_icon.py', import.meta.url), 'utf8')
+    const manifest = JSON.parse(readFileSync(new URL('../scripts/provider_icon_optical.json', import.meta.url), 'utf8')) as { avatars: Record<string, { scale?: number }> }
+    const ui = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const provider = readFileSync(new URL('./task_board_provider.ts', import.meta.url), 'utf8')
+
+    expect(importer).toContain('OPTICAL_ADJUSTMENTS_PATH')
+    expect(importer).toContain('load_optical_adjustments')
+    expect(importer).toContain('--no-optical-adjustment')
+    expect(Object.keys(manifest.avatars).sort()).toEqual(['claude-2', 'deepseek-2', 'gemini-1'])
+    expect(manifest.avatars['claude-2']?.scale).toBe(1.1)
+    expect(manifest.avatars['deepseek-2']?.scale).toBe(1.1)
+    expect(manifest.avatars['gemini-1']?.scale).toBe(1.1)
+
+    for (const avatar of Object.keys(manifest.avatars)) {
+      expect(ui).not.toContain(avatar)
+      expect(provider).not.toContain(avatar)
+    }
   })
 })

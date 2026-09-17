@@ -42,14 +42,15 @@ sessions. `task_board_ui_layout.test.ts` compares the two.
 
 ## Format
 
-Every file here is **128x128 RGBA**. `data.lua` draws them at `scale = 0.25`, so
-the button shows 32 GUI units and the source still has pixels to spare at the
-200% UI scale Factorio allows. All providers share one `size` in `data.lua`, so
-a file of a different size would be drawn wrong - keep them all at 128.
+Every file here is **128x128 RGBA**. The mod-GUI button is fixed at 48 GUI
+units, while `data.lua` draws every provider canvas at **40 GUI units**
+(`40 / 128`). That leaves four units of breathing room on each side and is
+large enough for the character art to read without letting any one provider
+change the button geometry.
 
-32 GUI units is small. A detailed illustration reads as its color and silhouette
-at that size rather than as its subject, which is why the button's tooltip names
-the vendor and the exact model.
+The data stage deliberately uses exactly one scale for every provider and
+variant. Differences in apparent face/head size are corrected in the imported
+asset, not with provider-specific runtime UI code.
 
 ## Importing artwork
 
@@ -83,11 +84,13 @@ to reach the edge is reported rather than silently shoved into place - that
 means the artwork is proportioned unlike the rest of the set.
 
 *Where the measurement loses.* The head is measured by silhouette, so a
-voluminous hairstyle or a wide hair ornament reads as head and that figure gets
-scaled down to compensate. Three of the twenty came out visibly small this way.
-Nothing cheap separated those from a genuinely large head - measuring skin tone
-instead caught held props, hands and a plush whale, and disagreed with the eye
-outright - so they carry a `--scale` nudge chosen by looking at them:
+voluminous hairstyle or a wide hair ornament can read as head and make that
+figure look smaller after automatic normalization. Those exceptions now live in
+`scripts/provider_icon_optical.json`, which the importer applies automatically.
+Keeping the optical corrections in one manifest makes them reproducible and
+keeps the Factorio runtime/provider resolver free of avatar-specific branches.
+
+The current manifest carries the three known silhouette outliers:
 
 | avatar | scale | why |
 | --- | --- | --- |
@@ -95,7 +98,9 @@ outright - so they carry a `--scale` nudge chosen by looking at them:
 | `deepseek-2` | 1.10 | hair volume plus the hairpin |
 | `gemini-1` | 1.10 | the arc and star ornaments sit outside the head |
 
-Anything above about 1.14 starts pushing those ornaments off the frame.
+The manifest can also record small `offset_x` / `offset_y` corrections in
+128px-canvas units. CLI `--scale`, `--offset-x`, and `--offset-y` override
+the manifest for one import; `--no-optical-adjustment` disables it.
 
 Options worth knowing:
 
@@ -105,8 +110,11 @@ Options worth knowing:
   when every figure is drawn at one scale, as on a single sheet.
 - `--anchor F` - where the head's widest row sits vertically, default 0.55.
 - `--no-baseline` - leave the figure where the head anchor puts it.
-- `--scale F` - draw the figure F times larger, for when the head measurement
-  reads hair as head. Record the factor in the table above.
+- `--scale F` - override the manifest's optical scale for one import.
+- `--offset-x N` / `--offset-y N` - override the manifest's small baked-in
+  placement correction, in 128px-canvas units.
+- `--no-optical-adjustment` - ignore the optical manifest for a diagnostic
+  import.
 - `--keep-top F` - for a lone portrait with no set to match.
 
 The current set came from one five-figure sheet plus three sets of individual
@@ -121,9 +129,25 @@ python packages/autorio/scripts/import_provider_icon.py "$SHEET" claude-1 --slic
 # individual squares
 python packages/autorio/scripts/import_provider_icon.py "$IMAGE" openai-2
 
-# the three that need a nudge
-python packages/autorio/scripts/import_provider_icon.py "$IMAGE" claude-2 --scale 1.10
+# optical exceptions such as claude-2 are applied from the manifest
+python packages/autorio/scripts/import_provider_icon.py "$IMAGE" claude-2
 ```
+
+## Visual QA contact sheet
+
+Numeric head measurements are useful, but the final criterion is the 48px
+button. Generate a sheet that renders every committed avatar exactly as a
+40px provider canvas centered inside a 48px slot:
+
+```bash
+python packages/autorio/scripts/make_provider_icon_contact_sheet.py
+```
+
+It writes `provider-icons-contact-sheet.png` in the current directory. Check
+the rows for comparable apparent head/face size and baseline before accepting a
+new avatar. If one still reads too small/large, update
+`scripts/provider_icon_optical.json` and re-import it rather than adding a
+runtime provider special case.
 
 ## Archived larger copies
 

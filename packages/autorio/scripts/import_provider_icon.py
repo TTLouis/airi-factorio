@@ -2,7 +2,10 @@
 """Import a provider avatar from source artwork.
 
 Turns artwork of any size into the square, transparent, 128x128 PNG the mod's
-sprite prototype expects.
+sprite prototype expects. The automatic head normalization is followed by a
+small per-avatar optical correction from provider_icon_optical.json when one is
+recorded; this keeps hair ornaments and other silhouette outliers from making
+one model avatar look smaller than its neighbours.
 
 A white-background source is keyed to transparent first. That is a flood fill
 from the border rather than a global "white is transparent" test, so white
@@ -26,12 +29,12 @@ button and an inconsistent one reads as a mistake:
                   head decides the scale; the bottom decides the placement, so
                   this only positions a figure that already reaches the bottom.
   --no-baseline   do not sit the figure on the bottom edge (see below).
-  --scale F       draw the figure F times larger. Measuring the head by its
-                  silhouette reads a voluminous hairstyle or a hair ornament as
-                  head, and scales that figure down to compensate; no cheap
-                  automatic measure told those apart from a genuinely large
-                  head, so the handful that come out small are nudged by eye and
-                  the factor recorded in the folder README.
+  --scale F       override the per-avatar optical scale from
+                  scripts/provider_icon_optical.json.
+  --offset-x N    override the optical horizontal shift, in 128px-canvas units.
+  --offset-y N    override the optical vertical shift, in 128px-canvas units.
+  --no-optical-adjustment
+                  ignore the per-avatar optical manifest for this import.
   --size N        output N x N instead of the mod's 128. Framing is unchanged,
                   so a larger size is the same picture with more pixels - see
                   assets/provider/ for the archived 256 set.
@@ -50,6 +53,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections import deque
@@ -76,9 +80,11 @@ MAX_BASELINE_SHIFT = 0.15
 # the button without the hair touching its border; every avatar uses it.
 DEFAULT_HEAD = 102
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "graphics", "icons", "provider"),
+    os.path.join(SCRIPT_DIR, "..", "graphics", "icons", "provider"),
 )
+OPTICAL_ADJUSTMENTS_PATH = os.path.join(SCRIPT_DIR, "provider_icon_optical.json")
 
 
 def key_white_background(image):
@@ -124,7 +130,7 @@ def widest_head_row(art):
     return best
 
 
-def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANCHOR, keep_top=1.0, size=TARGET, baseline=True, scale=1.0):
+def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANCHOR, keep_top=1.0, size=TARGET, baseline=True, scale=1.0, offset_x=0.0, offset_y=0.0):
     image = Image.open(source_path).convert("RGBA")
     if image.getchannel("A").getextrema()[0] == 255:
         image = key_white_background(image)
@@ -175,8 +181,25 @@ def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANC
 
     inner = max(1, round(size * INSET))
     icon = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    icon.paste(square.resize((inner, inner), Image.LANCZOS), ((size - inner) // 2, (size - inner) // 2))
+    # Optical offsets are recorded in 128px-canvas units so the same manifest
+    # works for both the shipped 128px files and archived 256px copies.
+    output_scale = size / TARGET
+    left = (size - inner) // 2 + round(offset_x * output_scale)
+    top = (size - inner) // 2 + round(offset_y * output_scale)
+    icon.paste(square.resize((inner, inner), Image.LANCZOS), (left, top))
     return icon
+
+
+def load_optical_adjustments(path=OPTICAL_ADJUSTMENTS_PATH):
+    """Return per-avatar visual corrections recorded outside runtime code."""
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    avatars = payload.get("avatars", {})
+    if not isinstance(avatars, dict):
+        raise SystemExit(f"{path}: 'avatars' must be an object")
+    return avatars
 
 
 def take(argv, flag, convert, default):
@@ -210,6 +233,7 @@ def bottom_edge(icon):
 def main():
     argv = sys.argv[1:]
     check_only = "--check" in argv
+    no_optical_adjustment = "--no-optical-adjustment" in argv
     slice_x = take(argv, "--slice", lambda v: tuple(int(part) for part in v.split(":")), None)
     frame = take(argv, "--frame", int, None)
     head = take(argv, "--head", int, None)
@@ -218,9 +242,10 @@ def main():
     size = take(argv, "--size", int, TARGET)
     out_dir = take(argv, "--out-dir", str, OUT_DIR)
     baseline = "--no-baseline" not in argv
-    scale = take(argv, "--scale", float, 1.0)
-    if not 0.5 <= scale <= 2:
-        raise SystemExit("--scale is a multiplier between 0.5 and 2")
+    scale_override = take(argv, "--scale", float, None)
+    offset_x_override = take(argv, "--offset-x", float, None)
+    offset_y_override = take(argv, "--offset-y", float, None)
+
     if size < 16:
         raise SystemExit("--size must be at least 16")
     if slice_x is not None and len(slice_x) != 2:
@@ -237,9 +262,36 @@ def main():
         raise SystemExit(__doc__)
     source, provider = args
 
-    icon = to_icon(source, slice_x, frame, head, anchor, keep_top, size, baseline, scale)
-    # Printed so a set imported with one --frame can be eyeballed for drift.
-    report = f"{provider}: {icon.size[0]}x{icon.size[1]}, head {head_width(icon)}px, bottom {bottom_edge(icon)}"
+    adjustment = {}
+    if not no_optical_adjustment:
+        candidate = load_optical_adjustments().get(provider, {})
+        if isinstance(candidate, dict):
+            adjustment = candidate
+    scale = scale_override if scale_override is not None else float(adjustment.get("scale", 1.0))
+    offset_x = offset_x_override if offset_x_override is not None else float(adjustment.get("offset_x", 0.0))
+    offset_y = offset_y_override if offset_y_override is not None else float(adjustment.get("offset_y", 0.0))
+    if not 0.5 <= scale <= 2:
+        raise SystemExit("--scale/manifest scale must be a multiplier between 0.5 and 2")
+    if abs(offset_x) > 32 or abs(offset_y) > 32:
+        raise SystemExit("--offset-x/--offset-y and manifest offsets must stay within 32px")
+
+    icon = to_icon(
+        source,
+        slice_x,
+        frame,
+        head,
+        anchor,
+        keep_top,
+        size,
+        baseline,
+        scale,
+        offset_x,
+        offset_y,
+    )
+    report = (
+        f"{provider}: {icon.size[0]}x{icon.size[1]}, head {head_width(icon)}px, "
+        f"bottom {bottom_edge(icon)}, optical scale {scale:g}, shift {offset_x:+g},{offset_y:+g}"
+    )
     if check_only:
         print(f"{report} (not written)")
         return

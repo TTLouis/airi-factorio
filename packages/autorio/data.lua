@@ -96,6 +96,14 @@ local provider_variants = {
   {"qwen", 4},
 }
 
+-- The mod-GUI button is fixed at 48 GUI units. Draw every provider canvas at
+-- 40 units so the avatar is materially larger than the old 32-unit rendering
+-- while keeping four units of breathing room on each side. The artwork itself
+-- is optically normalized by the importer; the data stage deliberately uses
+-- one scale for every provider and variant.
+local provider_avatar_source_size = 128
+local provider_avatar_gui_size = 40
+
 local provider_avatars = {}
 for _, entry in ipairs(provider_variants) do
   local provider, count = entry[1], entry[2]
@@ -105,11 +113,10 @@ for _, entry in ipairs(provider_variants) do
       type = "sprite",
       name = "airi-provider-" .. id,
       filename = "__autorio__/graphics/icons/provider/" .. id .. ".png",
-      -- 128 source pixels drawn at 32 GUI units, so the avatar stays crisp at
-      -- the 200% UI scale Factorio allows instead of being upscaled from a 1:1
-      -- source.
-      size = 128,
-      scale = 0.25,
+      -- Keep one prototype scale for the entire set. Per-avatar visual
+      -- corrections belong to the asset import metadata, not the runtime UI.
+      size = provider_avatar_source_size,
+      scale = provider_avatar_gui_size / provider_avatar_source_size,
       flags = {"gui-icon"},
     }
   end
