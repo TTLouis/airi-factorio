@@ -72,7 +72,7 @@ describe('recipe details use Factorio 2.0 recipe category fields', () => {
     expect(result.recipes[0].crafting_machine_count).toBe(12)
     expect(result.recipes[0].crafting_machines).toHaveLength(8)
     expect(result.recipes[0].crafting_machines_truncated).toBe(true)
-    expect(result.recipes[0].crafting_machines[0]).toEqual({ name: 'assembler-01', type: 'assembling-machine', crafting_speed: 1 })
+    expect(result.recipes[0].crafting_machines[0]).toEqual({ name: 'assembler-01', type: 'assembling-machine' })
   })
 
   it('returns another ordinary enabled recipe with deterministic categories', () => {
