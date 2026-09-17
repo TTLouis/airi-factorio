@@ -72,5 +72,22 @@ test('in-game task board snapshot is a projection of canonical durable state', (
     activity: [],
     wanted_items: [],
     agent: { phase: 'idle', detail: '' },
+    debug: {
+      request_id: '',
+      turn: 0,
+      provider_model: '',
+      provider_round: 0,
+      provider_latency_ms: 0,
+      input_units: 0,
+      cached_input_units: 0,
+      output_units: 0,
+      total_units: 0,
+      last_tool: '',
+      last_event: '',
+      recovery_attempt: 0,
+      last_error: '',
+      actor_id: 0,
+      actor_epoch: 0,
+    },
   })
 })
