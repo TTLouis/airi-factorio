@@ -269,7 +269,8 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function stop_actor_cleanup(actor: ControlledActor) {
-    actor.set_mining_state({ mining: false })
+    const maybeActor = actor as ControlledActor & { set_mining_state?: ControlledActor['set_mining_state'] }
+    if (typeof maybeActor.set_mining_state === 'function') maybeActor.set_mining_state({ mining: false })
   }
 
   function clear_combat_path(task: CombatTask, reset_attempts = false) {
@@ -516,7 +517,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function target_destroyed(actor: ControlledActor, task: CombatTask) {
-    const destroyed_was_static = !!task.target && is_static_enemy(task.target)
     task.targets_destroyed = (task.targets_destroyed ?? 0) + 1
     if (task.combat_mode !== 'clear_area') {
       complete_single(actor, task)
@@ -524,7 +524,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     }
     clear_bound_target(task)
     stop_actor_combat(actor)
-    if (destroyed_was_static || live_owned_turrets(task).length > 0 || task.combat_safety_goal === 'cleanup') {
+    if (live_owned_turrets(task).length > 0 || task.combat_safety_goal === 'cleanup') {
       enter_safety(actor, task, 'cleanup')
       return
     }
@@ -585,8 +585,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function planned_support_position(actor: ControlledActor, task: CombatTask, target: LuaEntity, anchor: { x: number, y: number }) {
-    // Factorio surfaces always expose can_place_entity. The fallback keeps older
-    // lightweight test doubles usable while production uses the shared planner.
     if (!actor.surface.can_place_entity) {
       return actor.surface.find_non_colliding_position('gun-turret', anchor, 2, 0.25, false)
     }
