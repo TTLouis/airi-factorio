@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseOperation, parsePlan, renderOperation, toolCommand, toolDefinitions } from './structured-policy.mjs'
+import { parseOperation, parsePlan, renderOperation, renderOperationPreflight, toolCommand, toolDefinitions } from './structured-policy.mjs'
 
 test('structured operations apply bounded defaults and render only approved Autorio calls', () => {
   assert.deepEqual(parseOperation({ name: 'mine_entity', args: { entity_name: 'iron-ore' } }), {
@@ -163,6 +163,19 @@ test('read-only tool renderer targets native actor-aware interfaces without play
   assert.equal(toolCommand('getEntityGeometry', { unit_number: 4242 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","entity_geometry",4242)))')
   assert.equal(toolCommand('getLogisticsTopology', { unit_number: 4242 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","logistics_topology",4242,8)))')
   assert.equal(toolCommand('getLogisticsTopology', { unit_number: 4242, radius: 16 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","logistics_topology",4242,16)))')
+})
+
+test('mutation identity preflight is read-only and limited to operations that need deterministic identities', () => {
+  const craft = renderOperationPreflight({ name: 'craft_item', args: { item_name: 'burner-mining-drill', count: 1 } })
+  assert.match(craft, /^\/silent-command rcon\.print\(helpers\.table_to_json\(remote\.call\("autorio_preflight","operation",/)
+  assert.match(craft, /'craft_item'/)
+  assert.match(craft, /'burner-mining-drill'/)
+
+  const gather = renderOperationPreflight({ name: 'gather_resource', args: { resource_name: 'tree-02-red', count: 4, search_radius: 64 } })
+  assert.match(gather, /'gather_resource'/)
+  assert.match(gather, /'tree-02-red'/)
+
+  assert.equal(renderOperationPreflight({ name: 'wait', args: { ticks: 60 } }), null)
 })
 
 test('tool calls reject unknown names, unsafe names, extras, and out-of-bound scans', () => {
