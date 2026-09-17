@@ -4,6 +4,8 @@ import spatialPlacementPrompt from './spatial-placement-prompt.md?raw'
 describe('spatial placement prompt contract', () => {
   it('requires runtime-derived spatial semantics and candidate execution', () => {
     expect(spatialPlacementPrompt).toContain('capability-driven from the current game instance')
+    expect(spatialPlacementPrompt).toContain('spatial.mining')
+    expect(spatialPlacementPrompt).toContain('resource_coverage')
     expect(spatialPlacementPrompt).toContain('getPlacementCandidates')
     expect(spatialPlacementPrompt).toContain('target_resource')
     expect(spatialPlacementPrompt).toContain('fluid_ports')
