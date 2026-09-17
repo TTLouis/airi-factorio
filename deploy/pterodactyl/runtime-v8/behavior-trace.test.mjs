@@ -52,7 +52,7 @@ class FakeRcon {
       const marker = text.match(/AIRI_RESULT_[a-f0-9]{24}:/)?.[0]
       assert.ok(marker)
       this.mutations.push(text)
-      const admissions = [...text.matchAll(/local r\d+=remote\.call/g)].length
+      const admissions = [...text.matchAll(/return remote\.call\('autorio_operations'/g)].length
       return `${marker}${JSON.stringify({ ok: true, result: Array.from({ length: admissions }, () => [true, 'Task started']) })}`
     }
     return 'tool-output'
