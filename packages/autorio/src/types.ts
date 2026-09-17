@@ -132,7 +132,7 @@ export interface PlayerParametersSetRecipe {
   owner_force_index?: number
   /** Stable Factorio entity identity. Recipe configuration never falls back to a same-name machine. */
   target_unit_number: number
-  /** Exact Factorio rotate direction: false clockwise, true counter-clockwise. */
+  /** Exact Factorio recipe prototype name to set on the target assembling machine. */
   recipe_name: string
 }
 
