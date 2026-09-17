@@ -507,7 +507,7 @@ describe('bounded area-clearing combat', () => {
     expect(c2.controller.status()).toMatchObject({ initial_threat_score: 64, support_turret_budget: 8 })
   })
 
-  it('advances the firing line between support placements instead of dumping the whole budget at one point', () => {
+  it('deploys a threat-sized support batch before advancing the firing line', () => {
     const c = world()
     c.enemies.length = 0
     for (let i = 0; i < 5; i++) {
@@ -529,21 +529,27 @@ describe('bounded area-clearing combat', () => {
     expect(c.controller.status()).toMatchObject({ initial_threat_score: 16, support_turret_budget: 4, turrets_placed: 0 })
 
     c.actor.position = { x: 6, y: 0 }
-    ;(globalThis as any).game.tick += 1
-    c.controller.tick(c.actor)
-    expect(c.surface.create_entity).toHaveBeenCalledTimes(1)
-
     for (let i = 0; i < 3; i++) {
       ;(globalThis as any).game.tick += 1
       c.controller.tick(c.actor)
     }
-    expect(c.surface.create_entity).toHaveBeenCalledTimes(1)
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
+    expect(c.controller.status()).toMatchObject({
+      support_stage_anchor_position: { x: 6, y: 0 },
+      support_stage_start_turret_count: 0,
+      support_stage_target_turret_count: 3,
+      encounter_owned_turret_count: 3,
+    })
 
-    c.actor.position = { x: 11, y: 0 }
     ;(globalThis as any).game.tick += 1
     c.controller.tick(c.actor)
-    expect(c.surface.create_entity).toHaveBeenCalledTimes(2)
-    expect(c.controller.status()).toMatchObject({ support_turret_budget: 4, turrets_placed: 2, encounter_owned_turret_count: 2 })
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
+
+    c.actor.position = { x: 14, y: 0 }
+    ;(globalThis as any).game.tick += 1
+    c.controller.tick(c.actor)
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(4)
+    expect(c.controller.status()).toMatchObject({ support_turret_budget: 4, turrets_placed: 4, encounter_owned_turret_count: 4 })
   })
 
   it('places and loads a paid gun turret only after support staging is established', () => {
