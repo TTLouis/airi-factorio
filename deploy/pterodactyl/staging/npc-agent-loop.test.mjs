@@ -43,7 +43,7 @@ class FakeRcon {
       const marker = text.match(/AIRI_RESULT_[a-f0-9]{24}:/)?.[0]
       assert.ok(marker)
       this.mutations.push(text)
-      const admissions = [...text.matchAll(/local r\d+=remote\.call/g)].length
+      const admissions = [...text.matchAll(/return remote\.call\('autorio_operations'/g)].length
       const result = Array.from({ length: admissions }, () => [true, 'Task started'])
       return `${marker}${JSON.stringify({ ok: true, result })}`
     }
@@ -356,7 +356,7 @@ test('actor replacement after atomic batch admission cancels continuation withou
 
   await assert.rejects(() => agent.request('two steps'), /epoch changed/)
   assert.equal(rcon.mutations.length, 1)
-  assert.equal((rcon.mutations[0].match(/local r\d+=remote\.call/g) ?? []).length, 2)
+  assert.equal((rcon.mutations[0].match(/return remote\.call\('autorio_operations'/g) ?? []).length, 2)
 })
 
 test('completion continuation stays on the captured actor and is bounded', async () => {
