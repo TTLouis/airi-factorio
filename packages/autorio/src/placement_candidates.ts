@@ -89,7 +89,7 @@ function rotate_cardinal(vector: { x: number, y: number }, direction: number) {
 
 function sorted_resource_coverages(values: Record<string, ResourceCoverage>) {
   const result: ResourceCoverage[] = []
-  for (const [, value] of pairs(values)) result.push(value)
+  for (const name in values) result.push(values[name])
   for (let i = 0; i < result.length; i++) {
     for (let j = i + 1; j < result.length; j++) {
       if (result[j].name < result[i].name) {
@@ -104,8 +104,9 @@ function sorted_resource_coverages(values: Record<string, ResourceCoverage>) {
 
 function resource_categories(prototype: any) {
   const result: Record<string, boolean> = {}
-  for (const [name, enabled] of pairs(prototype?.resource_categories ?? {})) {
-    if (enabled) result[name] = true
+  const categories: Record<string, boolean> = prototype?.resource_categories ?? {}
+  for (const name in categories) {
+    if (categories[name] === true) result[name] = true
   }
   return result
 }
@@ -155,7 +156,7 @@ function resource_coverage(
     if (category !== undefined && allowed_categories[category] !== true) continue
     const existing = coverage_by_name[resource.name]
     const amount = typeof resource.amount === 'number' ? resource.amount : 0
-    if (existing) {
+    if (existing !== undefined) {
       existing.entities += 1
       existing.amount += amount
     }
@@ -232,7 +233,7 @@ function port_signature(port: CandidateFluidPort) {
 
 function spatial_signature(candidate: PlacementCandidate) {
   const parts: string[] = []
-  if (candidate.item_output_position) {
+  if (candidate.item_output_position !== undefined) {
     parts.push(`out:${candidate.item_output_position.x}:${candidate.item_output_position.y}`)
   }
   for (const port of candidate.fluid_ports ?? []) parts.push(`fluid:${port_signature(port)}`)

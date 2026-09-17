@@ -1,3 +1,4 @@
+import { skill_constraint_predicate_signature } from './skill_constraint_predicates'
 import type { SkillAcceptanceCondition, SkillConstraint, SkillDefinition, SkillPrecondition } from './skills'
 
 export type SkillEvidenceKind = 'success' | 'semantic_failure' | 'execution_failure' | 'mechanic_correction'
@@ -69,37 +70,16 @@ function trust_key(skill_id: string, revision: number) {
   return `${skill_id}@${revision}`
 }
 
-function primitive_signature(value: unknown) {
-  if (value === undefined || value === null) return ''
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return ''
-}
-
-function predicate_signature(value: unknown) {
-  if (value === undefined || value === null || typeof value !== 'object' || Array.isArray(value)) return ''
-  const raw = value as Record<string, unknown>
-  const keys = Object.keys(raw).sort()
-  const parts: string[] = []
-  for (const key of keys) {
-    const primitive = primitive_signature(raw[key])
-    if (primitive.length > 0) parts.push(`${key}=${primitive}`)
-  }
-  return parts.join(',')
-}
-
 /**
- * Semantic identity for one constraint. Existing V1 skills have only human
- * readable descriptions; future/extended definitions may additionally carry
- * a small `predicate` object. Including the description already prevents two
- * different placement/resource rules from collapsing to kind|validation.
+ * Semantic identity for one constraint. Predicate identity comes from the
+ * finite canonical schema instead of accepting arbitrary JSON-like fields.
  */
 export function skill_constraint_semantic_signature(constraint: SkillConstraint) {
-  const predicate = predicate_signature((constraint as any).predicate)
   return [
     constraint.kind,
     constraint.validation,
     clean_text(constraint.description, 500),
-    predicate,
+    skill_constraint_predicate_signature(constraint.predicate),
   ].join('|')
 }
 

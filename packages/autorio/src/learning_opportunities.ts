@@ -1,4 +1,12 @@
-import type { SkillDefinition } from './skills'
+import {
+  create_skill_candidate,
+  get_skill_definition,
+  type SkillDefinition,
+} from './skills'
+import {
+  skill_constraint_predicate_signature,
+  type SkillConstraintPredicate,
+} from './skill_constraint_predicates'
 import {
   mark_skill_revision_reverified,
   record_skill_evidence,
@@ -55,6 +63,15 @@ interface VerificationEvidenceSnapshot {
   evidence_refs?: string[]
 }
 
+export interface SkillSemanticCounterexample {
+  run_id: string
+  skill_id: string
+  skill_revision: number
+  predicates: SkillConstraintPredicate[]
+  evidence_refs: string[]
+  summary: string
+}
+
 interface StoredSkillRevision {
   id: string
   revision: number
@@ -94,6 +111,18 @@ function unique_strings(values: string[], limit = MAX_EVIDENCE_REFS) {
   return result
 }
 
+function unique_predicates(values: SkillConstraintPredicate[]) {
+  const result: SkillConstraintPredicate[] = []
+  const signatures: string[] = []
+  for (const predicate of values) {
+    const signature = skill_constraint_predicate_signature(predicate)
+    if (signatures.includes(signature)) continue
+    signatures.push(signature)
+    result.push(predicate)
+  }
+  return result
+}
+
 function records_readonly(): Record<string, LearningOpportunity> {
   return storage.airi_learning_opportunities ?? {}
 }
@@ -116,6 +145,97 @@ function ensure_queue() {
 function terminal_evidence_processed() {
   storage.airi_learning_terminal_evidence_processed ??= {}
   return storage.airi_learning_terminal_evidence_processed
+}
+
+export function semantic_counterexample_from_failure(skill: SkillDefinition, run: VerificationEvidenceSnapshot, evidence_refs: string[] = []): SkillSemanticCounterexample | undefined {
+  if (run.state !== 'failed' || run.failure_kind !== 'semantic') return undefined
+  if (run.skill_id !== skill.id || run.skill_revision !== skill.revision) return undefined
+
+  const predicates: SkillConstraintPredicate[] = []
+  for (const relation of skill.topology.relations) {
+    if (relation.kind === 'adjacent' || relation.kind === 'custom') continue
+    if (relation.from === undefined && relation.to === undefined && relation.via === undefined) continue
+    predicates.push({
+      type: 'required_topology_relation',
+      relation_kind: relation.kind,
+      from: relation.from,
+      to: relation.to,
+      via: relation.via,
+    })
+  }
+  for (const output of skill.outputs) {
+    predicates.push({ type: 'output_delta', item: output.item, minimum_delta: 1 })
+  }
+
+  const deduplicated = unique_predicates(predicates)
+  if (deduplicated.length === 0) return undefined
+  return {
+    run_id: run.id,
+    skill_id: run.skill_id,
+    skill_revision: run.skill_revision,
+    predicates: deduplicated,
+    evidence_refs: unique_strings([...(run.evidence_refs ?? []), ...evidence_refs]),
+    summary: clean_text(run.reason ?? 'Semantic verification counterexample.'),
+  }
+}
+
+function counterexample_constraint_description(predicate: SkillConstraintPredicate) {
+  if (predicate.type === 'required_topology_relation') {
+    const endpoints = `${predicate.from ?? '?'} -> ${predicate.to ?? '?'}`
+    const via = predicate.via !== undefined ? ` via ${predicate.via}` : ''
+    return `Semantic counterexample requires ${predicate.relation_kind} ${endpoints}${via} to hold on a rebuilt instance.`
+  }
+  if (predicate.type === 'output_delta') return `Semantic counterexample requires ${predicate.item} to increase by at least ${predicate.minimum_delta} during bounded verification.`
+  if (predicate.type === 'resource_coverage') return `Semantic counterexample requires coverage of ${predicate.resource} by at least ${predicate.minimum_entities} resource entities.`
+  return 'Semantic counterexample requires a translated rebuild before reuse.'
+}
+
+export function revise_skill_from_semantic_counterexample(skill: SkillDefinition, counterexample: SkillSemanticCounterexample) {
+  if (counterexample.skill_id !== skill.id || counterexample.skill_revision !== skill.revision) return undefined
+  const existing = skill.constraints
+    .map(constraint => skill_constraint_predicate_signature(constraint.predicate))
+    .filter(value => value.length > 0)
+  const additions = counterexample.predicates.filter(predicate => !existing.includes(skill_constraint_predicate_signature(predicate)))
+  if (additions.length === 0) return undefined
+
+  const evidence_refs = unique_strings([...skill.source.evidence_refs, ...counterexample.evidence_refs], 64)
+  const known_failure_modes = unique_strings([...skill.known_failure_modes, counterexample.summary], 64)
+  const confidence_basis = unique_strings([
+    ...skill.confidence.basis,
+    `Revision ${skill.revision + 1} encodes deterministic semantic predicates from counterexample ${counterexample.run_id}.`,
+  ], 64)
+  const confidence_level = skill.confidence.level === 'high' ? 'medium' : skill.confidence.level
+
+  return create_skill_candidate({
+    ...skill,
+    revision: skill.revision + 1,
+    source: { ...skill.source, evidence_refs },
+    constraints: [
+      ...skill.constraints,
+      ...additions.map(predicate => ({
+        kind: predicate.type === 'resource_coverage' ? 'resource' as const : predicate.type === 'output_delta' ? 'custom' as const : 'placement' as const,
+        description: counterexample_constraint_description(predicate),
+        validation: 'unvalidated' as const,
+        evidence_refs: counterexample.evidence_refs,
+        predicate,
+      })),
+    ],
+    verification: {
+      ...skill.verification,
+      placement_rebuild: 'not_tested',
+      production_output: 'not_tested',
+      acceptance_conditions: [],
+    },
+    known_failure_modes,
+    confidence: { level: confidence_level, basis: confidence_basis },
+    examples: [
+      ...skill.examples,
+      {
+        summary: `Revised after semantic counterexample ${counterexample.run_id}.`,
+        notes: 'The revision adds only machine-readable predicates derived from structured topology/output semantics; free-form failure text is retained as evidence, not parsed as authority.',
+      },
+    ].slice(0, 64),
+  })
 }
 
 /**
@@ -145,6 +265,24 @@ function bridge_terminal_verification_evidence(opportunity: LearningOpportunity)
       refs,
     )
     processed[run.id] = terminal_key
+
+    if (semantic) {
+      const skill = get_skill_definition(run.skill_id)
+      if (skill !== undefined && skill.revision === run.skill_revision && skill.status === 'candidate') {
+        const counterexample = semantic_counterexample_from_failure(skill, run, refs)
+        const revised = counterexample !== undefined ? revise_skill_from_semantic_counterexample(skill, counterexample) : undefined
+        if (revised !== undefined) {
+          const classification = classify_verification_cost_risk(revised)
+          queue_learning_verification(
+            opportunity.id,
+            revised.id,
+            classification.estimated_cost,
+            classification.risk,
+            `Re-verify revision ${revised.revision} after semantic counterexample ${run.id}.`,
+          )
+        }
+      }
+    }
     return
   }
 

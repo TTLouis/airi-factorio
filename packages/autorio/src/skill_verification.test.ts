@@ -254,7 +254,7 @@ describe('Skill Verification / Instance Layer V1', () => {
     expect(verified.verification.acceptance_conditions.every(value => value.status === 'passed' && value.evidence_refs.length > 0)).toBe(true)
   })
 
-  it('classifies a built-but-broken intermediate transfer with no output as semantic failure and keeps the skill candidate', () => {
+  it('turns a semantic counterexample into a revised candidate and automatically requeues verification', () => {
     const skill = candidate_from_source()
     const opportunity = queued_opportunity(skill.id)
     store_analysis(analysis('broken-analysis', 80, false))
@@ -270,10 +270,18 @@ describe('Skill Verification / Instance Layer V1', () => {
     )
     expect(failed.state).toBe('failed')
     expect(failed.failure_kind).toBe('semantic')
-    expect(get_skill_definition(skill.id)?.status).toBe('candidate')
-    expect(get_skill_definition(skill.id)?.stage).toBe('executable_candidate')
-    expect(list_learning_opportunities()[0].state).toBe('failed')
-    expect(list_learning_verification_queue()).toHaveLength(0)
+    const revised = get_skill_definition(skill.id)
+    expect(revised?.status).toBe('candidate')
+    expect(revised?.stage).toBe('executable_candidate')
+    expect(revised?.revision).toBe(skill.revision + 1)
+    expect(revised?.constraints.some(value => value.predicate?.type === 'required_topology_relation')).toBe(true)
+    expect(revised?.constraints.some(value => value.predicate?.type === 'output_delta')).toBe(true)
+    expect(list_learning_opportunities()[0]).toMatchObject({
+      state: 'awaiting_verification',
+      skill_id: skill.id,
+    })
+    expect(list_learning_verification_queue()).toHaveLength(1)
+    expect(list_learning_verification_queue()[0].skill_id).toBe(skill.id)
   })
 
   it('keeps an unavailable actor as blocked rather than failed and retains the verification queue item', () => {

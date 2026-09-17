@@ -121,7 +121,8 @@ function mining_offset(prototype: any, direction: number) {
 
 function mining_categories(prototype: any) {
   const result: Record<string, boolean> = {}
-  for (const [name, enabled] of pairs(prototype?.resource_categories ?? {})) if (enabled) result[name] = true
+  const categories: Record<string, boolean> = prototype?.resource_categories ?? {}
+  for (const name in categories) if (categories[name] === true) result[name] = true
   return result
 }
 
@@ -148,7 +149,7 @@ function compact_mining_coverage(entity: LuaEntity) {
     if (category !== undefined && categories[category] !== true) continue
     const amount = typeof resource.amount === 'number' ? resource.amount : 0
     const existing = by_name[resource.name]
-    if (existing) {
+    if (existing !== undefined) {
       existing.entities += 1
       existing.amount += amount
     }
@@ -158,7 +159,7 @@ function compact_mining_coverage(entity: LuaEntity) {
   }
 
   const coverage: Array<{ name: string, entities: number, amount: number }> = []
-  for (const [, value] of pairs(by_name)) coverage.push(value)
+  for (const name in by_name) coverage.push(by_name[name])
   coverage.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
   const truncated = coverage.length > MAX_MINING_RESOURCE_TYPES
   if (truncated) coverage.splice(MAX_MINING_RESOURCE_TYPES)

@@ -6,6 +6,13 @@ import {
   list_analyzed_blocks,
   skill_candidate_definition_from_block,
 } from './factory_area_learning'
+import {
+  canonicalize_skill_constraint_predicate,
+  skill_constraint_predicate_signature,
+} from './skill_constraint_predicates'
+import type { SkillConstraintPredicate } from './skill_constraint_predicates'
+
+export type { SkillConstraintPredicate } from './skill_constraint_predicates'
 
 export const SKILL_SCHEMA_VERSION = 1
 
@@ -47,6 +54,7 @@ export interface SkillConstraint {
   description: string
   validation: 'validated' | 'unvalidated' | 'not_applicable'
   evidence_refs: string[]
+  predicate?: SkillConstraintPredicate
 }
 
 export interface SkillParameter {
@@ -347,12 +355,14 @@ function canonical_constraints(value: unknown): SkillConstraint[] {
   for (let index = 0; index < value.length; index++) {
     const raw: any = value[index]
     if (!plain_object(raw)) throw new Error(`constraints[${index}] must be an object`)
-    result.push({
+    const constraint: SkillConstraint = {
       kind: enum_value(raw.kind, ['placement', 'capacity', 'resource', 'safety', 'custom'] as const, `constraints[${index}].kind`, 'custom'),
       description: clean_text(raw.description, `constraints[${index}].description`, 500),
       validation: enum_value(raw.validation, ['validated', 'unvalidated', 'not_applicable'] as const, `constraints[${index}].validation`, 'unvalidated'),
       evidence_refs: string_list(raw.evidence_refs, `constraints[${index}].evidence_refs`),
-    })
+    }
+    if (raw.predicate !== undefined) constraint.predicate = canonicalize_skill_constraint_predicate(raw.predicate, `constraints[${index}].predicate`)
+    result.push(constraint)
   }
   return result
 }
@@ -584,6 +594,14 @@ function topology_relation_text(relation: SkillTopologyRelation) {
   return `\`${md_inline(relation.kind)}\`: ${md_inline(endpoints + via + description)}`
 }
 
+function constraint_text(constraint: SkillConstraint) {
+  const predicate = constraint.predicate !== undefined
+    ? `; predicate=${md_inline(skill_constraint_predicate_signature(constraint.predicate))}`
+    : ''
+  const evidence = constraint.evidence_refs.length > 0 ? `; evidence=${constraint.evidence_refs.join(', ')}` : ''
+  return `${constraint.kind}: ${constraint.description} [${constraint.validation}]${predicate}${evidence}`
+}
+
 export function generate_skill_markdown(skill: SkillDefinition) {
   const lines: string[] = []
   lines.push(`# ${md_inline(skill.name)}`, '')
@@ -608,7 +626,7 @@ export function generate_skill_markdown(skill: SkillDefinition) {
   md_list(lines, skill.topology.relations.map(topology_relation_text), 'No reusable relationships recorded.')
 
   lines.push('', '## Constraints', '')
-  md_list(lines, skill.constraints.map(constraint => `${constraint.kind}: ${constraint.description} [${constraint.validation}]${constraint.evidence_refs.length > 0 ? `; evidence=${constraint.evidence_refs.join(', ')}` : ''}`), 'None recorded.')
+  md_list(lines, skill.constraints.map(constraint_text), 'None recorded.')
   lines.push('', '## Parameters', '')
   md_list(lines, skill.parameters.map(parameter => `\`${md_inline(parameter.name)}\`: ${parameter.description}; ${parameter.required ? 'required' : 'optional'}${parameter.default_value !== undefined ? `; default=${parameter.default_value}` : ''}`), 'None recorded.')
 

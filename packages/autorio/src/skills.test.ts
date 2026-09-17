@@ -118,6 +118,46 @@ describe('learned skill record and export', () => {
     }))).toThrow(/has not passed/i)
   })
 
+  it('canonicalizes durable machine-readable constraint predicates while preserving legacy constraints', () => {
+    const skill = canonicalize_skill_definition(candidate({
+      constraints: [
+        {
+          kind: 'resource',
+          description: 'Mining placement must cover the requested resource.',
+          validation: 'validated',
+          evidence_refs: ['coverage:1'],
+          predicate: { type: 'resource_coverage', resource: ' iron-ore ' },
+        },
+        {
+          kind: 'capacity',
+          description: 'Legacy description-only capacity constraint.',
+          validation: 'unvalidated',
+          evidence_refs: [],
+        },
+      ],
+    }))
+
+    expect(skill.constraints[0].predicate).toEqual({
+      type: 'resource_coverage',
+      resource: 'iron-ore',
+      minimum_entities: 1,
+    })
+    expect(skill.constraints[1].predicate).toBeUndefined()
+    expect(generate_skill_markdown(skill)).toContain('predicate=resource_coverage|iron-ore|1|')
+  })
+
+  it('rejects arbitrary predicate schema extensions rather than silently persisting them', () => {
+    expect(() => canonicalize_skill_definition(candidate({
+      constraints: [{
+        kind: 'custom',
+        description: 'Unknown predicate must not become authority.',
+        validation: 'unvalidated',
+        evidence_refs: [],
+        predicate: { type: 'output_delta', item: 'transport-belt', minimum_delta: 1, guess: 'llm' },
+      }],
+    }))).toThrow(/not supported/i)
+  })
+
   it('keeps deterministic canonical structure and generates SKILL.md only from the structured record', () => {
     const skill = canonicalize_skill_definition(candidate())
     expect(serialize_skill_json(skill)).toBe(serialize_skill_json(skill))

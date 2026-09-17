@@ -23,6 +23,25 @@ describe('skill semantic evidence', () => {
   it('distinguishes constraints with the same kind/validation but different semantics', () => {
     const weak = skill_constraint_semantic_signature({
       kind: 'resource',
+      description: 'Mining placement must satisfy deterministic target resource coverage.',
+      validation: 'validated',
+      evidence_refs: [],
+      predicate: { type: 'resource_coverage', resource: 'iron-ore', minimum_entities: 1 },
+    })
+    const strong = skill_constraint_semantic_signature({
+      kind: 'resource',
+      description: 'Mining placement must satisfy deterministic target resource coverage.',
+      validation: 'validated',
+      evidence_refs: [],
+      predicate: { type: 'resource_coverage', resource: 'iron-ore', minimum_entities: 8 },
+    })
+
+    expect(weak).not.toBe(strong)
+  })
+
+  it('keeps legacy description-only constraints semantically distinct', () => {
+    const weak = skill_constraint_semantic_signature({
+      kind: 'resource',
       description: 'Must overlap at least one target resource tile.',
       validation: 'validated',
       evidence_refs: [],
