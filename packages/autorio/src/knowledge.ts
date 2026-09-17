@@ -69,9 +69,8 @@ function sort_strings(values: string[]) {
 
 function categories_for(recipe: any): string[] {
   const categories: string[] = []
-  const recipe_categories = (prototypes as any).recipe_category
-  if (!recipe_categories || typeof recipe?.has_category !== 'function') return categories
-  for (const [category] of pairs(recipe_categories)) {
+  if (!prototypes.recipe_category || typeof recipe?.has_category !== 'function') return categories
+  for (const [category] of pairs(prototypes.recipe_category)) {
     if (recipe.has_category(category)) categories.push(category)
   }
   sort_strings(categories)
