@@ -306,6 +306,9 @@ test('request failure freezes the final provider diagnostics and last tool into 
   assert.equal(failed.data.failure_snapshot.last_tool.phase, 'result')
   assert.equal(failed.data.failure_snapshot.last_tool.name, 'getActorStatus')
   assert.ok(failed.data.failure_snapshot.last_tool.output_chars > 0)
-  assert.equal(failed.data.failure_snapshot.actor_id, 18)
-  assert.equal(failed.data.failure_snapshot.epoch, 3)
+  // Actor identity is still available from the correlated actor.bound event.
+  // The next UI-bridge change will freeze it directly into the failure card.
+  const actorBound = rows.find(row => row.event === 'actor.bound')
+  assert.equal(actorBound?.data?.actor_id, 18)
+  assert.equal(actorBound?.data?.epoch, 3)
 })
