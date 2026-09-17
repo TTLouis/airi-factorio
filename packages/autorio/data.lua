@@ -73,3 +73,22 @@ data:extend({
     enabled = false,
   },
 })
+
+-- The console's top-left button shows which model AIRI is currently talking to.
+-- The avatars are our own drawings (see scripts/generate_provider_icons.py), so
+-- no vendor artwork or logo ships with the mod; a provider is identified by its
+-- accent color and a plain charm. Control stage picks one by matching the model
+-- identifier and falls back to "airi" when the provider is unknown.
+local provider_avatars = {}
+for _, provider in ipairs({"airi", "claude", "openai", "deepseek"}) do
+  provider_avatars[#provider_avatars + 1] = {
+    type = "sprite",
+    name = "airi-provider-" .. provider,
+    filename = "__autorio__/graphics/icons/provider/" .. provider .. ".png",
+    size = 64,
+    scale = 0.5,
+    flags = {"gui-icon"},
+  }
+end
+
+data:extend(provider_avatars)

@@ -7,6 +7,7 @@ import { create_skill_remote_interface, handle_skill_export_click, render_learn_
 // Namespace import on purpose: one Lua local instead of one per helper.
 import * as activity_state from './task_board_activity'
 import * as debug_ui from './task_board_debug'
+import * as provider_ui from './task_board_provider'
 import { get_actor_inventory_items } from './utils/inventory'
 
 const BUTTON_NAME = 'airi_task_board_button'
@@ -64,6 +65,9 @@ const SKILLS_BODY_NAME = 'airi_task_board_skills_body'
 const SKILLS_BUTTON_NAME = 'airi_task_board_skills'
 const SKILLS_CLOSE_BUTTON_NAME = 'airi_task_board_skills_close'
 const SKILLS_POPOUT_TITLE = 'Area Learning & Skills'
+// Only the fallback the button is created with. What it wears is the avatar of
+// whichever provider AIRI is currently talking to, which task_board_provider
+// resolves from the reported model identifier on every render.
 const BUTTON_SPRITE: SpritePath = 'item/logistic-robot'
 const CLOSE_BUTTON_NAME = 'airi_task_board_close'
 const PAUSE_BUTTON_NAME = 'airi_task_board_pause'
@@ -409,6 +413,8 @@ function ensure_button(player: LuaPlayer) {
   const flow = mod_gui_button_flow(player)
   const existing = flow[BUTTON_NAME]
   const button = (existing?.valid ? existing : flow.add({ type: 'sprite-button', name: BUTTON_NAME, sprite: BUTTON_SPRITE, style: 'slot_button', tooltip: 'AIRI NPC Console' })) as SpriteButtonGuiElement
+  button.sprite = provider_ui.provider_button_sprite(BUTTON_SPRITE)
+  button.tooltip = provider_ui.provider_button_tooltip('AIRI NPC Console')
   button.toggled = task_board_ui_is_open(player.index)
   return button
 }
@@ -705,7 +711,7 @@ export function task_board_activity_for_display(board: TaskBoardUiSnapshot | und
  * refresh_tracker, which the once-a-second refresh calls instead of rebuilding.
  */
 function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) {
-  const { header, body } = create_section(parent, 'Plan Tracker / Activity', undefined, 'Canonical plan progress plus timestamped auditable observations, actions, results, blockers, and system events.', true, { section: TRACKER.section, header: TRACKER.header, body: TRACKER.body })
+  const { header, body } = create_section(parent, 'Plan & Activity', undefined, 'Canonical plan progress plus timestamped auditable observations, actions, results, blockers, and system events.', true, { section: TRACKER.section, header: TRACKER.header, body: TRACKER.body })
   const summary = header.add({ type: 'label', name: TRACKER.summary, caption: '', style: 'semibold_label' }); summary.style.right_padding = 4
   const empty = body.add({ type: 'label', name: TRACKER.empty, caption: 'No active plan or recent AIRI activity.' }); empty.style.font_color = TONE_COLORS.muted
   const plan = body.add({ type: 'flow', name: TRACKER.plan, direction: 'vertical' }); plan.style.horizontally_stretchable = true; plan.style.vertical_spacing = 6
@@ -714,17 +720,18 @@ function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | unde
   const steps_table = steps_scroll.add({ type: 'table', name: TRACKER.steps_table, column_count: 4 }); steps_table.style.horizontal_spacing = 8; steps_table.style.vertical_spacing = 4
   plan.add({ type: 'flow', name: TRACKER.attention, direction: 'vertical' })
   const divider = body.add({ type: 'line', name: TRACKER.divider, direction: 'horizontal' }); divider.style.horizontally_stretchable = true
-  const activity_header = body.add({ type: 'flow', name: TRACKER.activity_header, direction: 'horizontal' }); activity_header.style.horizontally_stretchable = true; activity_header.style.vertical_align = 'center'; activity_header.style.horizontal_spacing = 8
-  activity_header.add({ type: 'label', caption: 'Recent activity', style: 'bold_label' })
-  const header_filler = activity_header.add({ type: 'empty-widget' }); header_filler.style.horizontally_stretchable = true
+  // The feed controls belong to the section subheader, beside the title, the
+  // same way Conversation carries its own. A second "Recent activity" header row
+  // inside the body used to hold them, which made two sections of the same
+  // console put the same kind of control in two different places.
+  const activity_header = header.add({ type: 'flow', name: TRACKER.activity_header, direction: 'horizontal' }); activity_header.style.vertical_align = 'center'; activity_header.style.horizontal_spacing = 6
   // Factorio's drop-down can only ever hold one selection, so the filter is a
   // row of toggle buttons. The flag rides in tags rather than a name per button.
   const filters = activity_header.add({ type: 'flow', name: TRACKER.filters, direction: 'horizontal' }); filters.style.horizontal_spacing = 2
-  const small_button = (button: LuaGuiElement) => { button.style.height = 24; button.style.minimal_width = 0; button.style.top_padding = 0; button.style.bottom_padding = 0; button.style.left_padding = 4; button.style.right_padding = 4; button.style.font = 'default-small-semibold'; return button }
-  small_button(filters.add({ type: 'button', caption: 'ALL', tooltip: 'Show every kind of activity', tags: { airi_activity_filter: activity_state.ACTIVITY_FILTER_ALL } }))
-  for (const filter of activity_state.ACTIVITY_FILTERS) small_button(filters.add({ type: 'button', caption: filter.caption, tooltip: `${filter.tooltip}. Click to show or hide; several can be on at once.`, tags: { airi_activity_filter: filter.flag } }))
-  small_button(activity_header.add({ type: 'button', name: TRACKER.live, caption: '' })).style.minimal_width = 76
-  activity_header.add({ type: 'label', name: TRACKER.count, caption: '', style: 'semibold_label' })
+  activity_state.style_feed_button(filters.add({ type: 'button', caption: 'ALL', tooltip: 'Show every kind of activity', tags: { airi_activity_filter: activity_state.ACTIVITY_FILTER_ALL } }))
+  for (const filter of activity_state.ACTIVITY_FILTERS) activity_state.style_feed_button(filters.add({ type: 'button', caption: filter.caption, tooltip: `${filter.tooltip}. Click to show or hide; several can be on at once.`, tags: { airi_activity_filter: filter.flag } }))
+  activity_state.style_feed_button(activity_header.add({ type: 'button', name: TRACKER.live, caption: '' }), activity_state.FEED_STATE_BUTTON_WIDTH)
+  const count = activity_header.add({ type: 'label', name: TRACKER.count, caption: '', style: 'semibold_label' }); count.style.right_padding = 4
   const activity_empty = body.add({ type: 'label', name: TRACKER.activity_empty, caption: '' }); activity_empty.style.font_color = TONE_COLORS.muted
   const activity_scroll = body.add({ type: 'scroll-pane', name: TRACKER.activity_scroll, style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' }); activity_scroll.style.horizontally_stretchable = true
   // Hovering holds the feed still while it is being read, and scrolling it hands
@@ -738,7 +745,7 @@ function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | unde
 function refresh_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) {
   const section = parent[TRACKER.section]; const header = section?.valid ? section[TRACKER.header] : undefined; const body = section?.valid ? section[TRACKER.body] : undefined
   if (!header?.valid || !body?.valid) return false
-  const summary = header[TRACKER.summary]; const empty = body[TRACKER.empty]; const plan = body[TRACKER.plan]; const divider = body[TRACKER.divider]; const activity_header = body[TRACKER.activity_header]; const activity_empty = body[TRACKER.activity_empty]; const activity_scroll = body[TRACKER.activity_scroll]
+  const summary = header[TRACKER.summary]; const empty = body[TRACKER.empty]; const plan = body[TRACKER.plan]; const divider = body[TRACKER.divider]; const activity_header = header[TRACKER.activity_header]; const activity_empty = body[TRACKER.activity_empty]; const activity_scroll = body[TRACKER.activity_scroll]
   const activity_table = activity_scroll?.valid ? activity_scroll[TRACKER.activity_table] : undefined
   if (!summary?.valid || !empty?.valid || !plan?.valid || !divider?.valid || !activity_header?.valid || !activity_empty?.valid || !activity_scroll?.valid || !activity_table?.valid) return false
   const tracker_heights = task_board_tracker_heights(player_gui_height(player), board === undefined ? 0 : math.min(board.steps.length, MAX_STEPS))
@@ -964,7 +971,7 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
 export function create_task_board_ui_remote_interface() {
   create_skill_remote_interface(); create_learning_remote_interface()
   remote.add_interface('autorio_task_board', {
-    set_snapshot: (value: unknown, generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); activity_state.merge_activity_history(stamped.activity); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
+    set_snapshot: (value: unknown, generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); activity_state.merge_activity_history(stamped.activity); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; provider_ui.remember_provider_model(stamped.debug?.provider_model); try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
     clear: (generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; storage.airi_task_board_ui = undefined; storage.airi_task_board_ui_synced_tick = game.tick; render_all(); return true },
     status: () => storage.airi_task_board_ui,
     sync_version: () => debug_ui.current_sync_version(),

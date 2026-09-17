@@ -379,14 +379,7 @@ function add_activity_line(parent: LuaGuiElement, entry: ProjectHistoryActivity)
 }
 
 function add_filter_button(parent: LuaGuiElement, caption: string, tooltip: string, flag: number) {
-  const button = parent.add({ type: 'button', caption, tooltip, tags: { airi_activity_filter: flag, airi_activity_surface: 'projects' } })
-  button.style.height = 24
-  button.style.minimal_width = 0
-  button.style.top_padding = 0
-  button.style.bottom_padding = 0
-  button.style.left_padding = 4
-  button.style.right_padding = 4
-  button.style.font = 'default-small-semibold'
+  activity_state.style_feed_button(parent.add({ type: 'button', caption, tooltip, tags: { airi_activity_filter: flag, airi_activity_surface: 'projects' } }))
 }
 
 function render_project_detail_skeleton(parent: LuaGuiElement, project: ProjectHistoryRecord | undefined) {

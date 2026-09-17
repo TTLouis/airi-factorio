@@ -47,6 +47,9 @@ import { event_handlers, set_load_handler } from './test-event-registry'
 
 ;(globalThis as any).helpers = {
   table_to_json: (value: unknown) => JSON.stringify(value),
+  // Every sprite the console asks for is one the mod's own data stage declares,
+  // so the stand-in answers the way a build that shipped its graphics would.
+  is_valid_sprite_path: () => true,
 }
 
 ;(globalThis as any).string = {

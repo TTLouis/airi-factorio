@@ -1,3 +1,5 @@
+import type { LuaGuiElement } from 'factorio:runtime'
+
 import type { TaskBoardUiActivity } from './task_board_ui'
 
 /**
@@ -28,6 +30,29 @@ export const ACTIVITY_FILTERS: ActivityFilter[] = [
 ]
 export const ACTIVITY_FILTER_ALL = 31
 const ACTIVITY_HISTORY_LIMIT = 160
+
+// Wide enough for the longest LIVE / PAUSED / "n NEW" caption, so nothing beside
+// the button shifts when the reading mode changes.
+export const FEED_STATE_BUTTON_WIDTH = 76
+const FEED_BUTTON_HEIGHT = 24
+
+/**
+ * Feed controls belong in the heading of the section they filter, never in a
+ * second header row inside its body. A default-height button would make that
+ * heading taller than a section title, so every feed in the console - Plan
+ * Tracker, Conversation, Projects - sizes its controls through here and the
+ * headings read as one pattern.
+ */
+export function style_feed_button(button: LuaGuiElement, minimal_width = 0) {
+  button.style.height = FEED_BUTTON_HEIGHT
+  button.style.minimal_width = minimal_width
+  button.style.top_padding = 0
+  button.style.bottom_padding = 0
+  button.style.left_padding = 4
+  button.style.right_padding = 4
+  button.style.font = 'default-small-semibold'
+  return button
+}
 
 export interface ActivityView {
   // Scroll to each new event as it arrives.

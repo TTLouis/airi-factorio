@@ -148,7 +148,7 @@ describe('AIRI NPC console compact tracker layout', () => {
   it('uses compact controls and one combined timestamped plan/activity tracker', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain('function compact_button(')
-    expect(source).toContain("'Plan Tracker / Activity'")
+    expect(source).toContain("'Plan & Activity'")
     expect(source).toContain('function render_tracker(')
     expect(source).toMatch(/render_tracker\(\w+, board[,)]/)
     expect(source).toContain('const previous = storage.airi_task_board_ui')
@@ -156,5 +156,46 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(source).toContain("caption: entry.timestamp ?? '--:--:--'")
     expect(source).not.toContain('render_steps(left, board)')
     expect(source).not.toContain('render_activity(left, board)')
+  })
+
+  // Conversation has always carried its LIVE control in its subheader. The
+  // tracker used to grow a second "Recent activity" header row inside its body
+  // for the same kind of control, which put one selector in a heading and one
+  // below it. Every feed control belongs in its section heading.
+  it('keeps every feed control in its section heading', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const tracker = source.split('function render_tracker(')[1]?.split('function refresh_tracker(')[0] ?? ''
+    expect(tracker).toContain('const activity_header = header.add(')
+    expect(tracker).not.toContain('const activity_header = body.add(')
+    expect(tracker).not.toContain("caption: 'Recent activity'")
+    expect(tracker).toContain('activity_state.style_feed_button(')
+    expect(source).toContain('const activity_header = header[TRACKER.activity_header]')
+
+    const debug_source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+    expect(debug_source).toContain('activity_state.style_feed_button(header.add(')
+    expect(debug_source).not.toContain("style: 'mini_button'")
+
+    // One styler for every feed, so the two headings cannot drift apart again.
+    const projects = readFileSync(new URL('./projects/project_window.ts', import.meta.url), 'utf8')
+    expect(projects).toContain('activity_state.style_feed_button(parent.add(')
+    expect(projects).not.toContain("button.style.font = 'default-small-semibold'")
+  })
+
+  // The button is a live readout of which model is answering, not a static icon.
+  it('dresses the mod-GUI button with the current provider avatar', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain('button.sprite = provider_ui.provider_button_sprite(BUTTON_SPRITE)')
+    expect(source).toContain("button.tooltip = provider_ui.provider_button_tooltip('AIRI NPC Console')")
+    expect(source).toContain('provider_ui.remember_provider_model(stamped.debug?.provider_model)')
+
+    // The avatars are prototypes, so the data stage has to declare every id the
+    // control stage can resolve to.
+    const data_stage = readFileSync(new URL('../data.lua', import.meta.url), 'utf8')
+    const provider_source = readFileSync(new URL('./task_board_provider.ts', import.meta.url), 'utf8')
+    for (const id of ['airi', 'claude', 'openai', 'deepseek']) {
+      expect(provider_source).toContain(`id: '${id}'`)
+      expect(data_stage).toContain(`"${id}"`)
+    }
+    expect(data_stage).toContain('"__autorio__/graphics/icons/provider/" .. provider .. ".png"')
   })
 })

@@ -370,7 +370,7 @@ export function render_ai_reply(parent: LuaGuiElement, response: string, width: 
     header.style.vertical_align = 'center'
     header.add({ type: 'label', caption: 'Current Task Conversation', style: 'subheader_caption_label' })
     const filler = header.add({ type: 'empty-widget' }); filler.style.horizontally_stretchable = true
-    header.add({ type: 'button', name: CONVERSATION.state, caption: '[img=utility/status_working] LIVE', style: 'mini_button', tooltip: 'Conversation follows the same LIVE/PAUSED reading mode as Activity. Click to pause or resume both feeds.' })
+    activity_state.style_feed_button(header.add({ type: 'button', name: CONVERSATION.state, caption: '[img=utility/status_working] LIVE', tooltip: 'Conversation follows the same LIVE/PAUSED reading mode as Activity. Click to pause or resume both feeds.' }), activity_state.FEED_STATE_BUTTON_WIDTH)
     const count = header.add({ type: 'label', name: CONVERSATION.count, caption: '0 messages', style: 'semibold_label' }); count.style.left_padding = 6; count.style.right_padding = 4
     const body = section.add({ type: 'flow', name: CONVERSATION.body, direction: 'vertical' })
     body.style.padding = 10
