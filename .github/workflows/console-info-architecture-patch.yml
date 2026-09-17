@@ -1,0 +1,173 @@
+name: Console information architecture patch
+
+on:
+  push:
+    branches:
+      - feat/npc-console-info-architecture
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/npc-console-info-architecture
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Apply focused console patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              source = p.read_text()
+              if old not in source:
+                  raise SystemExit(f'missing replacement anchor in {path}: {old[:100]!r}')
+              p.write_text(source.replace(old, new, 1))
+
+          def regex_once(path, pattern, replacement):
+              p = Path(path)
+              source = p.read_text()
+              updated, count = re.subn(pattern, replacement, source, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f'expected one regex replacement in {path}, got {count}: {pattern[:100]!r}')
+              p.write_text(updated)
+
+          replace_once(
+              'deploy/pterodactyl/runtime-v8/npc-agent-loop.mjs',
+              "    await this.traceEvent('plan.accepted', {\n      chat_message: plan.chatMessage,",
+              "    await this.traceEvent('plan.accepted', {\n      trigger_source: this.planUpdateReason,\n      chat_message: plan.chatMessage,",
+          )
+          replace_once(
+              'deploy/pterodactyl/runtime-v8/supervisor.mjs',
+              "    case 'plan.accepted':\n      return { phase: 'executing', detail: uiText(data.chat_message, 200) || 'Plan accepted' }",
+              "    case 'plan.accepted': {\n      const message = uiText(data.chat_message, 1000)\n      const publish = data.trigger_source === 'request' || data.trigger_source === 'failure'\n      return {\n        phase: 'executing',\n        detail: uiText(data.chat_message, 200) || 'Plan accepted',\n        ...(publish && message ? { activity: { kind: 'decision', text: message } } : {}),\n      }\n    }",
+          )
+
+          replace_once('packages/autorio/src/task_board_debug.ts', 'const CONVERSATION_HEIGHT = 170', 'const CONVERSATION_HEIGHT = 300')
+          replace_once(
+              'packages/autorio/src/task_board_debug.ts',
+              "  for (const entry of raw_history) {\n    const message = activity_conversation_message(entry)\n    if (message !== undefined) messages.push(message)\n  }",
+              "  for (const entry of raw_history) {\n    const message = activity_conversation_message(entry)\n    if (message === undefined) continue\n    const previous = messages.length > 0 ? messages[messages.length - 1] : undefined\n    if (message.role === 'assistant' && previous?.role === 'assistant' && previous.text === message.text) continue\n    messages.push(message)\n  }",
+          )
+          replace_once(
+              'packages/autorio/src/task_board_debug.ts',
+              "  add_row(table, 'UI sync', `gen ${version.generation} · rev ${version.revision} · age ${sync_age(synced_tick)}`)\n  if (clean_text(debug.last_error, 500).length > 0) add_row(table, 'Last error', clean_text(debug.last_error, 500), clean_text(debug.last_error, 500))\n}",
+              "  add_row(table, 'UI sync', `gen ${version.generation} · rev ${version.revision} · age ${sync_age(synced_tick)}`)\n  if (clean_text(debug.last_error, 500).length > 0) add_row(table, 'Last error', clean_text(debug.last_error, 500), clean_text(debug.last_error, 500))\n\n  body.add({ type: 'line' })\n  const activity_header = body.add({ type: 'flow', direction: 'horizontal' })\n  activity_header.style.horizontally_stretchable = true\n  activity_header.add({ type: 'label', caption: 'Execution Activity', style: 'semibold_label' })\n  const activity = activity_state.activity_history()\n  const filler = activity_header.add({ type: 'empty-widget' }); filler.style.horizontally_stretchable = true\n  activity_header.add({ type: 'label', caption: `${activity.length} event${activity.length === 1 ? '' : 's'}`, style: 'semibold_label' })\n  const scroll = body.add({ type: 'scroll-pane', horizontal_scroll_policy: 'never' })\n  scroll.style.width = DEBUG_WIDTH - 20\n  scroll.style.maximal_height = 280\n  const feed = scroll.add({ type: 'flow', direction: 'vertical' })\n  feed.style.horizontally_stretchable = true\n  feed.style.vertical_spacing = 3\n  const start = math.max(0, activity.length - 48)\n  if (activity.length === 0) {\n    const empty = feed.add({ type: 'label', caption: 'No retained execution activity.' })\n    empty.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }\n  }\n  for (let index = start; index < activity.length; index++) {\n    const entry = activity[index]\n    const timestamp = clean_text(entry.timestamp, 16) || '--:--:--'\n    const kind = clean_text(entry.kind, 32).toUpperCase()\n    const line = feed.add({ type: 'label', caption: `${timestamp} · ${kind} · ${clean_text(entry.text, 1200)}` })\n    line.style.single_line = false\n    line.style.maximal_width = DEBUG_WIDTH - 50\n  }\n}\n",
+          )
+
+          replace_once('packages/autorio/src/task_board_ui.ts', '  list_min_total: 306,', '  list_min_total: 150,')
+          replace_once('packages/autorio/src/task_board_ui.ts', '  list_max_total: 900,', '  list_max_total: 270,')
+          regex_once(
+              'packages/autorio/src/task_board_ui.ts',
+              r"export function task_board_tracker_heights\(gui_height: number, step_count = MAX_STEPS\) \{.*?\n\}",
+              "export function task_board_tracker_heights(gui_height: number, step_count = MAX_STEPS) {\n  const budget = math.max(CONSOLE_LAYOUT.list_min_total, math.min(CONSOLE_LAYOUT.list_max_total, math.floor(gui_height * CONSOLE_LAYOUT.screen_fraction) - CONSOLE_LAYOUT.fixed_height))\n  if (step_count <= 0) return { steps: 0, activity: 0 }\n  const wanted = math.max(CONSOLE_LAYOUT.steps_floor, step_count * CONSOLE_LAYOUT.step_row_height)\n  return { steps: math.min(budget, wanted), activity: 0 }\n}",
+          )
+          replace_once(
+              'packages/autorio/src/task_board_ui.ts',
+              "  const goal = board === undefined ? 'No active AIRI task.' : board_goal(board)\n  add_key_value(table, 'GOAL', text(goal, 110), { tooltip: goal, width: STATUS_VALUE_WIDTH })\n  add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: STATUS_VALUE_WIDTH })",
+              "  const goal = board === undefined ? 'No active AIRI task.' : board_goal(board)\n  add_key_value(table, 'GOAL', text(goal, 110), { tooltip: goal, width: STATUS_VALUE_WIDTH })\n  if (board !== undefined && board.steps.length > 0) {\n    const index = math.min(board.active_index, board.steps.length - 1)\n    const step = board.steps[index]\n    add_key_value(table, 'STEP', `${index + 1}/${board.total_steps} · ${text(step_caption(step.description), 80)}`, { tone: step_tone(step), tooltip: step.description, width: STATUS_VALUE_WIDTH })\n  }\n  const retained = activity_state.activity_history()\n  const recent = retained.length > 0 ? retained : (board?.activity ?? [])\n  let last = ''\n  let last_tone: Tone = 'muted'\n  let action_fallback = ''\n  for (let index = recent.length - 1; index >= 0; index--) {\n    const entry = recent[index]\n    if ((entry.kind === 'result' || entry.kind === 'blocker') && entry.text.length > 0) { last = entry.text; last_tone = activity_tone(entry.kind); break }\n    if (action_fallback.length === 0 && entry.kind === 'action' && entry.text.length > 0) action_fallback = entry.text\n  }\n  if (last.length === 0 && action_fallback.length > 0) { last = action_fallback; last_tone = 'good' }\n  if (last.length > 0) add_key_value(table, 'LAST', text(last, 90), { tone: last_tone, tooltip: last, width: STATUS_VALUE_WIDTH })\n  add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: STATUS_VALUE_WIDTH })",
+          )
+          replace_once(
+              'packages/autorio/src/task_board_ui.ts',
+              "create_section(parent, 'Plan & Activity', undefined, 'Canonical plan progress plus timestamped auditable observations, actions, results, blockers, and system events.'",
+              "create_section(parent, 'Plan Tracker', undefined, 'Canonical durable plan progress. Full execution activity is available in Debug.'",
+          )
+          replace_once('packages/autorio/src/task_board_ui.ts', "caption: 'No active plan or recent AIRI activity.'", "caption: 'No active plan.'")
+          replace_once(
+              'packages/autorio/src/task_board_ui.ts',
+              "  const has_steps = board !== undefined && board.steps.length > 0\n  const nothing = !has_steps && all_activity.length === 0\n  empty.visible = nothing; plan.visible = has_steps; divider.visible = has_steps; activity_header.visible = !nothing",
+              "  const has_steps = board !== undefined && board.steps.length > 0\n  empty.visible = !has_steps; plan.visible = has_steps; divider.visible = false; activity_header.visible = false",
+          )
+          replace_once(
+              'packages/autorio/src/task_board_ui.ts',
+              "  refresh_activity(activity_header, activity_empty, activity_scroll, activity_table, nothing ? [] : all_activity, tracker_heights.activity, player)\n  return true",
+              "  refresh_activity(activity_header, activity_empty, activity_scroll, activity_table, all_activity, tracker_heights.activity, player)\n  activity_empty.visible = false\n  activity_scroll.visible = false\n  return true",
+          )
+          replace_once(
+              'packages/autorio/src/task_board_ui.ts',
+              "  const top = parent.add({ type: 'flow', direction: 'horizontal' }); top.style.horizontal_spacing = COLUMN_SPACING; top.style.vertical_align = 'top'; render_status_panel(top, board, runtime, synced_tick); render_controls_panel(top, player, board, runtime)\n  debug_ui.render_ai_reply(parent, board?.response ?? '', LEFT_COLUMN_WIDTH)",
+              "  const top = parent.add({ type: 'flow', direction: 'horizontal' }); top.style.horizontal_spacing = COLUMN_SPACING; top.style.vertical_align = 'top'; render_status_panel(top, board, runtime, synced_tick); render_controls_panel(top, player, board, runtime)",
+          )
+          replace_once(
+              'packages/autorio/src/task_board_ui.ts',
+              "const dynamic = left.add({ type: 'flow', name: LEFT_DYNAMIC_NAME, direction: 'vertical' }); dynamic.style.width = LEFT_COLUMN_WIDTH; dynamic.style.vertical_spacing = COLUMN_SPACING; build_left_dynamic(dynamic, player, board, synced_tick, runtime); render_tracker(left, board, player); render_prompt(left, player)",
+              "const dynamic = left.add({ type: 'flow', name: LEFT_DYNAMIC_NAME, direction: 'vertical' }); dynamic.style.width = LEFT_COLUMN_WIDTH; dynamic.style.vertical_spacing = COLUMN_SPACING; build_left_dynamic(dynamic, player, board, synced_tick, runtime); render_tracker(left, board, player); debug_ui.render_ai_reply(dynamic, board?.response ?? '', LEFT_COLUMN_WIDTH); render_prompt(left, player)",
+          )
+
+          # Projects: make the window taller and add a real conversation projection
+          # above secondary Activity/Evidence without changing the stored activity source.
+          replace_once('packages/autorio/src/projects/project_window.ts', 'const PROJECTS_HEIGHT = 620', 'const PROJECTS_HEIGHT = 780')
+          replace_once('packages/autorio/src/projects/project_window.ts', 'const DETAIL_ACTIVITY_HEADER_NAME =', "const DETAIL_CONVERSATION_SCROLL_NAME = 'airi_task_board_projects_conversation_scroll'\nconst DETAIL_CONVERSATION_FLOW_NAME = 'airi_task_board_projects_conversation_flow'\nconst DETAIL_ACTIVITY_HEADER_NAME =")
+          replace_once('packages/autorio/src/projects/project_window.ts', '  step_scroll.style.maximal_height = 190', '  step_scroll.style.maximal_height = 260')
+          replace_once(
+              'packages/autorio/src/projects/project_window.ts',
+              "  // Same multi-select toggles as the console's Recent activity, with their own\n  // selection. The console's on_gui_click routes them here by the surface tag.\n  const activity_header = body.add({ type: 'flow', name: DETAIL_ACTIVITY_HEADER_NAME, direction: 'horizontal' })",
+              "  body.add({ type: 'label', caption: 'Task Conversation', style: 'semibold_label' })\n  const conversation_scroll = body.add({ type: 'scroll-pane', name: DETAIL_CONVERSATION_SCROLL_NAME, horizontal_scroll_policy: 'never' })\n  conversation_scroll.style.width = PROJECT_DETAIL_WIDTH - 30\n  conversation_scroll.style.maximal_height = 220\n  const conversation_flow = conversation_scroll.add({ type: 'flow', name: DETAIL_CONVERSATION_FLOW_NAME, direction: 'vertical' })\n  conversation_flow.style.horizontally_stretchable = true\n  conversation_flow.style.vertical_spacing = 3\n\n  // Activity / Evidence is secondary diagnostic history.\n  const activity_header = body.add({ type: 'flow', name: DETAIL_ACTIVITY_HEADER_NAME, direction: 'horizontal' })",
+          )
+          replace_once('packages/autorio/src/projects/project_window.ts', '  activity_scroll.style.minimal_height = 220', '  activity_scroll.style.minimal_height = 140')
+          replace_once(
+              'packages/autorio/src/projects/project_window.ts',
+              "  const activity_scroll = body[DETAIL_ACTIVITY_SCROLL_NAME]\n  const activity_header = body[DETAIL_ACTIVITY_HEADER_NAME]",
+              "  const conversation_scroll = body[DETAIL_CONVERSATION_SCROLL_NAME]\n  const activity_scroll = body[DETAIL_ACTIVITY_SCROLL_NAME]\n  const activity_header = body[DETAIL_ACTIVITY_HEADER_NAME]",
+          )
+          replace_once(
+              'packages/autorio/src/projects/project_window.ts',
+              "  const step_flow = step_scroll?.valid ? step_scroll[DETAIL_STEPS_FLOW_NAME] : undefined\n  const activity_flow = activity_scroll?.valid ? activity_scroll[DETAIL_ACTIVITY_FLOW_NAME] : undefined\n  if (!meta?.valid || !step_scroll?.valid || !activity_scroll?.valid || !activity_header?.valid || !step_flow?.valid || !activity_flow?.valid) return false",
+              "  const step_flow = step_scroll?.valid ? step_scroll[DETAIL_STEPS_FLOW_NAME] : undefined\n  const conversation_flow = conversation_scroll?.valid ? conversation_scroll[DETAIL_CONVERSATION_FLOW_NAME] : undefined\n  const activity_flow = activity_scroll?.valid ? activity_scroll[DETAIL_ACTIVITY_FLOW_NAME] : undefined\n  if (!meta?.valid || !step_scroll?.valid || !conversation_scroll?.valid || !activity_scroll?.valid || !activity_header?.valid || !step_flow?.valid || !conversation_flow?.valid || !activity_flow?.valid) return false",
+          )
+          replace_once(
+              'packages/autorio/src/projects/project_window.ts',
+              "    step_flow.clear()\n    activity_flow.clear()",
+              "    step_flow.clear()\n    conversation_flow.clear()\n    activity_flow.clear()",
+          )
+          replace_once(
+              'packages/autorio/src/projects/project_window.ts',
+              "  if (project.response.length > 0) add_detail_row(meta, 'AIRI', project.response)\n\n  const signature = step_signature(project)",
+              "  conversation_flow.clear()\n  let conversation_count = 0\n  for (const entry of project.activity) {\n    const text = clean_text(entry.text, 1200)\n    if (entry.kind === 'decision' && text.length > 0) {\n      const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${text}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++\n      continue\n    }\n    if (entry.kind !== 'observation' || !String(entry.id ?? '').startsWith('live_')) continue\n    const separator = text.indexOf(': ')\n    if (separator < 1 || text.startsWith('Tool ')) continue\n    const line = conversation_flow.add({ type: 'label', caption: `${text.substring(0, separator)} · ${text.substring(separator + 2)}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++\n  }\n  if (project.response.length > 0) {\n    const duplicate = project.activity.some(entry => entry.kind === 'decision' && clean_text(entry.text, 1200) === project.response)\n    if (!duplicate) { const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${project.response}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++ }\n  }\n  if (conversation_count === 0) conversation_flow.add({ type: 'label', caption: 'No player/AIRI conversation retained for this project.' })\n\n  const signature = step_signature(project)",
+          )
+
+          Path('packages/autorio/src/task_board_ui.information-architecture.test.ts').write_text("""import { readFileSync } from 'node:fs'\nimport { describe, expect, it } from 'vitest'\n\ndescribe('NPC console information architecture', () => {\n  const consoleSource = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')\n  const debugSource = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')\n  const projectsSource = readFileSync(new URL('./projects/project_window.ts', import.meta.url), 'utf8')\n\n  it('keeps controls in the top row and gives the main column to plan plus conversation', () => {\n    expect(consoleSource).toContain(\"create_section(parent, 'Plan Tracker'\")\n    expect(consoleSource).toContain('activity_header.visible = false')\n    expect(consoleSource).toContain('activity_scroll.visible = false')\n    expect(consoleSource).toMatch(/render_tracker\\(left, board, player\\); debug_ui\\.render_ai_reply\\(dynamic,[\\s\\S]*render_prompt\\(left, player\\)/)\n    expect(consoleSource).toContain(\"create_section(parent, 'Controls', CONTROLS_SECTION_WIDTH\")\n  })\n\n  it('promotes current step and last meaningful result into Status', () => {\n    expect(consoleSource).toContain(\"add_key_value(table, 'STEP'\")\n    expect(consoleSource).toContain(\"add_key_value(table, 'LAST'\")\n  })\n\n  it('gives conversation more room, moves execution activity to Debug, and makes Projects taller', () => {\n    expect(debugSource).toContain('const CONVERSATION_HEIGHT = 300')\n    expect(debugSource).toContain(\"caption: 'Execution Activity'\")\n    expect(projectsSource).toContain('const PROJECTS_HEIGHT = 780')\n    expect(projectsSource).toContain(\"caption: 'Task Conversation'\")\n    expect(projectsSource).toContain('step_scroll.style.maximal_height = 260')\n  })\n})\n""")
+
+          Path('deploy/pterodactyl/runtime-v8/supervisor.plan-conversation.test.mjs').write_text("""import assert from 'node:assert/strict'\nimport { readFileSync } from 'node:fs'\nimport test from 'node:test'\n\nimport { liveAgentEvent } from './supervisor.mjs'\n\ntest('plan.accepted publishes only initial and failure-replan public chat', () => {\n  const initial = liveAgentEvent('plan.accepted', { chat_message: 'I will bootstrap coal first.', trigger_source: 'request' })\n  assert.deepEqual(initial.activity, { kind: 'decision', text: 'I will bootstrap coal first.' })\n  const replan = liveAgentEvent('plan.accepted', { chat_message: 'I will use the east patch.', trigger_source: 'failure' })\n  assert.deepEqual(replan.activity, { kind: 'decision', text: 'I will use the east patch.' })\n  assert.equal(liveAgentEvent('plan.accepted', { chat_message: 'Continuing.', trigger_source: 'continuation' }).activity, undefined)\n  assert.equal(liveAgentEvent('plan.accepted', { chat_message: 'Checking.', trigger_source: 'completion' }).activity, undefined)\n})\n\ntest('NpcAgentLoop carries the trigger source on plan.accepted', () => {\n  const source = readFileSync(new URL('./npc-agent-loop.mjs', import.meta.url), 'utf8')\n  const accepted = source.split(\"await this.traceEvent('plan.accepted'\")[1]?.split('})')[0] ?? ''\n  assert.match(accepted, /trigger_source: this\\.planUpdateReason/)\n  assert.match(accepted, /chat_message: plan\\.chatMessage/)\n})\n""")
+          PY
+
+      - name: Regenerate Pterodactyl payload
+        run: node deploy/pterodactyl/build-payload.mjs
+
+      - name: Install
+        run: pnpm install
+
+      - name: Build and typecheck
+        run: pnpm run build && pnpm run typecheck
+
+      - name: Test TypeScript
+        run: pnpm run test
+
+      - name: Test production runtime
+        run: node --test --test-force-exit deploy/pterodactyl/runtime-v8/*.test.mjs
+
+      - name: Verify generated payload
+        run: node deploy/pterodactyl/build-payload.mjs --check
+
+      - name: Commit tested patch
+        shell: bash
+        run: |
+          rm .github/workflows/console-info-architecture-patch.yml
+          git config user.name 'AIRI Console CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(console): focus UI on plan and conversation'
+          git push origin HEAD:feat/npc-console-info-architecture
