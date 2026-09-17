@@ -111,7 +111,6 @@ function machine_summaries(categories: string[]) {
     machines: candidates.slice(0, MAX_MACHINE_MATCHES).map(({ name, prototype }) => ({
       name,
       type: prototype.type,
-      crafting_speed: prototype.crafting_speed,
     })),
   }
 }
