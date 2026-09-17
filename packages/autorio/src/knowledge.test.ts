@@ -18,8 +18,8 @@ function recipe(name: string, options: {
     enabled: options.enabled ?? true,
     hidden: false,
     energy: options.energy,
-    categories: options.categories,
-    has_category: (category: any) => options.categories.includes(typeof category === 'string' ? category : category?.name),
+    category: options.categories[0],
+    additional_categories: options.categories.slice(1),
     ingredients: options.ingredients,
     products: options.products,
     prototype: {
