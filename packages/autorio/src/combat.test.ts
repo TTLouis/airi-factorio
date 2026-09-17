@@ -384,6 +384,10 @@ describe('bounded area-clearing combat', () => {
     controller.tick(actor)
 
     expect(controller.status()).toMatchObject({ target: { name: 'small-biter', unit_number: 91 } })
+    // Target handoff is atomic: movement toward/away from the new mobile target
+    // starts on the following combat tick rather than continuing stale nest logic.
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
     expect(actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
   })
 
