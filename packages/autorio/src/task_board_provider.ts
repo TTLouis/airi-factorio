@@ -13,13 +13,17 @@ interface TaskBoardProvider { id: string, label: string }
 
 declare const storage: {
   // The last model identifier AIRI reported. A cleared board drops its debug
-  // block, and the button must not fall back to the unknown-provider avatar
-  // just because the current goal finished.
+  // block, and the button must not lose the avatar it earned just because the
+  // current goal finished.
   airi_task_board_provider_model?: string
 }
 
 const AVATAR_PREFIX = 'airi-provider-'
-const UNKNOWN: TaskBoardProvider = { id: 'airi', label: 'Unrecognized provider' }
+// An empty id means no vendor avatar exists for this model, and the button
+// keeps whatever sprite it was created with. There is deliberately no AIRI
+// house avatar: the button answers "which vendor is answering", and inventing a
+// fourth face for "none of them" would answer a different question.
+const UNKNOWN: TaskBoardProvider = { id: '', label: 'Unrecognized provider' }
 // Matched against the model identifier in order, so a name carrying two vendor
 // words - a proxy prefix, a router path - resolves to the vendor that actually
 // answers. Substrings only: model identifiers are provider-defined and change
@@ -55,11 +59,14 @@ export function current_provider_model() { return storage.airi_task_board_provid
 
 /**
  * The avatar for the current provider. The avatars are declared as sprites in
- * data.lua; a build that somehow shipped without the graphics still gets a
- * working button from `fallback` rather than an empty one.
+ * data.lua; an unrecognized model, or a build that somehow shipped without the
+ * graphics, still gets a working button from `fallback` rather than an empty
+ * one.
  */
 export function provider_button_sprite(fallback: SpritePath): SpritePath {
-  const avatar = `${AVATAR_PREFIX}${task_board_provider_of(current_provider_model()).id}` as SpritePath
+  const id = task_board_provider_of(current_provider_model()).id
+  if (id.length === 0) return fallback
+  const avatar = `${AVATAR_PREFIX}${id}` as SpritePath
   return helpers.is_valid_sprite_path(avatar) ? avatar : fallback
 }
 

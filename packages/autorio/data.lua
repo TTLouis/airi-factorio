@@ -74,13 +74,18 @@ data:extend({
   },
 })
 
--- The console's top-left button shows which model AIRI is currently talking to.
--- The avatars are our own drawings (see scripts/generate_provider_icons.py), so
--- no vendor artwork or logo ships with the mod; a provider is identified by its
--- accent color and a plain charm. Control stage picks one by matching the model
--- identifier and falls back to "airi" when the provider is unknown.
+-- The console's top-left button shows which vendor is behind the model AIRI is
+-- currently calling. One sprite per vendor, named after the id the control stage
+-- resolves from the configured model identifier. A model that matches no vendor
+-- deliberately gets no house avatar: the button answers "which vendor answers",
+-- and it keeps its default sprite when there is no answer.
+--
+-- Factorio's data stage has no file-exists test and a missing sprite file is a
+-- hard load failure, so every id listed here must have a committed PNG. The
+-- committed files are flat brand-color placeholders; replacing one with the
+-- vendor's own 64x64 icon needs no code change. See the folder's README.
 local provider_avatars = {}
-for _, provider in ipairs({"airi", "claude", "openai", "deepseek"}) do
+for _, provider in ipairs({"claude", "openai", "deepseek"}) do
   provider_avatars[#provider_avatars + 1] = {
     type = "sprite",
     name = "airi-provider-" .. provider,

@@ -29,11 +29,13 @@ describe('provider avatar selection', () => {
     expect(task_board_provider_of('Claude-Haiku').id).toBe('claude')
   })
 
-  it('falls back to the AIRI avatar for an unknown or missing model', () => {
-    expect(task_board_provider_of('').id).toBe('airi')
-    expect(task_board_provider_of(undefined).id).toBe('airi')
-    expect(task_board_provider_of('replace-me').id).toBe('airi')
-    expect(task_board_provider_of('llama-3.3-70b').id).toBe('airi')
+  // No house avatar for "none of the above": the button reports which vendor is
+  // answering, so with no answer it keeps the sprite it was created with.
+  it('claims no avatar for an unknown or missing model', () => {
+    expect(task_board_provider_of('').id).toBe('')
+    expect(task_board_provider_of(undefined).id).toBe('')
+    expect(task_board_provider_of('replace-me').id).toBe('')
+    expect(task_board_provider_of('llama-3.3-70b').id).toBe('')
   })
 
   // A proxy or router prefix puts a second vendor word in the identifier. The
@@ -56,8 +58,14 @@ describe('provider avatar selection', () => {
     expect(provider_button_tooltip('AIRI NPC Console')).toBe('AIRI NPC Console\nClaude · claude-sonnet-4-5')
   })
 
-  it('leaves the tooltip alone until a model has been reported', () => {
+  it('leaves the button alone until a model has been reported', () => {
     expect(provider_button_tooltip('AIRI NPC Console')).toBe('AIRI NPC Console')
-    expect(provider_button_sprite('item/logistic-robot')).toBe('airi-provider-airi')
+    expect(provider_button_sprite('item/logistic-robot')).toBe('item/logistic-robot')
+  })
+
+  it('keeps the default sprite for a model no vendor claims', () => {
+    remember_provider_model('llama-3.3-70b')
+    expect(provider_button_sprite('item/logistic-robot')).toBe('item/logistic-robot')
+    expect(provider_button_tooltip('AIRI NPC Console')).toBe('AIRI NPC Console\nUnrecognized provider · llama-3.3-70b')
   })
 })
