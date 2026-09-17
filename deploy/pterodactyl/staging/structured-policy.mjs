@@ -188,6 +188,35 @@ export function parseOperation(value) {
   }
 }
 
+function luaPreflightValue(value) {
+  if (value === null || value === undefined) return 'nil'
+  if (typeof value === 'string') return luaString(value)
+  if (typeof value === 'number') {
+    check(Number.isFinite(value), 'Invalid preflight number')
+    return String(value)
+  }
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (Array.isArray(value)) return `{${value.map(luaPreflightValue).join(',')}}`
+  check(typeof value === 'object', 'Invalid preflight value')
+  return `{${Object.keys(value).sort().map(key => `[${luaString(key)}]=${luaPreflightValue(value[key])}`).join(',')}}`
+}
+
+const PREFLIGHTED_OPERATIONS = new Set([
+  'craft_item',
+  'gather_resource',
+  'mine_resource_at',
+  'place_entity',
+  'mine_entity',
+  'walk_to_entity',
+  'set_machine_recipe',
+])
+
+export function renderOperationPreflight(value) {
+  const operation = parseOperation(value)
+  if (!PREFLIGHTED_OPERATIONS.has(operation.name)) return null
+  return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_preflight","operation",${luaString(operation.name)},${luaPreflightValue(operation.args)})))`
+}
+
 export function renderOperation(value) {
   const operation = parseOperation(value)
   switch (operation.name) {
