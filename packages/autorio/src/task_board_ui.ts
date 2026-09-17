@@ -321,6 +321,7 @@ export function task_board_game_time(tick: number) {
 export function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBoardUiSnapshot | undefined, tick: number) {
   const previous_activity = previous?.activity ?? []
   const used: boolean[] = []
+  const claimed: Record<string, boolean> = {}
   const now = task_board_game_time(tick)
   return { ...next, activity: next.activity.map(entry => {
     if (entry.timestamp !== undefined && entry.timestamp.length > 0) return entry
@@ -332,13 +333,18 @@ export function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBo
       }
       return { ...entry, timestamp: now }
     }
+    let timestamp: string | undefined
     for (let index = 0; index < previous_activity.length; index++) {
       const old = previous_activity[index]
       if ((old.id !== undefined && old.id.length > 0) || used[index] === true || old.kind !== entry.kind || old.text !== entry.text || !old.timestamp) continue
       used[index] = true
-      return { ...entry, timestamp: old.timestamp }
+      timestamp = old.timestamp
+      break
     }
-    return { ...entry, timestamp: now }
+    timestamp = timestamp ?? activity_state.retained_activity_timestamp(entry.kind, entry.text, claimed) ?? now
+    const stamped = { ...entry, timestamp }
+    claimed[activity_state.activity_key(stamped)] = true
+    return stamped
   }) }
 }
 
@@ -791,11 +797,14 @@ function refresh_steps(plan: LuaGuiElement, board: TaskBoardUiSnapshot, max_heig
  */
 function refresh_activity(header: LuaGuiElement, empty: LuaGuiElement, scroll: LuaGuiElement, table: LuaGuiElement, all_activity: TaskBoardUiActivity[], max_height: number, player: LuaPlayer) {
   const mask = activity_state.activity_filter_mask(player.index)
-  const entries: TaskBoardUiActivity[] = []; const keys: string[] = []
-  for (const entry of all_activity) { if (!activity_state.activity_matches_mask(entry.kind, mask)) continue; entries.push(entry); keys.push(activity_state.activity_key(entry)) }
+  // Player messages and AIRI replies already read in full in the conversation
+  // panel above; only what that panel does not show is listed here.
+  const in_conversation = debug_ui.conversation_activity_keys(storage.airi_task_board_ui)
+  const entries: TaskBoardUiActivity[] = []; const keys: string[] = []; let total = 0
+  for (const entry of all_activity) { const key = activity_state.activity_key(entry); if (in_conversation[key]) continue; total++; if (!activity_state.activity_matches_mask(entry.kind, mask)) continue; entries.push(entry); keys.push(key) }
   scroll.style.maximal_height = max_height
   scroll.visible = entries.length > 0
-  empty.visible = all_activity.length > 0 && entries.length === 0
+  empty.visible = total > 0 && entries.length === 0
   empty.caption = mask === 0 ? 'No activity categories selected.' : 'No recent activity matches this filter.'
   const add_row = (entry: TaskBoardUiActivity) => {
     const timestamp = table.add({ type: 'label', caption: entry.timestamp ?? '--:--:--', ignored_by_interaction: true }); timestamp.style.minimal_width = 66; timestamp.style.font_color = TONE_COLORS.muted
@@ -830,7 +839,7 @@ function refresh_activity(header: LuaGuiElement, empty: LuaGuiElement, scroll: L
     live.tooltip = view.follow ? 'Following the newest activity. Scrolling the feed stops following; so does clicking here.' : 'Not following, so the feed stays where you left it. Click to jump to the newest activity and follow it again.'
   }
   const count = header[TRACKER.count]
-  if (count?.valid) count.caption = mask === activity_state.ACTIVITY_FILTER_ALL ? `${all_activity.length} event${all_activity.length === 1 ? '' : 's'}` : `${entries.length}/${all_activity.length}`
+  if (count?.valid) count.caption = mask === activity_state.ACTIVITY_FILTER_ALL ? `${total} event${total === 1 ? '' : 's'}` : `${entries.length}/${total}`
 }
 /** The rendered activity feed for a player, if their console is open. */
 function activity_scroll_of(player: LuaPlayer) {
@@ -976,6 +985,7 @@ export function create_task_board_ui_remote_interface() {
       render_panel(player); return
     }
     const filter_flag = element.tags?.airi_activity_filter
+    if (typeof filter_flag === 'number' && element.tags?.airi_activity_surface === 'projects') { activity_state.toggle_activity_filter(player.index, filter_flag, 'projects'); render_debug_popout(player); return }
     if (typeof filter_flag === 'number') { activity_state.toggle_activity_filter(player.index, filter_flag); activity_state.reset_activity_view(player.index); render_panel(player); return }
     if (handle_learning_ui_click(player, element.name)) { render_skills_popout(player); return }
     if (handle_skill_export_click(player, element.name)) { render_skills_popout(player); return }

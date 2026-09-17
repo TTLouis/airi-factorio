@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   clear_snapshot_suppression,
+  conversation_activity_keys,
   follow_button_caption,
   latest_ai_reply,
   snapshot_is_suppressed,
@@ -45,6 +46,20 @@ describe('task board debug and UI freshness helpers', () => {
       { key: 'id:live_4', role: 'user', sender: 'TTLouis', text: 'continue', timestamp: '00:01:30' },
       { key: 'decision|00:01:31|The boiler is done; next is steam.', role: 'assistant', sender: 'AIRI', text: 'The boiler is done; next is steam.', timestamp: '00:01:31' },
     ])
+  })
+
+  it('names the activity rows the conversation already shows so the feed can skip them', () => {
+    store().airi_task_board_activity_history = [
+      { id: 'live_1', kind: 'observation', text: 'TTLouis: build power', timestamp: '00:01:00' },
+      { id: 'live_2', kind: 'observation', text: 'Tool getInventory', timestamp: '00:01:01' },
+      { kind: 'decision', text: 'Boiler first.', timestamp: '00:01:02' },
+      { kind: 'result', text: 'Autorio batch 1 completed: 1 task(s)', timestamp: '00:01:10' },
+    ]
+    expect(conversation_activity_keys({ goal_id: 'goal_power', objective: 'build power' })).toEqual({
+      'id:live_1': true,
+      'decision|00:01:02|Boiler first.': true,
+    })
+    expect(conversation_activity_keys(undefined)).toEqual({})
   })
 
   it('starts a new conversation cursor when the durable goal changes', () => {

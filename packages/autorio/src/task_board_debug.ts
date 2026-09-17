@@ -275,6 +275,26 @@ export function task_conversation_messages(board: any): TaskConversationMessage[
   return messages
 }
 
+/**
+ * Activity keys (task_board_activity's form) of the rows the Current Task
+ * Conversation shows right now. Recent activity skips them: the same player
+ * message or AIRI reply printed twice, one panel above the other, is noise.
+ */
+export function conversation_activity_keys(board: any) {
+  const hidden: Record<string, boolean> = {}
+  const messages = task_conversation_messages(board)
+  if (messages.length === 0) return hidden
+  const shown: Record<string, boolean> = {}
+  for (const message of messages) shown[message.key] = true
+  const history = Array.isArray(storage.airi_task_board_activity_history)
+    ? storage.airi_task_board_activity_history as any[]
+    : Array.isArray(board?.activity) ? board.activity as any[] : []
+  for (const entry of history) {
+    if (shown[task_activity_key(entry)]) hidden[activity_state.activity_key(entry)] = true
+  }
+  return hidden
+}
+
 export function latest_ai_reply(board: any) {
   const direct = clean_text(board?.response, 2000)
   if (direct.length > 0) return direct

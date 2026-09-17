@@ -350,11 +350,35 @@ export function evidenceText(item) {
   return summary
 }
 
+function evidenceBatch(item) {
+  try {
+    const parsed = JSON.parse(String(item?.summary ?? ''))
+    return Number.isSafeInteger(parsed?.batch_id) ? { id: parsed.batch_id, outcome: parsed.outcome } : undefined
+  }
+  catch { return undefined }
+}
+
+// A successful deterministic verification restates the completed receipt for the
+// same batch. Look for receipts across all retained evidence, not only the
+// displayed tail, so a verification cannot resurface once its receipt scrolls
+// out of the window.
+function completedReceiptBatches(evidence) {
+  const batches = new Set()
+  for (const item of evidence) {
+    if (!/receipt/i.test(String(item?.kind ?? ''))) continue
+    const batch = evidenceBatch(item)
+    if (batch?.outcome === 'completed') batches.add(batch.id)
+  }
+  return batches
+}
+
 export function deriveActivity(state) {
   if (!state || typeof state !== 'object') return []
   const entries = []
-  const evidence = Array.isArray(state.task_board?.evidence) ? state.task_board.evidence.slice(-4) : []
-  for (const item of evidence) {
+  const allEvidence = Array.isArray(state.task_board?.evidence) ? state.task_board.evidence : []
+  const receipted = completedReceiptBatches(allEvidence)
+  for (const item of allEvidence.slice(-4)) {
+    if (item?.kind === 'deterministic_verification' && receipted.has(evidenceBatch(item)?.id)) continue
     const summary = evidenceText(item)
     if (summary) entries.push({ kind: activityKindFromEvidence(uiText(item?.kind, 64)), text: summary })
   }
@@ -367,7 +391,9 @@ export function deriveActivity(state) {
   const blocker = uiText(state.blocker, 500)
   if (blocker) entries.push({ kind: 'blocker', text: blocker })
   const pauseReason = uiText(state.pause_reason, 300)
-  if (pauseReason) entries.push({ kind: 'system', text: `Paused: ${pauseReason}` })
+  // An exhausted provider recovery already reached the feed as the request's
+  // failure, with the same message; the pause adds only its reason code.
+  if (pauseReason && !pauseReason.startsWith('provider_recovery_exhausted:')) entries.push({ kind: 'system', text: `Paused: ${pauseReason}` })
   return entries.slice(-UI_ACTIVITY_LIMIT)
 }
 
@@ -507,7 +533,9 @@ export function liveAgentEvent(event, data = {}) {
     case 'request.completed':
       return { phase: 'idle', detail: 'Finished the last request' }
     case 'factorio.completed_signal':
-      return { phase: 'thinking', detail: 'Batch finished; checking the result', activity: { kind: 'result', text: 'Autorio batch completed' } }
+      // With a durable plan the batch receipt says the same thing with detail, so
+      // the snapshot drops this line; without one it is the only record.
+      return { phase: 'thinking', detail: 'Batch finished; checking the result', activity: { kind: 'result', text: 'Autorio batch completed', covered_by_receipt: true } }
     case 'factorio.error_continuation':
       return { phase: 'thinking', detail: 'Autorio reported an error; replanning' }
     case 'replan.started':
@@ -525,6 +553,11 @@ export function liveAgentEvent(event, data = {}) {
     default:
       return undefined
   }
+}
+
+function uiActivityEntry(entry) {
+  const { covered_by_receipt: _covered, ...rest } = entry
+  return rest
 }
 
 export function taskBoardUiSnapshot(state, live) {
@@ -547,7 +580,7 @@ export function taskBoardUiSnapshot(state, live) {
       total_steps: 0,
       active_index: 0,
       steps: [],
-      activity: liveActivity.slice(-UI_ACTIVITY_LIMIT),
+      activity: liveActivity.slice(-UI_ACTIVITY_LIMIT).map(uiActivityEntry),
       wanted_items: [],
       agent,
       debug,
@@ -567,7 +600,7 @@ export function taskBoardUiSnapshot(state, live) {
       description: String(step?.description ?? '').slice(0, 500),
       status: step?.status,
     })),
-    activity: [...deriveActivity(state), ...liveActivity].slice(-UI_ACTIVITY_LIMIT),
+    activity: [...deriveActivity(state), ...liveActivity.filter(entry => !entry.covered_by_receipt)].slice(-UI_ACTIVITY_LIMIT).map(uiActivityEntry),
     wanted_items: deriveWantedItems(state),
     agent,
     debug,
@@ -741,6 +774,10 @@ export class Session {
     this.npcId = 'airi'
     this.agentLive = { phase: 'idle', detail: '', objective: '', at: 0, activity: [], debug: emptyAgentDebug({ provider_model: this.config?.model }) }
     this.activitySequence = 0
+    // Live ids must not repeat across supervisor restarts: the mod keeps a
+    // history keyed by id, and a reused live_1 would be taken for an old event
+    // and silently dropped.
+    this.activityEpoch = Date.now().toString(36)
     this.uiSyncDirty = false
     this.uiSyncRunning = null
     this.uiInputPoll = null
@@ -764,7 +801,7 @@ export class Session {
     if (update?.phase) Object.assign(this.agentLive, { phase: update.phase, detail: update.detail ?? '', at: Date.now() })
     if (update?.objective) this.agentLive.objective = update.objective
     if (update?.activity) {
-      const activity = { ...update.activity, id: `live_${++this.activitySequence}` }
+      const activity = { ...update.activity, id: `live_${this.activityEpoch}_${++this.activitySequence}` }
       this.agentLive.activity = [...this.agentLive.activity, activity].slice(-UI_LIVE_ACTIVITY_LIMIT)
     }
     if (update || event === 'provider.response' || event === 'tool.result' || event === 'actor.bound') this.requestTaskBoardUiSync()

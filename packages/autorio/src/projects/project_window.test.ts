@@ -35,6 +35,19 @@ function snapshot(goal_id: string, objective: string, activity: any[] = []) {
   }
 }
 
+describe('project activity filters', () => {
+  it('filters the Projects feed with its own toggles, routed by the console click handler', async () => {
+    const { readFileSync } = await import('node:fs')
+    const window_source = readFileSync(new URL('./project_window.ts', import.meta.url), 'utf8')
+    const console_source = readFileSync(new URL('../task_board_ui.ts', import.meta.url), 'utf8')
+    expect(window_source).toContain("tags: { airi_activity_filter: flag, airi_activity_surface: 'projects' }")
+    expect(window_source).toContain("activity_state.activity_filter_mask(player_index, 'projects')")
+    expect(window_source).toContain('activity_state.activity_matches_mask(entry.kind as TaskBoardUiActivity[\'kind\'], mask)')
+    expect(window_source).toContain('(force_activity_latest || mask_changed)')
+    expect(console_source).toContain("element.tags?.airi_activity_surface === 'projects') { activity_state.toggle_activity_filter(player.index, filter_flag, 'projects'); render_debug_popout(player); return }")
+  })
+})
+
 describe('project history model', () => {
   it('ignores plan-less live snapshots without a durable goal id', () => {
     expect(record_project_snapshot(snapshot('', 'thinking'), 60)).toBe(false)

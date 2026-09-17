@@ -24,6 +24,17 @@ describe('recent activity filters', () => {
   beforeEach(() => {
     delete store.airi_task_board_activity_filter
     delete store.airi_task_board_activity_filters
+    delete store.airi_task_board_project_activity_filters
+  })
+
+  it('keeps the Projects window selection apart from the console', () => {
+    store.airi_task_board_activity_filter = { 1: 2 }
+    expect(activity_filter_mask(1)).toBe(1)
+    // The legacy drop-down only ever belonged to the console.
+    expect(activity_filter_mask(1, 'projects')).toBe(ACTIVITY_FILTER_ALL)
+    toggle_activity_filter(1, 4, 'projects')
+    expect(activity_filter_mask(1, 'projects')).toBe(ACTIVITY_FILTER_ALL - 4)
+    expect(activity_filter_mask(1)).toBe(1)
   })
 
   it('shows everything until the player chooses otherwise', () => {

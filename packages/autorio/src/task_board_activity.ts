@@ -41,6 +41,7 @@ export interface ActivityView {
 declare const storage: {
   airi_task_board_activity_filter?: Record<number, number>
   airi_task_board_activity_filters?: Record<number, number>
+  airi_task_board_project_activity_filters?: Record<number, number>
   airi_task_board_activity_view?: Record<number, ActivityView>
   airi_task_board_activity_history?: TaskBoardUiActivity[]
 }
@@ -60,13 +61,29 @@ function normalize_mask(value: unknown) {
 }
 
 /**
+ * Where a feed is shown. The console and the Projects window keep separate
+ * selections, so narrowing one feed never hides rows in the other.
+ */
+export type ActivityFilterSurface = 'console' | 'projects'
+
+function filter_store(surface: ActivityFilterSurface) {
+  if (surface === 'projects') {
+    if (storage.airi_task_board_project_activity_filters === undefined) storage.airi_task_board_project_activity_filters = {}
+    return storage.airi_task_board_project_activity_filters
+  }
+  if (storage.airi_task_board_activity_filters === undefined) storage.airi_task_board_activity_filters = {}
+  return storage.airi_task_board_activity_filters
+}
+
+/**
  * The categories this player currently shows. A save from the single-select
  * drop-down stored an index into ALL, PLAN, OBS, ACTIONS, RESULTS, ISSUES; that
- * selection carries over as the equivalent single category.
+ * selection carries over as the equivalent single category on the console.
  */
-export function activity_filter_mask(player_index: number) {
-  const current = normalize_mask(storage.airi_task_board_activity_filters?.[player_index])
+export function activity_filter_mask(player_index: number, surface: ActivityFilterSurface = 'console') {
+  const current = normalize_mask(filter_store(surface)[player_index])
   if (current !== undefined) return current
+  if (surface !== 'console') return ACTIVITY_FILTER_ALL
   const legacy = storage.airi_task_board_activity_filter?.[player_index]
   if (legacy === 2) return 1
   if (legacy === 3) return 2
@@ -77,12 +94,11 @@ export function activity_filter_mask(player_index: number) {
 }
 
 /** Toggle one category, or select every category when `flag` is ALL. */
-export function toggle_activity_filter(player_index: number, flag: number) {
-  const mask = activity_filter_mask(player_index)
+export function toggle_activity_filter(player_index: number, flag: number, surface: ActivityFilterSurface = 'console') {
+  const mask = activity_filter_mask(player_index, surface)
   let next = ACTIVITY_FILTER_ALL
   if (flag !== ACTIVITY_FILTER_ALL) next = has_flag(mask, flag) ? mask - flag : mask + flag
-  if (storage.airi_task_board_activity_filters === undefined) storage.airi_task_board_activity_filters = {}
-  storage.airi_task_board_activity_filters[player_index] = next
+  filter_store(surface)[player_index] = next
   return next
 }
 
@@ -91,6 +107,27 @@ export function activity_filter_selected(mask: number, flag: number) {
 }
 
 export function activity_matches_mask(kind: ActivityKind, mask: number) { return has_flag(mask, kind_flag(kind)) }
+
+/**
+ * The time a content-keyed entry (one without an id) was first seen, if it is
+ * already retained in history.
+ *
+ * Snapshots carry a small window, and entries derived from runtime state fall
+ * out of it and come back as live events push them around. Stamping only against
+ * the previous snapshot gave a returning entry a fresh time, so its key changed
+ * and history kept it twice, out of order. `claimed` holds keys this snapshot
+ * already assigned, so two identical entries in one snapshot stay distinct.
+ */
+export function retained_activity_timestamp(kind: string, text: string, claimed: Record<string, boolean>) {
+  const history = storage.airi_task_board_activity_history ?? []
+  for (let index = history.length - 1; index >= 0; index--) {
+    const old = history[index]
+    if ((old.id !== undefined && old.id.length > 0) || old.kind !== kind || old.text !== text || !old.timestamp) continue
+    if (claimed[activity_key(old)]) continue
+    return old.timestamp
+  }
+  return undefined
+}
 
 /**
  * Stable identity for one rendered row. The runtime gives live events an id;

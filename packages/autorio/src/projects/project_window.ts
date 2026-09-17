@@ -1,4 +1,7 @@
-import type { FrameGuiElement, LuaGuiElement, LuaPlayer, ScrollPaneGuiElement } from 'factorio:runtime'
+import type { ButtonGuiElement, FrameGuiElement, LuaGuiElement, LuaPlayer, ScrollPaneGuiElement } from 'factorio:runtime'
+import type { TaskBoardUiActivity } from '../task_board_ui'
+
+import * as activity_state from '../task_board_activity'
 
 // The main Task Board already owns on_gui_click. PROJECTS intentionally reuses
 // its existing debug-close click route for the sixth 3x2 control slot; project
@@ -17,6 +20,9 @@ const DETAIL_BODY_NAME = 'airi_task_board_projects_detail_body'
 const DETAIL_META_NAME = 'airi_task_board_projects_detail_meta'
 const DETAIL_STEPS_SCROLL_NAME = 'airi_task_board_projects_steps_scroll'
 const DETAIL_STEPS_FLOW_NAME = 'airi_task_board_projects_steps_flow'
+const DETAIL_ACTIVITY_HEADER_NAME = 'airi_task_board_projects_activity_header'
+const DETAIL_ACTIVITY_FILTERS_NAME = 'airi_task_board_projects_activity_filters'
+const DETAIL_ACTIVITY_COUNT_NAME = 'airi_task_board_projects_activity_count'
 const DETAIL_ACTIVITY_SCROLL_NAME = 'airi_task_board_projects_activity_scroll'
 const DETAIL_ACTIVITY_FLOW_NAME = 'airi_task_board_projects_activity_flow'
 const PROJECTS_WIDTH = 900
@@ -372,6 +378,17 @@ function add_activity_line(parent: LuaGuiElement, entry: ProjectHistoryActivity)
   line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60
 }
 
+function add_filter_button(parent: LuaGuiElement, caption: string, tooltip: string, flag: number) {
+  const button = parent.add({ type: 'button', caption, tooltip, tags: { airi_activity_filter: flag, airi_activity_surface: 'projects' } })
+  button.style.height = 24
+  button.style.minimal_width = 0
+  button.style.top_padding = 0
+  button.style.bottom_padding = 0
+  button.style.left_padding = 4
+  button.style.right_padding = 4
+  button.style.font = 'default-small-semibold'
+}
+
 function render_project_detail_skeleton(parent: LuaGuiElement, project: ProjectHistoryRecord | undefined) {
   const frame = parent.add({ type: 'frame', name: DETAIL_FRAME_NAME, direction: 'vertical', style: 'inside_shallow_frame' })
   frame.style.width = PROJECT_DETAIL_WIDTH
@@ -399,7 +416,21 @@ function render_project_detail_skeleton(parent: LuaGuiElement, project: ProjectH
   step_flow.style.horizontally_stretchable = true
   step_flow.style.vertical_spacing = 2
 
-  body.add({ type: 'label', caption: 'Activity / Evidence', style: 'semibold_label' })
+  // Same multi-select toggles as the console's Recent activity, with their own
+  // selection. The console's on_gui_click routes them here by the surface tag.
+  const activity_header = body.add({ type: 'flow', name: DETAIL_ACTIVITY_HEADER_NAME, direction: 'horizontal' })
+  activity_header.style.horizontally_stretchable = true
+  activity_header.style.vertical_align = 'center'
+  activity_header.style.horizontal_spacing = 8
+  activity_header.style.width = PROJECT_DETAIL_WIDTH - 30
+  activity_header.add({ type: 'label', caption: 'Activity / Evidence', style: 'semibold_label' })
+  const filler = activity_header.add({ type: 'empty-widget' })
+  filler.style.horizontally_stretchable = true
+  const filters = activity_header.add({ type: 'flow', name: DETAIL_ACTIVITY_FILTERS_NAME, direction: 'horizontal' })
+  filters.style.horizontal_spacing = 2
+  add_filter_button(filters, 'ALL', 'Show every kind of activity', activity_state.ACTIVITY_FILTER_ALL)
+  for (const filter of activity_state.ACTIVITY_FILTERS) add_filter_button(filters, filter.caption, `${filter.tooltip}. Click to show or hide; several can be on at once.`, filter.flag)
+  activity_header.add({ type: 'label', name: DETAIL_ACTIVITY_COUNT_NAME, caption: '', style: 'semibold_label' })
   const activity_scroll = body.add({ type: 'scroll-pane', name: DETAIL_ACTIVITY_SCROLL_NAME, horizontal_scroll_policy: 'never' })
   activity_scroll.style.width = PROJECT_DETAIL_WIDTH - 30
   activity_scroll.style.vertically_stretchable = true
@@ -409,7 +440,7 @@ function render_project_detail_skeleton(parent: LuaGuiElement, project: ProjectH
   activity_flow.style.vertical_spacing = 2
 }
 
-function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRecord | undefined, force_activity_latest = false) {
+function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRecord | undefined, player_index: number, force_activity_latest = false) {
   const body = frame[DETAIL_BODY_NAME]
   if (!body?.valid) return false
   const current_id = String(body.tags.project_id ?? '')
@@ -418,9 +449,19 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
   const meta = body[DETAIL_META_NAME]
   const step_scroll = body[DETAIL_STEPS_SCROLL_NAME]
   const activity_scroll = body[DETAIL_ACTIVITY_SCROLL_NAME]
+  const activity_header = body[DETAIL_ACTIVITY_HEADER_NAME]
   const step_flow = step_scroll?.valid ? step_scroll[DETAIL_STEPS_FLOW_NAME] : undefined
   const activity_flow = activity_scroll?.valid ? activity_scroll[DETAIL_ACTIVITY_FLOW_NAME] : undefined
-  if (!meta?.valid || !step_scroll?.valid || !activity_scroll?.valid || !step_flow?.valid || !activity_flow?.valid) return false
+  if (!meta?.valid || !step_scroll?.valid || !activity_scroll?.valid || !activity_header?.valid || !step_flow?.valid || !activity_flow?.valid) return false
+  const mask = activity_state.activity_filter_mask(player_index, 'projects')
+  const filters = activity_header[DETAIL_ACTIVITY_FILTERS_NAME]
+  if (filters?.valid) {
+    for (const button of filters.children) {
+      const flag = button.tags.airi_activity_filter
+      if (typeof flag === 'number') (button as ButtonGuiElement).toggled = activity_state.activity_filter_selected(mask, flag)
+    }
+  }
+  const count = activity_header[DETAIL_ACTIVITY_COUNT_NAME]
 
   meta.clear()
   if (project === undefined) {
@@ -428,7 +469,8 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
     step_flow.clear()
     activity_flow.clear()
     step_flow.tags = { signature: '' }
-    activity_flow.tags = { keys: [] }
+    activity_flow.tags = { keys: [], mask }
+    if (count?.valid) count.caption = ''
     return true
   }
   add_detail_row(meta, 'GOAL', project.objective)
@@ -453,12 +495,20 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
     step_flow.tags = { signature }
   }
 
-  const start = math.max(0, project.activity.length - MAX_ACTIVITY_VISIBLE)
-  const entries = project.activity.slice(start)
+  const matching: ProjectHistoryActivity[] = []
+  for (const entry of project.activity) {
+    if (activity_state.activity_matches_mask(entry.kind as TaskBoardUiActivity['kind'], mask)) matching.push(entry)
+  }
+  const start = math.max(0, matching.length - MAX_ACTIVITY_VISIBLE)
+  const entries = matching.slice(start)
   const keys = entries.map(activity_key)
   const shown = (activity_flow.tags.keys ?? []) as string[]
+  // A new selection shows a different set of rows, so start from its newest.
+  const mask_changed = activity_flow.tags.mask !== mask
   const diff = activity_rows_diff(shown, keys)
-  if (diff === undefined) {
+  // Nothing shown can still mean the placeholder label is there; rebuild so it
+  // does not stay above the first real rows.
+  if (diff === undefined || shown.length === 0) {
     activity_flow.clear()
     for (const entry of entries) add_activity_line(activity_flow, entry)
   }
@@ -469,9 +519,13 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
     }
     for (let index = entries.length - diff.append; index < entries.length; index++) add_activity_line(activity_flow, entries[index])
   }
-  activity_flow.tags = { keys }
-  if (entries.length === 0 && activity_flow.children.length === 0) activity_flow.add({ type: 'label', caption: 'No retained activity recorded for this project.' })
-  if (force_activity_latest && entries.length > 0) (activity_scroll as ScrollPaneGuiElement).scroll_to_bottom()
+  activity_flow.tags = { keys, mask }
+  if (entries.length === 0 && activity_flow.children.length === 0) {
+    const caption = project.activity.length === 0 ? 'No retained activity recorded for this project.' : mask === 0 ? 'No activity categories selected.' : 'No activity for this project matches this filter.'
+    activity_flow.add({ type: 'label', caption })
+  }
+  if (count?.valid) count.caption = mask === activity_state.ACTIVITY_FILTER_ALL ? `${project.activity.length} events` : `${matching.length}/${project.activity.length}`
+  if ((force_activity_latest || mask_changed) && entries.length > 0) (activity_scroll as ScrollPaneGuiElement).scroll_to_bottom()
   return true
 }
 
@@ -485,7 +539,7 @@ function build_projects_body(body: LuaGuiElement, player: LuaPlayer, current_goa
   render_project_list(columns, selected_id)
   render_project_detail_skeleton(columns, selected)
   const detail = columns[DETAIL_FRAME_NAME]
-  if (detail?.valid) refresh_project_detail(detail, selected, true)
+  if (detail?.valid) refresh_project_detail(detail, selected, player.index, true)
 }
 
 function build_projects_popout(player: LuaPlayer, current_goal_id: string) {
@@ -524,12 +578,12 @@ export function render_projects_popout(player: LuaPlayer, task_board_open: boole
     detail_frame.destroy()
     render_project_detail_skeleton(columns, selected)
     const rebuilt = columns[DETAIL_FRAME_NAME]
-    if (rebuilt?.valid) refresh_project_detail(rebuilt, selected, true)
+    if (rebuilt?.valid) refresh_project_detail(rebuilt, selected, player.index, true)
     return
   }
   // Routine heartbeats now update labels/rows in place. Scroll panes survive,
   // so reading an older completed project no longer jumps back to the top.
-  refresh_project_detail(detail_frame, selected)
+  refresh_project_detail(detail_frame, selected, player.index)
 }
 
 function handle_project_selection(player: LuaPlayer, element: any) {

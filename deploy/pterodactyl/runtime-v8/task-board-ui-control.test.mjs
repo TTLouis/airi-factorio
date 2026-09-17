@@ -180,6 +180,42 @@ test('activity is an auditable summary rather than hidden model reasoning', () =
   ])
 })
 
+test('one finished batch is one result line, not a receipt plus a restated verification', () => {
+  const receipt = { kind: 'operation_receipt', summary: JSON.stringify({ batch_id: 1, outcome: 'completed', task_count: 1, task_types: ['placing'] }) }
+  const verification = { kind: 'deterministic_verification', summary: JSON.stringify({ batch_id: 1, operations: ['place_entity'] }) }
+  const unreceipted = { kind: 'deterministic_verification', summary: JSON.stringify({ batch_id: 2, operations: ['craft_item'] }) }
+  // The receipt sits outside the displayed tail and still suppresses the
+  // restatement, so the verification cannot surface later as a new row.
+  const evidence = [receipt, { kind: 'note', summary: 'a' }, { kind: 'note', summary: 'b' }, { kind: 'note', summary: 'c' }, verification, unreceipted]
+  assert.deepEqual(deriveActivity({ last_chat_message: '', last_operations: [], blocker: '', pause_reason: '', task_board: { evidence } }).map(entry => entry.text), [
+    'b',
+    'c',
+    'Verified batch 2 complete (craft_item)',
+  ])
+})
+
+test('an exhausted provider recovery is reported once, by the failed request', () => {
+  const state = { last_chat_message: '', last_operations: [], blocker: '', task_board: { evidence: [] } }
+  assert.deepEqual(deriveActivity({ ...state, pause_reason: 'provider_recovery_exhausted: Provider response recovery exhausted after 3 attempts: Invalid provider content JSON' }), [])
+  assert.deepEqual(deriveActivity({ ...state, pause_reason: 'player_requested' }), [{ kind: 'system', text: 'Paused: player_requested' }])
+})
+
+test('the live batch-completed line gives way to the receipt only when a plan carries receipts', () => {
+  const completed = { ...liveAgentEvent('factorio.completed_signal').activity, id: 'live_x_1' }
+  const tool = { kind: 'observation', text: 'Tool getActorStatus', id: 'live_x_2' }
+  const live = { phase: 'thinking', detail: '', activity: [completed, tool] }
+  const planned = taskBoardUiSnapshot({
+    goal_id: 'goal_1', objective: 'Build power', blocker: '', pause_reason: '', last_chat_message: '', last_operations: [],
+    task_board: {
+      kind: 'task_board_lite', goal_id: 'goal_1', status: 'active', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 1, active_index: 0, steps: [{ id: 'step_1', description: 'Build boiler', status: 'active' }], evidence: [],
+    },
+  }, live)
+  assert.deepEqual(planned.activity, [tool])
+  const planless = taskBoardUiSnapshot(undefined, live)
+  assert.deepEqual(planless.activity, [{ kind: 'result', text: 'Autorio batch completed', id: 'live_x_1' }, tool])
+})
+
 test('task board projection carries canonical steps plus activity and wanted items', () => {
   const snapshot = taskBoardUiSnapshot({
     goal_id: 'goal_1', objective: 'Build power', blocker: '', pause_reason: '',
