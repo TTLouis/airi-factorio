@@ -45,6 +45,50 @@ Do not substitute lower layers for higher layers when the failure mode is engine
 
 ## Near-term single-NPC work
 
+### Priority 0 — Grounded capability / prototype discovery
+
+Treat this as a **high-priority harness gap before expanding deeper autonomous production-layout intelligence or compensating with a larger system prompt**.
+
+The current harness already has important pieces of deterministic discovery, but most of them start **after the model already knows an exact Factorio identity**:
+
+- `getRecipeDetails(item_or_recipe)` can resolve producers for an exact item/recipe and derive compatible crafting-machine prototypes from live recipe categories;
+- `getPrototypeDetails(name)` exposes static capability metadata for an exact item/fluid/entity prototype, including mining-drill resource categories;
+- `solveProduction` can recursively discover bounded enabled recipe routes from an exact target material and return bounded alternative candidates;
+- local observation can filter entities by Factorio type, and `findNearestEnemy` is an example of semantic discovery that does not require an exact hostile prototype name.
+
+The missing bootstrap layer is:
+
+```text
+human/model intent
+"I need something that can automatically mine this resource"
+        ↓
+bounded deterministic capability query
+        ↓
+current-game candidate prototype identities
+        ↓
+exact recipe/prototype inspection
+        ↓
+LLM chooses among grounded alternatives
+```
+
+Without that bridge, a model that does not already know Factorio names can still guess concepts such as "pickaxe", "miner", a recipe name, technology name, or modded machine identity and only discover the mistake during mutation admission.
+
+This capability layer must **not** become a complete prototype dump or a giant deterministic mod encyclopedia. Large overhaul mods make unbounded enumeration both expensive and cognitively useless. Preserve the same bounded-candidate design already used elsewhere:
+
+- query by narrow engine-backed capability/type/category rather than broad natural-language semantic search;
+- derive candidates from the running game's prototype/recipe data and current force state rather than a vanilla hardcoded catalogue;
+- prefer currently relevant/unlocked/craftable candidates when that distinction is deterministic;
+- cap candidate counts and return an explicit `LIMIT_EXCEEDED`/narrowing requirement rather than dumping hundreds of modded prototypes;
+- allow hierarchical refinement (capability/category first, exact candidate inspection second);
+- return canonical ordering and facts, **not a subjective "best machine" ranking**;
+- keep exact mutations gated by existing recipe/prototype validation and world observations.
+
+The architecture goal is not to teach the LLM all of Factorio or every installed mod. It is to make the running Factorio instance capable of answering bounded questions such as "what currently available entities can perform this engine-defined capability?" so the model can choose without inventing identities.
+
+Before adding a new API, audit whether an existing recipe/prototype/planning query can be generalized safely. Prefer a small composable discovery primitive over multiple hardcoded tools such as `getAvailableMiningDrills`, `getAvailableFurnaces`, etc.
+
+A representative E2E acceptance case should start from a high-level goal with no prototype names (for example early automatic resource extraction) and prove that a weaker model can reach valid exact identities entirely through deterministic game queries, without remembered Factorio wiki knowledge.
+
 ### 1. Promotion cleanup and baseline freeze
 
 - keep ordinary CI green;
