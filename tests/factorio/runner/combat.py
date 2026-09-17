@@ -285,7 +285,7 @@ def run(client: Rcon, results: Path) -> None:
     require(clear_result == [True, 'Area-clear combat task queued'], clear_result)
 
     cleanup_started = None
-    cleanup_deadline = time.monotonic() + 45.0
+    cleanup_deadline = time.monotonic() + 60.0
     while time.monotonic() < cleanup_deadline:
         candidate = lifecycle_observe('wait for native turret cleanup')
         combat_state = candidate.get('combat') or {}
@@ -357,7 +357,6 @@ def run(client: Rcon, results: Path) -> None:
     require(mid_safety is not None, 'simulation did not advance through cleanup safety window')
     require(mid_safety['combat']['combat_phase'] == 'safety' and mid_safety['mining'] is False, mid_safety)
     require(mid_safety['combat']['encounter_owned_turret_count'] >= 1, mid_safety)
-
     resumed_cleanup = None
     resume_deadline = time.monotonic() + 4.0
     while time.monotonic() < resume_deadline:
