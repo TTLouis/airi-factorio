@@ -151,6 +151,104 @@ function log_actor_info() {
   return true
 }
 
+function operation_preflight(name: string, args: Record<string, any>) {
+  const actor = get_controlled_actor()
+  const reject = (code: string, details: Record<string, unknown> = {}) => ({
+    ok: false,
+    code,
+    operation: name,
+    ...details,
+  })
+  const accept = (details: Record<string, unknown> = {}) => ({
+    ok: true,
+    operation: name,
+    ...details,
+  })
+
+  if (!args || typeof args !== 'object') return reject('invalid_preflight_args')
+
+  if (name === 'craft_item') {
+    if (!actor || !actor.is_valid) return reject('no_actor')
+    const item_name = args.item_name
+    const recipe = typeof item_name === 'string' ? actor.force.recipes[item_name] : undefined
+    if (!recipe) {
+      return reject('unknown_recipe', {
+        field: 'item_name',
+        identity: item_name,
+        expected: 'force recipe',
+      })
+    }
+    if (!recipe.enabled) {
+      return reject('recipe_locked', {
+        field: 'item_name',
+        identity: item_name,
+        recipe_name: recipe.name,
+      })
+    }
+    return accept({ field: 'item_name', identity: item_name, recipe_name: recipe.name })
+  }
+
+  if (name === 'gather_resource' || name === 'mine_resource_at') {
+    const resource_name = args.resource_name
+    const prototype = typeof resource_name === 'string' ? prototypes.entity[resource_name] : undefined
+    if (!prototype) {
+      return reject('unknown_prototype', {
+        field: 'resource_name',
+        identity: resource_name,
+        expected_type: 'resource',
+        observed_type: 'missing',
+      })
+    }
+    if (prototype.type !== 'resource') {
+      return reject('invalid_target_kind', {
+        field: 'resource_name',
+        identity: resource_name,
+        expected_type: 'resource',
+        observed_type: prototype.type,
+      })
+    }
+    return accept({
+      field: 'resource_name',
+      identity: resource_name,
+      expected_type: 'resource',
+      observed_type: prototype.type,
+    })
+  }
+
+  if (name === 'place_entity' || name === 'mine_entity' || name === 'walk_to_entity') {
+    const entity_name = args.entity_name
+    const prototype = typeof entity_name === 'string' ? prototypes.entity[entity_name] : undefined
+    if (!prototype) {
+      return reject('unknown_prototype', {
+        field: 'entity_name',
+        identity: entity_name,
+        expected: 'entity prototype',
+      })
+    }
+    return accept({ field: 'entity_name', identity: entity_name, observed_type: prototype.type })
+  }
+
+  if (name === 'set_machine_recipe') {
+    if (!actor || !actor.is_valid) return reject('no_actor')
+    const recipe_name = args.recipe_name
+    const recipe = typeof recipe_name === 'string' ? actor.force.recipes[recipe_name] : undefined
+    if (!recipe) {
+      return reject('unknown_recipe', {
+        field: 'recipe_name',
+        identity: recipe_name,
+        expected: 'force recipe',
+      })
+    }
+    return accept({ field: 'recipe_name', identity: recipe_name, recipe_name: recipe.name })
+  }
+
+  return accept({ validation: 'not_required' })
+}
+
+remote.add_interface('autorio_preflight', {
+  operation: (name: string, args: Record<string, any>) => operation_preflight(name, args),
+})
+
 remote.add_interface('autorio_operations', {
   walk_to_entity: (entity_name: string, search_radius: number) => {
     log(`[AUTORIO] New walk_to_entity task: ${entity_name}, radius: ${search_radius}`)
