@@ -4,6 +4,7 @@ import { task_board_resource_rows, task_board_wanted_rows } from './task_board_u
 
 describe('AIRI NPC console layout regressions', () => {
   const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  const debug_source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
 
   it('keeps a useful inventory viewport across display sizes while reserving sidebar room for equipment', () => {
     expect(task_board_resource_rows(720)).toBe(5)
@@ -44,6 +45,21 @@ describe('AIRI NPC console layout regressions', () => {
     expect(source).not.toContain('const TRACKER_LIST_MIN_TOTAL =')
     expect(source).not.toContain('const TRACKER_STEPS_SHARE =')
     expect(source).not.toContain('const PREVIEW_CAMERA_MIN_HEIGHT =')
+  })
+
+  it('keeps Current Task Conversation explicitly scrollable without rebuilding its pane', () => {
+    expect(debug_source).toContain("vertical_scroll_policy: 'auto-and-reserve-space'")
+    expect(debug_source).toContain('scroll.style.maximal_height = CONVERSATION_HEIGHT')
+    expect(debug_source).toContain("name: CONVERSATION.scroll")
+  })
+
+  it('makes the top-left AIRI mod-GUI button easier to see without changing its standard slot style', () => {
+    const ensure_button = source.split('function ensure_button(')[1]?.split('function destroy_panel(')[0] ?? ''
+    expect(ensure_button).toContain("style: 'slot_button'")
+    expect(ensure_button).toContain('button.style.width = 48')
+    expect(ensure_button).toContain('button.style.height = 48')
+    expect(ensure_button).toContain('button.style.minimal_width = 48')
+    expect(ensure_button).toContain('button.style.maximal_width = 48')
   })
 
   it('locks control and prompt widths instead of shrinking to their captions', () => {

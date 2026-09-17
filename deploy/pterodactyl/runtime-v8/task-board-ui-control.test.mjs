@@ -38,6 +38,16 @@ test('agent loop forwards trace events to the activity listener even without a t
   assert.deepEqual(seen, [['tool.call', { name: 'getInventory' }]])
 })
 
+test('every non-empty public AIRI reply is retained across continuation trigger sources', () => {
+  for (const trigger_source of ['request', 'failure', 'completion', 'resume']) {
+    assert.deepEqual(
+      liveAgentEvent('plan.accepted', { chat_message: 'Continuing with the next verified step.', trigger_source }).activity,
+      { kind: 'decision', text: 'Continuing with the next verified step.' },
+    )
+  }
+  assert.equal(liveAgentEvent('plan.accepted', { chat_message: '', trigger_source: 'completion' }).activity, undefined)
+})
+
 test('task receipts render as readable activity lines', () => {
   assert.equal(
     evidenceText({ kind: 'operation_receipt', summary: JSON.stringify({ outcome: 'completed', batch_id: 12, task_count: 2, task_types: ['walking_to_entity', 'mining'] }) }),

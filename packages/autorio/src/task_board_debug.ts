@@ -379,7 +379,7 @@ export function render_ai_reply(parent: LuaGuiElement, response: string, width: 
     body.style.padding = 10
     body.style.horizontally_stretchable = true
     const empty = body.add({ type: 'label', name: CONVERSATION.empty, caption: 'No current task conversation.' }); empty.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
-    const scroll = body.add({ type: 'scroll-pane', name: CONVERSATION.scroll, style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' })
+    const scroll = body.add({ type: 'scroll-pane', name: CONVERSATION.scroll, style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' })
     scroll.style.horizontally_stretchable = true
     scroll.style.maximal_height = CONVERSATION_HEIGHT
     const table = scroll.add({ type: 'table', name: CONVERSATION.table, column_count: 3, tags: { keys: [], chat_seen: '', was_following: true } })

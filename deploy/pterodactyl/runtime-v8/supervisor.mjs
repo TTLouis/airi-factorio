@@ -526,11 +526,14 @@ export function liveAgentEvent(event, data = {}) {
       }
     case 'plan.accepted': {
       const message = uiText(data.chat_message, 1000)
-      const publish = data.trigger_source === 'request' || data.trigger_source === 'failure'
       return {
         phase: 'executing',
         detail: uiText(data.chat_message, 200) || 'Plan accepted',
-        ...(publish && message ? { activity: { kind: 'decision', text: message } } : {}),
+        // chat_message is the public player-facing reply. Keep every non-empty
+        // reply in the live activity stream regardless of whether this turn was
+        // triggered by a new request, a failure, or an automatic continuation.
+        // Current Task Conversation is projected from that retained stream.
+        ...(message ? { activity: { kind: 'decision', text: message } } : {}),
       }
     }
     case 'operations.admit':

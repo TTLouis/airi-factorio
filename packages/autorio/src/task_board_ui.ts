@@ -416,6 +416,15 @@ function ensure_button(player: LuaPlayer) {
   button.sprite = provider_ui.provider_button_sprite(player.index, BUTTON_SPRITE)
   button.tooltip = provider_ui.provider_button_tooltip('AIRI NPC Console')
   button.toggled = task_board_ui_is_open(player.index)
+  // Factorio's stock mod-GUI slot is easy to miss at 1080p. A conservative
+  // 48px square keeps the standard slot-button styling while making AIRI's
+  // provider avatar materially easier to see and click.
+  button.style.width = 48
+  button.style.height = 48
+  button.style.minimal_width = 48
+  button.style.maximal_width = 48
+  button.style.minimal_height = 48
+  button.style.maximal_height = 48
   return button
 }
 function destroy_panel(player: LuaPlayer) {
