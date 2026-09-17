@@ -1,4 +1,5 @@
 import type { SkillDefinition } from './skills'
+import { skill_semantic_signature } from './skill_semantic_evidence'
 
 export type LearningOpportunitySource = 'completed_goal' | 'observed_factory' | 'experiment' | 'manual'
 export type LearningOpportunityState = 'detected' | 'analyzing' | 'candidate_created' | 'duplicate' | 'awaiting_verification' | 'verified' | 'rejected' | 'failed'
@@ -207,24 +208,22 @@ export function skill_novelty_key(skill: SkillDefinition) {
     const from = relation.from !== undefined ? node_by_id[relation.from] ?? relation.from : ''
     const to = relation.to !== undefined ? node_by_id[relation.to] ?? relation.to : ''
     const via = relation.via !== undefined ? node_by_id[relation.via] ?? relation.via : ''
-    return `${relation.kind}|${from}|${to}|${via}`
+    return `${relation.kind}|${from}|${to}|${via}|${relation.description ?? ''}`
   })
   relations.sort()
   const recipes = skill.source.recipe_ids.slice()
   recipes.sort()
-  const constraints = skill.constraints.map(value => `${value.kind}|${value.validation}`)
-  constraints.sort()
-  const parameters = skill.parameters.map(value => `${value.name}|${value.required ? 'required' : 'optional'}`)
+  const parameters = skill.parameters.map(value => `${value.name}|${value.required ? 'required' : 'optional'}|${value.description}|${value.default_value ?? ''}`)
   parameters.sort()
   return [
-    'learning-novelty-v1',
+    'learning-novelty-v2',
     `kind=${skill.kind}`,
     `inputs=${flow_signature(skill.inputs).join(',')}`,
     `outputs=${flow_signature(skill.outputs).join(',')}`,
     `recipes=${recipes.join(',')}`,
     `nodes=${nodes.join(',')}`,
     `relations=${relations.join(',')}`,
-    `constraints=${constraints.join(',')}`,
+    `semantic=${skill_semantic_signature(skill)}`,
     `parameters=${parameters.join(',')}`,
   ].join(';')
 }
@@ -269,6 +268,9 @@ function merge_numbers(left: number[], right: number[], limit = 64) {
 }
 
 export function merge_duplicate_skill(existing: SkillDefinition, incoming: SkillDefinition): SkillDefinition {
+  if (skill_novelty_key(existing) !== skill_novelty_key(incoming)) {
+    throw new Error('cannot merge skills with different semantic novelty keys')
+  }
   const evidence_refs = unique_strings([...existing.source.evidence_refs, ...incoming.source.evidence_refs])
   const recipe_ids = unique_strings([...existing.source.recipe_ids, ...incoming.source.recipe_ids], 64)
   const basis = unique_strings([...existing.confidence.basis, 'Observed an additional equivalent reusable instance.'], 64)
