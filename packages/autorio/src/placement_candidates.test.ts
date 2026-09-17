@@ -1,0 +1,200 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { placement_candidates_for_actor } from './placement_candidates'
+
+function luaPairs(value: Record<string, unknown>) {
+  return Object.entries(value)
+}
+
+describe('placement candidates', () => {
+  const originalPairs = (globalThis as any).pairs
+  const originalEntityPrototypes = (globalThis as any).prototypes.entity
+
+  beforeEach(() => {
+    ;(globalThis as any).pairs = luaPairs
+  })
+
+  afterEach(() => {
+    ;(globalThis as any).pairs = originalPairs
+    ;(globalThis as any).prototypes.entity = originalEntityPrototypes
+  })
+
+  it('uses live can_place_entity and does not depend on vanilla prototype names', () => {
+    ;(globalThis as any).prototypes.entity = {
+      'modded-building': {
+        name: 'modded-building',
+        type: 'assembling-machine',
+        tile_width: 3,
+        tile_height: 3,
+      },
+    }
+    const actor = {
+      position: { x: 0, y: 0 },
+      force: { index: 1 },
+      surface: {
+        can_place_entity: ({ position }: any) => position.x === 1.5 && position.y === 0.5,
+        find_entities_filtered: () => [],
+      },
+    } as any
+
+    const result = placement_candidates_for_actor(actor, {
+      entity_name: 'modded-building',
+      center: { x: 0, y: 0 },
+      radius: 2,
+      limit: 3,
+    }) as any
+
+    expect(result.ok).toBe(true)
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0]).toMatchObject({
+      id: 'candidate-1',
+      position: { x: 1.5, y: 0.5 },
+    })
+  })
+
+  it('rejects mining candidates that do not cover the requested live resource', () => {
+    ;(globalThis as any).prototypes.entity = {
+      'modded-miner': {
+        name: 'modded-miner',
+        type: 'mining-drill',
+        tile_width: 3,
+        tile_height: 3,
+        mining_drill_radius: 1.5,
+        resource_categories: { 'modded-solid': true },
+      },
+    }
+
+    const stone = {
+      valid: true,
+      name: 'modded-stone',
+      type: 'resource',
+      amount: 800,
+      prototype: { resource_category: 'modded-solid' },
+    }
+    const iron = {
+      valid: true,
+      name: 'modded-iron',
+      type: 'resource',
+      amount: 900,
+      prototype: { resource_category: 'modded-solid' },
+    }
+
+    const actor = {
+      position: { x: 0, y: 0 },
+      force: { index: 1 },
+      surface: {
+        can_place_entity: () => true,
+        find_entities_filtered: ({ area }: any) => {
+          const centerX = (area[0].x + area[1].x) / 2
+          if (centerX < 0) return [iron]
+          if (centerX > 0) return [stone]
+          return []
+        },
+      },
+    } as any
+
+    const result = placement_candidates_for_actor(actor, {
+      entity_name: 'modded-miner',
+      center: { x: 0, y: 0 },
+      radius: 1,
+      target_resource: 'modded-stone',
+      limit: 8,
+    }) as any
+
+    expect(result.ok).toBe(true)
+    expect(result.candidates.length).toBeGreaterThan(0)
+    for (const candidate of result.candidates) {
+      expect(candidate.position.x).toBeGreaterThan(0)
+      expect(candidate.resource_coverage).toEqual([
+        { name: 'modded-stone', entities: 1, amount: 800 },
+      ])
+    }
+  })
+
+  it('prefers stronger live resource coverage before distance', () => {
+    ;(globalThis as any).prototypes.entity = {
+      'wide-modded-miner': {
+        name: 'wide-modded-miner',
+        type: 'mining-drill',
+        tile_width: 3,
+        tile_height: 3,
+        mining_drill_radius: 2,
+        resource_categories: { ore: true },
+      },
+    }
+
+    function resource(name: string, amount: number) {
+      return {
+        valid: true,
+        name,
+        type: 'resource',
+        amount,
+        prototype: { resource_category: 'ore' },
+      }
+    }
+
+    const actor = {
+      position: { x: 0, y: 0 },
+      force: { index: 1 },
+      surface: {
+        can_place_entity: () => true,
+        find_entities_filtered: ({ area }: any) => {
+          const centerX = (area[0].x + area[1].x) / 2
+          if (centerX > 0) return [resource('rich-ore', 5000), resource('rich-ore', 4000)]
+          if (centerX === 0.5) return [resource('rich-ore', 100)]
+          return [resource('rich-ore', 50)]
+        },
+      },
+    } as any
+
+    const result = placement_candidates_for_actor(actor, {
+      entity_name: 'wide-modded-miner',
+      center: { x: 0, y: 0 },
+      radius: 2,
+      target_resource: 'rich-ore',
+      limit: 1,
+    }) as any
+
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0].resource_coverage[0]).toEqual({
+      name: 'rich-ore',
+      entities: 2,
+      amount: 9000,
+    })
+  })
+
+  it('returns no target-resource candidate when live category compatibility rejects it', () => {
+    ;(globalThis as any).prototypes.entity = {
+      'solid-only-miner': {
+        name: 'solid-only-miner',
+        type: 'mining-drill',
+        tile_width: 3,
+        tile_height: 3,
+        mining_drill_radius: 2,
+        resource_categories: { solid: true },
+      },
+    }
+    const actor = {
+      position: { x: 0, y: 0 },
+      force: { index: 1 },
+      surface: {
+        can_place_entity: () => true,
+        find_entities_filtered: () => [{
+          valid: true,
+          name: 'liquid-resource',
+          type: 'resource',
+          amount: 10000,
+          prototype: { resource_category: 'liquid' },
+        }],
+      },
+    } as any
+
+    const result = placement_candidates_for_actor(actor, {
+      entity_name: 'solid-only-miner',
+      radius: 1,
+      target_resource: 'liquid-resource',
+    }) as any
+
+    expect(result.ok).toBe(true)
+    expect(result.candidates).toEqual([])
+  })
+})
