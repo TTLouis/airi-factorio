@@ -1,5 +1,6 @@
 import { create_actor_remote_interface, get_controlled_actor } from './actors/actor_controller'
 import { remember_entity_reference } from './entity_reference'
+import { compact_spatial_summary } from './spatial_semantics'
 import { get_actor_inventory_items } from './utils/inventory'
 
 const MAX_NEARBY_RADIUS = 64
@@ -111,7 +112,7 @@ export function create_tools_remote_interface() {
       for (let i = 0; i < returned; i++) {
         const entity = matches[i]
         remember_entity_reference(entity)
-        entities.push({
+        const summary: Record<string, unknown> = {
           name: entity.name,
           type: entity.type,
           position: entity.position,
@@ -121,7 +122,10 @@ export function create_tools_remote_interface() {
           supports_direction: entity.supports_direction,
           rotatable: entity.rotatable,
           amount: entity.type === 'resource' ? entity.amount : undefined,
-        })
+        }
+        const spatial = compact_spatial_summary(entity)
+        if (spatial !== undefined) summary.spatial = spatial
+        entities.push(summary)
       }
 
       return {
@@ -212,25 +216,29 @@ export function create_tools_remote_interface() {
         recipe_name = recipe?.name
       }
 
+      const entity_summary: Record<string, unknown> = {
+        name: entity.name,
+        type: entity.type,
+        position: entity.position,
+        force: entity.force?.name,
+        unit_number: entity.unit_number,
+        direction: entity.direction,
+        supports_direction: entity.supports_direction,
+        rotatable: entity.rotatable,
+        amount: entity.type === 'resource' ? entity.amount : undefined,
+        recipe: recipe_name,
+        inventories,
+        inventories_truncated: entity.get_max_inventory_index() > MAX_ENTITY_INVENTORIES,
+        inventory_items_truncated,
+      }
+      const spatial = compact_spatial_summary(entity)
+      if (spatial !== undefined) entity_summary.spatial = spatial
+
       return {
         found: true,
         actor_position: actor.position,
         radius: bounded_radius,
-        entity: {
-          name: entity.name,
-          type: entity.type,
-          position: entity.position,
-          force: entity.force?.name,
-          unit_number: entity.unit_number,
-          direction: entity.direction,
-          supports_direction: entity.supports_direction,
-          rotatable: entity.rotatable,
-          amount: entity.type === 'resource' ? entity.amount : undefined,
-          recipe: recipe_name,
-          inventories,
-          inventories_truncated: entity.get_max_inventory_index() > MAX_ENTITY_INVENTORIES,
-          inventory_items_truncated,
-        },
+        entity: entity_summary,
       }
     },
   })
