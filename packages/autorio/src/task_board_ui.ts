@@ -1014,6 +1014,7 @@ export function create_task_board_ui_remote_interface() {
     if (element.name === SKILLS_CLOSE_BUTTON_NAME) { close_task_board_skills_ui(player.index); destroy_skills_popout(player); render_panel(player); return }
     if (element.name === debug_ui.DEBUG_BUTTON_NAME) { debug_ui.toggle_debug_ui(player.index); render_panel(player); render_debug_popout(player); return }
     if (element.name === debug_ui.DEBUG_CLOSE_BUTTON_NAME) { debug_ui.close_debug_ui(player.index); render_debug_popout(player); render_panel(player); return }
+    if (element.name === debug_ui.DEBUG_ACTIVITY_STATE_NAME) { debug_ui.toggle_debug_activity_follow(player.index); render_debug_popout(player); return }
     if (element.name === TRACKER.live) {
       const scroll = activity_scroll_of(player); const view = activity_state.activity_view(player.index)
       if (view.follow) activity_state.stop_activity_follow(player.index, last_shown_activity_key(scroll))
@@ -1043,11 +1044,22 @@ export function create_task_board_ui_remote_interface() {
   script.on_event(TRACKER.scroll_down_input, on_activity_wheel)
   // The cursor resting on the feed holds it still without ending follow; once it
   // leaves, anything that arrived in the meantime is caught up straight away.
-  script.on_event(defines.events.on_gui_hover, (event: any) => { const element = event.element; if (!element?.valid || element.name !== TRACKER.activity_scroll) return; activity_state.set_activity_hover(event.player_index, true) })
+  script.on_event(defines.events.on_gui_hover, (event: any) => {
+    const element = event.element; if (!element?.valid) return
+    if (element.name === TRACKER.activity_scroll) { activity_state.set_activity_hover(event.player_index, true); return }
+    if (element.name === debug_ui.DEBUG_ACTIVITY_SCROLL_NAME) debug_ui.set_debug_activity_hover(event.player_index, true)
+  })
   script.on_event(defines.events.on_gui_leave, (event: any) => {
-    const element = event.element; if (!element?.valid || element.name !== TRACKER.activity_scroll) return
-    const view = activity_state.set_activity_hover(event.player_index, false); if (!view.follow || !view.behind) return
-    const player = game.get_player(event.player_index); if (player?.valid) render_panel(player)
+    const element = event.element; if (!element?.valid) return
+    if (element.name === TRACKER.activity_scroll) {
+      const view = activity_state.set_activity_hover(event.player_index, false); if (!view.follow || !view.behind) return
+      const player = game.get_player(event.player_index); if (player?.valid) render_panel(player)
+      return
+    }
+    if (element.name === debug_ui.DEBUG_ACTIVITY_SCROLL_NAME) {
+      const view = debug_ui.set_debug_activity_hover(event.player_index, false); if (!view.follow || !view.behind) return
+      const player = game.get_player(event.player_index); if (player?.valid) render_debug_popout(player)
+    }
   })
   script.on_event(defines.events.on_gui_value_changed, (event: any) => {
     const element = event.element; if (!element?.valid || element.name !== PREVIEW_ZOOM_SLIDER_NAME) return; const player = game.get_player(event.player_index); if (!player?.valid) return

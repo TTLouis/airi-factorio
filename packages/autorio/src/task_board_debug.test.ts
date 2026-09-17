@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   clear_snapshot_suppression,
   conversation_activity_keys,
+  debug_activity_view,
   follow_button_caption,
   latest_ai_reply,
   snapshot_is_suppressed,
   suppress_snapshot,
   task_conversation_messages,
+  toggle_debug_activity_follow,
+  set_debug_activity_hover,
 } from './task_board_debug'
 
 const store = () => (globalThis as any).storage as Record<string, any>
@@ -19,6 +22,14 @@ describe('task board debug and UI freshness helpers', () => {
   it('uses concise follow captions', () => {
     expect(follow_button_caption(false)).toBe('FOLLOW')
     expect(follow_button_caption(true)).toBe('FOLLOWING')
+  })
+
+  it('keeps Debug execution-feed follow state independent and explicitly pausable', () => {
+    expect(debug_activity_view(7)).toEqual({ follow: true, hover: false, behind: false })
+    set_debug_activity_hover(7, true)
+    expect(debug_activity_view(7).hover).toBe(true)
+    expect(toggle_debug_activity_follow(7)).toMatchObject({ follow: false, hover: false })
+    expect(toggle_debug_activity_follow(7)).toMatchObject({ follow: true, hover: false, behind: true })
   })
 
   it('shows the explicit AIRI reply or falls back to the newest decision activity', () => {

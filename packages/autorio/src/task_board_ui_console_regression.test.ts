@@ -47,6 +47,22 @@ describe('AIRI NPC console layout regressions', () => {
     expect(source).not.toContain('const PREVIEW_CAMERA_MIN_HEIGHT =')
   })
 
+  it('keeps Debug Execution Activity alive across diagnostics refreshes and follows the newest event safely', () => {
+    const fill_debug = debug_source.split('function fill_debug_body(')[1]?.split('function build_debug_activity(')[0] ?? ''
+    expect(fill_debug).toContain('body.clear()')
+    expect(fill_debug).not.toContain('Execution Activity')
+    const refresh = debug_source.split('function refresh_debug_activity(')[1]?.split('function build_debug_popout(')[0] ?? ''
+    expect(refresh).toContain('activity_state.activity_rows_diff(shown, keys)')
+    expect(refresh).toContain('view.follow && !view.hover')
+    expect(refresh).toContain('(scroll as ScrollPaneGuiElement).scroll_to_bottom()')
+    expect(refresh).not.toContain('scroll.clear()')
+    expect(debug_source).toContain("name: DEBUG_ACTIVITY_SCROLL_NAME")
+    expect(debug_source).toContain("vertical_scroll_policy: 'auto-and-reserve-space'")
+    expect(source).toContain('debug_ui.toggle_debug_activity_follow(player.index)')
+    expect(source).toContain('debug_ui.set_debug_activity_hover(event.player_index, true)')
+    expect(source).toContain('debug_ui.set_debug_activity_hover(event.player_index, false)')
+  })
+
   it('keeps Current Task Conversation explicitly scrollable without rebuilding its pane', () => {
     expect(debug_source).toContain("vertical_scroll_policy: 'auto-and-reserve-space'")
     expect(debug_source).toContain('scroll.style.maximal_height = CONVERSATION_HEIGHT')

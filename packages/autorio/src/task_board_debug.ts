@@ -23,6 +23,16 @@ const CONVERSATION = {
   scroll: 'airi_task_board_activity_scroll',
   table: 'airi_task_board_activity_table',
 }
+export const DEBUG_ACTIVITY_STATE_NAME = 'airi_task_board_debug_activity_state'
+export const DEBUG_ACTIVITY_SCROLL_NAME = 'airi_task_board_debug_activity_scroll'
+const DEBUG_ACTIVITY = {
+  section: 'airi_task_board_debug_activity_section',
+  header: 'airi_task_board_debug_activity_header',
+  count: 'airi_task_board_debug_activity_count',
+  empty: 'airi_task_board_debug_activity_empty',
+  feed: 'airi_task_board_debug_activity_feed',
+}
+const DEBUG_ACTIVITY_ROWS = 48
 
 declare const storage: {
   airi_task_board_debug_open?: Record<number, boolean>
@@ -35,6 +45,7 @@ declare const storage: {
   airi_task_board_activity_history?: any[]
   airi_task_board_conversation_goal_id?: string
   airi_task_board_conversation_start_key?: string
+  airi_task_board_debug_activity_view?: Record<number, { follow: boolean, hover: boolean, behind: boolean, seen_key?: string }>
 }
 
 export interface TaskBoardUiDebugSnapshot {
@@ -194,6 +205,28 @@ export function toggle_debug_ui(player_index: number) { const next = !debug_ui_i
 export function close_debug_ui(player_index: number) { return project_ui.toggle_projects_ui(player_index) }
 export function debug_button_caption(player_index: number) { return debug_ui_is_open(player_index) ? 'DEBUG ON' : 'DEBUG' }
 export function follow_button_caption(active: boolean) { return active ? 'FOLLOWING' : 'FOLLOW' }
+
+export function debug_activity_view(player_index: number) {
+  if (storage.airi_task_board_debug_activity_view === undefined) storage.airi_task_board_debug_activity_view = {}
+  let view = storage.airi_task_board_debug_activity_view[player_index]
+  if (view === undefined) {
+    view = { follow: true, hover: false, behind: false }
+    storage.airi_task_board_debug_activity_view[player_index] = view
+  }
+  return view
+}
+export function toggle_debug_activity_follow(player_index: number) {
+  const view = debug_activity_view(player_index)
+  view.follow = !view.follow
+  view.hover = false
+  if (view.follow) view.behind = true
+  return view
+}
+export function set_debug_activity_hover(player_index: number, hover: boolean) {
+  const view = debug_activity_view(player_index)
+  view.hover = hover
+  return view
+}
 
 function task_activity_key(entry: any) {
   const id = clean_text(entry?.id, 120)
@@ -520,32 +553,105 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'UI sync', `gen ${version.generation} · rev ${version.revision} · age ${sync_age(synced_tick)}`)
   if (clean_text(debug.last_error, 500).length > 0) add_row(table, 'Last error', clean_text(debug.last_error, 500), clean_text(debug.last_error, 500))
 
-  body.add({ type: 'line' })
-  const activity_header = body.add({ type: 'flow', direction: 'horizontal' })
-  activity_header.style.horizontally_stretchable = true
-  activity_header.add({ type: 'label', caption: 'Execution Activity', style: 'semibold_label' })
-  const activity = activity_state.activity_history()
-  const filler = activity_header.add({ type: 'empty-widget' }); filler.style.horizontally_stretchable = true
-  activity_header.add({ type: 'label', caption: `${activity.length} event${activity.length === 1 ? '' : 's'}`, style: 'semibold_label' })
-  const scroll = body.add({ type: 'scroll-pane', horizontal_scroll_policy: 'never' })
+}
+
+function build_debug_activity(root: LuaGuiElement) {
+  const section = root.add({ type: 'flow', name: DEBUG_ACTIVITY.section, direction: 'vertical' })
+  section.style.width = DEBUG_WIDTH
+  section.style.padding = 10
+  section.style.vertical_spacing = 4
+  const header = section.add({ type: 'flow', name: DEBUG_ACTIVITY.header, direction: 'horizontal' })
+  header.style.horizontally_stretchable = true
+  header.style.vertical_align = 'center'
+  header.add({ type: 'label', caption: 'Execution Activity', style: 'semibold_label' })
+  const filler = header.add({ type: 'empty-widget' }); filler.style.horizontally_stretchable = true
+  activity_state.style_feed_button(header.add({ type: 'button', name: DEBUG_ACTIVITY_STATE_NAME, caption: '' }), activity_state.FEED_STATE_BUTTON_WIDTH)
+  const count = header.add({ type: 'label', name: DEBUG_ACTIVITY.count, caption: '0 events', style: 'semibold_label' }); count.style.left_padding = 6
+  const empty = section.add({ type: 'label', name: DEBUG_ACTIVITY.empty, caption: 'No retained execution activity.' }); empty.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
+  const scroll = section.add({ type: 'scroll-pane', name: DEBUG_ACTIVITY_SCROLL_NAME, horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' })
   scroll.style.width = DEBUG_WIDTH - 20
   scroll.style.maximal_height = 280
-  const feed = scroll.add({ type: 'flow', direction: 'vertical' })
+  scroll.raise_hover_events = true
+  const feed = scroll.add({ type: 'flow', name: DEBUG_ACTIVITY.feed, direction: 'vertical', ignored_by_interaction: true, tags: { keys: [] } })
   feed.style.horizontally_stretchable = true
   feed.style.vertical_spacing = 3
-  const start = math.max(0, activity.length - 48)
-  if (activity.length === 0) {
-    const empty = feed.add({ type: 'label', caption: 'No retained execution activity.' })
-    empty.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
-  }
-  for (let index = start; index < activity.length; index++) {
-    const entry = activity[index]
+}
+
+function refresh_debug_activity(root: LuaGuiElement, player: LuaPlayer, force = false) {
+  const section = root[DEBUG_ACTIVITY.section]
+  const header = section?.valid ? section[DEBUG_ACTIVITY.header] : undefined
+  const empty = section?.valid ? section[DEBUG_ACTIVITY.empty] : undefined
+  const scroll = section?.valid ? section[DEBUG_ACTIVITY_SCROLL_NAME] : undefined
+  const feed = scroll?.valid ? scroll[DEBUG_ACTIVITY.feed] : undefined
+  if (!section?.valid || !header?.valid || !empty?.valid || !scroll?.valid || !feed?.valid) return false
+
+  const activity = activity_state.activity_history()
+  const start = math.max(0, activity.length - DEBUG_ACTIVITY_ROWS)
+  const entries = activity.slice(start)
+  const keys = entries.map(entry => activity_state.activity_key(entry))
+  const shown = (feed.tags.keys ?? []) as string[]
+  const view = debug_activity_view(player.index)
+  const previous_last = shown.length > 0 ? shown[shown.length - 1] : undefined
+  if (view.seen_key === undefined && previous_last !== undefined) view.seen_key = previous_last
+
+  const add_entry = (entry: any) => {
     const timestamp = clean_text(entry.timestamp, 16) || '--:--:--'
     const kind = clean_text(entry.kind, 32).toUpperCase()
-    const line = feed.add({ type: 'label', caption: `${timestamp} · ${kind} · ${clean_text(entry.text, 1200)}` })
+    const line = feed.add({ type: 'label', caption: `${timestamp} · ${kind} · ${clean_text(entry.text, 1200)}`, ignored_by_interaction: true })
     line.style.single_line = false
     line.style.maximal_width = DEBUG_WIDTH - 50
   }
+
+  let appended = 0
+  if (force || (view.follow && !view.hover)) {
+    const diff = activity_state.activity_rows_diff(shown, keys)
+    if (diff === undefined || force) {
+      feed.clear()
+      for (const entry of entries) add_entry(entry)
+      appended = entries.length
+    }
+    else {
+      const children = feed.children
+      for (let index = 0; index < diff.drop && index < children.length; index++) children[index].destroy()
+      for (let index = entries.length - diff.append; index < entries.length; index++) add_entry(entries[index])
+      appended = diff.append
+    }
+    feed.tags = { keys }
+    const last_key = keys.length > 0 ? keys[keys.length - 1] : undefined
+    if (force || appended > 0 || previous_last !== last_key) (scroll as ScrollPaneGuiElement).scroll_to_bottom()
+    view.seen_key = last_key
+    view.behind = false
+  }
+  else {
+    const unseen = activity_state.activity_unseen(keys, view.seen_key)
+    view.behind = unseen.count > 0 || unseen.overflow
+  }
+
+  empty.visible = activity.length === 0
+  scroll.visible = activity.length > 0
+  const count = header[DEBUG_ACTIVITY.count]
+  if (count?.valid) count.caption = `${activity.length} event${activity.length === 1 ? '' : 's'}`
+  const unseen = activity_state.activity_unseen(keys, view.seen_key)
+  const state = header[DEBUG_ACTIVITY_STATE_NAME]
+  if (state?.valid) {
+    if (view.follow && !view.hover && unseen.count === 0) {
+      state.caption = '[img=utility/status_working] LIVE'
+      state.tooltip = 'Following the newest execution activity. Hovering holds the view; click to pause it.'
+    }
+    else if (unseen.count > 0) {
+      state.caption = `[img=utility/status_yellow] ${unseen.count}${unseen.overflow ? '+' : ''} NEW`
+      state.tooltip = 'New execution activity arrived without moving your reading position. Click to catch up and resume live follow.'
+    }
+    else if (view.hover && view.follow) {
+      state.caption = '[img=utility/status_yellow] HOLD'
+      state.tooltip = 'Holding the execution feed while you read it. Move the cursor away to resume live follow, or click to pause.'
+    }
+    else {
+      state.caption = '[img=utility/status_inactive] PAUSED'
+      state.tooltip = 'Execution activity is paused at your reading position. Click to jump to the newest event and follow again.'
+    }
+  }
+  return true
 }
 
 
@@ -561,7 +667,10 @@ function build_debug_popout(player: LuaPlayer, board: any, runtime: any, synced_
   // available to Projects without adding another Task Board click handler.
   titlebar.add({ type: 'sprite-button', name: DEBUG_BUTTON_NAME, sprite: 'utility/close', style: 'frame_action_button', tooltip: 'Close AIRI Debug' })
   const body = root.add({ type: 'flow', name: DEBUG_BODY_NAME, direction: 'vertical' }); body.style.width = DEBUG_WIDTH; body.style.padding = 10; body.style.vertical_spacing = 8
-  fill_debug_body(body, board, runtime, synced_tick); root.bring_to_front()
+  fill_debug_body(body, board, runtime, synced_tick)
+  build_debug_activity(root)
+  refresh_debug_activity(root, player, true)
+  root.bring_to_front()
 }
 
 export function render_debug_popout(player: LuaPlayer, console_open: boolean, board: any, runtime: any, synced_tick: number | undefined) {
@@ -578,6 +687,10 @@ export function render_debug_popout(player: LuaPlayer, console_open: boolean, bo
 
   if (!debug_ui_is_open(player.index)) { destroy_debug_popout(player); return }
   const root = player.gui.screen[DEBUG_ROOT_NAME]; const body = root?.valid ? root[DEBUG_BODY_NAME] : undefined
-  if (body?.valid) { fill_debug_body(body, board, runtime, synced_tick); return }
+  if (body?.valid && root?.valid) {
+    fill_debug_body(body, board, runtime, synced_tick)
+    if (!refresh_debug_activity(root, player)) { build_debug_activity(root); refresh_debug_activity(root, player, true) }
+    return
+  }
   build_debug_popout(player, board, runtime, synced_tick)
 }
