@@ -275,6 +275,49 @@ describe('combat lifecycle regressions', () => {
     })
   })
 
+  it('opens support staging after repeated mobile preemptions starve forward progress', () => {
+    const first = enemy(90, 'unit-spawner', 18)
+    const c = world([first])
+    c.main.push(itemStack('gun-turret', 1), itemStack('firearm-magazine', 40))
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+
+    const firstPursuer = enemy(91, 'unit', 6)
+    c.enemies.push(firstPursuer)
+    advance(c, 1)
+    expect(c.controller.status()).toMatchObject({
+      target: { unit_number: 91 },
+      support_pressure_preemptions: 1,
+      support_stage_started: false,
+    })
+
+    firstPursuer.valid = false
+    advance(c, 1)
+    expect(c.controller.status()).toMatchObject({ target: { unit_number: 90 } })
+
+    const secondPursuer = enemy(92, 'unit', 6)
+    c.enemies.push(secondPursuer)
+    advance(c, 1)
+    expect(c.controller.status()).toMatchObject({
+      target: { unit_number: 92 },
+      support_pressure_preemptions: 2,
+      support_stage_started: false,
+    })
+
+    secondPursuer.valid = false
+    advance(c, 1)
+    expect(c.controller.status()).toMatchObject({ target: { unit_number: 90 } })
+
+    advance(c, 1)
+    expect(c.createdTurrets).toHaveLength(1)
+    expect(c.controller.status()).toMatchObject({
+      target: { unit_number: 90 },
+      support_stage_started: true,
+      support_pressure_preemptions: 2,
+      encounter_owned_turret_count: 1,
+    })
+  })
+
   it('does not let distant mobile reinforcements starve the current static encounter', () => {
     const first = enemy(90, 'unit-spawner', 30)
     const second = enemy(91, 'unit-spawner', 40)
