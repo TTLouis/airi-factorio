@@ -95,6 +95,34 @@ then the evidence points to the provider exhausting output budget before emittin
 
 If `content_replacement_chars > 0`, investigate UTF-8 decoding or byte-based slicing. If content is non-empty with `structured_content.json_valid=false`, inspect the bounded final content preview for malformed/truncated JSON. If JSON is valid but `plan_valid=false`, investigate the AIRI structured-response schema instead.
 
+## Current implementation checkpoint
+
+This section is intentionally narrow: it tracks observability only. NPC behavior policy, spatial behavior, and skill design are owned by their topic-specific documents/workstreams and should not be folded into this checklist.
+
+At the latest inspected `feat/npc-transition-work` state, the following observability pieces are already durable:
+
+- provider request/response tracing with bounded content-shape, UTF-8, reasoning-length, tool-call, structured-JSON/schema, usage, and transport-error diagnostics;
+- correlated behavior tracing with request/turn/actor/provider/tool/plan/runtime events;
+- a frozen `request.failed.data.failure_snapshot` containing final provider diagnostics, recovery state, last tool, plan position, actor/epoch when available, and accumulated usage;
+- `runtime-v8/debug-report.mjs` plus regressions that correlate behavior and prompt traces, tolerate malformed JSONL rows, and distinguish UTF-8 replacement evidence from structured JSON failure;
+- first-layer in-game Debug UI projection for request/turn/provider/latency/tokens, provider diagnostic code, finish reason, content/reasoning character counts, last tool/event, recovery, actor, world task, follow state, UI sync, and last error.
+
+### Unfinished observability work
+
+1. **Second-layer Debug UI projection is not merged yet.** The runtime already records the data, but `supervisor.mjs` / `task_board_debug.ts` still need to project and render the remaining fields: `response_id`, `response_bytes`, `tool_call_count`, `content_utf8_bytes`, `content_non_ascii_chars`, `content_replacement_chars`, `normalized_content_chars`, `structured_content.json_valid`, `structured_content.plan_valid`, and `structured_content.error`. Keep this a small Debug-only change and do not redesign Conversation, Activity, Projects, or other UI while doing it.
+
+2. **Provider structured-content diagnostic codes can be more explicit.** Today a non-empty, non-truncated response can still have `diagnostic_code=ok` while `structured_content.json_valid=false` or while JSON is valid but the AIRI plan schema is invalid. A follow-up may add explicit classes such as `provider_content_invalid_json` and `provider_content_schema_invalid`, preserving the existing structured diagnostics as the source of truth.
+
+3. **Missing response-body tracing is still coarse.** `response.body` absence currently fails through the generic guard after the HTTP-status path. If this edge case matters in real E2E, add a dedicated `provider_missing_response_body` trace before throwing.
+
+4. **Real-provider reproduction is still required before closing the original incident.** Unit/regression coverage proves that truncation, empty visible content, reasoning-only output, UTF-8 replacement evidence, JSON failure, and schema failure are distinguishable. It does not prove which one the production provider returns for the original Chinese request. Reproduce one real failing/successful request and capture the correlated debug report before changing provider budgets or language behavior.
+
+5. **Temporary isolation branch is not implementation authority.** `obs/debug-ui-second-layer` was created to protect the shared UI while experimenting with the second-layer projection. It contains a contract-first test and temporary patch/CI scaffolding, but it is not merged and must not be treated as completed production code. Rebase/recreate the small change from the latest `feat/npc-transition-work` files rather than merging temporary scaffolding wholesale.
+
+### Current validation caveat
+
+Do not describe the shared branch as globally green merely because the observability regressions pass. At the latest inspected branch checkpoint, the runtime suite showed the observability/debug-report/debug-bridge tests passing, while the overall branch CI was red from concurrent non-observability spatial/placement/prompt/tool expectation failures. Re-check the latest HEAD and CI before continuing because this branch is highly concurrent.
+
 ## Regression contract
 
 Observability changes should preserve these properties:
