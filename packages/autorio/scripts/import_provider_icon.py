@@ -22,7 +22,16 @@ button and an inconsistent one reads as a mistake:
   --frame SIDE    crop a fixed SIDE x SIDE box out of the SOURCE instead. Only
                   equivalent when every figure is drawn at one scale, as on a
                   single sheet.
-  --anchor F      where the widest row sits in that box, top to bottom.
+  --anchor F      where the widest row sits in that box, top to bottom. The
+                  head decides the scale; the bottom decides the placement, so
+                  this only positions a figure that already reaches the bottom.
+  --no-baseline   do not sit the figure on the bottom edge (see below).
+  --scale F       draw the figure F times larger. Measuring the head by its
+                  silhouette reads a voluminous hairstyle or a hair ornament as
+                  head, and scales that figure down to compensate; no cheap
+                  automatic measure told those apart from a genuinely large
+                  head, so the handful that come out small are nudged by eye and
+                  the factor recorded in the folder README.
   --size N        output N x N instead of the mod's 128. Framing is unchanged,
                   so a larger size is the same picture with more pixels - see
                   assets/provider/ for the archived 256 set.
@@ -58,6 +67,11 @@ WHITE_TOLERANCE = 18
 # costume or a held prop is often wider than the head.
 HEAD_BAND = 0.62
 DEFAULT_ANCHOR = 0.55
+# How far a figure may be pushed down to reach the bottom edge, as a share of
+# the frame. Most need a few percent. Needing much more means the artwork is
+# proportioned unlike the rest of the set, which is worth seeing rather than
+# silently shoving into place.
+MAX_BASELINE_SHIFT = 0.15
 # Head width in the finished icon, in its 128 pixels. Chosen so the head fills
 # the button without the hair touching its border; every avatar uses it.
 DEFAULT_HEAD = 102
@@ -110,7 +124,7 @@ def widest_head_row(art):
     return best
 
 
-def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANCHOR, keep_top=1.0, size=TARGET):
+def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANCHOR, keep_top=1.0, size=TARGET, baseline=True, scale=1.0):
     image = Image.open(source_path).convert("RGBA")
     if image.getchannel("A").getextrema()[0] == 255:
         image = key_white_background(image)
@@ -131,8 +145,23 @@ def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANC
         # with the size keeps framing identical across output sizes.
         wanted = head * size / TARGET
         side = frame if frame is not None else max(1, round(measured * size * INSET / wanted))
+        side = max(1, round(side / scale))
+        top = -round(y - anchor * side)
+        # Sit the figure on the bottom edge. Anchoring on the head alone scales
+        # every avatar alike but leaves each one wherever its own costume ends,
+        # so a figure whose art stops early floats above the button's edge while
+        # its neighbours are cut flush by it. Only ever pushed down: a figure
+        # already running past the edge is flush there by definition, and
+        # pulling it up would drag its head out of frame.
+        drop = side - (top + art.height)
+        if drop > 0:
+            limit = round(side * MAX_BASELINE_SHIFT)
+            if baseline:
+                top += min(drop, limit)
+            if drop > limit:
+                print(f"note: {os.path.basename(source_path)} sits {drop} px above the edge, past the {limit} px limit")
         square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-        square.paste(art, (-round(centre - side / 2), -round(y - anchor * side)))
+        square.paste(art, (-round(centre - side / 2), top))
     else:
         if keep_top < 1.0:
             art = art.crop((0, 0, art.width, max(1, round(art.height * keep_top))))
@@ -171,6 +200,13 @@ def head_width(icon):
     return round((max(row) - min(row) + 1) / scale) if row else 0
 
 
+def bottom_edge(icon):
+    """Where the figure ends, normalized to 128. Equal across a set means the
+    avatars sit on one line instead of each floating at its own height."""
+    box = icon.getchannel("A").getbbox()
+    return round(box[3] / (icon.width / TARGET)) if box else 0
+
+
 def main():
     argv = sys.argv[1:]
     check_only = "--check" in argv
@@ -181,6 +217,10 @@ def main():
     keep_top = take(argv, "--keep-top", float, 1.0)
     size = take(argv, "--size", int, TARGET)
     out_dir = take(argv, "--out-dir", str, OUT_DIR)
+    baseline = "--no-baseline" not in argv
+    scale = take(argv, "--scale", float, 1.0)
+    if not 0.5 <= scale <= 2:
+        raise SystemExit("--scale is a multiplier between 0.5 and 2")
     if size < 16:
         raise SystemExit("--size must be at least 16")
     if slice_x is not None and len(slice_x) != 2:
@@ -197,9 +237,9 @@ def main():
         raise SystemExit(__doc__)
     source, provider = args
 
-    icon = to_icon(source, slice_x, frame, head, anchor, keep_top, size)
+    icon = to_icon(source, slice_x, frame, head, anchor, keep_top, size, baseline, scale)
     # Printed so a set imported with one --frame can be eyeballed for drift.
-    report = f"{provider}: {icon.size[0]}x{icon.size[1]}, head {head_width(icon)}px"
+    report = f"{provider}: {icon.size[0]}x{icon.size[1]}, head {head_width(icon)}px, bottom {bottom_edge(icon)}"
     if check_only:
         print(f"{report} (not written)")
         return

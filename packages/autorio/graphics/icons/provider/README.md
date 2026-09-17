@@ -60,13 +60,42 @@ python packages/autorio/scripts/import_provider_icon.py <source-image> <provider
 It accepts any size and keys a white background to transparent. `--check`
 reports what it would produce without writing.
 
-**Keeping a set consistent is the whole job.** By default the script scales each
-source so the measured head is 102 of the icon's 128 pixels, which is what makes
-twenty avatars drawn at twenty different sizes look like one set. Squaring each
-figure by its own bounding box instead scales a short drawing up more than a
-tall one; that produced heads ranging from 83px to 106px across five avatars
-that were drawn at the same scale. The script prints each measured head width,
-so drift is visible as it happens.
+**Keeping a set consistent is the whole job**, and it takes two rules.
+
+*The head sets the scale.* By default the script scales each source so the
+measured head is 102 of the icon's 128 pixels, which is what makes twenty
+avatars drawn at twenty different sizes look like one set. Squaring each figure
+by its own bounding box instead scales a short drawing up more than a tall one;
+that produced heads ranging from 83px to 106px across five avatars drawn at the
+same scale.
+
+*The bottom edge sets the placement.* Scaling on the head alone still leaves
+each figure wherever its own costume happens to end, so one whose art stops
+early floats above the button's edge while its neighbours are cut flush by it -
+a 9px gap across the set, plainly visible at button size. Each figure is pushed
+down onto the edge, never pulled up: one already running past it is flush there
+by definition, and pulling it up would drag its head out of frame. `--anchor`
+therefore only positions a figure that already reaches the bottom.
+
+The script prints the measured head width and bottom edge of every import, so
+drift in either is visible as it happens. A figure needing more than a 15% push
+to reach the edge is reported rather than silently shoved into place - that
+means the artwork is proportioned unlike the rest of the set.
+
+*Where the measurement loses.* The head is measured by silhouette, so a
+voluminous hairstyle or a wide hair ornament reads as head and that figure gets
+scaled down to compensate. Three of the twenty came out visibly small this way.
+Nothing cheap separated those from a genuinely large head - measuring skin tone
+instead caught held props, hands and a plush whale, and disagreed with the eye
+outright - so they carry a `--scale` nudge chosen by looking at them:
+
+| avatar | scale | why |
+| --- | --- | --- |
+| `claude-2` | 1.10 | bonnet and side curls read as head |
+| `deepseek-2` | 1.10 | hair volume plus the hairpin |
+| `gemini-1` | 1.10 | the arc and star ornaments sit outside the head |
+
+Anything above about 1.14 starts pushing those ornaments off the frame.
 
 Options worth knowing:
 
@@ -75,6 +104,9 @@ Options worth knowing:
 - `--frame SIDE` - fixed source box instead of head-normalized. Only equivalent
   when every figure is drawn at one scale, as on a single sheet.
 - `--anchor F` - where the head's widest row sits vertically, default 0.55.
+- `--no-baseline` - leave the figure where the head anchor puts it.
+- `--scale F` - draw the figure F times larger, for when the head measurement
+  reads hair as head. Record the factor in the table above.
 - `--keep-top F` - for a lone portrait with no set to match.
 
 The current set came from one five-figure sheet plus three sets of individual
@@ -88,6 +120,9 @@ python packages/autorio/scripts/import_provider_icon.py "$SHEET" claude-1 --slic
 
 # individual squares
 python packages/autorio/scripts/import_provider_icon.py "$IMAGE" openai-2
+
+# the three that need a nudge
+python packages/autorio/scripts/import_provider_icon.py "$IMAGE" claude-2 --scale 1.10
 ```
 
 ## Archived larger copies
