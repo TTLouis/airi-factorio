@@ -157,8 +157,10 @@ export interface PlayerParametersAttackNearestEnemy {
   /** One-shot preserves the original behavior; clear_area keeps reacquiring
    * enemies until the bounded origin area is clear. */
   combat_mode?: 'single' | 'clear_area'
-  /** Runtime lifecycle phase for deterministic clear-area handoff. */
-  combat_phase?: 'engage' | 'safety'
+  /** Runtime lifecycle phase for deterministic clear-area handoff and support cleanup. */
+  combat_phase?: 'engage' | 'safety' | 'cleanup'
+  /** What the current safety window unlocks once it remains stable. */
+  combat_safety_goal?: 'cleanup' | 'resume'
   /** First tick of the current uninterrupted local-safety window. */
   local_safe_since_tick?: number
   /** Exact support-turret entities created and paid for by the current combat encounter. */
