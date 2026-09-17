@@ -10,7 +10,7 @@ import {
   taskBoardProgress,
 } from './common.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
-import { renderOperation, toolCommand } from './structured-policy.mjs'
+import { renderOperation, renderOperationPreflight, toolCommand } from './structured-policy.mjs'
 
 export { AgentLoopError }
 
@@ -169,6 +169,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       owner: state.owner,
       objective: state.objective,
       status: state.status,
+      admission_status: state.admission_status,
       blocker: state.blocker,
       pause_reason: state.pause_reason,
       persistent_runtime: state.persistent_runtime,
@@ -223,6 +224,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         owner: cleanMemoryText(requestInfo?.sender ?? previous?.owner ?? 'unknown', 128),
         objective: cleanMemoryText(previous?.objective ?? requestInfo?.text ?? '', 1000),
         status: 'active',
+        admission_status: 'proposed',
         blocker: '',
         pause_reason: '',
         persistent_runtime: previous?.persistent_runtime,
@@ -339,6 +341,26 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return state.task_board
   }
 
+  setAdmissionState(key, admissionStatus, { blocker = '', evidence } = {}) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state) return undefined
+    const now = Date.now()
+    state.admission_status = admissionStatus
+    if (admissionStatus === 'admission_failed') {
+      state.status = 'blocked'
+      state.blocker = cleanMemoryText(blocker || 'operation_admission_failed', 500)
+      state.pause_reason = ''
+      let board = this.ensureTaskBoard(state)
+      board = setTaskBoardStatus(board, 'blocked', { blocker: state.blocker, now })
+      if (evidence) board = addTaskBoardEvidence(board, { ...evidence, now })
+      state.task_board = board
+    }
+    state.revision += 1
+    state.updated_at = now
+    this.planByNpc.set(key, state)
+    return state
+  }
+
   pausePlan(key, reason = 'cancelled') {
     const previous = key ? this.planByNpc.get(key) : undefined
     if (!previous || previous.status === 'completed') return previous
@@ -416,6 +438,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         owner: cleanMemoryText(value.owner, 128),
         objective: cleanMemoryText(value.objective, 1000),
         status: value.status,
+        admission_status: ['proposed', 'admitting', 'admitted', 'admission_failed'].includes(value.admission_status) ? value.admission_status : undefined,
         blocker: cleanMemoryText(value.blocker, 500),
         pause_reason: cleanMemoryText(value.pause_reason, 300),
         persistent_runtime: safePersistentRuntime(value.persistent_runtime),
@@ -1260,6 +1283,70 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.compactWorkingContext()
   }
 
+  async recoveryDiagnostic(details) {
+    if (this.traceRequest) this.traceRequest.recovery = { ...(this.traceRequest.recovery ?? {}), ...details }
+    await this.traceEvent('recovery.classified', details)
+  }
+
+  async preflightOperations(operations) {
+    const results = []
+    for (let index = 0; index < operations.length; index++) {
+      const command = renderOperationPreflight(operations[index])
+      if (!command) {
+        results.push({ ok: true, operation: operations[index].name, validation: 'not_required' })
+        continue
+      }
+      await this.assertCurrent()
+      let result
+      try {
+        result = JSON.parse(String(await this.rcon.command(command)).trim())
+      }
+      catch (error) {
+        const failure = new AgentLoopError(`Deterministic operation preflight failed to return valid JSON for operation ${index + 1}: ${error instanceof Error ? error.message : String(error)}`)
+        failure.preflight = { ok: false, code: 'preflight_transport_error', operation_index: index }
+        throw failure
+      }
+      await this.assertCurrent()
+      results.push(result)
+      if (result?.ok !== true) {
+        const failure = new AgentLoopError(`Operation preflight rejected operation ${index + 1} (${operations[index].name}): ${result?.code ?? 'unknown_preflight_failure'}`)
+        failure.preflight = { ...result, operation_index: index }
+        throw failure
+      }
+    }
+    return results
+  }
+
+  async markAdmissionFailure(stateResult, operations, failure, kind = 'admission_failure') {
+    if (!this.requestInfo) return stateResult
+    const operationIndex = Number.isSafeInteger(failure?.operationIndex)
+      ? failure.operationIndex
+      : Number.isSafeInteger(failure?.preflight?.operation_index)
+        ? failure.preflight.operation_index
+        : undefined
+    const operation = operationIndex !== undefined ? operations[operationIndex] : undefined
+    const factorioError = cleanMemoryText(failure?.factorioError ?? failure?.message ?? String(failure), 1600)
+    const evidence = {
+      kind,
+      ref: `${this.traceRequest?.id ?? 'request'}/admission`,
+      summary: JSON.stringify({
+        request_id: this.traceRequest?.id,
+        operation_index: operationIndex,
+        operation_name: operation?.name,
+        operation_args: sanitizeTraceValue(operation?.args ?? {}),
+        reason_code: failure?.preflight?.code,
+        factorio_error: factorioError,
+        no_replay: failure?.noReplay === true,
+      }),
+    }
+    const blocker = failure?.preflight?.code
+      ? `operation_preflight_failed:${failure.preflight.code}`
+      : 'operation_admission_failed'
+    const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'admission_failed', { blocker, evidence })
+    await this.persistState()
+    return state ? { ...(stateResult ?? {}), state } : stateResult
+  }
+
   async commitPlan(plan) {
     const commands = plan.operations.map(renderOperation)
     const operations = plan.operations.map((operation, index) => ({
@@ -1276,26 +1363,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     })
 
     const before = await this.assertCurrent()
-    if (commands.length > 0) {
-      await this.traceEvent('operations.admit', { operations })
-      const acknowledgement = await executeAuthorizedBatch(this.rcon, before.epoch, commands)
-      await this.traceEvent('operations.ack', {
-        operations: operations.map((operation, index) => ({ ...operation, admission_result: acknowledgement.results[index] })),
-      })
-      await this.assertCurrent()
-    }
-
     const persistentRuntime = commands.length === 0 && plan.plan.length > 0
       ? await this.persistentRuntimeStatus()
       : undefined
 
     this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
     let stateResult
+    let durablePlan = plan
     if (this.requestInfo) {
       this.lastMemoryKey = this.requestInfo.memoryKey
       const previousState = this.memory.currentPlan?.(this.requestInfo.memoryKey)
       const previousBoard = previousState?.task_board
-      const durablePlan = protectOutputBudgetRecoveryPlan(plan, previousState, this.outputBudgetRecoveryGuard)
+      durablePlan = protectOutputBudgetRecoveryPlan(plan, previousState, this.outputBudgetRecoveryGuard)
       if (durablePlan !== plan) {
         await this.traceEvent('provider.output_budget_recovery_plan_guarded', {
           goal_id: previousState?.goal_id,
@@ -1318,9 +1397,87 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
         allowReplan: this.planUpdateReason === 'failure',
       }) ?? stateResult
+      if (commands.length > 0 && stateResult?.state) {
+        const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'admitting')
+        if (state) stateResult = { ...stateResult, state }
+      }
       await this.persistState()
+      await this.traceEvent('plan.persisted', {
+        lifecycle: commands.length > 0 ? 'admitting' : 'accepted',
+        goal_id: stateResult?.state?.goal_id,
+        task_board: visibleTaskBoard(stateResult?.state?.task_board),
+      })
     }
     this.outputBudgetRecoveryGuard = null
+
+    if (commands.length > 0) {
+      let preflight
+      try {
+        preflight = await this.preflightOperations(plan.operations)
+        await this.traceEvent('operations.preflight_ok', {
+          operations: operations.map((operation, index) => ({ ...operation, preflight: preflight[index] })),
+        })
+      }
+      catch (error) {
+        stateResult = await this.markAdmissionFailure(stateResult, operations, error, 'operation_preflight_rejection')
+        await this.traceEvent('operations.preflight_rejected', {
+          failure_class: 'deterministic_preflight',
+          reason: error instanceof Error ? error.message : String(error),
+          preflight: error?.preflight,
+          operations,
+          task_board: visibleTaskBoard(stateResult?.state?.task_board),
+        })
+        this.active = false
+        await this.traceEvent('request.completed', {
+          chat_message: plan.chatMessage,
+          outcome: 'blocked_preflight',
+          task_board: visibleTaskBoard(stateResult?.state?.task_board),
+          usage: this.traceRequest?.usage,
+        })
+        this.traceRequest = null
+        return {
+          chatMessage: planProgress(plan, stateResult),
+          plan: stateResult?.state?.plan ?? durablePlan.plan,
+          currentStep: stateResult?.state?.current_step ?? durablePlan.currentStep,
+          operations: [],
+          epoch: before.epoch,
+          actorId: before.actor_id,
+          goalId: stateResult?.state?.goal_id,
+          goalStatus: stateResult?.state?.status,
+          taskBoard: visibleTaskBoard(stateResult?.state?.task_board),
+          blocker: error?.preflight,
+        }
+      }
+
+      await this.traceEvent('operations.admit', { operations })
+      try {
+        const acknowledgement = await executeAuthorizedBatch(this.rcon, before.epoch, commands)
+        await this.traceEvent('operations.ack', {
+          operations: operations.map((operation, index) => ({ ...operation, admission_result: acknowledgement.results[index] })),
+        })
+        if (this.requestInfo && stateResult?.state) {
+          const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'admitted')
+          if (state) stateResult = { ...stateResult, state }
+          await this.persistState()
+        }
+        await this.assertCurrent()
+      }
+      catch (error) {
+        stateResult = await this.markAdmissionFailure(stateResult, operations, error, 'operation_admission_failure')
+        const operationIndex = Number.isSafeInteger(error?.operationIndex) ? error.operationIndex : undefined
+        await this.traceEvent('operations.admission_failed', {
+          failure_class: 'mutation_admission',
+          request_id: this.traceRequest?.id,
+          operation_index: operationIndex,
+          operation: operationIndex !== undefined ? operations[operationIndex] : undefined,
+          factorio_error: error?.factorioError,
+          no_replay: true,
+          no_replay_reason: 'Earlier operations in the admitted batch may already have produced side effects.',
+          task_board: visibleTaskBoard(stateResult?.state?.task_board),
+        })
+        throw error
+      }
+    }
 
     if (commands.length === 0) {
       this.active = false
@@ -1346,8 +1503,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
     }
 
-    const canonicalPlan = stateResult?.state?.plan ?? plan.plan
-    const canonicalStep = stateResult?.state?.current_step ?? plan.currentStep
+    const canonicalPlan = stateResult?.state?.plan ?? durablePlan.plan
+    const canonicalStep = stateResult?.state?.current_step ?? durablePlan.currentStep
     this.planUpdateReason = 'continuation'
     return {
       chatMessage: planProgress(plan, stateResult),
