@@ -23,6 +23,10 @@ button and an inconsistent one reads as a mistake:
                   equivalent when every figure is drawn at one scale, as on a
                   single sheet.
   --anchor F      where the widest row sits in that box, top to bottom.
+  --size N        output N x N instead of the mod's 128. Framing is unchanged,
+                  so a larger size is the same picture with more pixels - see
+                  assets/provider/ for the archived 256 set.
+  --out-dir DIR   write somewhere other than the mod's graphics folder.
   --keep-top F    for single portrait art with no sheet to match: drop the
                   bottom of the drawing before squaring by bounding box, so
                   the costume does not eat the frame.
@@ -106,7 +110,7 @@ def widest_head_row(art):
     return best
 
 
-def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANCHOR, keep_top=1.0):
+def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANCHOR, keep_top=1.0, size=TARGET):
     image = Image.open(source_path).convert("RGBA")
     if image.getchannel("A").getextrema()[0] == 255:
         image = key_white_background(image)
@@ -122,9 +126,11 @@ def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANC
         measured, y, centre = widest_head_row(art)
         if measured == 0:
             raise SystemExit(f"{source_path}: could not measure a head to frame against")
-        # The square is downscaled to TARGET * INSET, so a head of `head` pixels
-        # in the finished icon needs this much source around it.
-        side = frame if frame is not None else max(1, round(measured * TARGET * INSET / head))
+        # The square is downscaled to size * INSET, so a head of `head` pixels
+        # per 128 of output needs this much source around it. Scaling the target
+        # with the size keeps framing identical across output sizes.
+        wanted = head * size / TARGET
+        side = frame if frame is not None else max(1, round(measured * size * INSET / wanted))
         square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
         square.paste(art, (-round(centre - side / 2), -round(y - anchor * side)))
     else:
@@ -138,9 +144,9 @@ def to_icon(source_path, slice_x=None, frame=None, head=None, anchor=DEFAULT_ANC
         square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
         square.paste(art, ((side - art.width) // 2, (side - art.height) // 2))
 
-    inner = max(1, round(TARGET * INSET))
-    icon = Image.new("RGBA", (TARGET, TARGET), (0, 0, 0, 0))
-    icon.paste(square.resize((inner, inner), Image.LANCZOS), ((TARGET - inner) // 2, (TARGET - inner) // 2))
+    inner = max(1, round(size * INSET))
+    icon = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    icon.paste(square.resize((inner, inner), Image.LANCZOS), ((size - inner) // 2, (size - inner) // 2))
     return icon
 
 
@@ -157,10 +163,12 @@ def take(argv, flag, convert, default):
 
 
 def head_width(icon):
-    """Rough head width in the finished icon, for the consistency report."""
+    """Rough head width, normalized to 128, for the consistency report."""
     pixels = icon.getchannel("A").load()
-    row = [x for y in range(40, 80) for x in range(icon.width) if pixels[x, y] > 8]
-    return max(row) - min(row) + 1 if row else 0
+    scale = icon.width / TARGET
+    rows = range(round(40 * scale), round(80 * scale))
+    row = [x for y in rows for x in range(icon.width) if pixels[x, y] > 8]
+    return round((max(row) - min(row) + 1) / scale) if row else 0
 
 
 def main():
@@ -171,6 +179,10 @@ def main():
     head = take(argv, "--head", int, None)
     anchor = take(argv, "--anchor", float, DEFAULT_ANCHOR)
     keep_top = take(argv, "--keep-top", float, 1.0)
+    size = take(argv, "--size", int, TARGET)
+    out_dir = take(argv, "--out-dir", str, OUT_DIR)
+    if size < 16:
+        raise SystemExit("--size must be at least 16")
     if slice_x is not None and len(slice_x) != 2:
         raise SystemExit("--slice takes X0:X1")
     if frame is not None and head is not None:
@@ -185,15 +197,15 @@ def main():
         raise SystemExit(__doc__)
     source, provider = args
 
-    icon = to_icon(source, slice_x, frame, head, anchor, keep_top)
+    icon = to_icon(source, slice_x, frame, head, anchor, keep_top, size)
     # Printed so a set imported with one --frame can be eyeballed for drift.
     report = f"{provider}: {icon.size[0]}x{icon.size[1]}, head {head_width(icon)}px"
     if check_only:
         print(f"{report} (not written)")
         return
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    out = os.path.join(OUT_DIR, provider + ".png")
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, provider + ".png")
     icon.save(out)
     print(f"wrote {out} - {report}")
 

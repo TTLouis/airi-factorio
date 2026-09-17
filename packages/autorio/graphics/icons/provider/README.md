@@ -90,6 +90,26 @@ python packages/autorio/scripts/import_provider_icon.py "$SHEET" claude-1 --slic
 python packages/autorio/scripts/import_provider_icon.py "$IMAGE" openai-2
 ```
 
+## Archived larger copies
+
+`packages/autorio/assets/provider/` holds the same twenty avatars at 256x256,
+framed identically. They are outside `graphics/`, so the mod build does not ship
+them - `graphics/` is what gets copied into `dist/`. They exist for anything
+outside the button that wants more pixels.
+
+Regenerate one with the same command plus `--size 256 --out-dir`:
+
+```bash
+python packages/autorio/scripts/import_provider_icon.py "$IMAGE" openai-2   --size 256 --out-dir packages/autorio/assets/provider
+```
+
+Framing is size-independent, so the 256 copy is the 128 one with more pixels
+rather than a differently cropped picture. Note what the sources support: the
+figures cut out of the five-figure sheet carry about 500 source pixels across
+the crop square, so they still downscale cleanly into 256 but would be roughly
+1:1 at 512. The individual square sources carry about 1300 and have room to
+spare.
+
 ## Placeholders
 
 `scripts/make_provider_placeholders.py <provider-id>` writes a flat brand-color
