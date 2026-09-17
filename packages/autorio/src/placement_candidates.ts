@@ -1,4 +1,6 @@
 import type { ControlledActor } from './actors/types'
+import type { CandidateFluidPort } from './placement_spatial_features'
+import { candidate_fluid_ports } from './placement_spatial_features'
 
 const MAX_RADIUS = 24
 const MAX_LIMIT = 8
@@ -27,6 +29,7 @@ export interface PlacementCandidate {
   direction: number
   distance_from_center: number
   item_output_position?: { x: number, y: number }
+  fluid_ports?: CandidateFluidPort[]
   resource_coverage?: ResourceCoverage[]
 }
 
@@ -221,9 +224,9 @@ function candidate_has_target_resource(candidate: PlacementCandidate, target_res
 
 /**
  * Enumerate legal placement choices locally using the running game's entity
- * prototype and LuaSurface.can_place_entity. Resource coverage is derived from
- * the prototype's mining radius/categories and live map resources, so modded
- * miners participate without name-based special cases.
+ * prototype and LuaSurface.can_place_entity. Resource coverage and fluid-port
+ * geometry are derived from the active prototype/runtime data, so modded
+ * entities participate without name-based special cases.
  */
 export function placement_candidates_for_actor(actor: ControlledActor, request: PlacementCandidateRequest) {
   const prototype = prototypes.entity[request.entity_name]
@@ -269,6 +272,8 @@ export function placement_candidates_for_actor(actor: ControlledActor, request: 
         }
         const output = item_output_position(prototype, position, direction)
         if (output !== undefined) candidate.item_output_position = output
+        const fluid_ports = candidate_fluid_ports(prototype, position, direction)
+        if (fluid_ports !== undefined) candidate.fluid_ports = fluid_ports
         if (coverage !== undefined && coverage.length > 0) candidate.resource_coverage = coverage
         candidates.push(candidate)
       }
