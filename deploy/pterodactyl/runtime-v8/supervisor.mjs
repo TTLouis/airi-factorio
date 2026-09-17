@@ -524,8 +524,15 @@ export function liveAgentEvent(event, data = {}) {
         detail: `Checking ${uiText(data.name, 64)}`,
         activity: { kind: 'observation', text: `Tool ${uiText(data.name, 64)}${data.cached ? ' (cached)' : ''}` },
       }
-    case 'plan.accepted':
-      return { phase: 'executing', detail: uiText(data.chat_message, 200) || 'Plan accepted' }
+    case 'plan.accepted': {
+      const message = uiText(data.chat_message, 1000)
+      const publish = data.trigger_source === 'request' || data.trigger_source === 'failure'
+      return {
+        phase: 'executing',
+        detail: uiText(data.chat_message, 200) || 'Plan accepted',
+        ...(publish && message ? { activity: { kind: 'decision', text: message } } : {}),
+      }
+    }
     case 'operations.admit':
       return { phase: 'executing', detail: `Submitting ${count(data.operations)} operation(s) to Autorio` }
     case 'request.waiting':

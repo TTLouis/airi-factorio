@@ -1268,6 +1268,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       args: operation.args,
     }))
     await this.traceEvent('plan.accepted', {
+      trigger_source: this.planUpdateReason,
       chat_message: plan.chatMessage,
       plan: plan.plan,
       current_step: plan.currentStep,

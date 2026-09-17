@@ -20,13 +20,15 @@ const DETAIL_BODY_NAME = 'airi_task_board_projects_detail_body'
 const DETAIL_META_NAME = 'airi_task_board_projects_detail_meta'
 const DETAIL_STEPS_SCROLL_NAME = 'airi_task_board_projects_steps_scroll'
 const DETAIL_STEPS_FLOW_NAME = 'airi_task_board_projects_steps_flow'
+const DETAIL_CONVERSATION_SCROLL_NAME = 'airi_task_board_projects_conversation_scroll'
+const DETAIL_CONVERSATION_FLOW_NAME = 'airi_task_board_projects_conversation_flow'
 const DETAIL_ACTIVITY_HEADER_NAME = 'airi_task_board_projects_activity_header'
 const DETAIL_ACTIVITY_FILTERS_NAME = 'airi_task_board_projects_activity_filters'
 const DETAIL_ACTIVITY_COUNT_NAME = 'airi_task_board_projects_activity_count'
 const DETAIL_ACTIVITY_SCROLL_NAME = 'airi_task_board_projects_activity_scroll'
 const DETAIL_ACTIVITY_FLOW_NAME = 'airi_task_board_projects_activity_flow'
 const PROJECTS_WIDTH = 900
-const PROJECTS_HEIGHT = 620
+const PROJECTS_HEIGHT = 780
 const PROJECT_LIST_WIDTH = 250
 const PROJECT_DETAIL_WIDTH = PROJECTS_WIDTH - PROJECT_LIST_WIDTH - 12
 const MAX_PROJECTS = 64
@@ -403,14 +405,21 @@ function render_project_detail_skeleton(parent: LuaGuiElement, project: ProjectH
   body.add({ type: 'line' })
   body.add({ type: 'label', caption: 'Tasks / Steps', style: 'semibold_label' })
   const step_scroll = body.add({ type: 'scroll-pane', name: DETAIL_STEPS_SCROLL_NAME, horizontal_scroll_policy: 'never' })
-  step_scroll.style.maximal_height = 190
+  step_scroll.style.maximal_height = 260
   step_scroll.style.width = PROJECT_DETAIL_WIDTH - 30
   const step_flow = step_scroll.add({ type: 'flow', name: DETAIL_STEPS_FLOW_NAME, direction: 'vertical', tags: { signature: '' } })
   step_flow.style.horizontally_stretchable = true
   step_flow.style.vertical_spacing = 2
 
-  // Same multi-select toggles as the console's Recent activity, with their own
-  // selection. The console's on_gui_click routes them here by the surface tag.
+  body.add({ type: 'label', caption: 'Task Conversation', style: 'semibold_label' })
+  const conversation_scroll = body.add({ type: 'scroll-pane', name: DETAIL_CONVERSATION_SCROLL_NAME, horizontal_scroll_policy: 'never' })
+  conversation_scroll.style.width = PROJECT_DETAIL_WIDTH - 30
+  conversation_scroll.style.maximal_height = 220
+  const conversation_flow = conversation_scroll.add({ type: 'flow', name: DETAIL_CONVERSATION_FLOW_NAME, direction: 'vertical' })
+  conversation_flow.style.horizontally_stretchable = true
+  conversation_flow.style.vertical_spacing = 3
+
+  // Activity / Evidence is secondary diagnostic history.
   const activity_header = body.add({ type: 'flow', name: DETAIL_ACTIVITY_HEADER_NAME, direction: 'horizontal' })
   activity_header.style.horizontally_stretchable = true
   activity_header.style.vertical_align = 'center'
@@ -427,7 +436,7 @@ function render_project_detail_skeleton(parent: LuaGuiElement, project: ProjectH
   const activity_scroll = body.add({ type: 'scroll-pane', name: DETAIL_ACTIVITY_SCROLL_NAME, horizontal_scroll_policy: 'never' })
   activity_scroll.style.width = PROJECT_DETAIL_WIDTH - 30
   activity_scroll.style.vertically_stretchable = true
-  activity_scroll.style.minimal_height = 220
+  activity_scroll.style.minimal_height = 140
   const activity_flow = activity_scroll.add({ type: 'flow', name: DETAIL_ACTIVITY_FLOW_NAME, direction: 'vertical', tags: { keys: [] } })
   activity_flow.style.horizontally_stretchable = true
   activity_flow.style.vertical_spacing = 2
@@ -441,11 +450,13 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
   if (current_id !== next_id) return false
   const meta = body[DETAIL_META_NAME]
   const step_scroll = body[DETAIL_STEPS_SCROLL_NAME]
+  const conversation_scroll = body[DETAIL_CONVERSATION_SCROLL_NAME]
   const activity_scroll = body[DETAIL_ACTIVITY_SCROLL_NAME]
   const activity_header = body[DETAIL_ACTIVITY_HEADER_NAME]
   const step_flow = step_scroll?.valid ? step_scroll[DETAIL_STEPS_FLOW_NAME] : undefined
+  const conversation_flow = conversation_scroll?.valid ? conversation_scroll[DETAIL_CONVERSATION_FLOW_NAME] : undefined
   const activity_flow = activity_scroll?.valid ? activity_scroll[DETAIL_ACTIVITY_FLOW_NAME] : undefined
-  if (!meta?.valid || !step_scroll?.valid || !activity_scroll?.valid || !activity_header?.valid || !step_flow?.valid || !activity_flow?.valid) return false
+  if (!meta?.valid || !step_scroll?.valid || !conversation_scroll?.valid || !activity_scroll?.valid || !activity_header?.valid || !step_flow?.valid || !conversation_flow?.valid || !activity_flow?.valid) return false
   const mask = activity_state.activity_filter_mask(player_index, 'projects')
   const filters = activity_header[DETAIL_ACTIVITY_FILTERS_NAME]
   if (filters?.valid) {
@@ -460,6 +471,7 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
   if (project === undefined) {
     meta.add({ type: 'label', caption: 'Select a project from the left.' })
     step_flow.clear()
+    conversation_flow.clear()
     activity_flow.clear()
     step_flow.tags = { signature: '' }
     activity_flow.tags = { keys: [], mask }
@@ -471,7 +483,24 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
   add_detail_row(meta, 'PROGRESS', `${project.completed_count}/${project.total_steps}`)
   if (project.blocker.length > 0) add_detail_row(meta, 'BLOCKER', project.blocker)
   if (project.pause_reason.length > 0) add_detail_row(meta, 'PAUSED', project.pause_reason)
-  if (project.response.length > 0) add_detail_row(meta, 'AIRI', project.response)
+  conversation_flow.clear()
+  let conversation_count = 0
+  for (const entry of project.activity) {
+    const text = clean_text(entry.text, 1200)
+    if (entry.kind === 'decision' && text.length > 0) {
+      const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${text}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
+      continue
+    }
+    if (entry.kind !== 'observation' || !String(entry.id ?? '').startsWith('live_')) continue
+    const separator = text.indexOf(': ')
+    if (separator < 1 || text.startsWith('Tool ')) continue
+    const line = conversation_flow.add({ type: 'label', caption: `${text.substring(0, separator)} · ${text.substring(separator + 2)}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
+  }
+  if (project.response.length > 0) {
+    const duplicate = project.activity.some(entry => entry.kind === 'decision' && clean_text(entry.text, 1200) === project.response)
+    if (!duplicate) { const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${project.response}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++ }
+  }
+  if (conversation_count === 0) conversation_flow.add({ type: 'label', caption: 'No player/AIRI conversation retained for this project.' })
 
   const signature = step_signature(project)
   if (step_flow.tags.signature !== signature) {

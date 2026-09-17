@@ -145,8 +145,8 @@ const CONSOLE_LAYOUT = {
   // height at all, and charging the left column for it is what used to starve
   // the activity feed.
   fixed_height: 560,
-  list_min_total: 306,
-  list_max_total: 900,
+  list_min_total: 150,
+  list_max_total: 270,
   // A ceiling on the plan list's share, not its size. A plan shorter than the
   // ceiling only claims the rows it actually has and the remainder goes to the
   // activity feed, which is the list that keeps growing.
@@ -555,6 +555,23 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   add_key_value(table, 'WORLD', world_task_summary(runtime.world_task), { width: STATUS_VALUE_WIDTH })
   const goal = board === undefined ? 'No active AIRI task.' : board_goal(board)
   add_key_value(table, 'GOAL', text(goal, 110), { tooltip: goal, width: STATUS_VALUE_WIDTH })
+  if (board !== undefined && board.steps.length > 0) {
+    const index = math.min(board.active_index, board.steps.length - 1)
+    const step = board.steps[index]
+    add_key_value(table, 'STEP', `${index + 1}/${board.total_steps} · ${text(step_caption(step.description), 80)}`, { tone: step_tone(step), tooltip: step.description, width: STATUS_VALUE_WIDTH })
+  }
+  const retained = activity_state.activity_history()
+  const recent = retained.length > 0 ? retained : (board?.activity ?? [])
+  let last = ''
+  let last_tone: Tone = 'muted'
+  let action_fallback = ''
+  for (let index = recent.length - 1; index >= 0; index--) {
+    const entry = recent[index]
+    if ((entry.kind === 'result' || entry.kind === 'blocker') && entry.text.length > 0) { last = entry.text; last_tone = activity_tone(entry.kind); break }
+    if (action_fallback.length === 0 && entry.kind === 'action' && entry.text.length > 0) action_fallback = entry.text
+  }
+  if (last.length === 0 && action_fallback.length > 0) { last = action_fallback; last_tone = 'good' }
+  if (last.length > 0) add_key_value(table, 'LAST', text(last, 90), { tone: last_tone, tooltip: last, width: STATUS_VALUE_WIDTH })
   add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: STATUS_VALUE_WIDTH })
 }
 function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Temporarily suspend current world work and follow this player. A goal paused by Follow automatically resumes when Follow stops.'; const details = ['Click to stop following. A goal paused by Follow will automatically resume.']; if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
@@ -607,11 +624,9 @@ export function task_board_gui_height(resolution_height: number, scale: number) 
  */
 export function task_board_tracker_heights(gui_height: number, step_count = MAX_STEPS) {
   const budget = math.max(CONSOLE_LAYOUT.list_min_total, math.min(CONSOLE_LAYOUT.list_max_total, math.floor(gui_height * CONSOLE_LAYOUT.screen_fraction) - CONSOLE_LAYOUT.fixed_height))
-  if (step_count <= 0) return { steps: 0, activity: budget }
-  const ceiling = math.floor(budget * CONSOLE_LAYOUT.steps_share)
-  const wanted = math.min(ceiling, step_count * CONSOLE_LAYOUT.step_row_height)
-  const steps = math.max(math.min(CONSOLE_LAYOUT.steps_floor, ceiling), wanted)
-  return { steps, activity: budget - steps }
+  if (step_count <= 0) return { steps: 0, activity: 0 }
+  const wanted = math.max(CONSOLE_LAYOUT.steps_floor, step_count * CONSOLE_LAYOUT.step_row_height)
+  return { steps: math.min(budget, wanted), activity: 0 }
 }
 
 /**
@@ -711,9 +726,9 @@ export function task_board_activity_for_display(board: TaskBoardUiSnapshot | und
  * refresh_tracker, which the once-a-second refresh calls instead of rebuilding.
  */
 function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) {
-  const { header, body } = create_section(parent, 'Plan & Activity', undefined, 'Canonical plan progress plus timestamped auditable observations, actions, results, blockers, and system events.', true, { section: TRACKER.section, header: TRACKER.header, body: TRACKER.body })
+  const { header, body } = create_section(parent, 'Plan Tracker', undefined, 'Canonical durable plan progress. Full execution activity is available in Debug.', true, { section: TRACKER.section, header: TRACKER.header, body: TRACKER.body })
   const summary = header.add({ type: 'label', name: TRACKER.summary, caption: '', style: 'semibold_label' }); summary.style.right_padding = 4
-  const empty = body.add({ type: 'label', name: TRACKER.empty, caption: 'No active plan or recent AIRI activity.' }); empty.style.font_color = TONE_COLORS.muted
+  const empty = body.add({ type: 'label', name: TRACKER.empty, caption: 'No active plan.' }); empty.style.font_color = TONE_COLORS.muted
   const plan = body.add({ type: 'flow', name: TRACKER.plan, direction: 'vertical' }); plan.style.horizontally_stretchable = true; plan.style.vertical_spacing = 6
   const progress = plan.add({ type: 'progressbar', name: TRACKER.progress, value: 0 }); progress.style.horizontally_stretchable = true
   const steps_scroll = plan.add({ type: 'scroll-pane', name: TRACKER.steps_scroll, style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' }); steps_scroll.style.horizontally_stretchable = true
@@ -751,15 +766,16 @@ function refresh_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | und
   const tracker_heights = task_board_tracker_heights(player_gui_height(player), board === undefined ? 0 : math.min(board.steps.length, MAX_STEPS))
   const all_activity = task_board_activity_for_display(board)
   const has_steps = board !== undefined && board.steps.length > 0
-  const nothing = !has_steps && all_activity.length === 0
-  empty.visible = nothing; plan.visible = has_steps; divider.visible = has_steps; activity_header.visible = !nothing
+  empty.visible = !has_steps; plan.visible = has_steps; divider.visible = false; activity_header.visible = false
   summary.caption = ''
   if (board !== undefined && has_steps) {
     if (!refresh_steps(plan, board, tracker_heights.steps)) return false
     const active_number = board.status === 'completed' ? board.total_steps : math.min(board.active_index + 1, board.total_steps)
     summary.caption = `STEP ${active_number}/${board.total_steps} · ${board.completed_count} done`
   }
-  refresh_activity(activity_header, activity_empty, activity_scroll, activity_table, nothing ? [] : all_activity, tracker_heights.activity, player)
+  refresh_activity(activity_header, activity_empty, activity_scroll, activity_table, all_activity, tracker_heights.activity, player)
+  activity_empty.visible = false
+  activity_scroll.visible = false
   return true
 }
 /**
@@ -901,12 +917,11 @@ function render_titlebar(root: FrameGuiElement, caption = 'AIRI NPC Console', cl
 }
 function build_left_dynamic(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, synced_tick: number | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const top = parent.add({ type: 'flow', direction: 'horizontal' }); top.style.horizontal_spacing = COLUMN_SPACING; top.style.vertical_align = 'top'; render_status_panel(top, board, runtime, synced_tick); render_controls_panel(top, player, board, runtime)
-  debug_ui.render_ai_reply(parent, board?.response ?? '', LEFT_COLUMN_WIDTH)
 }
 function build_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const board = storage.airi_task_board_ui; const synced_tick = storage.airi_task_board_ui_synced_tick; const runtime = runtime_snapshot()
   const left = columns.add({ type: 'flow', name: LEFT_COLUMN_NAME, direction: 'vertical' }); left.style.width = LEFT_COLUMN_WIDTH; left.style.vertical_spacing = COLUMN_SPACING
-  const dynamic = left.add({ type: 'flow', name: LEFT_DYNAMIC_NAME, direction: 'vertical' }); dynamic.style.width = LEFT_COLUMN_WIDTH; dynamic.style.vertical_spacing = COLUMN_SPACING; build_left_dynamic(dynamic, player, board, synced_tick, runtime); render_tracker(left, board, player); render_prompt(left, player)
+  const dynamic = left.add({ type: 'flow', name: LEFT_DYNAMIC_NAME, direction: 'vertical' }); dynamic.style.width = LEFT_COLUMN_WIDTH; dynamic.style.vertical_spacing = COLUMN_SPACING; build_left_dynamic(dynamic, player, board, synced_tick, runtime); render_tracker(left, board, player); debug_ui.render_ai_reply(dynamic, board?.response ?? '', LEFT_COLUMN_WIDTH); render_prompt(left, player)
   const right = columns.add({ type: 'flow', name: RIGHT_COLUMN_NAME, direction: 'vertical' }); right.style.width = PREVIEW_COLUMN_WIDTH; right.style.vertical_spacing = COLUMN_SPACING; right.style.vertically_stretchable = true; render_world_preview(right, runtime, player)
   const resources = right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' }); resources.style.horizontal_spacing = COLUMN_SPACING; resources.style.vertical_align = 'top'; render_inventory(resources, runtime, player); render_resource_sidebar(resources, board, runtime, player)
 }

@@ -1,0 +1,29 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+
+describe('NPC console information architecture', () => {
+  const consoleSource = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  const debugSource = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+  const projectsSource = readFileSync(new URL('./projects/project_window.ts', import.meta.url), 'utf8')
+
+  it('keeps controls in the top row and gives the main column to plan plus conversation', () => {
+    expect(consoleSource).toContain("create_section(parent, 'Plan Tracker'")
+    expect(consoleSource).toContain('activity_header.visible = false')
+    expect(consoleSource).toContain('activity_scroll.visible = false')
+    expect(consoleSource).toMatch(/render_tracker\(left, board, player\); debug_ui\.render_ai_reply\(dynamic,[\s\S]*render_prompt\(left, player\)/)
+    expect(consoleSource).toContain("create_section(parent, 'Controls', CONTROLS_SECTION_WIDTH")
+  })
+
+  it('promotes current step and last meaningful result into Status', () => {
+    expect(consoleSource).toContain("add_key_value(table, 'STEP'")
+    expect(consoleSource).toContain("add_key_value(table, 'LAST'")
+  })
+
+  it('gives conversation more room, moves execution activity to Debug, and makes Projects taller', () => {
+    expect(debugSource).toContain('const CONVERSATION_HEIGHT = 300')
+    expect(debugSource).toContain("caption: 'Execution Activity'")
+    expect(projectsSource).toContain('const PROJECTS_HEIGHT = 780')
+    expect(projectsSource).toContain("caption: 'Task Conversation'")
+    expect(projectsSource).toContain('step_scroll.style.maximal_height = 260')
+  })
+})
