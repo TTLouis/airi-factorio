@@ -221,9 +221,9 @@ test('output-budget recovery rejects replay of a completed mutation before admis
       assert.equal(context.allowTools, false)
       assert.equal(context.recoveryKind, undefined)
       const boundedRecoveryContext = messages.map(message => message.content ?? '').join('\n')
-      assert.match(boundedRecoveryContext, /attempted to replay a completed world mutation without fresh tool evidence/)
+      assert.match(boundedRecoveryContext, /attempted to replay a completed world mutation/)
       return planMessage({
-        chatMessage: 'I will not replay the completed wait without a fresh observation.',
+        chatMessage: 'I will not replay the completed wait.',
         plan: canonical,
         currentStep: 0,
         operations: [],
@@ -310,4 +310,54 @@ test('cached recovery observation does not count as fresh world evidence', async
   assert.equal(agent.outputBudgetRecoveryGuard.world_evidence_observed, false)
   assert.equal(agent.outputBudgetRecoveryGuard.fresh_tool_evidence, false)
   assert.match(agent.messages.at(-1).content, /Duplicate observation suppressed/)
+})
+
+test('runtime-static prototype cache does not count as fresh world evidence', async () => {
+  const agent = makeAgent({ provider: async () => planMessage() })
+  agent.active = true
+  agent.epoch = deployment()
+  agent.messages = []
+  agent.outputBudgetRecoveryGuard = {
+    goal_id: 'goal_test',
+    world_evidence_observed: false,
+    fresh_tool_evidence: false,
+    completed_operations: ['wait {"ticks":60}'],
+  }
+
+  const message = {
+    content: null,
+    tool_calls: [{
+      id: 'static-prototype',
+      type: 'function',
+      function: { name: 'getPrototypeDetails', arguments: '{"name":"stone-furnace"}' },
+    }],
+  }
+  const prepared = agent.prepareToolBatch(message)
+  agent.staticPrototypeCache.set(prepared[0].signature, {
+    name: 'stone-furnace',
+    raw: '{"name":"stone-furnace"}',
+    facts: { name: 'stone-furnace' },
+  })
+
+  await agent.handleToolBatch(message, prepared)
+
+  assert.equal(agent.outputBudgetRecoveryGuard.world_evidence_observed, false)
+  assert.equal(agent.outputBudgetRecoveryGuard.fresh_tool_evidence, false)
+})
+
+test('fresh observation still cannot authorize replay of an already completed mutation', () => {
+  const agent = makeAgent({ provider: async () => planMessage() })
+  agent.outputBudgetRecoveryGuard = {
+    goal_id: 'goal_test',
+    world_evidence_observed: true,
+    fresh_tool_evidence: true,
+    completed_operations: ['wait {"ticks":60}'],
+  }
+
+  assert.throws(() => agent.parsePlanMessage(planMessage({
+    chatMessage: 'Observed the live world; I will repeat the completed wait.',
+    plan: ['Inspect the result'],
+    currentStep: 0,
+    operations: [{ name: 'wait', args: { ticks: 60 } }],
+  })), /attempted to replay a completed world mutation/)
 })
