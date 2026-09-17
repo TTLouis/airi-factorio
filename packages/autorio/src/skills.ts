@@ -507,6 +507,13 @@ export function put_skill_definition(value: any) {
   return skill
 }
 
+export function put_untrusted_skill_definition(value: any) {
+  const skill = canonicalize_skill_definition(value)
+  if (skill.status === 'verified') throw new Error('verified skill promotion requires the live runtime verifier; caller-supplied verified definitions are not trusted')
+  ensure_definitions()[skill.id] = skill
+  return skill
+}
+
 export function create_skill_candidate(value: any) {
   if (!plain_object(value)) throw new Error('skill candidate must be an object')
   return put_skill_definition({
@@ -714,7 +721,7 @@ export function create_skill_remote_interface() {
   remote.add_interface('autorio_skills', {
     put_definition: (value: unknown) => {
       try {
-        const skill = put_skill_definition(value)
+        const skill = put_untrusted_skill_definition(value)
         return [true, skill.id, skill.revision]
       }
       catch (error) {

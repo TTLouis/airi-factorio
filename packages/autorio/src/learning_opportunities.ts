@@ -18,6 +18,7 @@ export type LearningOpportunityState = 'detected' | 'analyzing' | 'candidate_cre
 export type LearningPolicy = 'manual' | 'assisted' | 'autonomous_bounded'
 export type LearningCost = 'cheap' | 'moderate' | 'expensive'
 export type LearningRisk = 'safe' | 'moderate' | 'dangerous'
+export type LearningVerificationQueueState = 'queued' | 'running' | 'blocked'
 
 export interface LearningSourceArea {
   surface_index: number
@@ -46,7 +47,7 @@ export interface LearningOpportunity {
 export interface LearningVerificationQueueItem {
   opportunity_id: string
   skill_id: string
-  state: 'queued' | 'blocked'
+  state: LearningVerificationQueueState
   created_tick: number
   estimated_cost: LearningCost
   risk: LearningRisk

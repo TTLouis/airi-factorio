@@ -9,6 +9,7 @@ on:
   pull_request:
     branches:
       - main
+      - feat/npc-transition-work
 
   workflow_dispatch:
 
@@ -89,3 +90,21 @@ jobs:
 
       - name: Test standalone-NPC deployment protocol and production runtime
         run: node --test --test-force-exit deploy/pterodactyl/staging/*.test.mjs deploy/pterodactyl/runtime-v8/*.test.mjs
+
+  factorio-npc-deterministic:
+    if: github.ref == 'refs/heads/feat/npc-transition-work' || github.base_ref == 'feat/npc-transition-work'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install
+
+      - name: Run deterministic Factorio NPC harness
+        run: pnpm test:npc

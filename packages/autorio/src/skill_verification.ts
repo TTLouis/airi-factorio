@@ -12,6 +12,8 @@ import {
   list_learning_verification_queue,
   skill_novelty_key,
   update_learning_opportunity,
+  type LearningVerificationQueueItem,
+  type LearningVerificationQueueState,
 } from './learning_opportunities'
 import {
   get_skill_definition,
@@ -104,23 +106,13 @@ export interface SkillVerificationRun {
   completed_tick?: number
 }
 
-interface VerificationQueueRecord {
-  opportunity_id: string
-  skill_id: string
-  state: 'queued' | 'running' | 'blocked'
-  created_tick: number
-  estimated_cost: 'cheap' | 'moderate' | 'expensive'
-  risk: 'safe' | 'moderate' | 'dangerous'
-  reason: string
-}
-
 declare const storage: {
   airi_skill_instance_templates?: Record<string, SkillInstanceTemplate>
   airi_skill_verification_runs?: Record<string, SkillVerificationRun>
   airi_skill_verification_run_order?: string[]
   airi_skill_verification_next_id?: number
   airi_skill_verification_active_run_id?: string
-  airi_learning_verification_queue?: VerificationQueueRecord[]
+  airi_learning_verification_queue?: LearningVerificationQueueItem[]
 }
 
 const MAX_TEMPLATE_ENTITIES = 16
@@ -209,7 +201,7 @@ function remove_queue_item(opportunity_id: string) {
   for (let index = queue.length - 1; index >= 0; index--) if (queue[index].opportunity_id === opportunity_id) queue.splice(index, 1)
 }
 
-function set_queue_state(opportunity_id: string, state: VerificationQueueRecord['state'], reason: string) {
+function set_queue_state(opportunity_id: string, state: LearningVerificationQueueState, reason: string) {
   const item = queue_item(opportunity_id)
   if (!item) return
   item.state = state
@@ -707,7 +699,7 @@ export function promote_verified_skill(run: SkillVerificationRun) {
   })
 }
 
-function finish_verified(run: SkillVerificationRun) {
+export function finish_verified(run: SkillVerificationRun) {
   const promoted = promote_verified_skill(run)
   const refs = unique_strings([...run.evidence_refs, placement_evidence(run), topology_evidence(run), ...promoted.verification.acceptance_conditions.flatMap(condition => condition.evidence_refs)])
   const next = update_run(run, { state: 'verified', reason: `Verified ${promoted.id} revision ${promoted.revision}.`, evidence_refs: refs, completed_tick: game.tick })
@@ -825,7 +817,7 @@ function verification_position(value: any) {
   return { x: value.x, y: value.y }
 }
 
-function create_run(item: VerificationQueueRecord, skill: SkillDefinition) {
+function create_run(item: LearningVerificationQueueItem, skill: SkillDefinition) {
   const run: SkillVerificationRun = {
     schema_version: 1,
     id: next_run_id(),
@@ -854,7 +846,7 @@ export function start_next_skill_verification(get_actor: () => ControlledActor |
   if (active_run() !== undefined) return { ok: false as const, error: 'another skill verification run is already active', run: active_run() }
   verification_actor_getter = get_actor
   const requested_opportunity = typeof request?.opportunity_id === 'string' ? request.opportunity_id : undefined
-  let item: VerificationQueueRecord | undefined
+  let item: LearningVerificationQueueItem | undefined
   for (const candidate of queue_records()) {
     if (candidate.state !== 'queued') continue
     if (requested_opportunity !== undefined && candidate.opportunity_id !== requested_opportunity) continue
@@ -952,7 +944,7 @@ export function register_skill_verification_runtime(get_actor: () => ControlledA
 
 export function maybe_start_autonomous_bounded_verification(get_actor: () => ControlledActor | undefined) {
   if (get_learning_policy() !== 'autonomous_bounded' || active_run() !== undefined) return undefined
-  for (const item of list_learning_verification_queue() as any[]) {
+  for (const item of list_learning_verification_queue()) {
     if (item.state !== 'queued') continue
     if (item.risk !== 'safe') continue
     return start_next_skill_verification(get_actor, { opportunity_id: item.opportunity_id })
