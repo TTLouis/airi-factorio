@@ -1235,7 +1235,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       throw error
     }
     const results = this.messages.slice(beforeCount + 1).filter(item => item.role === 'tool')
-    if (this.outputBudgetRecoveryGuard && results.length > 0) {
+    const freshResultObserved = results.some((_, index) => cachedBefore[index] !== true)
+    if (this.outputBudgetRecoveryGuard && freshResultObserved) {
       this.outputBudgetRecoveryGuard.world_evidence_observed = true
       this.outputBudgetRecoveryGuard.fresh_tool_evidence = true
     }
