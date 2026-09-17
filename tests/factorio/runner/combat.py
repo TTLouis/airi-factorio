@@ -357,6 +357,7 @@ def run(client: Rcon, results: Path) -> None:
     require(mid_safety is not None, 'simulation did not advance through cleanup safety window')
     require(mid_safety['combat']['combat_phase'] == 'safety' and mid_safety['mining'] is False, mid_safety)
     require(mid_safety['combat']['encounter_owned_turret_count'] >= 1, mid_safety)
+
     resumed_cleanup = None
     resume_deadline = time.monotonic() + 4.0
     while time.monotonic() < resume_deadline:
