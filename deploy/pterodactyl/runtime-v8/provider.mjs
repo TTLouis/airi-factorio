@@ -14,6 +14,7 @@ const PLAN_STATE_MARKER = '[PLAN_STATE]'
 const MEMORY_MARKER = '[MEMORY]'
 const PROMPT_TRACE_MAX_BYTES = 10 * 1024 * 1024
 const PROMPT_TRACE_FILES = 5
+const PROMPT_RESPONSE_PREVIEW_CHARS = 4000
 const SENSITIVE_PROMPT_KEY = /^(?:authorization|api.?key|password|secret|cookie|session|token|access.?token|refresh.?token|factorio.?token|openai.?token|rcon.?token)$/i
 const promptTraceWriters = new Map()
 
@@ -135,6 +136,17 @@ function promptTraceMessageChars(message) {
   return String(message?.content ?? '').length + JSON.stringify(message?.tool_calls ?? '').length
 }
 
+function promptTraceIdentity(options = {}) {
+  return {
+    request_id: typeof options.requestId === 'string' ? options.requestId : undefined,
+    round: Number.isSafeInteger(options.round) ? options.round : undefined,
+    actor_id: Number.isSafeInteger(options.actorId) ? options.actorId : undefined,
+    epoch: Number.isSafeInteger(options.epoch) ? options.epoch : undefined,
+    recovery_attempt: Number.isSafeInteger(options.recoveryAttempt) ? options.recoveryAttempt : 0,
+    allow_tools: options.allowTools !== false,
+  }
+}
+
 async function traceProviderPayload(body, options = {}) {
   const filename = promptTraceFile(options)
   if (!filename) return false
@@ -143,14 +155,10 @@ async function traceProviderPayload(body, options = {}) {
     const tools = Array.isArray(body?.tools) ? body.tools : []
     await promptTraceWriter(filename).emit({
       schema: 1,
+      event: 'provider.request',
       ts: new Date().toISOString(),
-      request_id: typeof options.requestId === 'string' ? options.requestId : undefined,
-      round: Number.isSafeInteger(options.round) ? options.round : undefined,
-      actor_id: Number.isSafeInteger(options.actorId) ? options.actorId : undefined,
-      epoch: Number.isSafeInteger(options.epoch) ? options.epoch : undefined,
+      ...promptTraceIdentity(options),
       trigger_source: promptTraceTrigger(body?.messages, options.recoveryAttempt),
-      recovery_attempt: Number.isSafeInteger(options.recoveryAttempt) ? options.recoveryAttempt : 0,
-      allow_tools: options.allowTools !== false,
       payload: body,
       stats: {
         body_chars: rawBody.length,
@@ -165,6 +173,85 @@ async function traceProviderPayload(body, options = {}) {
   catch {
     // Observability must never turn a valid provider request into a runtime failure.
     return false
+  }
+}
+
+async function traceProviderResult(event, data, options = {}) {
+  const filename = promptTraceFile(options)
+  if (!filename) return false
+  try {
+    await promptTraceWriter(filename).emit({
+      schema: 1,
+      event,
+      ts: new Date().toISOString(),
+      ...promptTraceIdentity(options),
+      ...data,
+    })
+    return true
+  }
+  catch {
+    // Response diagnostics are best-effort and must never change provider behavior.
+    return false
+  }
+}
+
+function providerReasoningChars(message) {
+  let total = 0
+  for (const key of ['reasoning_content', 'reasoning', 'analysis']) {
+    const value = message?.[key]
+    if (typeof value === 'string') total += value.length
+    else if (value && typeof value === 'object') {
+      try { total += JSON.stringify(value).length }
+      catch {}
+    }
+  }
+  if (Array.isArray(message?.reasoning_details)) {
+    try { total += JSON.stringify(message.reasoning_details).length }
+    catch {}
+  }
+  return total
+}
+
+function structuredContentDiagnostics(content) {
+  const text = String(content ?? '')
+  if (!text) return { json_valid: false, plan_valid: false, error: 'empty content' }
+  let parsed
+  try { parsed = JSON.parse(text) }
+  catch (error) {
+    return {
+      json_valid: false,
+      plan_valid: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+  try {
+    parsePlan(parsed)
+    return { json_valid: true, plan_valid: true }
+  }
+  catch (error) {
+    return {
+      json_valid: true,
+      plan_valid: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+function contentShape(content) {
+  const text = typeof content === 'string' ? content : ''
+  let nonAsciiChars = 0
+  let replacementChars = 0
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0
+    if (code > 0x7f) nonAsciiChars++
+    if (code === 0xfffd) replacementChars++
+  }
+  return {
+    content_chars: text.length,
+    content_utf8_bytes: Buffer.byteLength(text, 'utf8'),
+    content_non_ascii_chars: nonAsciiChars,
+    content_replacement_chars: replacementChars,
+    content_preview: text.slice(0, PROMPT_RESPONSE_PREVIEW_CHARS),
   }
 }
 
@@ -616,7 +703,7 @@ export async function providerRequest(config, messages, {
     body.tool_choice = 'auto'
   }
 
-  await traceProviderPayload(body, {
+  const traceOptions = {
     round,
     epoch,
     actorId,
@@ -624,7 +711,8 @@ export async function providerRequest(config, messages, {
     recoveryAttempt,
     allowTools,
     promptTraceFile: traceFile,
-  })
+  }
+  await traceProviderPayload(body, traceOptions)
 
   try {
     const response = await fetchImpl(providerEndpoint(config.base), {
@@ -638,7 +726,13 @@ export async function providerRequest(config, messages, {
       body: JSON.stringify(body),
     })
 
-    if (!response.ok) throw new DeploymentError(`Provider HTTP ${response.status}; request will not be retried automatically`)
+    if (!response.ok) {
+      await traceProviderResult('provider.response_error', {
+        diagnostic_code: 'provider_http_error',
+        http_status: response.status,
+      }, traceOptions)
+      throw new DeploymentError(`Provider HTTP ${response.status}; request will not be retried automatically`)
+    }
     check(response.body, 'Provider returned no response body')
     const reader = response.body.getReader()
     const chunks = []
@@ -649,35 +743,95 @@ export async function providerRequest(config, messages, {
       bytes += value.length
       if (bytes > 256 * 1024) {
         await reader.cancel()
+        await traceProviderResult('provider.response_error', {
+          diagnostic_code: 'provider_response_too_large',
+          response_bytes: bytes,
+        }, traceOptions)
         throw new DeploymentError('Provider response too large')
       }
       chunks.push(value)
     }
 
+    const responseText = Buffer.concat(chunks).toString('utf8')
     let data
-    try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')) }
-    catch { throw new DeploymentError('Provider returned invalid JSON') }
+    try { data = JSON.parse(responseText) }
+    catch (error) {
+      await traceProviderResult('provider.response_error', {
+        diagnostic_code: 'provider_body_invalid_json',
+        response_bytes: bytes,
+        response_chars: responseText.length,
+        parse_error: error instanceof Error ? error.message : String(error),
+        response_first_nonspace: responseText.trimStart().slice(0, 1),
+      }, traceOptions)
+      throw new DeploymentError('Provider returned invalid JSON')
+    }
     const choice = data?.choices?.[0]
     const message = choice?.message
+    if (!message || typeof message !== 'object') {
+      await traceProviderResult('provider.response_error', {
+        diagnostic_code: 'provider_missing_assistant_message',
+        response_bytes: bytes,
+        response_id: typeof data?.id === 'string' ? data.id : undefined,
+        model: typeof data?.model === 'string' ? data.model : config.model,
+        choice_keys: choice && typeof choice === 'object' ? Object.keys(choice) : [],
+      }, traceOptions)
+    }
     check(message && typeof message === 'object', 'Provider response has no assistant message')
+
+    const rawContent = typeof message.content === 'string' ? message.content : ''
+    const rawShape = contentShape(rawContent)
+    const reasoningContentChars = providerReasoningChars(message)
+    const toolCallCount = Array.isArray(message.tool_calls) ? message.tool_calls.length : 0
     if (message.tool_calls === undefined && typeof message.content === 'string') {
       message.content = normalizeProviderPlanContent(message.content)
     }
+    const normalizedContent = typeof message.content === 'string' ? message.content : ''
+    const structured = message.tool_calls === undefined
+      ? structuredContentDiagnostics(normalizedContent)
+      : undefined
+    const finishReason = choice?.finish_reason
+    const diagnosticCode = finishReason === 'length'
+      ? (rawShape.content_chars === 0 && toolCallCount === 0 ? 'provider_output_truncated_empty_content' : 'provider_output_truncated')
+      : (rawShape.content_chars === 0 && toolCallCount === 0 ? 'provider_empty_content' : 'ok')
+    const providerDiagnostics = {
+      response_id: typeof data?.id === 'string' ? data.id : undefined,
+      model: typeof data?.model === 'string' ? data.model : config.model,
+      finish_reason: finishReason,
+      usage: data?.usage && typeof data.usage === 'object' ? data.usage : undefined,
+      diagnostic_code: diagnosticCode,
+      response_bytes: bytes,
+      choice_keys: choice && typeof choice === 'object' ? Object.keys(choice) : [],
+      message_keys: Object.keys(message),
+      tool_call_count: toolCallCount,
+      reasoning_content_chars: reasoningContentChars,
+      ...rawShape,
+      normalized_content_chars: normalizedContent.length,
+      structured_content: structured,
+    }
+
+    await traceProviderResult('provider.response', providerDiagnostics, traceOptions)
     Object.defineProperty(message, '_airiProvider', {
       configurable: true,
       enumerable: false,
-      value: {
-        response_id: typeof data?.id === 'string' ? data.id : undefined,
-        model: typeof data?.model === 'string' ? data.model : config.model,
-        finish_reason: choice?.finish_reason,
-        usage: data?.usage && typeof data.usage === 'object' ? data.usage : undefined,
-      },
+      value: providerDiagnostics,
     })
     return message
   }
   catch (error) {
-    if (signal?.aborted) throw new DeploymentError('Provider request cancelled')
-    if (timeoutSignal.aborted) throw new DeploymentError(`Provider timed out after ${timeoutMs} ms`)
+    if (signal?.aborted) {
+      await traceProviderResult('provider.response_error', {
+        diagnostic_code: 'provider_cancelled',
+        message: 'Provider request cancelled',
+      }, traceOptions)
+      throw new DeploymentError('Provider request cancelled')
+    }
+    if (timeoutSignal.aborted) {
+      await traceProviderResult('provider.response_error', {
+        diagnostic_code: 'provider_timeout',
+        timeout_ms: timeoutMs,
+      }, traceOptions)
+      throw new DeploymentError(`Provider timed out after ${timeoutMs} ms`)
+    }
     throw error
   }
 }
