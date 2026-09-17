@@ -55,11 +55,26 @@ function recipe_candidates(actor: ControlledActor, item_or_recipe: string) {
   }
 }
 
+function sort_strings(values: string[]) {
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      if (values[j] < values[i]) {
+        const tmp = values[i]
+        values[i] = values[j]
+        values[j] = tmp
+      }
+    }
+  }
+}
+
 function categories_for(recipe: any): string[] {
   const categories: string[] = []
-  for (const category of recipe.categories ?? []) {
-    categories.push(category)
+  const recipe_categories = (prototypes as any).recipe_category
+  if (!recipe_categories || typeof recipe?.has_category !== 'function') return categories
+  for (const [category] of pairs(recipe_categories)) {
+    if (recipe.has_category(category)) categories.push(category)
   }
+  sort_strings(categories)
   return categories
 }
 
