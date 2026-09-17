@@ -35,8 +35,7 @@ const TURRET_PLACEMENT_SEARCH_RADIUS = 3
 const TURRET_PLACEMENT_CANDIDATES = 6
 const TURRET_LOAD_COUNT = 20
 const SUPPORT_THREAT_PER_TURRET = 4
-const MAX_SUPPORT_TURRETS_PER_STAGE = 3
-const MAX_SUPPORT_TURRETS = 8
+const MAX_SUPPORT_TURRETS_PER_STAGE = 8
 const TURRET_AMMO_PRIORITY = ['uranium-rounds-magazine', 'piercing-rounds-magazine', 'firearm-magazine']
 const COMBAT_PATH_MAX_ATTEMPTS = 4
 const COMBAT_PATH_REQUEST_TIMEOUT_TICKS = 15 * 60
@@ -76,6 +75,7 @@ type CombatTask = PlayerParametersAttackNearestEnemy & {
   support_stage_anchor_position?: { x: number, y: number }
   support_stage_start_turret_count?: number
   support_stage_target_turret_count?: number
+  support_stage_batch_size?: number
 }
 
 interface CombatResult {
@@ -96,6 +96,7 @@ interface CombatResult {
   initial_threat_score?: number
   support_turret_budget?: number
   support_stage_started?: boolean
+  support_stage_batch_size?: number
   last_turret_position?: { x: number, y: number }
   last_turret_unit_number?: number
   turret_ammo_name?: string
@@ -218,15 +219,19 @@ function support_threat_score(enemies: LuaEntity[]) {
 
 function support_turret_budget(threat_score: number) {
   if (threat_score <= 0) return 0
-  return math.min(MAX_SUPPORT_TURRETS, math.max(1, math.ceil(threat_score / SUPPORT_THREAT_PER_TURRET)))
+  return math.min(MAX_SUPPORT_TURRETS_PER_STAGE, math.max(1, math.ceil(threat_score / SUPPORT_THREAT_PER_TURRET)))
 }
 
-function support_stage_batch_size(threat_score: number, remaining: number) {
-  if (remaining <= 0) return 0
-  let desired = 1
-  if (threat_score > 8) desired = 3
-  else if (threat_score > 4) desired = 2
-  return math.min(MAX_SUPPORT_TURRETS_PER_STAGE, desired, remaining)
+function support_stage_batch_size(threat_score: number) {
+  if (threat_score <= 0) return 0
+  if (threat_score <= 4) return 1
+  if (threat_score <= 8) return 2
+  if (threat_score <= 16) return 3
+  if (threat_score <= 24) return 4
+  if (threat_score <= 32) return 5
+  if (threat_score <= 40) return 6
+  if (threat_score <= 48) return 7
+  return MAX_SUPPORT_TURRETS_PER_STAGE
 }
 
 function retreat_position(actor: ControlledActor, threat: LuaEntity) {
@@ -270,6 +275,7 @@ function record(actor: ControlledActor | undefined, raw_task: PlayerParametersAt
     initial_threat_score: task?.initial_threat_score,
     support_turret_budget: task?.support_turret_budget,
     support_stage_started: task?.support_stage_started,
+    support_stage_batch_size: task?.support_stage_batch_size,
     last_turret_position: task?.last_turret_position,
     last_turret_unit_number: task?.last_turret_unit_number,
     turret_ammo_name: task?.turret_ammo_name,
@@ -399,7 +405,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     record(actor, task, true, true, 'area_cleared')
     manager.reset_task_state()
     manager.next_task()
-    log(`[AUTORIO] Combat area clear: destroyed ${task.targets_destroyed ?? 0} targets, placed ${task.turrets_placed ?? 0}/${task.support_turret_budget ?? 0} support turrets`)
+    log(`[AUTORIO] Combat area clear: destroyed ${task.targets_destroyed ?? 0} targets, placed ${task.turrets_placed ?? 0} support turrets; stage_budget=${task.support_turret_budget ?? 0}`)
   }
 
   function area_enemies(actor: ControlledActor, task: CombatTask) {
@@ -440,7 +446,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.initial_static_threats = static_threats
     task.initial_threat_score = threat_score
     task.support_turret_budget = support_turret_budget(threat_score)
-    log(`[AUTORIO] Combat support plan: static_threats=${static_threats}, threat_score=${threat_score}, turret_budget=${task.support_turret_budget}`)
+    log(`[AUTORIO] Combat support plan: static_threats=${static_threats}, threat_score=${threat_score}, stage_budget=${task.support_turret_budget}`)
   }
 
   function bind_target(actor: ControlledActor, task: CombatTask, target: LuaEntity, reason: 'acquired' | 'preempted') {
@@ -516,6 +522,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       task.support_stage_anchor_position = undefined
       task.support_stage_start_turret_count = undefined
       task.support_stage_target_turret_count = undefined
+      task.support_stage_batch_size = undefined
       task.initial_static_threats = undefined
       task.initial_threat_score = undefined
       enter_safety(actor, task, 'resume')
@@ -649,22 +656,22 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return result
   }
 
-  function begin_support_stage(actor: ControlledActor, task: CombatTask, budget: number, owned_count: number) {
-    const remaining = budget - owned_count
-    const batch_size = support_stage_batch_size(task.initial_threat_score ?? remaining * SUPPORT_THREAT_PER_TURRET, remaining)
+  function begin_support_stage(actor: ControlledActor, task: CombatTask, stage_budget: number, owned_count: number) {
+    const batch_size = support_stage_batch_size(task.initial_threat_score ?? stage_budget * SUPPORT_THREAT_PER_TURRET)
     if (batch_size <= 0) return false
     task.support_stage_anchor_position = copy_position(actor.position)
     task.support_stage_start_turret_count = owned_count
+    task.support_stage_batch_size = batch_size
     task.support_stage_target_turret_count = owned_count + batch_size
-    log(`[AUTORIO] Combat support stage opened at ${serpent.line(actor.position)}: batch=${batch_size}, deployed=${owned_count}, budget=${budget}`)
+    log(`[AUTORIO] Combat support stage opened at ${serpent.line(actor.position)}: batch=${batch_size}, deployed=${owned_count}, stage_budget=${stage_budget}`)
     return true
   }
 
   function should_place_support(actor: ControlledActor, task: CombatTask, target: LuaEntity) {
     if (task.combat_mode !== 'clear_area' || !is_static_enemy(target)) return false
-    const budget = task.support_turret_budget ?? 0
+    const stage_budget = task.support_turret_budget ?? 0
     const owned_count = live_owned_turrets(task).length
-    if (owned_count >= budget) return false
+    if (stage_budget <= 0) return false
     if (nearest_mobile_enemy_distance(actor) <= TURRET_DANGER_DISTANCE) return false
 
     if (!task.support_stage_started) {
@@ -673,19 +680,19 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       const staged = distance(actor.position, target.position) <= TURRET_STAGING_DISTANCE
       if (!advanced || !staged) return false
       task.support_stage_started = true
-      if (!begin_support_stage(actor, task, budget, owned_count)) return false
-      log(`[AUTORIO] Combat support staging established after advancing ${distance(actor.position, origin)} tiles; budget=${budget}`)
+      if (!begin_support_stage(actor, task, stage_budget, owned_count)) return false
+      log(`[AUTORIO] Combat support staging established after advancing ${distance(actor.position, origin)} tiles; stage_budget=${stage_budget}`)
     }
     else {
       const stage_target = task.support_stage_target_turret_count ?? owned_count
       if (owned_count >= stage_target) {
         const stage_anchor = task.support_stage_anchor_position ?? task.last_turret_position
         if (stage_anchor && distance(actor.position, stage_anchor) < TURRET_LINE_ADVANCE_DISTANCE) return false
-        if (!begin_support_stage(actor, task, budget, owned_count)) return false
+        if (!begin_support_stage(actor, task, stage_budget, owned_count)) return false
       }
     }
 
-    return owned_count < (task.support_stage_target_turret_count ?? budget)
+    return owned_count < (task.support_stage_target_turret_count ?? owned_count)
   }
 
   function support_anchor(actor: ControlledActor, target: LuaEntity, turret_index: number) {
@@ -791,7 +798,9 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     task.turret_ammo_name = ammo.name
     task.last_turret_ammo_loaded = inserted_ammo
     ;(task.encounter_owned_turrets ??= []).push(turret)
-    log(`[AUTORIO] Combat support turret ${live_owned_turrets(task).length}/${task.support_turret_budget ?? 0} placed at ${serpent.line(position)} unit=${turret.unit_number ?? 'n/a'} with ${inserted_ammo} ${ammo.name}; stage_target=${task.support_stage_target_turret_count ?? 0}; total_placements=${task.turrets_placed}`)
+    const stage_target = task.support_stage_target_turret_count ?? live_owned_turrets(task).length
+    const stage_start_count = task.support_stage_start_turret_count ?? 0
+    log(`[AUTORIO] Combat support turret ${live_owned_turrets(task).length - stage_start_count}/${task.support_stage_batch_size ?? 0} in current stage placed at ${serpent.line(position)} unit=${turret.unit_number ?? 'n/a'} with ${inserted_ammo} ${ammo.name}; stage_target=${stage_target}; total_placements=${task.turrets_placed}`)
     return true
   }
 
@@ -1160,6 +1169,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       support_stage_anchor_position: task?.support_stage_anchor_position,
       support_stage_start_turret_count: task?.support_stage_start_turret_count,
       support_stage_target_turret_count: task?.support_stage_target_turret_count,
+      support_stage_batch_size: task?.support_stage_batch_size ?? 0,
       last_turret_position: task?.last_turret_position,
       last_turret_unit_number: task?.last_turret_unit_number,
       turret_ammo_name: task?.turret_ammo_name,
