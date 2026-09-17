@@ -11,10 +11,8 @@ function recipe(name: string, product: string, category = 'crafting') {
     ingredients: [{ type: 'item', name: 'iron-plate', amount: 1 }],
     products: [{ type: 'item', name: product, amount: 1 }],
     prototype: { hidden_from_player_crafting: false },
-    has_category: (candidate: any) => {
-      if (typeof candidate !== 'string') throw new Error('Factorio runtime category IDs must cross this boundary as strings')
-      return candidate === category
-    },
+    category,
+    additional_categories: [],
   }
 }
 
@@ -38,8 +36,8 @@ beforeEach(() => {
   ;(globalThis as any).prototypes.get_entity_filtered = () => ({})
 })
 
-describe('recipe details use the Factorio 2 runtime category predicate', () => {
-  it('returns burner-mining-drill details without reading LuaRecipe.categories', () => {
+describe('recipe details use Factorio 2.0 recipe category fields', () => {
+  it('returns burner-mining-drill details from the Factorio 2.0 category field', () => {
     const actor = actorWithRecipes({
       'burner-mining-drill': recipe('burner-mining-drill', 'burner-mining-drill'),
     })
@@ -52,6 +50,15 @@ describe('recipe details use the Factorio 2 runtime category predicate', () => {
       categories: ['crafting'],
       hand_craftable_category: true,
     })
+  })
+
+  it('includes deterministic additional categories without duplicates', () => {
+    const multi = recipe('multi', 'multi') as any
+    multi.additional_categories = ['smelting', 'crafting']
+    const actor = actorWithRecipes({ multi })
+
+    const result = recipe_details_for_actor(actor, 'multi')
+    expect(result.recipes[0].categories).toEqual(['crafting', 'smelting'])
   })
 
   it('caps compatible machine summaries at eight and reports the full match count', () => {
