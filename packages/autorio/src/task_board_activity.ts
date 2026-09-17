@@ -15,12 +15,14 @@ export interface ActivityFilter { caption: string, flag: number, tooltip: string
 
 // Flags are powers of two combined by plain arithmetic, never bitwise operators:
 // TSTL's JIT target emits `bit.band`, and Factorio's Lua has no `bit` library.
+// Keep every visible caption to three glyphs so the auto-sized Factorio buttons
+// stay visually uniform next to the hard-coded ALL button in task_board_ui.
 export const ACTIVITY_FILTERS: ActivityFilter[] = [
-  { caption: 'PLAN', flag: 1, tooltip: 'Plan decisions' },
+  { caption: 'PLN', flag: 1, tooltip: 'Plan decisions' },
   { caption: 'OBS', flag: 2, tooltip: 'Observations and notes' },
   { caption: 'ACT', flag: 4, tooltip: 'Actions' },
-  { caption: 'RESULT', flag: 8, tooltip: 'Results' },
-  { caption: 'ISSUE', flag: 16, tooltip: 'Blockers and system events' },
+  { caption: 'RES', flag: 8, tooltip: 'Results' },
+  { caption: 'ISS', flag: 16, tooltip: 'Blockers and system events' },
 ]
 export const ACTIVITY_FILTER_ALL = 31
 const ACTIVITY_HISTORY_LIMIT = 160
