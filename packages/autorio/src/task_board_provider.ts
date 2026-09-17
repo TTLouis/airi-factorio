@@ -16,6 +16,8 @@ declare const storage: {
   // block, and the button must not lose the avatar it earned just because the
   // current goal finished.
   airi_task_board_provider_model?: string
+  // Which avatar variant each player sees, by player index.
+  airi_task_board_avatar_roll?: Record<number, number>
 }
 
 const AVATAR_PREFIX = 'airi-provider-'
@@ -28,12 +30,15 @@ const UNKNOWN: TaskBoardProvider = { id: '', label: 'Unrecognized provider' }
 // words - a proxy prefix, a router path - resolves to the vendor that actually
 // answers. Substrings only: model identifiers are provider-defined and change
 // faster than any list here can.
-const PROVIDERS: Array<TaskBoardProvider & { keys: string[] }> = [
-  { id: 'deepseek', label: 'DeepSeek', keys: ['deepseek'] },
-  { id: 'claude', label: 'Claude', keys: ['claude', 'anthropic', 'sonnet', 'opus', 'haiku'] },
-  { id: 'qwen', label: 'Qwen', keys: ['qwen', 'qianwen', 'tongyi'] },
-  { id: 'gemini', label: 'Gemini', keys: ['gemini', 'google'] },
-  { id: 'openai', label: 'OpenAI', keys: ['openai', 'chatgpt', 'gpt-', 'gpt4', 'gpt3', 'o1-', 'o3-', 'o4-'] },
+// `variants` is how many `<id>-<n>.png` files that provider has. data.lua must
+// declare the same count: a variant the resolver can pick but the data stage
+// never declared leaves the button blank.
+const PROVIDERS: Array<TaskBoardProvider & { keys: string[], variants: number }> = [
+  { id: 'deepseek', label: 'DeepSeek', variants: 4, keys: ['deepseek'] },
+  { id: 'claude', label: 'Claude', variants: 4, keys: ['claude', 'anthropic', 'sonnet', 'opus', 'haiku'] },
+  { id: 'qwen', label: 'Qwen', variants: 4, keys: ['qwen', 'qianwen', 'tongyi'] },
+  { id: 'gemini', label: 'Gemini', variants: 4, keys: ['gemini', 'google'] },
+  { id: 'openai', label: 'OpenAI', variants: 4, keys: ['openai', 'chatgpt', 'gpt-', 'gpt4', 'gpt3', 'o1-', 'o3-', 'o4-'] },
 ]
 
 /**
@@ -51,6 +56,40 @@ export function task_board_provider_of(model: unknown): TaskBoardProvider {
   return UNKNOWN
 }
 
+function variants_of(id: string) {
+  for (const provider of PROVIDERS) if (provider.id === id) return provider.variants
+  return 0
+}
+
+/**
+ * Roll which avatar variant a player sees. Called when they join, so the
+ * console looks a little different each time they come back.
+ *
+ * Deliberately not `math.random`. GUI rendering is synchronized game state, so
+ * the choice has to be one every peer reaches - which rules out anything
+ * client-local - and drawing from the map's RNG would advance a synchronized
+ * stream from GUI code. Mixing the join tick with the player index is
+ * deterministic, free, and varies between sessions because the tick does. The
+ * factors are odd and coprime so neighbouring ticks and adjacent players do not
+ * land on the same variant.
+ */
+export function roll_provider_avatar(player_index: number, tick: number) {
+  if (storage.airi_task_board_avatar_roll === undefined) storage.airi_task_board_avatar_roll = {}
+  storage.airi_task_board_avatar_roll[player_index] = ((tick % 100003) * 131 + player_index * 40503) % 2147483647
+}
+
+/** The variant this player sees, 1-based. Rolls one if they never got one. */
+export function provider_avatar_variant(player_index: number, id: string) {
+  const variants = variants_of(id)
+  if (variants <= 1) return 1
+  let roll = storage.airi_task_board_avatar_roll?.[player_index]
+  if (roll === undefined) {
+    roll_provider_avatar(player_index, game.tick)
+    roll = storage.airi_task_board_avatar_roll![player_index]
+  }
+  return (roll % variants) + 1
+}
+
 /** Record the model a snapshot reported. Empty values keep the last known one. */
 export function remember_provider_model(model: unknown) {
   const name = String(model ?? '').trim()
@@ -65,10 +104,10 @@ export function current_provider_model() { return storage.airi_task_board_provid
  * graphics, still gets a working button from `fallback` rather than an empty
  * one.
  */
-export function provider_button_sprite(fallback: SpritePath): SpritePath {
+export function provider_button_sprite(player_index: number, fallback: SpritePath): SpritePath {
   const id = task_board_provider_of(current_provider_model()).id
   if (id.length === 0) return fallback
-  const avatar = `${AVATAR_PREFIX}${id}` as SpritePath
+  const avatar = `${AVATAR_PREFIX}${id}-${provider_avatar_variant(player_index, id)}` as SpritePath
   return helpers.is_valid_sprite_path(avatar) ? avatar : fallback
 }
 

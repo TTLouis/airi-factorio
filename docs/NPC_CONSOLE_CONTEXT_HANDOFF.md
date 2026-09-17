@@ -159,12 +159,19 @@ There is no house avatar for a model no vendor claims. The button answers "which
 vendor is answering", so with no answer it keeps its default sprite rather than
 showing a fourth face that would mean something else.
 
-The committed PNGs under `packages/autorio/graphics/icons/provider/` are flat
-brand-color placeholders, not artwork; that folder's README covers replacing one
-with a vendor's own icon, which needs no code change. Keep `data.lua` and the
-resolver's ids in step in both directions: an id in `data.lua` without a
-committed PNG is a hard mod-load failure, and a resolver id with no prototype
-silently leaves the button on its default sprite.
+Each vendor has several avatars, and a player is rolled one when they join, so
+the console does not look identical every session. The roll is per player and
+lives in `storage`. That placement is the point: the console is synchronized
+game state, so which sprite a player's button shows cannot be decided while
+drawing or from anything client-local, and it must not be drawn from the map's
+synchronized RNG either. See `packages/autorio/graphics/icons/provider/README.md`
+for the import pipeline and the framing rules that keep a set looking like one
+set.
+
+Keep `data.lua` and the resolver in step in both directions, ids and variant
+counts: an id or count in `data.lua` without a committed PNG is a hard mod-load
+failure, and a resolver id or count with no prototype leaves the button blank or
+on its default sprite for whichever players rolled the missing variant.
 
 ## Steps / Activity backend direction
 

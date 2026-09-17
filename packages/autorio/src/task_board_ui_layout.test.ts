@@ -184,18 +184,30 @@ describe('AIRI NPC console compact tracker layout', () => {
   // The button is a live readout of which model is answering, not a static icon.
   it('dresses the mod-GUI button with the current provider avatar', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
-    expect(source).toContain('button.sprite = provider_ui.provider_button_sprite(BUTTON_SPRITE)')
+    expect(source).toContain('button.sprite = provider_ui.provider_button_sprite(player.index, BUTTON_SPRITE)')
     expect(source).toContain("button.tooltip = provider_ui.provider_button_tooltip('AIRI NPC Console')")
     expect(source).toContain('provider_ui.remember_provider_model(stamped.debug?.provider_model)')
 
-    // The avatars are prototypes, so the data stage has to declare every id the
-    // control stage can resolve to.
+    // Joining is where the variant is decided, in synchronized storage, rather
+    // than while drawing - the button must not be a client-local choice.
+    expect(source).toContain('provider_ui.roll_provider_avatar(player.index, game.tick)')
+  })
+
+  // The avatars are prototypes, so the data stage has to declare every variant
+  // the control stage can resolve to. A count that drifts leaves a blank button
+  // for whichever players rolled the missing one, which is the kind of bug that
+  // only shows up for some players on some sessions.
+  it('declares every avatar variant the resolver can pick', () => {
     const data_stage = readFileSync(new URL('../data.lua', import.meta.url), 'utf8')
     const provider_source = readFileSync(new URL('./task_board_provider.ts', import.meta.url), 'utf8')
-    for (const id of ['claude', 'openai', 'deepseek', 'gemini', 'qwen']) {
-      expect(provider_source).toContain(`id: '${id}'`)
-      expect(data_stage).toContain(`"${id}"`)
-    }
-    expect(data_stage).toContain('"__autorio__/graphics/icons/provider/" .. provider .. ".png"')
+
+    const declared = new Map<string, number>()
+    for (const [, id, count] of data_stage.matchAll(/\{"(\w+)", (\d+)\}/g)) declared.set(id, Number(count))
+    const resolved = new Map<string, number>()
+    for (const [, id, count] of provider_source.matchAll(/id: '(\w+)',[^}]*?variants: (\d+)/g)) resolved.set(id, Number(count))
+
+    expect(resolved.size).toBe(5)
+    expect([...declared.entries()].sort()).toEqual([...resolved.entries()].sort())
+    expect(data_stage).toContain('"__autorio__/graphics/icons/provider/" .. id .. ".png"')
   })
 })

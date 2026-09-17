@@ -75,28 +75,44 @@ data:extend({
 })
 
 -- The console's top-left button shows which vendor is behind the model AIRI is
--- currently calling. One sprite per vendor, named after the id the control stage
--- resolves from the configured model identifier. A model that matches no vendor
--- deliberately gets no house avatar: the button answers "which vendor answers",
--- and it keeps its default sprite when there is no answer.
+-- currently calling. Each vendor has several avatars and a player is rolled one
+-- when they join, so the console does not look identical every session; the
+-- file is graphics/icons/provider/<id>-<n>.png and the sprite is named to
+-- match. A model that matches no vendor deliberately gets no house avatar: the
+-- button answers "which vendor answers", and keeps its default sprite when
+-- there is no answer.
 --
--- Factorio's data stage has no file-exists test and a missing sprite file is a
--- hard load failure, so every id listed here must have a committed PNG. Import
+-- The counts here must match `variants` in src/task_board_provider.ts. Factorio's
+-- data stage has no file-exists test and a missing sprite file is a hard load
+-- failure, so every id and count listed must have its PNGs committed. Import
 -- artwork with scripts/import_provider_icon.py, which produces the 128x128 the
--- prototype below expects and keeps a set framed consistently. See the folder's
+-- prototype expects and normalizes the framing across a set. See the folder's
 -- README.
+local provider_variants = {
+  {"claude", 4},
+  {"openai", 4},
+  {"deepseek", 4},
+  {"gemini", 4},
+  {"qwen", 4},
+}
+
 local provider_avatars = {}
-for _, provider in ipairs({"claude", "openai", "deepseek", "gemini", "qwen"}) do
-  provider_avatars[#provider_avatars + 1] = {
-    type = "sprite",
-    name = "airi-provider-" .. provider,
-    filename = "__autorio__/graphics/icons/provider/" .. provider .. ".png",
-    -- 128 source pixels drawn at 32 GUI units, so the avatar stays crisp at the
-    -- 200% UI scale Factorio allows instead of being upscaled from a 1:1 source.
-    size = 128,
-    scale = 0.25,
-    flags = {"gui-icon"},
-  }
+for _, entry in ipairs(provider_variants) do
+  local provider, count = entry[1], entry[2]
+  for variant = 1, count do
+    local id = provider .. "-" .. variant
+    provider_avatars[#provider_avatars + 1] = {
+      type = "sprite",
+      name = "airi-provider-" .. id,
+      filename = "__autorio__/graphics/icons/provider/" .. id .. ".png",
+      -- 128 source pixels drawn at 32 GUI units, so the avatar stays crisp at
+      -- the 200% UI scale Factorio allows instead of being upscaled from a 1:1
+      -- source.
+      size = 128,
+      scale = 0.25,
+      flags = {"gui-icon"},
+    }
+  end
 end
 
 data:extend(provider_avatars)

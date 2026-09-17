@@ -1,22 +1,22 @@
 # Provider avatars
 
 The console's top-left button wears the avatar of whichever vendor is behind the
-model AIRI is currently calling. The file name is the provider id that
-`src/task_board_provider.ts` resolves from the configured model identifier, and
-`data.lua` declares one `sprite` prototype per file.
+model AIRI is currently calling. `src/task_board_provider.ts` resolves the
+provider id from the configured model identifier, and `data.lua` declares one
+`sprite` prototype per file.
 
 **The artwork in this folder is AI-generated.** It is not the work of a human
 illustrator, and it is not any vendor's official artwork - each avatar is an
 original character wearing that vendor's mark as a hair clip. Say so anywhere
 these are shown or redistributed.
 
-| file | shown for models matching |
+| files | shown for models matching |
 | --- | --- |
-| `claude.png` | `claude`, `anthropic`, `sonnet`, `opus`, `haiku` |
-| `deepseek.png` | `deepseek` |
-| `qwen.png` | `qwen`, `qianwen`, `tongyi` |
-| `gemini.png` | `gemini`, `google` |
-| `openai.png` | `openai`, `chatgpt`, `gpt-`, `gpt4`, `gpt3`, `o1-`, `o3-`, `o4-` |
+| `claude-1..4.png` | `claude`, `anthropic`, `sonnet`, `opus`, `haiku` |
+| `deepseek-1..4.png` | `deepseek` |
+| `qwen-1..4.png` | `qwen`, `qianwen`, `tongyi` |
+| `gemini-1..4.png` | `gemini`, `google` |
+| `openai-1..4.png` | `openai`, `chatgpt`, `gpt-`, `gpt4`, `gpt3`, `o1-`, `o3-`, `o4-` |
 
 Matching is by substring, in that order, so a routed identifier like
 `openai-compatible/deepseek-chat` resolves to the vendor that actually answers.
@@ -25,6 +25,20 @@ about who is answering.
 
 A model that matches none of them keeps the button's default sprite. There is no
 house avatar for that case on purpose.
+
+## Variants
+
+Each provider has several avatars, and a player is rolled one when they join, so
+the console does not look identical every session. The roll is per player and
+lives in `storage`, because the console is synchronized game state: every peer
+has to draw the same button for the same player. It is deliberately not
+`math.random`, which would advance the map's synchronized RNG from GUI code.
+
+Variant counts appear in two places and must agree: `variants` in
+`src/task_board_provider.ts` and the table in `data.lua`. A resolver count
+higher than the declared one leaves a blank button for whichever players rolled
+the missing variant - a bug that only shows up for some players in some
+sessions. `task_board_ui_layout.test.ts` compares the two.
 
 ## Format
 
@@ -40,33 +54,41 @@ the vendor and the exact model.
 ## Importing artwork
 
 ```bash
-python packages/autorio/scripts/import_provider_icon.py <source-image> <provider-id> [options]
+python packages/autorio/scripts/import_provider_icon.py <source-image> <provider-id-and-variant> [options]
 ```
 
 It accepts any size and keys a white background to transparent. `--check`
 reports what it would produce without writing.
 
-**Keep a set consistent.** Pass the same `--frame SIDE` to every figure of one
-sheet. `--frame` crops a fixed box out of the *source*, centred on the widest
-row of the head, so every head lands the same size no matter how tall or short
-that figure's own artwork is. Without it each figure is squared by its own
-bounding box, and a short drawing gets scaled up more than a tall one - that
-produced heads ranging from 83px to 106px across five avatars drawn at the same
-scale. The script prints the measured head width of each import so drift is
-visible. The current set came from one sheet:
+**Keeping a set consistent is the whole job.** By default the script scales each
+source so the measured head is 102 of the icon's 128 pixels, which is what makes
+twenty avatars drawn at twenty different sizes look like one set. Squaring each
+figure by its own bounding box instead scales a short drawing up more than a
+tall one; that produced heads ranging from 83px to 106px across five avatars
+that were drawn at the same scale. The script prints each measured head width,
+so drift is visible as it happens.
+
+Options worth knowing:
+
+- `--head N` - target head width in the finished icon. The default, 102.
+- `--slice X0:X1` - take one figure out of a multi-figure sheet by pixel column.
+- `--frame SIDE` - fixed source box instead of head-normalized. Only equivalent
+  when every figure is drawn at one scale, as on a single sheet.
+- `--anchor F` - where the head's widest row sits vertically, default 0.55.
+- `--keep-top F` - for a lone portrait with no set to match.
+
+The current set came from one five-figure sheet plus three sets of individual
+square images, all imported at the default head width:
 
 ```bash
-SRC="ChatGPT Image Sep 17, 2026, 11_46_25 AM.png"   # 2172x724, five figures
-python packages/autorio/scripts/import_provider_icon.py "$SRC" openai   --slice 0:425     --frame 500
-python packages/autorio/scripts/import_provider_icon.py "$SRC" claude   --slice 438:866   --frame 500
-python packages/autorio/scripts/import_provider_icon.py "$SRC" deepseek --slice 878:1300  --frame 500
-python packages/autorio/scripts/import_provider_icon.py "$SRC" gemini   --slice 1310:1735 --frame 500
-python packages/autorio/scripts/import_provider_icon.py "$SRC" qwen     --slice 1748:2171 --frame 500
-```
+# sheet, 2172x724, five figures
+python packages/autorio/scripts/import_provider_icon.py "$SHEET" openai-1 --slice 0:425
+python packages/autorio/scripts/import_provider_icon.py "$SHEET" claude-1 --slice 438:866
+# ... deepseek-1 --slice 878:1300, gemini-1 --slice 1310:1735, qwen-1 --slice 1748:2171
 
-`--slice` column ranges are the gaps between figures; they are whatever the
-sheet happens to use. For a single portrait with no sheet to match, use
-`--keep-top 0.72` instead of `--frame`.
+# individual squares
+python packages/autorio/scripts/import_provider_icon.py "$IMAGE" openai-2
+```
 
 ## Placeholders
 
@@ -78,10 +100,11 @@ quietly replace real artwork.
 
 ## Adding a provider
 
-1. Add the id and its match keys to `PROVIDERS` in `src/task_board_provider.ts`.
-2. Add the id to the list in `data.lua`.
-3. Commit a 128x128 PNG here under that id - imported artwork or a placeholder.
+1. Add the id, its match keys, and its `variants` count to `PROVIDERS` in
+   `src/task_board_provider.ts`.
+2. Add the id and the same count to the table in `data.lua`.
+3. Commit that many 128x128 PNGs here as `<id>-1.png` and up.
 
-All three are required. An id in `data.lua` with no committed PNG stops the mod
-from loading; a resolver id with no prototype silently leaves the button on its
-default sprite.
+All three are required. An id or count in `data.lua` with no committed PNG stops
+the mod from loading; a resolver id or count with no prototype leaves the button
+blank or on its default sprite.

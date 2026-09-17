@@ -413,7 +413,7 @@ function ensure_button(player: LuaPlayer) {
   const flow = mod_gui_button_flow(player)
   const existing = flow[BUTTON_NAME]
   const button = (existing?.valid ? existing : flow.add({ type: 'sprite-button', name: BUTTON_NAME, sprite: BUTTON_SPRITE, style: 'slot_button', tooltip: 'AIRI NPC Console' })) as SpriteButtonGuiElement
-  button.sprite = provider_ui.provider_button_sprite(BUTTON_SPRITE)
+  button.sprite = provider_ui.provider_button_sprite(player.index, BUTTON_SPRITE)
   button.tooltip = provider_ui.provider_button_tooltip('AIRI NPC Console')
   button.toggled = task_board_ui_is_open(player.index)
   return button
@@ -977,7 +977,11 @@ export function create_task_board_ui_remote_interface() {
     sync_version: () => debug_ui.current_sync_version(),
     drain_inputs: () => drain_ui_inputs(),
   })
-  script.on_event(defines.events.on_player_joined_game, (event: any) => { const player = game.get_player(event.player_index); if (player?.valid) render(player) })
+  // Joining re-rolls which avatar variant this player sees, so the console does
+  // not look identical every session. The roll lands in synchronized storage
+  // here rather than being decided while drawing, which would make the button a
+  // client-local decision.
+  script.on_event(defines.events.on_player_joined_game, (event: any) => { const player = game.get_player(event.player_index); if (!player?.valid) return; provider_ui.roll_provider_avatar(player.index, game.tick); render(player) })
   script.on_event(defines.events.on_gui_click, (event: any) => {
     const element = event.element; if (!element?.valid) return; const player = game.get_player(event.player_index); if (!player?.valid) return
     if (element.name === BUTTON_NAME) { toggle_task_board_ui_open(player.index); render(player); return }
