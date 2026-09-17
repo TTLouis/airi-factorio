@@ -179,7 +179,13 @@ function support_turret_budget(static_threats: number) {
 function retreat_position(actor: ControlledActor, threat: LuaEntity) {
   const dx = actor.position.x - threat.position.x
   const dy = actor.position.y - threat.position.y
-  return { x: actor.position.x + dx, y: actor.position.y + dy }
+  const current_distance = math.sqrt(dx * dx + dy * dy)
+  if (current_distance <= 0.001) return { x: actor.position.x - KITE_DISTANCE, y: actor.position.y }
+  const retreat_distance = math.max(0, KITE_DISTANCE - current_distance)
+  return {
+    x: actor.position.x + dx / current_distance * retreat_distance,
+    y: actor.position.y + dy / current_distance * retreat_distance,
+  }
 }
 
 function selected_support_ammo(inventory: LuaInventory): { name: string, stack: LuaItemStack } | undefined {

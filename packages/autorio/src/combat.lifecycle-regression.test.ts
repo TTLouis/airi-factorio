@@ -273,6 +273,32 @@ describe('combat lifecycle regressions', () => {
     expect(c.actor.get_mining_state().mining).toBe(false)
   })
 
+  it('bounds close-threat retreat so a mobile preemption does not erase static-encounter progress', () => {
+    const first = enemy(90, 'unit-spawner', 30)
+    const second = enemy(91, 'unit-spawner', 40)
+    const c = world([first, second])
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+
+    c.actor.position = { x: 6, y: 0 }
+    c.surface.get_tile = vi.fn(() => ({ name: 'grass-1' }))
+    c.character.can_shoot.mockReturnValue(true)
+    const pursuer = enemy(92, 'unit', 14)
+    c.enemies.push(pursuer)
+    advance(c, 1)
+
+    expect(c.controller.status()).toMatchObject({ target: { unit_number: 92 }, path: { mode: 'retreat' } })
+    expect(c.surface.request_path).toHaveBeenLastCalledWith(expect.objectContaining({
+      start: { x: 6, y: 0 },
+      goal: { x: 2, y: 0 },
+      radius: 1.5,
+    }))
+
+    pursuer.valid = false
+    advance(c, 1)
+    expect(c.controller.status()).toMatchObject({ target: { unit_number: 90 }, combat_phase: 'engage' })
+  })
+
   it('interrupts turret recovery when a mobile threat reappears and resumes cleanup only after safety is stable again', () => {
     const first = enemy(100, 'unit-spawner', 30)
     const c = world([first])
