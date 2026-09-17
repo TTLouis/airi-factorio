@@ -14,6 +14,23 @@ function actor() {
   } as unknown as ControlledActor
 }
 
+function persistent_follow_task() {
+  return {
+    type: TaskStates.WALKING_TO_ENTITY,
+    entity_name: 'character',
+    search_radius: 4096,
+    target_kind: 'player' as const,
+    target_player_name: 'TTLouis',
+    reach_distance: 4,
+    persistent_follow: true,
+    path: null,
+    path_drawn: false,
+    path_index: 1,
+    calculating_path: false,
+    target_position: null,
+  }
+}
+
 beforeEach(() => {
   ;(globalThis as any).game.tick = 100
   ;(globalThis as any).game.print = vi.fn()
@@ -63,6 +80,43 @@ describe('Autorio task batch receipts', () => {
     })
     expect((globalThis as any).game.print).toHaveBeenCalledWith(
       '[AUTORIO] All operations completed: batch=1, task_count=2, tasks=walking_direct,waiting, tick=160',
+    )
+  })
+
+  it('keeps routine persistent-follow batches out of the player console while retaining receipts and logs', () => {
+    const manager = new_task_manager(() => actor())
+    manager.add_task(persistent_follow_task())
+
+    expect((globalThis as any).game.print).not.toHaveBeenCalled()
+    expect((globalThis as any).log).toHaveBeenCalledWith(
+      '[AUTORIO] Operation batch started: batch=1, first_task=walking_to_entity, tick=100',
+    )
+
+    manager.reset_task_state()
+    ;(globalThis as any).game.tick = 120
+    manager.next_task()
+
+    expect((globalThis as any).game.print).not.toHaveBeenCalled()
+    expect(manager.get_status_snapshot().last_completed_batch).toMatchObject({
+      batch_id: 1,
+      task_count: 1,
+      task_types: [TaskStates.WALKING_TO_ENTITY],
+    })
+    expect((globalThis as any).log).toHaveBeenCalledWith(
+      '[AUTORIO] All operations completed: batch=1, task_count=1, tasks=walking_to_entity, tick=120',
+    )
+  })
+
+  it('still promotes a persistent-follow failure cancellation to the player console', () => {
+    const manager = new_task_manager(() => actor())
+    manager.add_task(persistent_follow_task())
+
+    ;(globalThis as any).game.tick = 130
+    manager.cancel_all_tasks('follow_stuck')
+
+    expect((globalThis as any).game.print).toHaveBeenCalledTimes(1)
+    expect((globalThis as any).game.print).toHaveBeenCalledWith(
+      '[AUTORIO] Operation batch cancelled: batch=1, task_count=1, tasks=walking_to_entity, tick=130, reason=follow_stuck',
     )
   })
 

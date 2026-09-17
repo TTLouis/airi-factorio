@@ -179,7 +179,9 @@ export function new_navigation_controller(get_actor: () => ControlledActor | und
     if (actor?.is_valid) actor.set_walking_state({ walking: false, direction: defines.direction.north })
     record(actor, task, false, false, code)
     rendering.clear()
-    if (actor && identity_matches(actor, task)) manager.cancel_all_tasks()
+    if (actor && identity_matches(actor, task)) {
+      manager.cancel_all_tasks(task.persistent_follow ? `follow_${code}` : `navigation_${code}`)
+    }
     else manager.discard_all_tasks_after_actor_loss()
     log(`[AUTORIO] [ERROR] Navigation task failed: ${code}; queued operations cancelled`)
   }

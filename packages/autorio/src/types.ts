@@ -32,6 +32,9 @@ export interface PlayerParametersWalkToEntity {
   target_player_name?: string
   /** Arrival distance for this navigation task. */
   reach_distance?: number
+  /** True when this leg was spawned by the persistent follow controller. Routine
+   * follow legs stay out of player-facing batch chatter while failures still surface. */
+  persistent_follow?: boolean
   path: PathfinderWaypoint[] | null
   path_drawn: boolean
   path_index: number

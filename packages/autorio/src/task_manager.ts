@@ -21,15 +21,25 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
   let batch_sequence = 0
   let active_batch_id: number | undefined
   let active_batch_task_types: TaskStates[] = []
+  let active_batch_console_quiet = false
   let last_completed_batch: TaskBatchReceipt | undefined
   let last_cancelled_batch: TaskBatchReceipt | undefined
 
+  function is_routine_follow_task(task: PlayerParameters) {
+    return task.type === TaskStates.WALKING_TO_ENTITY && task.persistent_follow === true
+  }
+
   function begin_or_extend_batch(task: PlayerParameters) {
     const created = active_batch_id === undefined
+    const quiet_task = is_routine_follow_task(task)
     if (created) {
       batch_sequence += 1
       active_batch_id = batch_sequence
       active_batch_task_types = []
+      active_batch_console_quiet = quiet_task
+    }
+    else if (!quiet_task) {
+      active_batch_console_quiet = false
     }
     active_batch_task_types.push(task.type)
     return created
@@ -48,6 +58,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     else last_cancelled_batch = receipt
     active_batch_id = undefined
     active_batch_task_types = []
+    active_batch_console_quiet = false
     return receipt
   }
 
@@ -62,7 +73,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     log(`[AUTORIO] Task added: ${task.type}, batch=${active_batch_id}, task queue length: ${task_queue.length}`)
     if (new_batch) {
       const details = `batch=${active_batch_id}, first_task=${task.type}, tick=${game.tick}`
-      game.print(`[AUTORIO] Operation batch started: ${details}`)
+      if (!active_batch_console_quiet) game.print(`[AUTORIO] Operation batch started: ${details}`)
       log(`[AUTORIO] Operation batch started: ${details}`)
     }
 
@@ -126,11 +137,12 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     const task = task_queue.shift()
     if (!task) {
       player_state.task_state = TaskStates.IDLE
+      const quiet_completion = active_batch_id !== undefined && active_batch_console_quiet
       const receipt = close_batch('completed')
       const details = receipt
         ? receipt_details(receipt)
         : `batch=none, task_count=0, tasks=none, tick=${game.tick}`
-      game.print(`[AUTORIO] All operations completed: ${details}`)
+      if (!quiet_completion) game.print(`[AUTORIO] All operations completed: ${details}`)
       log(`[AUTORIO] All operations completed: ${details}`)
       return
     }
