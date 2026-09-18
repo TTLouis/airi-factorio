@@ -10,7 +10,7 @@ import {
   taskBoardProgress,
 } from './common.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
-import { renderOperation, renderOperationPreflight, toolCommand } from './structured-policy.mjs'
+import { isObservationToolName, renderOperation, renderOperationPreflight, toolCommand } from './structured-policy.mjs'
 
 export { AgentLoopError }
 
@@ -33,7 +33,7 @@ For a multi-step request, keep the plan stable enough that the harness can track
 
 An empty operations array normally means no new Autorio world action will happen after your reply. Never claim that a finite action is continuing when neither a new operation nor a live persistent runtime mode exists. Persistent controllers such as follow are different: if a read-only status tool proves the controller is active, healthy, and live, operations: [] may accurately describe that background mode without submitting a duplicate operation. When the whole requested goal is actually verified complete, return plan: [], currentStep: 0, operations: [], and say it is complete.
 
-Before a non-empty operation batch, chatMessage should tell the human what concrete current plan step AIRI is about to attempt. [MOD] completion/error messages may include a detailed getTaskStatus snapshot. Use that receipt plus any needed read-only verification to advance, replan, complete, or report a blocker.
+Before a non-empty operation batch, chatMessage should tell the human what concrete current plan step AIRI is about to attempt. Do not say mining, construction, transfer, crafting, or any other mutation has started unless that mutation is in the admitted/running operation batch or authoritative runtime evidence proves it. Navigation completion proves arrival only; it never proves that a later mining or construction action started. [MOD] completion/error messages may include a detailed getTaskStatus snapshot. Use that receipt plus any needed read-only verification to advance, replan, complete, or report a blocker.
 `.trim()
 
 function cleanMemoryText(value, max) {
@@ -880,6 +880,69 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     return this.requestInfo?.memoryKey ?? this.lastMemoryKey ?? `npc:${this.npcId}`
   }
 
+
+  prepareContinuationContext() {
+    super.prepareContinuationContext()
+    const planContext = this.memory.planContext?.(this.activePlanKey())
+    if (planContext) this.messages.push({ role: 'user', content: planContext })
+  }
+
+  isObservationToolName(name) {
+    return isObservationToolName(name)
+  }
+
+  observationToolCommand(name, args) {
+    return toolCommand(name, args)
+  }
+
+  observedMiningTargets(entityName) {
+    const byReference = new Map()
+    const remember = (entity, actorPosition) => {
+      if (!entity || entity.name !== entityName) return
+      const reference = Number.isSafeInteger(entity.unit_number)
+        ? `entity:${entity.unit_number}`
+        : `fallback:${entity.name}:${entity.type ?? 'unknown'}:${entity.position?.x ?? '?'}:${entity.position?.y ?? '?'}`
+      let distance = Number.isFinite(entity.distance) ? entity.distance : undefined
+      if (distance === undefined && actorPosition && entity.position
+        && Number.isFinite(actorPosition.x) && Number.isFinite(actorPosition.y)
+        && Number.isFinite(entity.position.x) && Number.isFinite(entity.position.y)) {
+        distance = Math.hypot(entity.position.x - actorPosition.x, entity.position.y - actorPosition.y)
+      }
+      byReference.set(reference, {
+        name: entity.name,
+        type: entity.type,
+        unit_number: Number.isSafeInteger(entity.unit_number) ? entity.unit_number : undefined,
+        position: entity.position,
+        distance,
+      })
+    }
+
+    for (const entry of this.nearbyEntitiesBaselines?.values?.() ?? []) {
+      const actorPosition = entry?.view?.actor_position
+      for (const entity of entry?.view?.entities ?? []) remember(entity, actorPosition)
+    }
+    for (const entry of this.entityStatusBaselines?.values?.() ?? []) {
+      remember(entry?.view?.entity, undefined)
+    }
+    return [...byReference.values()]
+  }
+
+  legacyMiningApproachVerified(entityName) {
+    const state = this.memory.currentPlan?.(this.activePlanKey())
+    if (state?.last_mutation_verified !== true || !Array.isArray(state.last_operations)) return false
+    return state.last_operations.some((value) => {
+      const separator = typeof value === 'string' ? value.indexOf(' ') : -1
+      if (separator < 1 || value.slice(0, separator) !== 'walk_to_entity') return false
+      try {
+        const args = JSON.parse(value.slice(separator + 1))
+        return args?.entity_name === entityName
+      }
+      catch {
+        return false
+      }
+    })
+  }
+
   failureSnapshot(stage, message) {
     const request = this.traceRequest
     const planState = this.memory.currentPlan?.(this.activePlanKey())
@@ -1246,6 +1309,36 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   parsePlanMessage(message) {
     const plan = super.parsePlanMessage(message)
+    for (const operation of plan.operations) {
+      if (operation.name !== 'mine_entity') continue
+      const targets = this.observedMiningTargets(operation.args.entity_name)
+      const exact = targets.filter(target => Number.isSafeInteger(target.unit_number))
+      if (exact.length > 0) {
+        const error = new AgentLoopError(
+          `Exact live identity was already observed for ${operation.args.entity_name}; use mine_entity_exact with an observed unit_number instead of falling back to legacy name-based mining. Exact mining owns runtime repositioning when the target is outside mining reach.`,
+        )
+        error.failureClass = 'plan_category'
+        error.code = 'exact_identity_available_for_mining'
+        error.details = {
+          entity_name: operation.args.entity_name,
+          observed_unit_numbers: exact.slice(0, 8).map(target => target.unit_number),
+        }
+        throw error
+      }
+
+      const remote = targets.filter(target => Number.isFinite(target.distance) && target.distance > 5)
+      if (remote.length > 0 && !this.legacyMiningApproachVerified(operation.args.entity_name)) {
+        const requiredRadius = Math.max(6, Math.min(4096, Math.ceil(Math.max(...remote.map(target => target.distance))) + 2))
+        const error = new AgentLoopError(
+          `The observed ${operation.args.entity_name} target is outside legacy local mining resolution and has no usable exact identity. Approach it first with walk_to_entity {entity_name:"${operation.args.entity_name}",search_radius:${requiredRadius}}, wait for authoritative navigation completion, then continue the same finite goal into mine_entity. A remote name observation is not proof that local mine_entity can resolve the target.`,
+        )
+        error.failureClass = 'plan_category'
+        error.code = 'remote_name_mining_requires_approach'
+        error.details = { entity_name: operation.args.entity_name, search_radius: requiredRadius }
+        throw error
+      }
+    }
+
     const replayed = replayedCompletedOperations(plan, this.outputBudgetRecoveryGuard)
     if (replayed.length > 0) {
       void this.traceEvent('provider.output_budget_recovery_replay_rejected', {
@@ -1322,6 +1415,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   async recoveryDiagnostic(details) {
     if (this.traceRequest) this.traceRequest.recovery = { ...(this.traceRequest.recovery ?? {}), ...details }
     await this.traceEvent('recovery.classified', details)
+  }
+
+  finiteNoOperationPressure(plan) {
+    if (plan?.operations?.length > 0 || !Array.isArray(plan?.plan) || plan.plan.length === 0) return ''
+    const state = this.memory.currentPlan?.(this.activePlanKey())
+    if (this.planUpdateReason !== 'completion' || state?.status !== 'active') return ''
+    return 'The previous Autorio batch completed, but the finite user goal still has remaining canonical work. Completing navigation, crafting, or another prerequisite does not start the next mutation. Continue now: submit the next executable operation if it is already parameterized, make only one targeted observation if one mutable fact is truly missing, or report a truthful blocker. Do not stop and wait for a human “continue” message, and do not claim a later action has started unless its mutation was admitted or runtime evidence proves it.'
   }
 
   async preflightOperations(operations) {
