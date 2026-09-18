@@ -110,7 +110,7 @@ test('tools-disabled recovery cannot turn an unresolved identity into a craft mu
           chatMessage: 'bad',
           plan: ['Need a recipe'],
           currentStep: 0,
-          operations: [{ name: 'getRecipeDetails', args: { item_or_recipe: 'burner-mining-drill' } }],
+          operations: [{ name: 'craft_item', args: { item_name: 'iron-mining-drill', count: 0 } }],
         }),
       }
     },
