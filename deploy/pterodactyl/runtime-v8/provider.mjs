@@ -57,6 +57,9 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   if (options.recoveryKind === 'output_budget_exhaustion') {
     return { effort: 'none', reason: 'output_budget_recovery' }
   }
+  if (options.actionOmissionRepair === true) {
+    return { effort: 'low', reason: 'action_omission_repair' }
+  }
   if (Number.isSafeInteger(options.recoveryAttempt) && options.recoveryAttempt > 0) {
     return { effort: 'none', reason: 'strict_recovery' }
   }
