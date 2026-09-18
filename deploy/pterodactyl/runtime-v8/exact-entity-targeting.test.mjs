@@ -133,13 +133,13 @@ test('old task unit id cannot leak into a new human request', async () => {
         return { content: null, tool_calls: [toolCall('observe-first', 'getNearbyEntities', { radius: 64, name: 'stone-furnace', limit: 4 })] }
       }
       if (calls === 2) return planMessage([{ name: 'mine_entity_exact', args: { unit_number: 289 } }])
-      if (calls === 3) return planMessage([{ name: 'mine_entity_exact', args: { unit_number: 289 } }])
-      if (calls === 4) {
-        const text = messages.map(message => String(message.content ?? '')).join('\n')
-        assert.match(text, /not bound by a live observation in this active request/i)
-        return { content: null, tool_calls: [toolCall('observe-again', 'getNearbyEntities', { radius: 64, name: 'stone-furnace', limit: 4 })] }
+      if (calls === 3) {
+        return planMessage([{ name: 'walk_to_entity_exact', args: { unit_number: 289, reach_distance: 2.5 } }])
       }
-      return planMessage([{ name: 'mine_entity_exact', args: { unit_number: 289 } }])
+      const text = messages.map(message => String(message.content ?? '')).join('\n')
+      assert.match(text, /not bound by a live observation in this active request/i)
+      assert.match(text, /walk_to_position/i)
+      return planMessage([{ name: 'walk_to_position', args: { x: 8, y: 1, reach_distance: 2 } }])
     },
   })
 
@@ -148,9 +148,11 @@ test('old task unit id cannot leak into a new human request', async () => {
   assert.equal(rcon.mutations.length, 1)
 
   const second = await agent.request('new task involving that furnace', { sender: 'tester' })
-  assert.equal(second.operations[0].args.unit_number, 289)
-  assert.equal(calls, 5)
+  assert.equal(second.operations[0].name, 'walk_to_position')
+  assert.deepEqual(second.operations[0].args, { x: 8, y: 1, reach_distance: 2 })
+  assert.equal(calls, 4)
   assert.equal(rcon.mutations.length, 2)
+  assert.doesNotMatch(rcon.mutations[1], /walk_to_entity_exact',289/)
 })
 
 test('stale exact id is rejected before admission and replacement is rebound after coordinate return', async () => {
