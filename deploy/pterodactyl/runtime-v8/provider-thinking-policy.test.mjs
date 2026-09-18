@@ -55,11 +55,11 @@ test('successful deterministic completion continuation uses low effort with thin
   assert.equal(message._airiProvider.reasoning_policy_reason, 'deterministic_completion')
 })
 
-test('new ordinary DeepSeek goal uses high effort', async () => {
+test('new ordinary DeepSeek goal uses high effort only when lifecycle routing marks it new_goal', async () => {
   const { seen } = await captureRequest([
     { role: 'system', content: 'system' },
     { role: 'user', content: '[CHAT] tester: automate iron production' },
-  ], { allowTools: true })
+  ], { allowTools: true, triggerSource: 'new_goal' })
 
   assert.equal(seen.body.reasoning_effort, 'high')
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
@@ -133,6 +133,32 @@ test('successful grounded execution de-escalates back to low after earlier failu
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
 })
 
+test('interaction router is tool-free, disables reasoning, and CHAT alone is not new_goal', async () => {
+  const routed = await captureRequest([
+    { role: 'system', content: 'classify only' },
+    { role: 'user', content: '[CHAT] tester: 给我汇报一下你那里卡住了' },
+  ], {
+    allowTools: false,
+    interactionRouter: true,
+    triggerSource: 'interaction_router',
+    requestBodyPatch: { max_tokens: 160, response_format: { type: 'json_object' } },
+  })
+
+  assert.equal(routed.seen.body.tools, undefined)
+  assert.equal(routed.seen.body.reasoning_effort, 'none')
+  assert.deepEqual(routed.seen.body.thinking, { type: 'disabled' })
+  assert.equal(routed.seen.body.max_tokens, 160)
+  assert.deepEqual(routed.seen.body.response_format, { type: 'json_object' })
+
+  assert.deepEqual(selectReasoningPolicy(config(), [
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: continue current work' },
+  ], { allowTools: true }), {
+    effort: 'high',
+    reason: 'ordinary_planning',
+  })
+})
+
 test('custom DeepSeek-compatible base URL keeps its endpoint while receiving model-gated reasoning policy', async () => {
   const { seen } = await captureRequest([
     { role: 'system', content: 'system' },
@@ -160,7 +186,7 @@ test('provider prompt trace records selected effort and policy reason per call',
     await captureRequest([
       { role: 'system', content: 'system' },
       { role: 'user', content: '[CHAT] tester: plan a production line' },
-    ], { allowTools: true, promptTraceFile: traceFile })
+    ], { allowTools: true, triggerSource: 'new_goal', promptTraceFile: traceFile })
 
     const rows = (await fsp.readFile(traceFile, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     const request = rows.find(row => row.event === 'provider.request')
