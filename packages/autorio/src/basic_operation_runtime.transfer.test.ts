@@ -126,7 +126,7 @@ describe('exact entity item transfers', () => {
     })
   })
 
-  it('recovers the same observed unit when native lookup temporarily returns nil', () => {
+  it('fails closed when an observed exact unit no longer resolves natively', () => {
     const c = context()
     const selectedInventory = inventory()
     const distractorInventory = inventory()
@@ -137,20 +137,14 @@ describe('exact entity item transfers', () => {
     ;(globalThis as any).game.get_entity_by_unit_number = vi.fn(() => undefined)
 
     expect(c.controller.submit_move_exact('firearm-magazine', 101, 7, true)).toEqual([true, 'Task started'])
-    expect(c.runtime.state_moving_items(c.actor)).toBe(7)
+    expect(c.runtime.state_moving_items(c.actor)).toBe(0)
 
-    expect(c.findEntities).toHaveBeenCalledWith({
-      position: { x: 2, y: 0 },
-      radius: 0.25,
-      name: 'gun-turret',
-      force: c.actor.force,
-    })
-    expect(selectedInventory.counts['firearm-magazine']).toBe(7)
+    expect(c.findEntities).not.toHaveBeenCalled()
+    expect(selectedInventory.counts['firearm-magazine'] ?? 0).toBe(0)
     expect(distractorInventory.counts['firearm-magazine'] ?? 0).toBe(0)
     expect(c.controller.status().last_result).toMatchObject({
-      code: 'completed',
-      completed: true,
-      moved_count: 7,
+      code: 'target_gone',
+      completed: false,
       target_unit_number: 101,
     })
   })
