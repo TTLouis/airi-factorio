@@ -105,6 +105,25 @@ function visibleTaskBoard(board) {
   }
 }
 
+function compactBasicOperationResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return undefined
+  return {
+    operation_id: Number.isSafeInteger(result.operation_id) ? result.operation_id : undefined,
+    type: typeof result.type === 'string' ? cleanMemoryText(result.type, 64) : undefined,
+    accepted: result.accepted === true,
+    completed: result.completed === true,
+    code: typeof result.code === 'string' ? cleanMemoryText(result.code, 64) : undefined,
+    entity_name: typeof result.entity_name === 'string' ? cleanMemoryText(result.entity_name, 200) : undefined,
+    target_unit_number: Number.isSafeInteger(result.target_unit_number) ? result.target_unit_number : undefined,
+    player_name: typeof result.player_name === 'string' ? cleanMemoryText(result.player_name, 128) : undefined,
+    item_name: typeof result.item_name === 'string' ? cleanMemoryText(result.item_name, 200) : undefined,
+    requested_count: Number.isSafeInteger(result.requested_count) ? result.requested_count : undefined,
+    moved_count: Number.isSafeInteger(result.moved_count) ? result.moved_count : undefined,
+    to_entity: typeof result.to_entity === 'boolean' ? result.to_entity : undefined,
+    to_player: typeof result.to_player === 'boolean' ? result.to_player : undefined,
+  }
+}
+
 function receiptEvidence(raw, outcome) {
   try {
     const parsed = JSON.parse(raw)
@@ -124,6 +143,7 @@ function receiptEvidence(raw, outcome) {
         task_types: Array.isArray(receipt?.task_types) ? receipt.task_types.slice(0, 16) : undefined,
         tick: receipt?.tick,
         reason: receipt?.reason,
+        basic_operation: compactBasicOperationResult(parsed?.basic_operation?.last_result),
       }),
     }
   }
@@ -233,6 +253,8 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         revision: (previous?.revision ?? 0) + 1,
         last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
         last_operations: plan.operations.slice(0, 16).map(operation => cleanMemoryText(`${operation.name} ${JSON.stringify(operation.args ?? {})}`, 800)),
+        last_mutation_verified: false,
+        last_verified_batch_id: undefined,
         updated_at: now,
         history,
       }
@@ -450,6 +472,8 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : 1,
         last_chat_message: cleanMemoryText(value.last_chat_message, 2000),
         last_operations: (Array.isArray(value.last_operations) ? value.last_operations : []).slice(-16).map(operation => cleanMemoryText(operation, 800)),
+        last_mutation_verified: value.last_mutation_verified === true,
+        last_verified_batch_id: Number.isSafeInteger(value.last_verified_batch_id) && value.last_verified_batch_id > 0 ? value.last_verified_batch_id : undefined,
         updated_at: Number.isFinite(value.updated_at) ? value.updated_at : Date.now(),
         history: (Array.isArray(value.history) ? value.history : []).slice(-PLAN_HISTORY_LIMIT).map(entry => ({
           revision: Number.isSafeInteger(entry?.revision) ? entry.revision : 0,
@@ -1399,6 +1423,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
         allowReplan: this.planUpdateReason === 'failure',
+        previousState,
       }) ?? stateResult
       if (commands.length > 0 && stateResult?.state) {
         const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'admitting')
