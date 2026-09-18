@@ -554,7 +554,10 @@ describe('bounded area-clearing combat', () => {
     c.controller.tick(c.actor)
     expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
 
-    c.enemies[0].position = { x: 34, y: 0 }
+    const active_unit_number = c.controller.status().target?.unit_number
+    const active_target = c.enemies.find(entity => entity.unit_number === active_unit_number)
+    expect(active_target).toBeDefined()
+    active_target.position = { x: 36, y: 0 }
     ;(globalThis as any).game.tick += 1
     c.controller.tick(c.actor)
     expect(c.surface.create_entity).toHaveBeenCalledTimes(4)
