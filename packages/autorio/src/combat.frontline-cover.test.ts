@@ -10,6 +10,15 @@ beforeEach(() => {
   ;(globalThis as any).game.tick = 100
   ;(globalThis as any).game.print = vi.fn()
   ;(globalThis as any).log = vi.fn()
+  ;(globalThis as any).prototypes = {
+    entity: {
+      'gun-turret': { turret_range: 18 },
+      'small-worm-turret': { attack_parameters: { range: 10 } },
+      'medium-worm-turret': { attack_parameters: { range: 15 } },
+      'big-worm-turret': { attack_parameters: { range: 20 } },
+      'behemoth-worm-turret': { attack_parameters: { range: 30 } },
+    },
+  }
 })
 
 function itemStack(name: string, count: number) {
@@ -44,7 +53,7 @@ function inventory(items: any[] = []) {
   return value
 }
 
-function enemy(unit_number: number, name: string, type: 'unit' | 'unit-spawner', x: number) {
+function enemy(unit_number: number, name: string, type: 'unit' | 'unit-spawner' | 'turret', x: number, attackRange?: number) {
   return {
     valid: true,
     name,
@@ -52,6 +61,7 @@ function enemy(unit_number: number, name: string, type: 'unit' | 'unit-spawner',
     unit_number,
     position: { x, y: 0 },
     health: type === 'unit' ? 30 : 350,
+    prototype: attackRange === undefined ? undefined : { attack_parameters: { range: attackRange } },
   } as any
 }
 
@@ -158,6 +168,41 @@ describe('sacrificial combat support frontline', () => {
     expect(c.createdTurrets[0].position.x).toBeGreaterThan(c.actor.position.x)
     expect(c.createdTurrets[0].position.x).toBeLessThan(nest.position.x)
     expect(c.createdTurrets[0].position).toEqual({ x: 12, y: 0 })
+  })
+
+  it('uses each worm tier\'s own attack range and scans to at least twice that range', () => {
+    const nest = enemy(15, 'biter-spawner', 'unit-spawner', 30)
+    const smallOutside = enemy(16, 'small-worm-turret', 'turret', 21, 10)
+    const behemothInside = enemy(17, 'behemoth-worm-turret', 'turret', 59, 30)
+    const c = world([nest, smallOutside, behemothInside], 1)
+
+    c.controller.submit_clear(40)
+    c.controller.tick(c.actor)
+
+    expect(c.controller.status()).toMatchObject({
+      target: { unit_number: 17, name: 'behemoth-worm-turret' },
+    })
+
+    behemothInside.valid = false
+    tick(c)
+
+    expect(c.controller.status().target).not.toMatchObject({ unit_number: 16 })
+  })
+
+  it('can discover and fund support for a worm outside the requested clear radius when it is within twice its attack range', () => {
+    const worm = enemy(18, 'big-worm-turret', 'turret', 35, 20)
+    const c = world([worm], 1)
+
+    c.controller.submit_clear(10)
+    c.controller.tick(c.actor)
+    expect(c.controller.status()).toMatchObject({ combat_phase: 'safety', support_turret_budget: 0 })
+
+    tick(c)
+    expect(c.controller.status()).toMatchObject({
+      combat_phase: 'engage',
+      target: { unit_number: 18, name: 'big-worm-turret' },
+      support_turret_budget: 1,
+    })
   })
 
   it('establishes support for ranged mobile pressure outside panic distance', () => {
@@ -283,6 +328,32 @@ describe('sacrificial combat support frontline', () => {
       radius: 1.5,
     }))
     expect(c.controller.status()).toMatchObject({ path: { mode: 'retreat', target_position: { x: -6, y: 0 } } })
+  })
+
+  it('does not start support cleanup while a worm remains inside its doubled threat radius', () => {
+    const nest = enemy(58, 'biter-spawner', 'unit-spawner', 30)
+    const worm = enemy(59, 'medium-worm-turret', 'turret', 29, 15)
+    worm.valid = false
+    const c = world([nest, worm], 1)
+
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+    c.actor.position = { x: 6, y: 0 }
+    tick(c)
+    expect(c.createdTurrets).toHaveLength(1)
+
+    nest.valid = false
+    tick(c)
+    expect(c.controller.status()).toMatchObject({ combat_phase: 'safety', combat_safety_goal: 'cleanup' })
+
+    worm.valid = true
+    tick(c)
+
+    expect(c.controller.status()).toMatchObject({
+      combat_phase: 'engage',
+      target: { unit_number: 59, name: 'medium-worm-turret' },
+    })
+    expect(c.actor.set_mining_state).not.toHaveBeenCalledWith(expect.objectContaining({ mining: true }))
   })
 
   it('still recovers surviving encounter-owned support during cleanup', () => {
