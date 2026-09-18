@@ -157,6 +157,54 @@ describe('construction-area finite blocker clearing', () => {
     })
   })
 
+  it('recovers when Factorio drops an accepted mining state on the next tick while the blocker is still live', () => {
+    const f = fixture()
+    f.treeB.valid = false
+    f.rock.valid = false
+    expect(f.controller.submit(1, 0, 4, 4)[0]).toBe(true)
+
+    f.controller.tick(f.actor)
+    expect(f.manager.player_state.task_state).toBe(TaskStates.CLEARING_AREA)
+    expect(f.actor.get_mining_state().mining).toBe(true)
+
+    f.actor.set_mining_state({ mining: false })
+    f.controller.tick(f.actor)
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      target_kind: 'position',
+      requested_position: { x: 1, y: 0 },
+      reach_distance: 0.5,
+    })
+    expect(f.manager.get_status_snapshot()).toMatchObject({
+      queue_length: 1,
+      queued_task_types: [TaskStates.CLEARING_AREA],
+    })
+  })
+
+  it('treats an exact-selection miss as a bounded closer reposition instead of immediate failure', () => {
+    const f = fixture()
+    f.treeB.valid = false
+    f.rock.valid = false
+    ;(f.actor as any).update_selected_entity = vi.fn(() => {
+      ;(f.actor.character as any).selected = undefined
+    })
+
+    expect(f.controller.submit(1, 0, 4, 4)[0]).toBe(true)
+    f.controller.tick(f.actor)
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      target_kind: 'position',
+      requested_position: { x: 1, y: 0 },
+      reach_distance: 0.5,
+    })
+    expect(f.manager.get_status_snapshot()).toMatchObject({
+      queue_length: 1,
+      queued_task_types: [TaskStates.CLEARING_AREA],
+    })
+  })
+
   it('bounds repeated engine-rejected mining starts instead of retrying forever', () => {
     const f = fixture()
     f.treeB.valid = false

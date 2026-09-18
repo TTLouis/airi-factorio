@@ -1,4 +1,4 @@
-"""Verify bounded construction-area clearing with heterogeneous live tree prototypes."""
+"""Verify bounded construction-area clearing with engine-discovered heterogeneous finite blockers."""
 import argparse
 import json
 import sys

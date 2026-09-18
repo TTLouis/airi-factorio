@@ -70,7 +70,9 @@ describe('mining reach recovery', () => {
     expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
     expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
       entity_name: 'iron-ore',
-      target: f.resource,
+      target_kind: 'position',
+      requested_position: { x: 3, y: 0 },
+      target: null,
       target_position: { x: 3, y: 0 },
       reach_distance: 2.45,
       owner_actor_id: 42,
@@ -110,6 +112,7 @@ describe('mining reach recovery', () => {
     expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
     expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
       entity_name: 'mod-tree-a',
+      target_kind: 'exact_entity',
       target: natural,
       target_unit_number: 191,
       target_position: { x: 8, y: 0 },

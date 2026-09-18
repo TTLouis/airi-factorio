@@ -30,26 +30,30 @@ function squared_distance(a: { x: number, y: number }, b: { x: number, y: number
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
 
-function mining_reposition_task(actor: ControlledActor, entity: LuaEntity): PlayerParametersWalkToEntity | undefined {
+function mining_reposition_task(actor: ControlledActor, entity: LuaEntity, task: PlayerParametersMineEntity): PlayerParametersWalkToEntity | undefined {
   const identity = actor.status_snapshot()
   if (identity.actor_id === undefined) return undefined
+  const exact_identity = task.target_unit_number !== undefined
+  const target_position = { x: entity.position.x, y: entity.position.y }
   return {
     type: TaskStates.WALKING_TO_ENTITY,
     entity_name: entity.name,
     search_radius: MINING_TARGET_SEARCH_RADIUS,
+    target_kind: exact_identity ? 'exact_entity' : 'position',
+    requested_position: exact_identity ? undefined : target_position,
     reach_distance: mining_reach_distance(actor, entity),
     path: null,
     path_drawn: false,
     path_index: 1,
     calculating_path: false,
-    target_position: { x: entity.position.x, y: entity.position.y },
-    target: entity,
-    target_unit_number: entity.unit_number,
+    target_position,
+    target: exact_identity ? entity : null,
+    target_unit_number: exact_identity ? task.target_unit_number : undefined,
     owner_actor_id: identity.actor_id,
     owner_actor_kind: identity.kind,
     owner_force_index: actor.force.index,
     path_attempts: 0,
-    started_tick: game.tick,
+    started_tick: undefined,
     last_progress_tick: game.tick,
   }
 }
@@ -94,7 +98,7 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
   }
 
   function reposition_for_mining(actor: ControlledActor, entity: LuaEntity, task: PlayerParametersMineEntity) {
-    const navigation = mining_reposition_task(actor, entity)
+    const navigation = mining_reposition_task(actor, entity, task)
     if (!navigation) {
       controller.fail(actor, task, 'actor_changed')
       return false

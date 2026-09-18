@@ -221,6 +221,28 @@ describe('product-oriented finite harvesting', () => {
     expect(f.actor.set_mining_state).toHaveBeenLastCalledWith({ mining: true, position: f.rockA.position })
   })
 
+  it('recovers from an exact-selection miss by approaching closer instead of cancelling harvest', () => {
+    const f = fixture()
+    f.rockB.valid = false
+    ;(f.actor as any).update_selected_entity = vi.fn(() => {
+      ;(f.actor.character as any).selected = undefined
+    })
+    expect(f.harvest.submit('stone', 1, 64)[0]).toBe(true)
+
+    f.harvest.tick(f.actor)
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      target_kind: 'position',
+      requested_position: { x: 1, y: 0 },
+      reach_distance: 0.5,
+    })
+    expect(f.manager.get_status_snapshot()).toMatchObject({
+      queue_length: 1,
+      queued_task_types: [TaskStates.HARVESTING],
+    })
+  })
+
   it('excludes ordinary resource patches from the harvest source set', () => {
     const f = fixture()
     expect(f.harvest.submit('stone', 1, 64)[0]).toBe(true)

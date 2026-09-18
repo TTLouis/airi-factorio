@@ -198,7 +198,7 @@ export function new_area_clearing_controller(
       return
     }
     if (!select_exact_mining_target(actor, target)) {
-      fail(actor, task, 'selection_mismatch')
+      reposition_after_rejected_start(actor, task, target)
       return
     }
 
