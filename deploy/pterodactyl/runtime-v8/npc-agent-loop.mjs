@@ -50,6 +50,8 @@ An empty operations array normally means no new Autorio world action will happen
 When finite canonical work remains but execution is truthfully impossible, keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or blocker. This is the explicit no-mutation blocker contract. Future-tense prose such as "I will take the items" is not a blocker and does not authorize the harness to invent an operation.
 
 Before a non-empty operation batch, chatMessage should tell the human what concrete current plan step AIRI is about to attempt. Do not say mining, construction, transfer, crafting, or any other mutation has started unless that mutation is in the admitted/running operation batch or authoritative runtime evidence proves it. Navigation completion proves arrival only; it never proves that a later mining or construction action started. [MOD] completion/error messages may include a detailed getTaskStatus snapshot. Use that receipt plus any needed read-only verification to advance, replan, complete, or report a blocker.
+
+Skill lifecycle is explicit. findSkills is discovery only: a search result is not a loaded skill and must not be relied on as the full pattern. Before following a discovered skill, call getSkillDetails for that exact id. A [SKILL_CONTEXT] message contains only skills explicitly opened with getSkillDetails for the current logical task. Reuse their structure and constraints, but revalidate mutable world state, recipes, inventory, geometry, and placement with live deterministic tools before acting.
 `.trim()
 
 function cleanMemoryText(value, max) {
@@ -1095,6 +1097,105 @@ const INTERACTION_INTENTS = new Set([
   'chat_only',
 ])
 
+const POST_STEP_ROUTES = new Set([
+  'continue_current',
+  'replan',
+  'wait_runtime',
+  'fallback_planner',
+])
+const SKILL_CONTEXT_MAX_SKILLS = 3
+const SKILL_CONTEXT_MAX_CHARS = 16000
+
+function boundedSkillValue(value, depth = 0) {
+  if (depth > 4) return undefined
+  if (typeof value === 'string') return cleanMemoryText(value, 600)
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value
+  if (Array.isArray(value)) {
+    return value.slice(0, 12)
+      .map(item => boundedSkillValue(item, depth + 1))
+      .filter(item => item !== undefined)
+  }
+  if (!value || typeof value !== 'object') return undefined
+  const entries = Object.entries(value).slice(0, 24)
+    .map(([key, child]) => [key, boundedSkillValue(child, depth + 1)])
+    .filter(([, child]) => child !== undefined)
+  return Object.fromEntries(entries)
+}
+
+function compactLoadedSkill(raw, expectedId) {
+  let skill
+  try { skill = typeof raw === 'string' ? JSON.parse(raw) : raw }
+  catch { return undefined }
+  if (!skill || typeof skill !== 'object' || Array.isArray(skill)) return undefined
+  const id = typeof skill.id === 'string' ? cleanMemoryText(skill.id, 80) : ''
+  if (!id || (expectedId && id !== expectedId)) return undefined
+
+  const keys = [
+    'schema_version', 'revision', 'id', 'name', 'kind', 'stage', 'status', 'summary',
+    'preconditions', 'inputs', 'outputs', 'topology', 'constraints', 'parameters',
+    'verification', 'known_failure_modes', 'confidence', 'examples',
+  ]
+  const compact = {}
+  for (const key of keys) {
+    if (skill[key] === undefined) continue
+    const value = boundedSkillValue(skill[key])
+    if (value !== undefined) compact[key] = value
+  }
+  let serialized = JSON.stringify(compact)
+  if (serialized.length <= 7000) return compact
+
+  delete compact.examples
+  delete compact.known_failure_modes
+  serialized = JSON.stringify(compact)
+  if (serialized.length <= 7000) return compact
+
+  return {
+    id,
+    revision: Number.isSafeInteger(skill.revision) ? skill.revision : undefined,
+    name: typeof skill.name === 'string' ? cleanMemoryText(skill.name, 160) : undefined,
+    kind: typeof skill.kind === 'string' ? cleanMemoryText(skill.kind, 80) : undefined,
+    stage: typeof skill.stage === 'string' ? cleanMemoryText(skill.stage, 80) : undefined,
+    status: typeof skill.status === 'string' ? cleanMemoryText(skill.status, 80) : undefined,
+    summary: typeof skill.summary === 'string' ? cleanMemoryText(skill.summary, 1200) : undefined,
+    preconditions: Array.isArray(skill.preconditions) ? boundedSkillValue(skill.preconditions.slice(0, 6)) : undefined,
+    topology: boundedSkillValue(skill.topology),
+    constraints: Array.isArray(skill.constraints) ? boundedSkillValue(skill.constraints.slice(0, 8)) : undefined,
+    parameters: Array.isArray(skill.parameters) ? boundedSkillValue(skill.parameters.slice(0, 8)) : undefined,
+    verification: boundedSkillValue(skill.verification),
+  }
+}
+
+function postStepDecisionQuestions() {
+  return {
+    route: {
+      type: 'choice',
+      instructions: 'After one authoritative Autorio batch completion, choose the smallest safe planner transition. This is routing only; do not invent world facts or declare completion.',
+      criteria: {
+        continue_current: 'The canonical goal still looks semantically on track and the main planner should continue compactly.',
+        replan: 'The completion evidence materially changes the remaining approach or suggests the main planner should reconsider the next action with higher reasoning.',
+        wait_runtime: 'A persistent runtime controller is authoritatively active, healthy, and live, so waking the main planner now would only duplicate ongoing work.',
+        fallback_planner: 'The evidence is ambiguous or outside this routing contract; use the existing safe main-planner continuation.',
+      },
+    },
+  }
+}
+
+function parsePostStepDecision(response) {
+  const answer = response?.answers?.route
+  if (!answer || !POST_STEP_ROUTES.has(answer.choice)) throw new AgentLoopError('Decision provider returned invalid post-step route')
+  if (typeof answer.confidence !== 'number' || !Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1) {
+    throw new AgentLoopError('Decision provider returned invalid post-step confidence')
+  }
+  return {
+    route: answer.choice,
+    confidence: answer.confidence,
+    probabilities: answer.probabilities,
+    model: typeof response?.model === 'string' ? response.model : undefined,
+    provider: typeof response?.provider === 'string' ? response.provider : undefined,
+    usage: response?.usage && typeof response.usage === 'object' ? response.usage : undefined,
+  }
+}
+
 const INTERACTION_ROUTER_PROMPT = `Classify one incoming human message relative to the currently active Factorio goal.
 You are a side-channel interaction router only. You have no Factorio tools and must never propose or execute world operations.
 
@@ -1422,6 +1523,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.interactionProvider = typeof options.interactionProvider === 'function' ? options.interactionProvider : null
     this.interactionDecisionProvider = typeof options.interactionDecisionProvider === 'function' ? options.interactionDecisionProvider : null
     this.interactionAbort = null
+    this.postStepDecisionAbort = null
+    this.loadedSkillContext = new Map()
+    this.reasoningTriggerSource = null
     this.persistQueue = Promise.resolve()
     this.traceRequest = null
     this.traceRequestSequence = 0
@@ -1492,6 +1596,46 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     return this.requestInfo?.memoryKey ?? this.lastMemoryKey ?? `npc:${this.npcId}`
   }
 
+  clearLoadedSkillContext() {
+    this.loadedSkillContext.clear()
+  }
+
+  recordLoadedSkillToolResult(toolName, args, raw) {
+    if (toolName !== 'getSkillDetails') return false
+    const skill = compactLoadedSkill(raw, typeof args?.id === 'string' ? args.id : undefined)
+    if (!skill) return false
+    if (this.loadedSkillContext.has(skill.id)) this.loadedSkillContext.delete(skill.id)
+    this.loadedSkillContext.set(skill.id, skill)
+    while (this.loadedSkillContext.size > SKILL_CONTEXT_MAX_SKILLS) {
+      const oldest = this.loadedSkillContext.keys().next().value
+      if (oldest === undefined) break
+      this.loadedSkillContext.delete(oldest)
+    }
+    return skill
+  }
+
+  skillContext() {
+    const skills = [...this.loadedSkillContext.values()]
+    if (skills.length === 0) return ''
+    while (skills.length > 1 && JSON.stringify(skills).length > SKILL_CONTEXT_MAX_CHARS) skills.shift()
+    const payload = JSON.stringify(skills)
+    if (payload.length > SKILL_CONTEXT_MAX_CHARS) return ''
+    return `[SKILL_CONTEXT] Explicitly loaded AIRI skills for this logical task. They are reusable strategy/constraint context, not authoritative live world state. Revalidate mutable facts before acting.\n${payload}`
+  }
+
+  providerMessages() {
+    const messages = super.providerMessages().filter(message => !(message?.role === 'user'
+      && typeof message.content === 'string'
+      && message.content.startsWith('[SKILL_CONTEXT]')))
+    const skillContext = this.skillContext()
+    if (!skillContext) return messages
+    const insertAt = Math.min(this.baseMessages.length, messages.length)
+    return [
+      ...messages.slice(0, insertAt),
+      { role: 'user', content: skillContext },
+      ...messages.slice(insertAt),
+    ]
+  }
 
   prepareContinuationContext() {
     super.prepareContinuationContext()
@@ -1800,6 +1944,156 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
+  async routePostStepDecision(receipt) {
+    if (!this.interactionDecisionProvider) return { route: 'fallback_planner', decision_called: false }
+
+    const generation = this.generation
+    const current = await this.assertCurrent()
+    const persistentRuntime = await this.persistentRuntimeStatus()
+    const runtimeHealthy = persistentRuntimeHealthy(persistentRuntime)
+    const planState = this.memory.currentPlan?.(this.activePlanKey())
+    const board = planState?.task_board
+    const state = {
+      phase: 'post_step',
+      current_goal: planState
+        ? {
+            goal_id: sanitizeDurableModelText(planState.goal_id, 100),
+            objective: sanitizeDurableModelText(planState.objective, 500),
+            status: planState.status,
+            active_step_index: Number.isSafeInteger(board?.active_index) ? board.active_index : undefined,
+            active_step: Number.isSafeInteger(board?.active_index)
+              ? sanitizeDurableModelText(board?.steps?.[board.active_index]?.description, 300)
+              : undefined,
+            completed_count: Number.isSafeInteger(board?.completed_count) ? board.completed_count : undefined,
+            total_steps: Number.isSafeInteger(board?.total_steps) ? board.total_steps : undefined,
+          }
+        : null,
+      completion_receipt: sanitizeDurableModelValue(receipt?.providerStatus ?? {}),
+      persistent_runtime: sanitizeDurableModelValue(persistentRuntime),
+      persistent_runtime_healthy: runtimeHealthy,
+    }
+    const questions = postStepDecisionQuestions()
+    const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
+    this.postStepDecisionAbort?.abort()
+    const controller = new AbortController()
+    this.postStepDecisionAbort = controller
+    const startedAt = Date.now()
+
+    await this.decisionTraceEvent('decision.request', {
+      decision_id: decisionId,
+      contract: 'post_step_route',
+      mode: 'active',
+      question_ids: Object.keys(questions),
+      runtime_healthy: runtimeHealthy,
+      canonical_step: Number.isSafeInteger(board?.active_index) ? board.active_index : undefined,
+    })
+
+    try {
+      const response = await this.interactionDecisionProvider(state, questions, {
+        epoch: current.epoch,
+        actorId: current.actor_id,
+        signal: controller.signal,
+      })
+      if (generation !== this.generation || !this.active || controller.signal.aborted) {
+        throw new AgentLoopError('Model turn was cancelled or superseded')
+      }
+      await this.assertCurrent()
+      const decision = parsePostStepDecision(response)
+      const latency_ms = Date.now() - startedAt
+      let appliedRoute = decision.route
+      let fallbackReason = ''
+      if (decision.route === 'wait_runtime' && !runtimeHealthy) {
+        appliedRoute = 'fallback_planner'
+        fallbackReason = 'wait_runtime_without_authoritative_healthy_persistent_runtime'
+      }
+
+      await this.decisionTraceEvent('decision.response', {
+        decision_id: decisionId,
+        contract: 'post_step_route',
+        mode: 'active',
+        provider: decision.provider,
+        model: decision.model,
+        route: decision.route,
+        confidence: decision.confidence,
+        latency_ms,
+        input_units: Number.isFinite(decision.usage?.input_tokens) ? Math.max(0, Math.trunc(decision.usage.input_tokens)) : 0,
+        output_units: Number.isFinite(decision.usage?.output_tokens) ? Math.max(0, Math.trunc(decision.usage.output_tokens)) : 0,
+        cost_usd: Number.isFinite(decision.usage?.cost) && decision.usage.cost >= 0 ? decision.usage.cost : 0,
+      })
+      await this.decisionTraceEvent('decision.route_applied', {
+        decision_id: decisionId,
+        contract: 'post_step_route',
+        mode: 'active',
+        requested_route: decision.route,
+        applied_route: appliedRoute,
+        fallback_reason: fallbackReason,
+        runtime_healthy: runtimeHealthy,
+      })
+      await this.traceEvent('post_step.routed', {
+        mode: 'active',
+        route: decision.route,
+        applied_route: appliedRoute,
+        fallback_reason: fallbackReason,
+        runtime_healthy: runtimeHealthy,
+        decision: {
+          provider: decision.provider,
+          model: decision.model,
+          route: decision.route,
+          confidence: decision.confidence,
+          usage: decision.usage,
+        },
+        decision_latency_ms: latency_ms,
+      })
+
+      if (appliedRoute === 'wait_runtime') {
+        await this.traceEvent('planner.skipped', { source: 'decision_provider', route: appliedRoute })
+      }
+      else {
+        await this.traceEvent('planner.wake', { source: 'decision_provider', route: appliedRoute })
+      }
+      return {
+        route: appliedRoute,
+        requested_route: decision.route,
+        runtime: persistentRuntime,
+        decision,
+        fallback_reason: fallbackReason,
+        decision_called: true,
+      }
+    }
+    catch (error) {
+      if (generation !== this.generation || !this.active || controller.signal.aborted) {
+        throw new AgentLoopError('Model turn was cancelled or superseded')
+      }
+      const latency_ms = Date.now() - startedAt
+      const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+      await this.decisionTraceEvent('decision.fallback', {
+        decision_id: decisionId,
+        contract: 'post_step_route',
+        mode: 'active',
+        fallback_target: 'main_planner',
+        reason: message,
+        latency_ms,
+      })
+      await this.traceEvent('post_step.routed', {
+        mode: 'active',
+        route: 'fallback_planner',
+        applied_route: 'fallback_planner',
+        fallback_reason: message,
+        runtime_healthy: runtimeHealthy,
+        decision_latency_ms: latency_ms,
+      })
+      await this.traceEvent('planner.wake', {
+        source: 'decision_provider',
+        route: 'fallback_planner',
+        fallback_reason: message,
+      })
+      return { route: 'fallback_planner', runtime: persistentRuntime, error: message, decision_called: true }
+    }
+    finally {
+      if (this.postStepDecisionAbort === controller) this.postStepDecisionAbort = null
+    }
+  }
+
   async cancelInteractionWorldWork(epoch) {
     if (!epoch || !Number.isSafeInteger(epoch.epoch)) return
     await executeAuthorizedBatch(
@@ -1908,6 +2202,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       if (healthyRuntime) await this.cancelInteractionWorldWork(routed.epoch)
       const state = this.memory.pausePlan?.(memoryKey, 'user_cancel')
       await this.persistState()
+      this.clearLoadedSkillContext()
       super.cancel()
       const reply = state
         ? 'Cancelled the remaining Autorio work and paused the current goal.'
@@ -1930,6 +2225,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     else if (!routed.router_bypassed && intent === 'new_goal') {
       if (healthyRuntime) await this.cancelInteractionWorldWork(routed.epoch)
+      this.clearLoadedSkillContext()
       super.cancel()
       this.memory.clearTaskContext?.(memoryKey)
       await this.persistState()
@@ -1945,6 +2241,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         ? 'amend_current'
         : 'continue_current'
     this.requestLifecycle = intent
+    this.reasoningTriggerSource = null
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
@@ -2007,6 +2304,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.loadPersistentState()
     const key = this.requestInfo?.memoryKey ?? this.lastMemoryKey ?? `npc:${this.npcId}`
     this.memory.clearTaskContext?.(key)
+    this.clearLoadedSkillContext()
     await this.persistState()
 
     // Completion is a hard planner boundary. Do not carry the completed task's
@@ -2192,18 +2490,35 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return null
     }
     this.lastHandledRuntimeReceipt.completion = receiptKey
-    const result = await this.continueFromModMessage(
-      `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
-      'factorio.completion_continuation',
-    )
-    if (pendingAmendment) this.pendingInteractionAmendment = null
-    return result
+
+    const routed = pendingAmendment
+      ? { route: 'fallback_planner', decision_called: false }
+      : await this.routePostStepDecision(receipt)
+    if (routed.route === 'wait_runtime') return null
+
+    this.reasoningTriggerSource = routed.route === 'continue_current'
+      ? 'continue_current'
+      : routed.route === 'replan'
+        ? 'post_step_replan'
+        : null
+    try {
+      const result = await this.continueFromModMessage(
+        `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
+        'factorio.completion_continuation',
+      )
+      if (pendingAmendment) this.pendingInteractionAmendment = null
+      return result
+    }
+    finally {
+      this.reasoningTriggerSource = null
+    }
   }
 
   async failed(errorText) {
     await this.loadPersistentState()
     if (!this.active) return null
     this.planUpdateReason = 'failure'
+    this.reasoningTriggerSource = null
     const cleanError = cleanMemoryText(errorText, 4000)
     const receipt = await this.taskStatusReceipt()
     const receiptKey = runtimeReceiptKey('failure', receipt.view, cleanError, this.epoch?.epoch)
@@ -2226,6 +2541,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   cancel(reason = 'cancelled') {
     this.interactionAbort?.abort()
     this.interactionAbort = null
+    this.postStepDecisionAbort?.abort()
+    this.postStepDecisionAbort = null
+    this.clearLoadedSkillContext()
+    this.reasoningTriggerSource = null
     void this.traceEvent('request.cancelled', { reason, usage: this.traceRequest?.usage })
     this.traceRequest = null
     this.outputBudgetRecoveryUsed = false
@@ -2268,6 +2587,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const controller = new AbortController()
     this.providerAbort = controller
     const providerMessages = providerMessagesOverride ?? this.providerMessages()
+    const triggerSource = this.reasoningTriggerSource ?? this.planUpdateReason
     const startedAt = Date.now()
     if (recoveryAttempt > 0 && this.traceRequest) {
       this.traceRequest.recovery = {
@@ -2279,7 +2599,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     await this.traceEvent('provider.request', {
       round,
-      trigger_source: this.planUpdateReason,
+      trigger_source: triggerSource,
       allow_tools: effectiveAllowTools,
       recovery_attempt: effectiveRecoveryAttempt,
       recovery_kind: traceRecoveryKind,
@@ -2295,7 +2615,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         allowTools: effectiveAllowTools,
         recoveryAttempt: effectiveRecoveryAttempt,
         recoveryKind,
-        triggerSource: this.planUpdateReason,
+        triggerSource,
         lifecycle: this.requestLifecycle,
         actionOmissionRepair: omissionRepair,
         requestBodyPatch: omissionRepair ? { max_tokens: ACTION_OMISSION_MAX_TOKENS } : undefined,
@@ -2306,7 +2626,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const responseTrace = {
         kind: 'response',
         round,
-        trigger_source: this.planUpdateReason,
+        trigger_source: triggerSource,
         recovery_attempt: effectiveRecoveryAttempt,
         recovery_kind: traceRecoveryKind,
         latency_ms: Date.now() - startedAt,
@@ -2323,7 +2643,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const errorTrace = {
         kind: 'error',
         round,
-        trigger_source: this.planUpdateReason,
+        trigger_source: triggerSource,
         recovery_attempt: effectiveRecoveryAttempt,
         recovery_kind: traceRecoveryKind,
         latency_ms: Date.now() - startedAt,
@@ -2538,7 +2858,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     for (let index = 0; index < results.length; index++) {
       const original = String(results[index].content ?? '')
-      this.recordLiveEntityToolResult(prepared[index]?.tool?.function?.name, original)
+      const toolName = prepared[index]?.tool?.function?.name
+      this.recordLiveEntityToolResult(toolName, original)
+      const loadedSkill = this.recordLoadedSkillToolResult(toolName, prepared[index]?.args, original)
+      if (loadedSkill) {
+        await this.traceEvent('skill.context_loaded', {
+          skill_id: loadedSkill.id,
+          revision: loadedSkill.revision,
+          loaded_skill_count: this.loadedSkillContext.size,
+        })
+      }
       if (cachedBefore[index]) results[index].content = DUPLICATE_OBSERVATION_MESSAGE
       const output = String(results[index].content ?? '')
       if (this.traceRequest?.usage) this.traceRequest.usage.tool_result_chars += output.length
@@ -2748,7 +3077,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       args: operation.args,
     }))
     await this.traceEvent('plan.accepted', {
-      trigger_source: this.planUpdateReason,
+      trigger_source: triggerSource,
       chat_message: plan.chatMessage,
       plan: plan.plan,
       current_step: plan.currentStep,

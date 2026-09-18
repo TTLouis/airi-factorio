@@ -543,6 +543,11 @@ function emptyAgentDebug(fallback = {}) {
     decision_model: '',
     decision_shadow_intent: '',
     decision_active_intent: '',
+    decision_post_step_route: '',
+    decision_post_step_applied_route: '',
+    decision_post_step_confidence_percent: 0,
+    decision_post_step_latency_ms: 0,
+    decision_post_step_fallback: '',
     decision_confidence_percent: 0,
     decision_queue_conflict_percent: 0,
     decision_latency_ms: 0,
@@ -573,6 +578,11 @@ function decisionDebugFields(value = {}) {
     decision_model: uiText(value.decision_model, 160),
     decision_shadow_intent: uiText(value.decision_shadow_intent, 80),
     decision_active_intent: uiText(value.decision_active_intent, 80),
+    decision_post_step_route: uiText(value.decision_post_step_route, 80),
+    decision_post_step_applied_route: uiText(value.decision_post_step_applied_route, 80),
+    decision_post_step_confidence_percent: debugInteger(value.decision_post_step_confidence_percent),
+    decision_post_step_latency_ms: debugInteger(value.decision_post_step_latency_ms),
+    decision_post_step_fallback: uiText(value.decision_post_step_fallback, 300),
     decision_confidence_percent: debugInteger(value.decision_confidence_percent),
     decision_queue_conflict_percent: debugInteger(value.decision_queue_conflict_percent),
     decision_latency_ms: debugInteger(value.decision_latency_ms),
@@ -703,6 +713,31 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
     if (decisionError) debug.decision_error = decisionError
   }
 
+  if (event === 'post_step.routed') {
+    const decision = data?.decision && typeof data.decision === 'object' ? data.decision : undefined
+    debug.decision_post_step_route = uiText(data.route, 80)
+    debug.decision_post_step_applied_route = uiText(data.applied_route, 80)
+    debug.decision_post_step_fallback = uiText(data.fallback_reason, 300)
+    debug.decision_post_step_latency_ms = debugInteger(data.decision_latency_ms)
+    if (decision) {
+      debug.decision_provider = uiText(decision.provider, 80)
+      debug.decision_model = uiText(decision.model, 160)
+      debug.decision_post_step_confidence_percent = decisionPercent(decision.confidence)
+      const decisionInput = debugInteger(decision.usage?.input_tokens)
+      const decisionOutput = debugInteger(decision.usage?.output_tokens)
+      const decisionCost = decisionMicroUsd(decision.usage?.cost)
+      debug.decision_input_units = decisionInput
+      debug.decision_output_units = decisionOutput
+      debug.decision_cost_micro_usd = decisionCost
+      debug.decision_calls_total = debugInteger(debug.decision_calls_total) + 1
+      debug.decision_input_units_total = debugInteger(debug.decision_input_units_total) + decisionInput
+      debug.decision_output_units_total = debugInteger(debug.decision_output_units_total) + decisionOutput
+      debug.decision_cost_micro_usd_total = debugInteger(debug.decision_cost_micro_usd_total) + decisionCost
+      debug.decision_error = ''
+    }
+    if (debug.decision_post_step_fallback) debug.decision_error = debug.decision_post_step_fallback
+  }
+
   if (event === 'planner.skipped' && data?.source === 'decision_provider') {
     debug.decision_planner_skips_total = debugInteger(debug.decision_planner_skips_total) + 1
   }
@@ -738,6 +773,19 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
 export function liveAgentEvent(event, data = {}) {
   const count = value => Array.isArray(value) ? value.length : 0
   switch (event) {
+    case 'post_step.routed': {
+      const requested = uiText(data.route, 80) || 'fallback_planner'
+      const applied = uiText(data.applied_route, 80) || requested
+      const decision = data?.decision && typeof data.decision === 'object' ? data.decision : undefined
+      const confidence = decisionPercent(decision?.confidence)
+      const fallback = uiText(data.fallback_reason, 160)
+      return {
+        activity: {
+          kind: 'system',
+          text: `Jev ACTIVE post-step: ${requested}${applied !== requested ? ` → ${applied}` : ''}${confidence > 0 ? ` · ${confidence}%` : ''}${fallback ? ` · fallback ${fallback}` : ''}`,
+        },
+      }
+    }
     case 'interaction.routed': {
       const shadow = data?.decision_shadow && typeof data.decision_shadow === 'object' ? data.decision_shadow : undefined
       if (shadow) {

@@ -28,6 +28,11 @@ describe('task board debug and UI freshness helpers', () => {
       decision_model: 'jev-latest',
       decision_shadow_intent: 'status_query',
       decision_active_intent: 'status_query',
+      decision_post_step_route: 'wait_runtime',
+      decision_post_step_applied_route: 'fallback_planner',
+      decision_post_step_confidence_percent: 87,
+      decision_post_step_latency_ms: 42,
+      decision_post_step_fallback: 'runtime not healthy',
       decision_confidence_percent: 109,
       decision_queue_conflict_percent: 17,
       decision_latency_ms: 84,
@@ -51,6 +56,11 @@ describe('task board debug and UI freshness helpers', () => {
     expect(debug.decision_model).toBe('jev-latest')
     expect(debug.decision_shadow_intent).toBe('status_query')
     expect(debug.decision_active_intent).toBe('status_query')
+    expect(debug.decision_post_step_route).toBe('wait_runtime')
+    expect(debug.decision_post_step_applied_route).toBe('fallback_planner')
+    expect(debug.decision_post_step_confidence_percent).toBe(87)
+    expect(debug.decision_post_step_latency_ms).toBe(42)
+    expect(debug.decision_post_step_fallback).toBe('runtime not healthy')
     expect(debug.decision_confidence_percent).toBe(100)
     expect(debug.decision_queue_conflict_percent).toBe(17)
     expect(debug.decision_latency_ms).toBe(84)

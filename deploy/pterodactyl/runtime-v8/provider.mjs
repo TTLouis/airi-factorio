@@ -70,6 +70,9 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   if (options.triggerSource === 'new_goal') {
     return { effort: 'high', reason: 'new_goal' }
   }
+  if (options.triggerSource === 'post_step_replan') {
+    return { effort: 'high', reason: 'jev_post_step_replan' }
+  }
   if (completionContinuation(messages, options)) {
     return { effort: 'low', reason: 'deterministic_completion' }
   }
@@ -113,7 +116,8 @@ export async function providerRequest(config, messages, options = {}) {
 
   const actualFetch = options.fetchImpl ?? fetch
   const actualEndpoint = providerEndpoint(config.base)
-  const compactPath = options.recoveryKind === 'output_budget_exhaustion' || completionContinuation(messages, options)
+  const compactPath = options.recoveryKind === 'output_budget_exhaustion'
+    || (completionContinuation(messages, options) && options.triggerSource !== 'post_step_replan')
   const callerPatch = options.requestBodyPatch && typeof options.requestBodyPatch === 'object' && !Array.isArray(options.requestBodyPatch)
     ? options.requestBodyPatch
     : {}

@@ -386,3 +386,45 @@ test('task board UI snapshot includes live debug diagnostics', () => {
   assert.equal(snapshot.debug.recovery_attempt, 3)
   assert.equal(snapshot.debug.last_event, 'request.failed')
 })
+
+
+test('active Jev post-step routing is tracked separately from interaction shadow routing', () => {
+  let debug = liveAgentDebugEvent('interaction.routed', {
+    intent: 'status_query',
+    decision_shadow_latency_ms: 80,
+    decision_shadow: {
+      provider: 'TypeSafe',
+      model: 'jev-latest',
+      intent: 'status_query',
+      intent_confidence: 0.93,
+      queue_conflict_probability: 0.02,
+      usage: { input_tokens: 120, output_tokens: 10, cost: 0.00000504 },
+    },
+  })
+
+  debug = liveAgentDebugEvent('post_step.routed', {
+    mode: 'active',
+    route: 'wait_runtime',
+    applied_route: 'fallback_planner',
+    fallback_reason: 'wait_runtime_without_authoritative_healthy_persistent_runtime',
+    decision_latency_ms: 44,
+    decision: {
+      provider: 'TypeSafe',
+      model: 'jev-latest',
+      route: 'wait_runtime',
+      confidence: 0.88,
+      usage: { input_tokens: 90, output_tokens: 8, cost: 0.00000378 },
+    },
+  }, debug)
+
+  assert.equal(debug.decision_shadow_intent, 'status_query')
+  assert.equal(debug.decision_active_intent, 'status_query')
+  assert.equal(debug.decision_post_step_route, 'wait_runtime')
+  assert.equal(debug.decision_post_step_applied_route, 'fallback_planner')
+  assert.equal(debug.decision_post_step_confidence_percent, 88)
+  assert.equal(debug.decision_post_step_latency_ms, 44)
+  assert.match(debug.decision_post_step_fallback, /wait_runtime_without/)
+  assert.equal(debug.decision_calls_total, 2)
+  assert.equal(debug.decision_input_units_total, 210)
+  assert.equal(debug.decision_output_units_total, 18)
+})

@@ -55,6 +55,20 @@ test('successful deterministic completion continuation uses low effort with thin
   assert.equal(message._airiProvider.reasoning_policy_reason, 'deterministic_completion')
 })
 
+test('Jev post-step replan overrides the compact completion path and uses high effort', async () => {
+  const { seen, message } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: build a furnace' },
+    { role: 'user', content: COMPLETION },
+  ], { allowTools: true, triggerSource: 'post_step_replan' })
+
+  assert.equal(seen.url, 'https://proxy.example/v1/chat/completions')
+  assert.equal(seen.body.reasoning_effort, 'high')
+  assert.deepEqual(seen.body.thinking, { type: 'enabled' })
+  assert.equal(seen.body.max_tokens, 4000)
+  assert.equal(message._airiProvider.reasoning_policy_reason, 'jev_post_step_replan')
+})
+
 test('new ordinary DeepSeek goal uses high effort only when lifecycle routing marks it new_goal', async () => {
   const { seen } = await captureRequest([
     { role: 'system', content: 'system' },

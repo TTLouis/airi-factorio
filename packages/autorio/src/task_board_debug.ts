@@ -72,6 +72,11 @@ export interface TaskBoardUiDebugSnapshot {
   decision_model: string
   decision_shadow_intent: string
   decision_active_intent: string
+  decision_post_step_route: string
+  decision_post_step_applied_route: string
+  decision_post_step_confidence_percent: number
+  decision_post_step_latency_ms: number
+  decision_post_step_fallback: string
   decision_confidence_percent: number
   decision_queue_conflict_percent: number
   decision_latency_ms: number
@@ -138,6 +143,11 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     decision_model: clean_text(debug.decision_model, 160),
     decision_shadow_intent: clean_text(debug.decision_shadow_intent, 80),
     decision_active_intent: clean_text(debug.decision_active_intent, 80),
+    decision_post_step_route: clean_text(debug.decision_post_step_route, 80),
+    decision_post_step_applied_route: clean_text(debug.decision_post_step_applied_route, 80),
+    decision_post_step_confidence_percent: math.min(100, integer(debug.decision_post_step_confidence_percent)),
+    decision_post_step_latency_ms: integer(debug.decision_post_step_latency_ms),
+    decision_post_step_fallback: clean_text(debug.decision_post_step_fallback, 300),
     decision_confidence_percent: math.min(100, integer(debug.decision_confidence_percent)),
     decision_queue_conflict_percent: math.min(100, integer(debug.decision_queue_conflict_percent)),
     decision_latency_ms: integer(debug.decision_latency_ms),
@@ -564,6 +574,11 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const decision_model = clean_text(debug.decision_model, 160)
   const decision_shadow = clean_text(debug.decision_shadow_intent, 80)
   const decision_active = clean_text(debug.decision_active_intent, 80)
+  const decision_post_step = clean_text(debug.decision_post_step_route, 80)
+  const decision_post_step_applied = clean_text(debug.decision_post_step_applied_route, 80)
+  const decision_post_step_confidence = math.min(100, integer(debug.decision_post_step_confidence_percent))
+  const decision_post_step_latency = integer(debug.decision_post_step_latency_ms)
+  const decision_post_step_fallback = clean_text(debug.decision_post_step_fallback, 300)
   const decision_confidence = math.min(100, integer(debug.decision_confidence_percent))
   const decision_conflict = math.min(100, integer(debug.decision_queue_conflict_percent))
   const decision_latency = integer(debug.decision_latency_ms)
@@ -600,7 +615,8 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Latest completed round', latest_round_tokens)
   add_row(table, 'Decision provider', decision_model.length > 0 ? `${decision_provider || 'decision'} · ${decision_model}` : '—')
   add_row(table, 'Decision shadow', decision_shadow.length > 0 ? `${decision_shadow} · ${decision_confidence}% · active ${decision_active || 'unknown'} · conflict ${decision_conflict}%` : '—')
-  add_row(table, 'Decision usage', decision_shadow.length > 0 ? `${decision_input} in / ${decision_output} out · ${decision_latency} ms${decision_cost > 0 ? ` · ${decision_cost} µUSD` : ''}` : '—')
+  add_row(table, 'Jev ACTIVE post-step', decision_post_step.length > 0 ? `${decision_post_step}${decision_post_step_applied && decision_post_step_applied !== decision_post_step ? ` → ${decision_post_step_applied}` : ''} · ${decision_post_step_confidence}% · ${decision_post_step_latency} ms${decision_post_step_fallback ? ` · ${decision_post_step_fallback}` : ''}` : '—')
+  add_row(table, 'Decision usage', decision_shadow.length > 0 || decision_post_step.length > 0 ? `${decision_input} in / ${decision_output} out · ${decision_latency || decision_post_step_latency} ms${decision_cost > 0 ? ` · ${decision_cost} µUSD` : ''}` : '—')
   add_row(table, 'Decision totals', decision_calls_total > 0 ? `${decision_calls_total} calls · ${decision_input_total} in / ${decision_output_total} out${decision_cost_total > 0 ? ` · ${decision_cost_total} µUSD` : ''} · shadow ${decision_matches} match / ${decision_mismatches} differ` : '—')
   add_row(table, 'Planner routing · Jev', decision_planner_skips > 0 || decision_planner_wakes > 0 ? `${decision_planner_skips} skipped / ${decision_planner_wakes} wakes` : 'not active yet')
   add_row(table, 'Provider diag', clean_text(debug.provider_diagnostic_code, 160) || '—')
