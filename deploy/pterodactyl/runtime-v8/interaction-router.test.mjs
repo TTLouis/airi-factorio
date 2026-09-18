@@ -137,6 +137,26 @@ test('interaction route parser is strict and runtime health uses authoritative t
   assert.throws(() => parseInteractionRoute({ content: '{"intent":"status_query","queue_conflict":true,"reply":""}' }))
   assert.equal(interactionRuntimeHealthy({ task_state: 'placing', queue_length: 0 }), true)
   assert.equal(interactionRuntimeHealthy({ task_state: 'idle', queue_length: 0 }), false)
+  assert.equal(interactionRuntimeHealthy({ task_state: 'IDLE', queue_length: 0 }), false)
+  assert.equal(interactionRuntimeHealthy({ task_state: '  Idle  ', queue_length: 0 }), false)
+})
+
+test('constructor initializes routed lifecycle without requiring an intent variable in scope', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const mockProvider = async () => ({ content: '{"chatMessage":"","plan":[],"currentStep":0,"operations":[]}' })
+  const agent = new NpcAgentLoop({
+    rcon: new RouterRcon({ running: false }),
+    memory,
+    systemPrompt: 'constructor regression',
+    npcId: 'airi',
+    provider: mockProvider,
+    interactionProvider: mockProvider,
+    traceFile: null,
+    stateFile: null,
+  })
+
+  assert.equal(agent.requestLifecycle, 'new_goal')
+  assert.equal(agent.pendingInteractionAmendment, null)
 })
 
 test('continue_current while Autorio is healthy does not restart the main planner or cancel world work', async () => {
