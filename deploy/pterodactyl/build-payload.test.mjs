@@ -71,7 +71,7 @@ test('generated egg variable contract keeps safe provider defaults and 300 reque
     assert.ok(egg.variables.some(entry => entry.env_variable === 'SGLUNA_ACTOR_MODE'))
     assert.ok(egg.variables.some(entry => entry.env_variable === 'SGLUNA_CHAT_PLAYERS'))
     assert.ok(!egg.variables.some(entry => entry.env_variable === 'PRIVATE_SERVER'))
-    assert.ok(!egg.variables.some(entry => entry.env_variable.startsWith('AIRI_'))
+    assert.ok(!egg.variables.some(entry => entry.env_variable.startsWith('AIRI_')))
     assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_PLAYER'))
     assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_CHAT_PLAYER'))
   }
