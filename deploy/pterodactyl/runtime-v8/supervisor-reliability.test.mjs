@@ -71,6 +71,8 @@ test('in-game task board snapshot is a projection of canonical durable state', (
     steps: state.task_board.steps,
     activity: [],
     wanted_items: [],
+    conversation_id: '',
+    conversation: [],
     agent: { phase: 'idle', detail: '' },
     debug: {
       request_id: '',
