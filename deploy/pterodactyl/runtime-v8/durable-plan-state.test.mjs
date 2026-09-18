@@ -845,5 +845,7 @@ test('verified final completion is not mistaken for an action omission', async (
   assert.equal(agent.active, false)
   assert.equal(agent.messages.length, 0)
   assert.equal(agent.baseMessages.length, 0)
-  assert.equal(agent.memory.context('npc:airi'), '')
+  const resetContext = agent.memory.context('npc:airi')
+  assert.match(resetContext, /No active durable goal/)
+  assert.doesNotMatch(resetContext, /place one furnace|requested furnace/i)
 })
