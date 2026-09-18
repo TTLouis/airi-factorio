@@ -461,3 +461,79 @@ test('an oversized board is trimmed to fit the command path instead of being dro
   const small = { ...snapshot, steps: [], activity: [], objective: 'build power' }
   assert.equal(taskBoardUiJson(small), JSON.stringify(small), 'a small board is sent unchanged')
 })
+
+test('current UI conversation retains more than four user/assistant messages independently of activity limits', () => {
+  const session = Object.create(Session.prototype)
+  Object.assign(session, {
+    npcName: 'AIRI',
+    activityEpoch: 'epoch',
+    conversationGeneration: 0,
+    conversationSequence: 0,
+    agentLive: { phase: 'idle', detail: '', objective: '', at: 0, activity: [], conversation_id: 'task_epoch_0', conversation: [], debug: {} },
+    requestTaskBoardUiSync: () => {},
+  })
+  for (let index = 1; index <= 6; index++) {
+    session.onAgentActivity('request.received', { sender: 'TTLouis', text: `request ${index}` })
+    session.onAgentActivity('plan.accepted', { chat_message: `answer ${index}` })
+  }
+  const snapshot = taskBoardUiSnapshot(undefined, session.liveAgentStatus())
+  assert.equal(snapshot.conversation.length, 12)
+  assert.deepEqual(snapshot.conversation.slice(0, 4).map(entry => entry.text), ['request 1', 'answer 1', 'request 2', 'answer 2'])
+  assert.equal(snapshot.activity.length <= 18, true)
+})
+
+test('New Task starts a fresh UI conversation generation and old messages do not return on later syncs', async () => {
+  const session = Object.assign(Object.create(Session.prototype), sessionFixture())
+  Object.assign(session, {
+    activityEpoch: 'epoch',
+    conversationGeneration: 0,
+    conversationSequence: 2,
+    agentLive: {
+      phase: 'idle', detail: '', objective: 'old task', at: 0, activity: [],
+      conversation_id: 'task_epoch_0',
+      conversation: [
+        { id: 'old-1', role: 'user', sender: 'TTLouis', text: 'old request' },
+        { id: 'old-2', role: 'assistant', sender: 'AIRI', text: 'old answer' },
+      ],
+      debug: {},
+    },
+    clearTaskBoardUi: async () => true,
+  })
+  session.agent.memory.clearTaskContext = () => ({ status: 'cleared' })
+  await executeUiControl(session, { action: 'new_task', player_name: 'TTLouis' })
+  assert.equal(session.agentLive.conversation.length, 0)
+  assert.equal(session.agentLive.conversation_id, 'task_epoch_1')
+
+  session.appendUiConversation('user', 'TTLouis', 'fresh request')
+  session.appendUiConversation('assistant', 'AIRI', 'fresh answer')
+  const first = taskBoardUiSnapshot(undefined, session.liveAgentStatus())
+  const refreshed = taskBoardUiSnapshot(undefined, session.liveAgentStatus())
+  assert.deepEqual(first.conversation.map(entry => entry.text), ['fresh request', 'fresh answer'])
+  assert.deepEqual(refreshed.conversation.map(entry => entry.text), ['fresh request', 'fresh answer'])
+  assert.equal(refreshed.conversation.some(entry => entry.text.startsWith('old ')), false)
+})
+
+test('pause/terminate and resume acknowledge only after their queued runtime work settles', async () => {
+  const session = Object.assign(Object.create(Session.prototype), sessionFixture())
+  const queued = []
+  const acknowledgements = []
+  session.queueEvent = fn => { queued.push(fn); return true }
+  session.ackTaskBoardUiLifecycle = async (playerIndex, action) => { acknowledgements.push([playerIndex, action]); return true }
+
+  session.queueUiControl({ action: 'pause', player_index: 7, player_name: 'TTLouis' })
+  assert.deepEqual(acknowledgements, [])
+  await queued.shift()()
+  assert.deepEqual(acknowledgements, [[7, 'pause']])
+
+  session.queueUiControl({ action: 'terminate', player_index: 7, player_name: 'TTLouis' })
+  assert.deepEqual(acknowledgements, [[7, 'pause']])
+  await queued.shift()()
+  assert.deepEqual(acknowledgements, [[7, 'pause'], [7, 'terminate']])
+
+  let resumeOptions
+  session.queuePlayerRequest = (_sender, _text, options) => { resumeOptions = options; return true }
+  session.queueUiPrompt({ player_index: 7, player_name: 'TTLouis', text: 'continue' })
+  assert.deepEqual(acknowledgements, [[7, 'pause'], [7, 'terminate']])
+  await resumeOptions.onSettled()
+  assert.deepEqual(acknowledgements, [[7, 'pause'], [7, 'terminate'], [7, 'resume']])
+})

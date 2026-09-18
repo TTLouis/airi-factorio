@@ -1060,7 +1060,7 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
     return true
   }
   if (element_name === FOLLOW_BUTTON_NAME) { clear_terminate_confirmation(player.index); const follow = read_follow_status(); emit_control(player, follow?.active ? 'stop_follow' : 'follow'); return true }
-  if (element_name === NEW_TASK_BUTTON_NAME) { clear_terminate_confirmation(player.index); debug_ui.reset_task_conversation(); emit_control(player, 'new_task'); render_panel(player); return true }
+  if (element_name === NEW_TASK_BUTTON_NAME) { clear_terminate_confirmation(player.index); debug_ui.suppress_snapshot(storage.airi_task_board_ui); debug_ui.reset_task_conversation(); emit_control(player, 'new_task'); render_panel(player); return true }
   if (element_name === PROMPT_SEND_BUTTON_NAME) { submit_prompt(player, task_board_ui_prompt_draft(player.index)); return true }
   return false
 }

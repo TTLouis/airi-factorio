@@ -160,14 +160,18 @@ describe('AIRI NPC console layout regressions', () => {
   })
 })
 describe('old tasks and New Task conversation integration', () => {
+  const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  const projects = readFileSync(new URL('./projects/project_window.ts', import.meta.url), 'utf8')
+
   it('renders an independent old-task history button and explicit lifecycle acknowledgement route', () => {
     expect(source).toContain("name: project_ui.PROJECTS_BUTTON_NAME, caption: 'OLD TASKS'")
-    expect(source).toContain("PROJECTS_BUTTON_NAME = 'airi_task_board_projects'")
+    expect(projects).toContain("PROJECTS_BUTTON_NAME = 'airi_task_board_projects'")
+    expect(projects).toContain("PROJECTS_CLOSE_BUTTON_NAME = 'airi_task_board_projects_close'")
     expect(source).toContain("ack_lifecycle: (player_index: unknown, action: unknown)")
   })
 
-  it('clears the current conversation binding before queueing New Task', () => {
+  it('tombstones and clears the current conversation binding before queueing New Task', () => {
     const handler = source.split('function handle_control_click(')[1]?.split('\n}\n\nexport function create_task_board_ui_remote_interface')[0] ?? ''
-    expect(handler).toContain("debug_ui.reset_task_conversation(); emit_control(player, 'new_task')")
+    expect(handler).toContain("debug_ui.suppress_snapshot(storage.airi_task_board_ui); debug_ui.reset_task_conversation(); emit_control(player, 'new_task')")
   })
 })

@@ -45,6 +45,7 @@ const SYSTEM_RECOVERY_PAUSE_REASONS = new Set(['npc_identity_or_session_changed'
 const UI_AGENT_PHASES = new Set(['idle', 'thinking', 'observing', 'executing', 'waiting', 'error'])
 const UI_LIVE_ACTIVITY_LIMIT = 14
 const UI_ACTIVITY_LIMIT = 18
+const UI_CONVERSATION_LIMIT = 64
 const UI_SYNC_BATCH_MS = 50
 const UI_STALE_THINKING_MS = 5000
 
@@ -578,8 +579,10 @@ export function taskBoardUiSnapshot(state, live) {
   }
   const debug = live?.debug && typeof live.debug === 'object' ? live.debug : emptyAgentDebug()
   const liveActivity = Array.isArray(live?.activity) ? live.activity : []
+  const liveConversation = Array.isArray(live?.conversation) ? live.conversation.slice(-UI_CONVERSATION_LIMIT) : []
+  const conversationId = uiText(live?.conversation_id, 120)
   if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps)) {
-    if (!live || (agent.phase === 'idle' && liveActivity.length === 0)) return undefined
+    if (!live || (agent.phase === 'idle' && liveActivity.length === 0 && liveConversation.length === 0)) return undefined
     return {
       goal_id: '',
       objective: uiText(live.objective, 500),
@@ -592,6 +595,8 @@ export function taskBoardUiSnapshot(state, live) {
       steps: [],
       activity: liveActivity.slice(-UI_ACTIVITY_LIMIT).map(uiActivityEntry),
       wanted_items: [],
+      conversation_id: conversationId,
+      conversation: liveConversation,
       agent,
       debug,
     }
@@ -612,6 +617,8 @@ export function taskBoardUiSnapshot(state, live) {
     })),
     activity: [...deriveActivity(state), ...liveActivity.filter(entry => !entry.covered_by_receipt)].slice(-UI_ACTIVITY_LIMIT).map(uiActivityEntry),
     wanted_items: deriveWantedItems(state),
+    conversation_id: conversationId,
+    conversation: liveConversation,
     agent,
     debug,
   }
@@ -627,6 +634,15 @@ export function taskBoardUiJson(snapshot) {
   for (const limit of [240, 120, 60]) {
     if (Buffer.byteLength(json) <= UI_SNAPSHOT_MAX_BYTES) break
     candidate = { ...candidate, steps: candidate.steps.map(step => ({ ...step, description: uiText(step.description, limit) })) }
+    json = JSON.stringify(candidate)
+  }
+  // Conversation is a separate UI concern from model dialogue memory. Preserve
+  // every retained turn before considering payload trimming; if a very long task
+  // would exceed the RCON command ceiling, shorten message text rather than
+  // dropping whole user/assistant turns from the visible task transcript.
+  for (const limit of [1200, 800, 500, 300]) {
+    if (Buffer.byteLength(json) <= UI_SNAPSHOT_MAX_BYTES) break
+    candidate = { ...candidate, conversation: (candidate.conversation ?? []).map(message => ({ ...message, text: uiText(message.text, limit) })) }
     json = JSON.stringify(candidate)
   }
   return Buffer.byteLength(json) <= UI_SNAPSHOT_MAX_BYTES ? json : undefined
@@ -657,6 +673,7 @@ function resetLiveTaskContext(session) {
     at: Date.now(),
     activity: [],
   })
+  session.startNewUiConversation?.()
 }
 
 async function discardTaskContext(session, reason, { clearDialogue = false } = {}) {
@@ -807,12 +824,23 @@ export class Session {
     this.authorizationPromise = null
     this.npcName = 'AIRI'
     this.npcId = 'airi'
-    this.agentLive = { phase: 'idle', detail: '', objective: '', at: 0, activity: [], debug: emptyAgentDebug({ provider_model: this.config?.model }) }
+    this.activityEpoch = Date.now().toString(36)
+    this.conversationGeneration = 0
+    this.conversationSequence = 0
+    this.agentLive = {
+      phase: 'idle',
+      detail: '',
+      objective: '',
+      at: 0,
+      activity: [],
+      conversation_id: `task_${this.activityEpoch}_0`,
+      conversation: [],
+      debug: emptyAgentDebug({ provider_model: this.config?.model }),
+    }
     this.activitySequence = 0
     // Live ids must not repeat across supervisor restarts: the mod keeps a
     // history keyed by id, and a reused live_1 would be taken for an old event
     // and silently dropped.
-    this.activityEpoch = Date.now().toString(36)
     this.uiSyncDirty = false
     this.uiSyncRunning = null
     this.uiInputPoll = null
@@ -822,7 +850,30 @@ export class Session {
     this.lastUiFailureAt = 0
   }
 
+  startNewUiConversation() {
+    this.conversationGeneration += 1
+    this.conversationSequence = 0
+    if (!this.agentLive || typeof this.agentLive !== 'object') return
+    this.agentLive.conversation_id = `task_${this.activityEpoch}_${this.conversationGeneration}`
+    this.agentLive.conversation = []
+  }
+
+  appendUiConversation(role, sender, rawText) {
+    const text = uiText(rawText, 2000)
+    if (!text || (role !== 'user' && role !== 'assistant')) return
+    if (!Array.isArray(this.agentLive.conversation)) this.agentLive.conversation = []
+    const message = {
+      id: `message_${this.activityEpoch}_${this.conversationGeneration}_${++this.conversationSequence}`,
+      role,
+      sender: uiText(sender || (role === 'assistant' ? 'AIRI' : 'Player'), 128),
+      text,
+    }
+    this.agentLive.conversation = [...this.agentLive.conversation, message].slice(-UI_CONVERSATION_LIMIT)
+  }
+
   onAgentActivity(event, data) {
+    if (event === 'request.received') this.appendUiConversation('user', data?.sender, data?.text)
+    if (event === 'plan.accepted' && data?.chat_message) this.appendUiConversation('assistant', this.npcName || 'AIRI', data.chat_message)
     const fallback = {
       request_id: this.agent?.traceRequest?.id,
       turn: this.agent?.traceRequest ? this.agent.continuations + 1 : 0,
@@ -850,7 +901,7 @@ export class Session {
       phase = 'idle'
       detail = ''
     }
-    return { phase, detail, objective: live.objective, activity: live.activity, debug: live.debug }
+    return { phase, detail, objective: live.objective, activity: live.activity, conversation_id: live.conversation_id, conversation: live.conversation, debug: live.debug }
   }
 
   requestTaskBoardUiSync() {
@@ -1028,6 +1079,14 @@ export class Session {
     return this.writeTaskBoardUi('/silent-command rcon.print(tostring(remote.call("autorio_task_board","clear")))', 'clear')
   }
 
+  async ackTaskBoardUiLifecycle(playerIndex, action) {
+    if (!Number.isSafeInteger(playerIndex) || playerIndex < 1) return false
+    return this.writeTaskBoardUi(
+      `/silent-command rcon.print(tostring(remote.call("autorio_task_board","ack_lifecycle",${playerIndex},${luaString(action)})))`,
+      `ack ${action}`,
+    )
+  }
+
   async syncTaskBoardUi(state = this.currentPlanState()) {
     if (!this.rcon) return false
     const snapshot = taskBoardUiSnapshot(state, this.liveAgentStatus())
@@ -1058,14 +1117,8 @@ export class Session {
           this.log(`[AIRI UI] Ignored unauthorized ${input.kind} player=${input.player_name}${input.action ? ` action=${input.action}` : ''}`)
           continue
         }
-        if (input.kind === 'control') {
-          this.queueEvent(async () => {
-            await executeUiControl(this, input)
-          }, { reportError: true })
-        }
-        else {
-          this.queuePlayerRequest(input.player_name, input.text)
-        }
+        if (input.kind === 'control') this.queueUiControl(input)
+        else this.queueUiPrompt(input)
       }
       return inputs.length > 0
     }
@@ -1193,27 +1246,53 @@ export class Session {
     await this.rcon.command(`/silent-command game.print(${luaString(`${label} ${clean}`)})`)
   }
 
-  queuePlayerRequest(sender, rawText) {
+  queueUiControl(input) {
+    this.queueEvent(async () => {
+      try {
+        await executeUiControl(this, input)
+      }
+      finally {
+        if (input.action === 'pause' || input.action === 'terminate') {
+          await this.ackTaskBoardUiLifecycle(input.player_index, input.action)
+        }
+      }
+    }, { reportError: true })
+    return true
+  }
+
+  queueUiPrompt(input) {
+    const resume = input.text.trim().toLowerCase() === 'continue'
+    return this.queuePlayerRequest(input.player_name, input.text, resume ? {
+      onSettled: async () => { await this.ackTaskBoardUiLifecycle(input.player_index, 'resume') },
+    } : undefined)
+  }
+
+  queuePlayerRequest(sender, rawText, { onSettled } = {}) {
     const text = routeNpcRequest(rawText, this.npcName)
     if (!text || !this.agent) return false
     const stop = text.toLowerCase() === 'stop'
     if (stop) this.agent.cancel('user_stop_immediate')
     this.queueEvent(async () => {
-      if (stop) {
-        const state = typeof this.agent.pausePersistentPlan === 'function'
-          ? await this.agent.pausePersistentPlan('user_stop')
-          : undefined
-        if (state) await this.syncTaskBoardUi(state)
+      try {
+        if (stop) {
+          const state = typeof this.agent.pausePersistentPlan === 'function'
+            ? await this.agent.pausePersistentPlan('user_stop')
+            : undefined
+          if (state) await this.syncTaskBoardUi(state)
+          await this.ensureAuthorization()
+          await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")')
+          await this.printChat('Paused the current AIRI plan and cancelled active Autorio work. Say continue/resume when you want me to pick it back up.')
+          return
+        }
         await this.ensureAuthorization()
-        await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")')
-        await this.printChat('Paused the current AIRI plan and cancelled active Autorio work. Say continue/resume when you want me to pick it back up.')
-        return
+        await this.applyNavigationObstaclePolicy(text)
+        const result = await this.agent.request(text, { sender })
+        await this.syncTaskBoardUi()
+        if (result?.chatMessage) await this.printChat(result.chatMessage)
       }
-      await this.ensureAuthorization()
-      await this.applyNavigationObstaclePolicy(text)
-      const result = await this.agent.request(text, { sender })
-      await this.syncTaskBoardUi()
-      if (result?.chatMessage) await this.printChat(result.chatMessage)
+      finally {
+        if (typeof onSettled === 'function') await onSettled()
+      }
     }, { reportError: true })
     return true
   }
@@ -1227,9 +1306,7 @@ export class Session {
         this.log(`[AIRI UI] Ignored unauthorized control action=${uiControl.action} player=${uiControl.player_name}`)
         return
       }
-      this.queueEvent(async () => {
-        await executeUiControl(this, uiControl)
-      }, { reportError: true })
+      this.queueUiControl(uiControl)
       return
     }
 
@@ -1239,7 +1316,7 @@ export class Session {
         this.log(`[AIRI UI] Ignored unauthorized prompt player=${uiPrompt.player_name}`)
         return
       }
-      this.queuePlayerRequest(uiPrompt.player_name, uiPrompt.text)
+      this.queueUiPrompt(uiPrompt)
       return
     }
 
