@@ -128,6 +128,8 @@ case "$LANE" in
   core)
     printf '[npc-test][core] Running placement/transfer and lifecycle cancellation gates...\n'
     run_py placement_transfer.py
+    printf '[npc-test][core] Running full furnace supply/retrieval transfer gate...\n'
+    run_py smelting_transfer.py
     run_py control_lifecycle.py
     printf '[npc-test][core] Running owned basic-operation outcome/failure gates...\n'
     run_py basic_outcomes.py
