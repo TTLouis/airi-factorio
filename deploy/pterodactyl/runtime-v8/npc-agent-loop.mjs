@@ -1431,18 +1431,50 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         allowReplan: this.planUpdateReason === 'failure',
         previousState,
       }) ?? stateResult
-      if (commands.length > 0 && stateResult?.state) {
+      if (commands.length > 0 && stateResult?.state && stateResult?.blockedByHarness !== true) {
         const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'admitting')
         if (state) stateResult = { ...stateResult, state }
       }
       await this.persistState()
       await this.traceEvent('plan.persisted', {
-        lifecycle: commands.length > 0 ? 'admitting' : 'accepted',
+        lifecycle: stateResult?.blockedByHarness === true ? 'blocked' : commands.length > 0 ? 'admitting' : 'accepted',
         goal_id: stateResult?.state?.goal_id,
         task_board: visibleTaskBoard(stateResult?.state?.task_board),
       })
     }
     this.outputBudgetRecoveryGuard = null
+
+    if (commands.length > 0 && stateResult?.blockedByHarness === true) {
+      this.active = false
+      await this.traceEvent('operations.skipped', {
+        reason: 'unresolved_transfer_step',
+        blocker: stateResult?.state?.blocker,
+        operations,
+        task_board: visibleTaskBoard(stateResult?.state?.task_board),
+      })
+      await this.traceEvent('request.completed', {
+        chat_message: plan.chatMessage,
+        outcome: 'blocked_no_operation',
+        task_board: visibleTaskBoard(stateResult?.state?.task_board),
+        usage: this.traceRequest?.usage,
+      })
+      this.traceRequest = null
+      return {
+        chatMessage: planProgress(plan, stateResult),
+        plan: stateResult?.state?.plan ?? durablePlan.plan,
+        currentStep: stateResult?.state?.current_step ?? durablePlan.currentStep,
+        operations: [],
+        epoch: before.epoch,
+        actorId: before.actor_id,
+        goalId: stateResult?.state?.goal_id,
+        goalStatus: stateResult?.state?.status,
+        taskBoard: visibleTaskBoard(stateResult?.state?.task_board),
+        blocker: {
+          class: 'unverified_transfer_step',
+          reason: stateResult?.state?.blocker ?? 'unverified_transfer_step',
+        },
+      }
+    }
 
     if (commands.length > 0) {
       let preflight
