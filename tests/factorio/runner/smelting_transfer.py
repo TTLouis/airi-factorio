@@ -117,8 +117,8 @@ def run(client: Rcon, results: Path) -> None:
         "local tiles={}; for dx=-10,10 do for dy=-10,10 do tiles[#tiles+1]={name='landfill',position={x=math.floor(p.x)+dx,y=math.floor(p.y)+dy}} end end; "
         "s.set_tiles(tiles,true,false,true); "
         f"local stone=s.create_entity{{name='stone',position={{x=p.x+1,y=p.y+1}},amount={stone_needed + 5}}}; "
-        f"local coal=s.create_entity{{name='coal',position={{x=p.x+2,y=p.y+1}},amount={FUEL_COUNT + 5}}}; "
-        f"local iron=s.create_entity{{name='iron-ore',position={{x=p.x+3,y=p.y+1}},amount={ore_needed + 5}}}; "
+        f"local coal=s.create_entity{{name='coal',position={{x=p.x-1,y=p.y+1}},amount={FUEL_COUNT + 5}}}; "
+        f"local iron=s.create_entity{{name='iron-ore',position={{x=p.x+1,y=p.y-1}},amount={ore_needed + 5}}}; "
         "game.speed=4; "
         "rcon.print(helpers.table_to_json({actor_id=a.unit_number,stone=stone and stone.position or nil,"
         "coal=coal and coal.position or nil,iron=iron and iron.position or nil,speed=game.speed}))",
