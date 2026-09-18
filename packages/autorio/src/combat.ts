@@ -80,6 +80,13 @@ type CombatTask = PlayerParametersAttackNearestEnemy & {
   support_pressure_preemptions?: number
 }
 
+interface PersistentCombatSupportRegistry {
+  actor_id: number
+  actor_kind: string
+  force_index: number
+  turrets: LuaEntity[]
+}
+
 interface CombatResult {
   accepted: boolean
   completed: boolean
@@ -113,10 +120,45 @@ interface CombatResult {
 
 declare const storage: {
   airi_last_combat_result?: CombatResult
+  airi_owned_combat_support?: PersistentCombatSupportRegistry
 }
 
 function copy_position(position: { x: number, y: number }) {
   return { x: position.x, y: position.y }
+}
+
+function support_registry_matches(owner_actor_id: number, owner_actor_kind: string, owner_force_index: number) {
+  const registry = storage.airi_owned_combat_support
+  return registry !== undefined
+    && registry.actor_id === owner_actor_id
+    && registry.actor_kind === owner_actor_kind
+    && registry.force_index === owner_force_index
+}
+
+function registered_support_turrets(owner_actor_id: number, owner_actor_kind: string, owner_force_index: number) {
+  const registry = storage.airi_owned_combat_support
+  if (!registry || !support_registry_matches(owner_actor_id, owner_actor_kind, owner_force_index)) return []
+  const live = registry.turrets.filter(entity => entity.valid)
+  if (live.length === 0) storage.airi_owned_combat_support = undefined
+  else registry.turrets = live
+  return live
+}
+
+function sync_support_registry(task: CombatTask, turrets: LuaEntity[]) {
+  if (task.combat_mode !== 'clear_area') return
+  const live = turrets.filter(entity => entity.valid)
+  if (live.length === 0) {
+    if (support_registry_matches(task.owner_actor_id, task.owner_actor_kind, task.owner_force_index)) {
+      storage.airi_owned_combat_support = undefined
+    }
+    return
+  }
+  storage.airi_owned_combat_support = {
+    actor_id: task.owner_actor_id,
+    actor_kind: task.owner_actor_kind,
+    force_index: task.owner_force_index,
+    turrets: live,
+  }
 }
 
 function nearest(actor: ControlledActor, entities: LuaEntity[]) {
@@ -376,6 +418,9 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       record(actor, undefined, false, false, 'no_actor')
       return [false, 'no_actor']
     }
+    const carried_support = combat_mode === 'clear_area'
+      ? registered_support_turrets(identity.actor_id, identity.kind, actor.force.index)
+      : []
     manager.add_task({
       type: TaskStates.ATTACKING,
       search_radius,
@@ -388,7 +433,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       targets_destroyed: 0,
       turrets_placed: 0,
       combat_phase: 'engage',
-      encounter_owned_turrets: [],
+      encounter_owned_turrets: [...carried_support],
       combat_path: null,
       combat_path_attempts: 0,
       started_tick: game.tick,
@@ -487,8 +532,21 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function live_owned_turrets(task: CombatTask) {
-    const owned = (task.encounter_owned_turrets ?? []).filter(entity => entity.valid)
+    const owned: LuaEntity[] = []
+    const add_live_unique = (entity: LuaEntity) => {
+      if (!entity.valid) return
+      for (const existing of owned) {
+        if (existing === entity) return
+        if (existing.unit_number !== undefined && entity.unit_number !== undefined && existing.unit_number === entity.unit_number) return
+      }
+      owned.push(entity)
+    }
+    for (const entity of task.encounter_owned_turrets ?? []) add_live_unique(entity)
+    if (task.combat_mode === 'clear_area') {
+      for (const entity of registered_support_turrets(task.owner_actor_id, task.owner_actor_kind, task.owner_force_index)) add_live_unique(entity)
+    }
     task.encounter_owned_turrets = owned
+    sync_support_registry(task, owned)
     return owned
   }
 
