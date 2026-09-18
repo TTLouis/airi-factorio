@@ -89,8 +89,11 @@ def run(client: Rcon, results: Path) -> None:
         # [boolean, message] admissions (for example supply/transfer/wait).
         # Normalize both shapes without changing production APIs.
         return json_command(
-            "/silent-command local accepted,message=" + expression + "; "
-            "rcon.print(helpers.table_to_json({accepted=accepted==true,message=message}))",
+            "/silent-command local result=" + expression + "; "
+            "local accepted=false; local message=nil; "
+            "if type(result)=='table' then accepted=result[1]==true; message=result[2] "
+            "else accepted=result==true end; "
+            "rcon.print(helpers.table_to_json({accepted=accepted,message=message}))",
             f'{context} admission',
         )
 
