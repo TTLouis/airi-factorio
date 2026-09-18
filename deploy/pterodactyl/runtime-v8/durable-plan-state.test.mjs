@@ -34,6 +34,12 @@ class FakeRcon {
   async command(text) {
     if (text.includes('remote.call("airi_deployment","status")')) return JSON.stringify(this.status)
     if (text.includes('remote.call("autorio_preflight","operation"')) return JSON.stringify({ ok: true })
+    if (text.includes('remote.call("autorio_tools","get_nearby_entities"')) {
+      return JSON.stringify({
+        actor_position: { x: 0, y: 0 },
+        entities: [{ name: 'stone-furnace', type: 'furnace', unit_number: 582, position: { x: 4, y: 0 } }],
+      })
+    }
     if (text.includes('remote.call("autorio_operations","status")')) {
       return JSON.stringify({
         task_state: 'idle',
@@ -86,6 +92,19 @@ test('rejected transfer cannot advance or complete the canonical plan step', asy
     provider: async () => {
       reply++
       if (reply === 1) {
+        return {
+          content: null,
+          tool_calls: [{
+            id: 'observe-furnace',
+            type: 'function',
+            function: {
+              name: 'getNearbyEntities',
+              arguments: JSON.stringify({ radius: 16, name: 'stone-furnace', limit: 4 }),
+            },
+          }],
+        }
+      }
+      if (reply === 2) {
         return planMessage({
           chatMessage: 'Loading the observed furnace.',
           plan,
@@ -97,13 +116,10 @@ test('rejected transfer cannot advance or complete the canonical plan step', asy
         })
       }
       return planMessage({
-        chatMessage: 'Trying to retrieve plates despite the rejected supply.',
+        chatMessage: 'Trying to advance despite the rejected supply.',
         plan,
         currentStep: 1,
-        operations: [{
-          name: 'move_items_exact',
-          args: { item_name: 'iron-plate', unit_number: 582, max_count: 20, to_entity: false },
-        }],
+        operations: [],
       })
     },
     systemPrompt: 'NPC transfer truth test prompt',
