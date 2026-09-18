@@ -5,6 +5,12 @@ function luaPairs(value: Record<string, unknown>) {
   return Object.entries(value)
 }
 
+function runtimeCollection<T>(values: T[]) {
+  const result: Record<number, T> = {}
+  for (let index = 0; index < values.length; index++) result[index + 1] = values[index]
+  return result
+}
+
 describe('prototype fluid connection geometry', () => {
   const originalPairs = (globalThis as any).pairs
   const originalPrototypes = (globalThis as any).prototypes
@@ -80,6 +86,52 @@ describe('prototype fluid connection geometry', () => {
           connection_categories_truncated: false,
         },
       ],
+    })
+  })
+
+  it('reads runtime-shaped fluidbox, connection, position, and category collections without JS array methods or length', () => {
+    const boiler = (globalThis as any).prototypes.entity.boiler
+    boiler.items_to_place_this = runtimeCollection([{ name: 'boiler', count: 1 }])
+    boiler.fluidbox_prototypes = runtimeCollection([
+      {
+        index: 1,
+        production_type: 'input-output',
+        filter: { name: 'water' },
+        pipe_connections: runtimeCollection([
+          {
+            connection_type: 'normal',
+            flow_direction: 'input-output',
+            direction: 12,
+            positions: runtimeCollection([
+              { x: -2, y: 0.5 },
+              { x: -0.5, y: -2 },
+              { x: 2, y: -0.5 },
+              { x: 0.5, y: 2 },
+              { x: 99, y: 99 },
+            ]),
+            connection_category: runtimeCollection(['default', 'water', 'steam', 'modded', 'overflow']),
+          },
+        ]),
+      },
+    ])
+
+    const result = prototype_details('boiler') as any
+    expect(result.entity.place_items).toEqual([{ name: 'boiler', count: 1 }])
+    expect(result.entity.fluidboxes).toHaveLength(1)
+    expect(result.entity.fluidboxes[0]).toMatchObject({
+      pipe_connection_count: 1,
+      pipe_connections_truncated: false,
+      pipe_connections: [{
+        positions: [
+          { x: -2, y: 0.5 },
+          { x: -0.5, y: -2 },
+          { x: 2, y: -0.5 },
+          { x: 0.5, y: 2 },
+        ],
+        positions_truncated: true,
+        connection_categories: ['default', 'water', 'steam', 'modded'],
+        connection_categories_truncated: true,
+      }],
     })
   })
 
