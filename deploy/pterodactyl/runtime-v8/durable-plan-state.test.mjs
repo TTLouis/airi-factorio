@@ -770,7 +770,7 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
     provider: async (_messages, options) => {
       calls++
       optionsSeen.push(options)
-      if (calls <= 5) return toolMessage(`preplan-observe-${calls}`, 15 + calls)
+      if (calls <= 4) return toolMessage(`preplan-observe-${calls}`, 15 + calls)
       return planMessage({
         chatMessage: '',
         plan: [],
@@ -784,8 +784,8 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
   })
 
   const result = await agent.request('inspect the chest and take the needed plates', { sender: 'TTLouis' })
-  assert.equal(calls, 6)
-  assert.equal(rcon.observationCalls, 5)
+  assert.equal(calls, 5)
+  assert.equal(rcon.observationCalls, 4)
   assert.equal(optionsSeen.at(-1).allowTools, false)
   assert.equal(optionsSeen.at(-1).recoveryAttempt, 1)
   assert.deepEqual(optionsSeen.at(-1).requestBodyPatch, { max_tokens: 700 })
