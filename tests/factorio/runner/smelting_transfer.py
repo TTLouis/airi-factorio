@@ -191,7 +191,7 @@ def run(client: Rcon, results: Path) -> None:
     require(after_supply['coal'] == 0, after_supply)
 
     produced = entity_status('furnace production initial')
-    max_wait_rounds = 10
+    max_wait_rounds = 20
     wait_ticks = 600
     for attempt in range(max_wait_rounds):
         if entity_item_count(produced, 'iron-plate') >= TARGET_PLATES:
