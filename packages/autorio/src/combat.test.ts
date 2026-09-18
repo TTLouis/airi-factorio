@@ -511,7 +511,7 @@ describe('bounded area-clearing combat', () => {
     expect(c2.controller.status()).toMatchObject({ initial_threat_score: 64, support_turret_budget: 8 })
   })
 
-  it('deploys a threat-sized support batch before advancing the firing line', () => {
+  it('deploys a threat-sized support batch and restages only when target coverage is lost', () => {
     const c = world()
     c.enemies.length = 0
     for (let i = 0; i < 5; i++) {
@@ -550,6 +550,11 @@ describe('bounded area-clearing combat', () => {
     expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
 
     c.actor.position = { x: 14, y: 0 }
+    ;(globalThis as any).game.tick += 1
+    c.controller.tick(c.actor)
+    expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
+
+    c.enemies[0].position = { x: 34, y: 0 }
     ;(globalThis as any).game.tick += 1
     c.controller.tick(c.actor)
     expect(c.surface.create_entity).toHaveBeenCalledTimes(4)
