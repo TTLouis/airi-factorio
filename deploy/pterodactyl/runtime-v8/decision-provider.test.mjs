@@ -150,9 +150,11 @@ test('decision provider batches questions into one TypeSafe System One request a
               noul: 0.12,
             },
           },
+          provider: 'TypeSafe',
           usage: {
             input_tokens: 187,
             output_tokens: 19,
+            cost: 0.000007854,
           },
         }), {
           status: 200,
@@ -166,7 +168,51 @@ test('decision provider batches questions into one TypeSafe System One request a
   assert.equal(reserves, 1)
   assert.equal(result.answers.route.choice, 'conversation')
   assert.equal(result.answers.urgent.noul, 0.12)
-  assert.deepEqual(result.usage, { input_tokens: 187, output_tokens: 19 })
+  assert.equal(result.provider, 'TypeSafe')
+  assert.deepEqual(result.usage, { input_tokens: 187, output_tokens: 19, cost: 0.000007854 })
+})
+
+test('decision provider validates Score legend, indexed probabilities, and range', async () => {
+  const config = decisionProviderConfiguration({ TYPESAFE_API_KEY: KEY })
+
+  const result = await decisionProviderRequest(
+    config,
+    { failure_count: 2, operation: 'place_candidate' },
+    {
+      severity: {
+        type: 'score',
+        instructions: 'How severe is the recovery situation?',
+        criteria: ['routine', 'needs observation', 'needs planner', 'blocked'],
+      },
+    },
+    {
+      reserve: async () => {},
+      fetchImpl: async () => new Response(JSON.stringify({
+        answers: {
+          severity: {
+            type: 'score',
+            score: 1.8,
+            legend: {
+              0: 'routine',
+              1: 'needs observation',
+              2: 'needs planner',
+              3: 'blocked',
+            },
+            probabilities: {
+              0: 0.05,
+              1: 0.25,
+              2: 0.65,
+              3: 0.05,
+            },
+            confidence: 0.83,
+          },
+        },
+      }), { status: 200 }),
+    },
+  )
+
+  assert.equal(result.answers.severity.score, 1.8)
+  assert.equal(result.answers.severity.legend['2'], 'needs planner')
 })
 
 test('decision provider refuses to spend credit without an explicit budget reservation', async () => {
