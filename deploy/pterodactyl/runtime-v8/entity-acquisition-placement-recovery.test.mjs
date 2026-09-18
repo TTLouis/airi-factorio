@@ -323,7 +323,7 @@ test('alternating distinct read-only observations trigger generic decision press
       calls++
       if (calls <= observations.length) return { content: null, tool_calls: [observations[calls - 1]] }
       const text = messages.map(message => String(message.content ?? '')).join('\n')
-      assert.match(text, /Decision pressure after 4 consecutive observation-only rounds/)
+      assert.match(text, /Decision pressure after 3 consecutive observation-only rounds/)
       return planMessage([{ name: 'wait', args: { ticks: 1 } }])
     },
   })
