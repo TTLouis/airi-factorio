@@ -9,7 +9,6 @@ import {
   suppress_snapshot,
   task_conversation_messages,
   toggle_debug_activity_follow,
-  set_debug_activity_hover,
   reset_task_conversation,
 } from './task_board_debug'
 
@@ -26,11 +25,9 @@ describe('task board debug and UI freshness helpers', () => {
   })
 
   it('keeps Debug execution-feed follow state independent and explicitly pausable', () => {
-    expect(debug_activity_view(7)).toEqual({ follow: true, hover: false, behind: false })
-    set_debug_activity_hover(7, true)
-    expect(debug_activity_view(7).hover).toBe(true)
-    expect(toggle_debug_activity_follow(7)).toMatchObject({ follow: false, hover: false })
-    expect(toggle_debug_activity_follow(7)).toMatchObject({ follow: true, hover: false, behind: true })
+    expect(debug_activity_view(7)).toEqual({ follow: true, behind: false })
+    expect(toggle_debug_activity_follow(7)).toMatchObject({ follow: false, behind: false })
+    expect(toggle_debug_activity_follow(7)).toMatchObject({ follow: true, behind: true })
   })
 
   it('shows the explicit AIRI reply or falls back to the newest decision activity', () => {

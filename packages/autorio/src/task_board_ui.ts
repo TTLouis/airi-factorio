@@ -6,6 +6,7 @@ import { create_learning_remote_interface, handle_learning_ui_click, handle_task
 import { create_skill_remote_interface, handle_skill_export_click, render_learn_area_button, render_skill_export_section } from './skills'
 // Namespace import on purpose: one Lua local instead of one per helper.
 import * as activity_state from './task_board_activity'
+import { literal_gui_text, trusted_rich_text } from './task_board_gui_text'
 import * as debug_ui from './task_board_debug'
 import * as project_ui from './projects/project_window'
 import * as provider_ui from './task_board_provider'
@@ -527,7 +528,7 @@ function activity_tone(kind: TaskBoardUiActivityKind): Tone { if (kind === 'deci
 function board_tone(board_status: TaskBoardUiSnapshot['status']): Tone { if (board_status === 'active') return 'good'; if (board_status === 'completed') return 'info'; if (board_status === 'paused') return 'warn'; if (board_status === 'blocked') return 'bad'; return 'muted' }
 function agent_tone(phase: TaskBoardUiAgentPhase): Tone { if (phase === 'thinking' || phase === 'observing') return 'info'; if (phase === 'executing') return 'good'; if (phase === 'waiting') return 'warn'; if (phase === 'error') return 'bad'; return 'muted' }
 function agent_caption(phase: TaskBoardUiAgentPhase) { if (phase === 'thinking') return 'THINKING'; if (phase === 'observing') return 'OBSERVING'; if (phase === 'executing') return 'EXECUTING'; if (phase === 'waiting') return 'WORKING'; if (phase === 'error') return 'ERROR'; return 'IDLE' }
-function item_caption(name: string) { const item_prototypes = prototypes.item; if (item_prototypes !== undefined && item_prototypes[name] !== undefined) return `[item=${name}] ${name}`; return name }
+function item_caption(name: string) { const item_prototypes = prototypes.item; if (item_prototypes !== undefined && item_prototypes[name] !== undefined) return trusted_rich_text(`[item=${name}] ${name}`); return name }
 function item_sprite(name: string): SpritePath { const item: SpritePath = `item/${name}`; if (helpers.is_valid_sprite_path(item)) return item; const entity: SpritePath = `entity/${name}`; if (helpers.is_valid_sprite_path(entity)) return entity; return 'utility/questionmark' }
 function read_follow_status(): TaskBoardUiFollowStatus | undefined {
   if (remote.interfaces?.autorio_follow === undefined || typeof remote.call !== 'function') return undefined
@@ -584,8 +585,8 @@ function create_section(parent: LuaGuiElement, title: string, width?: number, to
 }
 function add_status_badge(parent: LuaGuiElement, tone: Tone, caption: string) { const badge = parent.add({ type: 'flow', direction: 'horizontal' }); badge.style.vertical_align = 'center'; badge.style.horizontal_spacing = 4; badge.style.right_padding = 4; badge.add({ type: 'sprite', sprite: TONE_SPRITES[tone], style: 'status_image' }); const label = badge.add({ type: 'label', caption, style: 'bold_label' }); label.style.font_color = TONE_COLORS[tone]; return badge }
 function create_key_value_table(parent: LuaGuiElement) { const table = parent.add({ type: 'table', column_count: 2 }); table.style.horizontal_spacing = 12; table.style.vertical_spacing = 4; return table }
-function add_key_value(table: LuaGuiElement, key: string, value: string, options: { tone?: Tone, tooltip?: string, width?: number } = {}) { const key_label = table.add({ type: 'label', caption: key, style: 'semibold_label' }); key_label.style.minimal_width = KEY_COLUMN_WIDTH; const value_label = table.add({ type: 'label', caption: value, tooltip: options.tooltip }); value_label.style.single_line = false; if (options.width !== undefined) value_label.style.maximal_width = options.width; if (options.tone !== undefined) value_label.style.font_color = TONE_COLORS[options.tone]; return value_label }
-function add_empty_state(parent: LuaGuiElement, caption: string) { const label = parent.add({ type: 'label', caption }); label.style.font_color = TONE_COLORS.muted; return label }
+function add_key_value(table: LuaGuiElement, key: string, value: string, options: { tone?: Tone, static_tooltip?: string, width?: number } = {}) { const key_label = table.add({ type: 'label', caption: key, style: 'semibold_label' }); key_label.style.minimal_width = KEY_COLUMN_WIDTH; const value_label = literal_gui_text(table.add({ type: 'label', caption: value, tooltip: options.static_tooltip })); value_label.style.single_line = false; if (options.width !== undefined) value_label.style.maximal_width = options.width; if (options.tone !== undefined) value_label.style.font_color = TONE_COLORS[options.tone]; return value_label }
+function add_empty_state(parent: LuaGuiElement, caption: string) { const label = literal_gui_text(parent.add({ type: 'label', caption })); label.style.font_color = TONE_COLORS.muted; return label }
 function board_goal(board: TaskBoardUiSnapshot) { if (board.objective.length > 0) return board.objective; if (board.goal_id.length > 0) return board.goal_id; return board.status === 'idle' ? 'No active AIRI task.' : 'Current task' }
 /**
  * How much the last snapshot is still worth believing.
@@ -620,25 +621,24 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   const { header, body } = create_section(parent, 'Status', STATUS_SECTION_WIDTH, undefined, false)
   const overall = overall_state(board, synced_tick); add_status_badge(header, overall.tone, overall.caption)
   const table = create_key_value_table(body)
-  add_key_value(table, 'NPC', runtime.actor_name || 'AIRI', { tooltip: runtime.actor_kind.length > 0 ? runtime.actor_kind.split('_').join(' ') : undefined, width: STATUS_VALUE_WIDTH })
+  add_key_value(table, 'NPC', runtime.actor_name || 'AIRI', { width: STATUS_VALUE_WIDTH })
   const freshness = task_board_sync_freshness(synced_tick, game.tick)
   const phase = board?.agent.phase ?? 'idle'; const detail = board?.agent.detail ?? ''
   const live_caption = detail.length > 0 ? `${agent_caption(phase)} · ${text(detail, 90)}` : agent_caption(phase)
   const stale_caption = freshness === 'offline' ? 'NOT CONNECTED' : `NO ANSWER — last seen ${agent_caption(phase)}`
-  add_key_value(table, 'AIRI', freshness === 'live' ? live_caption : stale_caption, { tone: freshness === 'live' ? agent_tone(phase) : 'bad', tooltip: freshness === 'live' && detail.length > 0 ? detail : 'The console polls the AIRI runtime; this row reports the answer, not a guess.', width: STATUS_VALUE_WIDTH })
+  add_key_value(table, 'AIRI', freshness === 'live' ? live_caption : stale_caption, { tone: freshness === 'live' ? agent_tone(phase) : 'bad', static_tooltip: 'The console polls the AIRI runtime; this row reports the answer, not a guess.', width: STATUS_VALUE_WIDTH })
   add_key_value(table, 'WORLD', world_task_summary(runtime.world_task), { width: STATUS_VALUE_WIDTH })
   const goal = board === undefined ? 'No active AIRI task.' : board_goal(board)
-  add_key_value(table, 'GOAL', text(goal, 110), { tooltip: goal, width: STATUS_VALUE_WIDTH })
+  add_key_value(table, 'GOAL', text(goal, 110), { width: STATUS_VALUE_WIDTH })
   if (board !== undefined && board.steps.length > 0) {
     const index = math.min(board.active_index, board.steps.length - 1)
     const step = board.steps[index]
-    add_key_value(table, 'STEP', `${index + 1}/${board.total_steps} · ${text(step_caption(step.description), 80)}`, { tone: step_tone(step), tooltip: step.description, width: STATUS_VALUE_WIDTH })
+    add_key_value(table, 'STEP', `${index + 1}/${board.total_steps} · ${text(step_caption(step.description), 80)}`, { tone: step_tone(step), width: STATUS_VALUE_WIDTH })
   }
   const retained = activity_state.activity_history()
   const recent = retained.length > 0 ? retained : (board?.activity ?? [])
   const board_blocker_text = board === undefined ? '' : task_condition_text(board.blocker_summary, board.blocker, 'AIRI is blocked by an internal task condition.')
   let last = ''
-  let last_tooltip = ''
   let last_tone: Tone = 'muted'
   let action_fallback = ''
   for (let index = recent.length - 1; index >= 0; index--) {
@@ -646,17 +646,16 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
     if ((entry.kind === 'result' || entry.kind === 'blocker') && entry.text.length > 0) {
       const current_board_blocker = entry.kind === 'blocker' && board !== undefined && board.blocker.length > 0 && (entry.text === board.blocker || entry.text === board_blocker_text)
       last = current_board_blocker ? board_blocker_text : entry.text
-      if (current_board_blocker) last_tooltip = board.blocker
       last_tone = activity_tone(entry.kind)
       break
     }
     if (action_fallback.length === 0 && entry.kind === 'action' && entry.text.length > 0) action_fallback = entry.text
   }
   if (last.length === 0 && action_fallback.length > 0) { last = action_fallback; last_tone = 'good' }
-  if (last.length > 0) add_key_value(table, 'LAST', text(last, 90), { tone: last_tone, tooltip: last_tooltip.length > 0 ? last_tooltip : last, width: STATUS_VALUE_WIDTH })
+  if (last.length > 0) add_key_value(table, 'LAST', text(last, 90), { tone: last_tone, width: STATUS_VALUE_WIDTH })
   add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: STATUS_VALUE_WIDTH })
 }
-function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Temporarily suspend current world work and follow this player. A goal paused by Follow automatically resumes when Follow stops.'; const details = ['Click to stop following. A goal paused by Follow will automatically resume.']; if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
+function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { return follow?.active ? 'Click to stop following. A goal paused by Follow will automatically resume.' : 'Temporarily suspend current world work and follow this player. A goal paused by Follow automatically resumes when Follow stops.' }
 function compact_button(button: LuaGuiElement) { button.style.width = COMPACT_BUTTON_WIDTH; button.style.height = COMPACT_BUTTON_HEIGHT; button.style.minimal_width = COMPACT_BUTTON_WIDTH; button.style.maximal_width = COMPACT_BUTTON_WIDTH; button.style.minimal_height = COMPACT_BUTTON_HEIGHT; button.style.maximal_height = COMPACT_BUTTON_HEIGHT; return button }
 function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const { body } = create_section(parent, 'Controls', CONTROLS_SECTION_WIDTH, undefined, false)
@@ -686,7 +685,7 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   // A blank last_failure is still truthy, which drew a lone warning triangle with
   // no message next to it. Render the row only when there is something to read.
   const issue_text = text(follow?.last_failure ?? '', 100)
-  if (issue_text.length > 0) { const issue = body.add({ type: 'label', caption: `⚠ ${issue_text}`, tooltip: follow?.last_failure }); issue.style.single_line = false; issue.style.maximal_width = CONTROLS_SECTION_WIDTH - 2 * SECTION_PADDING; issue.style.font_color = TONE_COLORS.bad }
+  if (issue_text.length > 0) { const issue = literal_gui_text(body.add({ type: 'label', caption: `⚠ ${issue_text}` })); issue.style.single_line = false; issue.style.maximal_width = CONTROLS_SECTION_WIDTH - 2 * SECTION_PADDING; issue.style.font_color = TONE_COLORS.bad }
 }
 
 /**
@@ -741,6 +740,14 @@ function player_gui_height(_player: LuaPlayer) {
 }
 
 function preview_position_caption(preview: TaskBoardUiWorldPreview) { return `X ${math.floor(preview.position.x)} · Y ${math.floor(preview.position.y)}` }
+function focus_npc_preview(player: LuaPlayer) {
+  const preview = runtime_snapshot().preview
+  if (preview === undefined) return false
+  const surface = game.get_surface(preview.surface_index)
+  if (surface === undefined) return false
+  player.set_controller({ type: defines.controllers.remote, position: preview.position, surface })
+  return true
+}
 
 /**
  * Updates the preview without rebuilding it.
@@ -784,7 +791,7 @@ function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntime
   if (preview === undefined) { add_empty_state(body, 'NPC world preview is unavailable.'); return }
   const zoom = task_board_preview_zoom(player.index)
   const preview_min_height = task_board_preview_min_height(player_gui_height(player))
-  const position = header.add({ type: 'label', name: PREVIEW_POSITION_NAME, caption: preview_position_caption(preview), style: 'semibold_label' }); position.style.right_padding = 4
+  const position = header.add({ type: 'button', name: PREVIEW_POSITION_NAME, caption: preview_position_caption(preview), style: 'mini_button_aligned_to_text_vertically', tooltip: 'Show NPC in remote view' }); position.style.right_margin = 4
   const frame = body.add({ type: 'frame', name: PREVIEW_CAMERA_FRAME_NAME, direction: 'vertical', style: 'deep_frame_in_shallow_frame' })
   frame.style.width = PREVIEW_CAMERA_WIDTH; frame.style.minimal_height = preview_min_height; frame.style.horizontally_stretchable = false; frame.style.vertically_stretchable = true
   const camera = frame.add({ type: 'camera', name: PREVIEW_CAMERA_NAME, position: preview.position, surface_index: preview.surface_index, zoom })
@@ -885,7 +892,7 @@ function refresh_steps(plan: LuaGuiElement, board: TaskBoardUiSnapshot, max_heig
     for (let index = 0; index < visible.length; index++) {
       const step = visible[index]; const tone = step_tone(step)
       steps_table.add({ type: 'sprite', sprite: TONE_SPRITES[tone], style: 'status_image', tooltip: step.status }); steps_table.add({ type: 'label', caption: `${index + 1}.`, style: 'semibold_label' })
-      const description = steps_table.add({ type: 'label', caption: step_caption(step.description), style: step.status === 'active' ? 'bold_label' : 'label' }); description.style.single_line = false; description.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 170
+      const description = literal_gui_text(steps_table.add({ type: 'label', caption: step_caption(step.description), style: step.status === 'active' ? 'bold_label' : 'label' })); description.style.single_line = false; description.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 170
       if (step.status === 'completed' || step.status === 'pending') description.style.font_color = TONE_COLORS.muted
       const state = steps_table.add({ type: 'label', caption: step.status.toUpperCase(), style: 'semibold_label' }); state.style.font_color = TONE_COLORS[tone]; state.style.minimal_width = 72
       if (index === active_index) active_label = description
@@ -897,8 +904,8 @@ function refresh_steps(plan: LuaGuiElement, board: TaskBoardUiSnapshot, max_heig
   attention.clear()
   if (board.blocker.length > 0 || board.pause_reason.length > 0) {
     const table = create_key_value_table(attention); const width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12
-    if (board.blocker.length > 0) add_key_value(table, 'BLOCKED', task_condition_text(board.blocker_summary, board.blocker, 'AIRI is blocked by an internal task condition.'), { tone: 'bad', tooltip: board.blocker, width })
-    if (board.pause_reason.length > 0) add_key_value(table, 'PAUSED', task_condition_text(board.pause_summary, board.pause_reason, 'AIRI is paused by an internal task condition.'), { tone: 'warn', tooltip: board.pause_reason, width })
+    if (board.blocker.length > 0) add_key_value(table, 'BLOCKED', task_condition_text(board.blocker_summary, board.blocker, 'AIRI is blocked by an internal task condition.'), { tone: 'bad', width })
+    if (board.pause_reason.length > 0) add_key_value(table, 'PAUSED', task_condition_text(board.pause_summary, board.pause_reason, 'AIRI is paused by an internal task condition.'), { tone: 'warn', width })
   }
   return true
 }
@@ -922,7 +929,7 @@ function refresh_activity(header: LuaGuiElement, empty: LuaGuiElement, scroll: L
   const add_row = (entry: TaskBoardUiActivity) => {
     const timestamp = table.add({ type: 'label', caption: entry.timestamp ?? '--:--:--', ignored_by_interaction: true }); timestamp.style.minimal_width = 66; timestamp.style.font_color = TONE_COLORS.muted
     const tag = table.add({ type: 'label', caption: activity_prefix(entry.kind), style: 'bold_label', ignored_by_interaction: true }); tag.style.minimal_width = 52; tag.style.font_color = TONE_COLORS[activity_tone(entry.kind)]
-    const line = table.add({ type: 'label', caption: entry.text, ignored_by_interaction: true }); line.style.single_line = false; line.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 160
+    const line = literal_gui_text(table.add({ type: 'label', caption: entry.text, ignored_by_interaction: true })); line.style.single_line = false; line.style.maximal_width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 160
   }
   const shown = (table.tags.keys ?? []) as string[]
   const diff = activity_state.activity_rows_diff(shown, keys)
@@ -948,7 +955,7 @@ function refresh_activity(header: LuaGuiElement, empty: LuaGuiElement, scroll: L
     const unseen = view.follow ? { count: 0, overflow: false } : activity_state.activity_unseen(keys, view.seen_key)
     const tone: Tone = view.follow ? 'good' : unseen.count > 0 ? 'warn' : 'muted'
     const state = view.follow ? 'LIVE' : unseen.count > 0 ? `${unseen.count}${unseen.overflow ? '+' : ''} NEW` : 'PAUSED'
-    live.caption = `[img=${TONE_SPRITES[tone]}] ${state}`
+    live.caption = trusted_rich_text(`[img=${TONE_SPRITES[tone]}] ${state}`)
     live.tooltip = view.follow ? 'Following the newest activity. Scrolling the feed stops following; so does clicking here.' : 'Not following, so the feed stays where you left it. Click to jump to the newest activity and follow it again.'
   }
   const count = header[TRACKER.count]
@@ -972,8 +979,8 @@ function add_slot_grid(parent: LuaGuiElement, slots: Array<{ name: string, count
   const scroll = parent.add({ type: 'scroll-pane', style: 'deep_slots_scroll_pane', horizontal_scroll_policy: 'never', vertical_scroll_policy: 'auto-and-reserve-space' }); scroll.style.width = columns * RESOURCE_LAYOUT.slot_size + RESOURCE_LAYOUT.scrollbar_width; scroll.style.height = height; scroll.style.minimal_height = height; scroll.style.maximal_height = height
   const grid = scroll.add({ type: 'table', column_count: columns, style: 'slot_table' }); for (const slot of slots) grid.add({ type: 'sprite-button', sprite: item_sprite(slot.name), number: slot.count, style, tooltip: slot.tooltip })
 }
-function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) { const { header, body } = create_section(parent, 'NPC Inventory', RESOURCE_LAYOUT.inventory_section_width, undefined, false); header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: `${item_caption(item.name)} × ${item.count}` })), 'slot_button', task_board_resource_rows(player_gui_height(player)), RESOURCE_LAYOUT.inventory_slot_columns) }
-function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) { const { header, body } = create_section(parent, 'Wanted / Needed', RESOURCE_LAYOUT.wanted_section_width, undefined, false); const items = board?.wanted_items ?? []; header.add({ type: 'label', caption: `${items.length} items`, style: 'semibold_label' }); add_slot_grid(body, items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: item.reason.length > 0 ? `${item_caption(item.name)} × ${item.count} — ${item.reason}` : `${item_caption(item.name)} × ${item.count}` })), 'yellow_slot_button', task_board_wanted_rows(player_gui_height(player)), RESOURCE_LAYOUT.wanted_slot_columns) }
+function render_inventory(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) { const { header, body } = create_section(parent, 'NPC Inventory', RESOURCE_LAYOUT.inventory_section_width, undefined, false); header.add({ type: 'label', caption: `${runtime.inventory.length} items`, style: 'semibold_label' }); add_slot_grid(body, runtime.inventory.map(item => ({ name: item.name, count: item.count, tooltip: trusted_rich_text(`${item_caption(item.name)} × ${item.count}`) })), 'slot_button', task_board_resource_rows(player_gui_height(player)), RESOURCE_LAYOUT.inventory_slot_columns) }
+function render_wanted_items(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, player: LuaPlayer) { const { header, body } = create_section(parent, 'Wanted / Needed', RESOURCE_LAYOUT.wanted_section_width, undefined, false); const items = board?.wanted_items ?? []; header.add({ type: 'label', caption: `${items.length} items`, style: 'semibold_label' }); add_slot_grid(body, items.slice(0, MAX_WANTED_ITEMS).map(item => ({ name: item.name, count: item.count, tooltip: trusted_rich_text(`${item_caption(item.name)} × ${item.count}`) })), 'yellow_slot_button', task_board_wanted_rows(player_gui_height(player)), RESOURCE_LAYOUT.wanted_slot_columns) }
 function render_resource_sidebar(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) {
   const sidebar = parent.add({ type: 'flow', direction: 'vertical' }); sidebar.style.width = RESOURCE_LAYOUT.wanted_section_width; sidebar.style.vertical_spacing = COLUMN_SPACING
   render_wanted_items(sidebar, board, player)
@@ -986,7 +993,7 @@ function render_resource_sidebar(parent: LuaGuiElement, board: TaskBoardUiSnapsh
     const slots = row.add({ type: 'table', column_count: RESOURCE_LAYOUT.equipped_slot_columns, style: 'slot_table' })
     for (let index = 0; index < RESOURCE_LAYOUT.equipped_slot_columns; index++) {
       const item = items[index]
-      if (item !== undefined) slots.add({ type: 'sprite-button', sprite: item_sprite(item.name), number: item.count, style: 'slot_button', tooltip: `${item_caption(item.name)} × ${item.count}` })
+      if (item !== undefined) slots.add({ type: 'sprite-button', sprite: item_sprite(item.name), number: item.count, style: 'slot_button', tooltip: trusted_rich_text(`${item_caption(item.name)} × ${item.count}`) })
       else slots.add({ type: 'sprite-button', style: 'slot_button', tooltip: `Empty ${caption.toLowerCase()} slot` })
     }
   }
@@ -1114,6 +1121,7 @@ export function create_task_board_ui_remote_interface() {
   script.on_event(defines.events.on_gui_click, (event: any) => {
     const element = event.element; if (!element?.valid) return; const player = game.get_player(event.player_index); if (!player?.valid) return
     if (element.name === BUTTON_NAME) { toggle_task_board_ui_open(player.index); render(player); return }
+    if (element.name === PREVIEW_POSITION_NAME) { focus_npc_preview(player); return }
     if (element.name === CLOSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); close_task_board_ui(player.index); close_task_board_skills_ui(player.index); project_ui.close_projects_ui(player.index); debug_ui.close_debug_ui(player.index); destroy_skills_popout(player); project_ui.render_projects_popout(player, false); render_debug_popout(player); destroy_panel(player); ensure_button(player); return }
     if (element.name === project_ui.PROJECTS_BUTTON_NAME) { project_ui.toggle_projects_ui(player.index); render_panel(player); project_ui.render_projects_popout(player, true, storage.airi_task_board_ui?.goal_id ?? ''); return }
     if (element.name === project_ui.PROJECTS_CLOSE_BUTTON_NAME) { project_ui.close_projects_ui(player.index); project_ui.render_projects_popout(player, true, storage.airi_task_board_ui?.goal_id ?? ''); render_panel(player); return }
@@ -1150,25 +1158,6 @@ export function create_task_board_ui_remote_interface() {
   }
   script.on_event(TRACKER.scroll_up_input, on_activity_wheel)
   script.on_event(TRACKER.scroll_down_input, on_activity_wheel)
-  // The cursor resting on the feed holds it still without ending follow; once it
-  // leaves, anything that arrived in the meantime is caught up straight away.
-  script.on_event(defines.events.on_gui_hover, (event: any) => {
-    const element = event.element; if (!element?.valid) return
-    if (element.name === TRACKER.activity_scroll) { activity_state.set_activity_hover(event.player_index, true); return }
-    if (element.name === debug_ui.DEBUG_ACTIVITY_SCROLL_NAME) debug_ui.set_debug_activity_hover(event.player_index, true)
-  })
-  script.on_event(defines.events.on_gui_leave, (event: any) => {
-    const element = event.element; if (!element?.valid) return
-    if (element.name === TRACKER.activity_scroll) {
-      const view = activity_state.set_activity_hover(event.player_index, false); if (!view.follow || !view.behind) return
-      const player = game.get_player(event.player_index); if (player?.valid) render_panel(player)
-      return
-    }
-    if (element.name === debug_ui.DEBUG_ACTIVITY_SCROLL_NAME) {
-      const view = debug_ui.set_debug_activity_hover(event.player_index, false); if (!view.follow || !view.behind) return
-      const player = game.get_player(event.player_index); if (player?.valid) render_debug_popout(player)
-    }
-  })
   script.on_event(defines.events.on_gui_value_changed, (event: any) => {
     const element = event.element; if (!element?.valid || element.name !== PREVIEW_ZOOM_SLIDER_NAME) return; const player = game.get_player(event.player_index); if (!player?.valid) return
     const zoom = set_preview_zoom(player.index, element.slider_value); element.slider_value = zoom

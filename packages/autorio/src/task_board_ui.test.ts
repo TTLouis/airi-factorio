@@ -80,6 +80,35 @@ describe('in-game task board UI projection', () => {
     expect(board?.wanted_items).toEqual([{ name: 'iron-plate', count: 1, reason: 'test' }])
   })
 
+  it('keeps external Factorio rich-text syntax literal at the GUI boundary without mutating snapshot data', () => {
+    const rich = '[item=iron-plate] [color=red]hello[/color] [ ]] 普通中文 English'
+    const board = sanitize_task_board_ui_snapshot({
+      goal_id: 'goal_rich', objective: rich, response: rich, status: 'active', blocker: rich, pause_reason: rich,
+      completed_count: 0, total_steps: 1, active_index: 0,
+      steps: [{ id: 'step_1', description: rich, status: 'active' }],
+      activity: [{ kind: 'result', text: rich }],
+      wanted_items: [{ name: 'iron-plate', count: 1, reason: rich }],
+      conversation_id: 'conv_rich',
+      conversation: [{ id: 'm1', role: 'assistant', sender: rich, text: rich }],
+    })
+    expect(board?.objective).toBe(rich)
+    expect(board?.response).toBe(rich)
+    expect(board?.steps[0].description).toBe(rich)
+    expect(board?.activity[0].text).toBe(rich)
+    expect(board?.wanted_items[0].reason).toBe(rich)
+    expect(board?.conversation[0].text).toBe(rich)
+
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const debug = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+    const boundary = readFileSync(new URL('./task_board_gui_text.ts', import.meta.url), 'utf8')
+    expect(boundary).toContain('defines.rich_text_setting.disabled')
+    expect(source).toContain('literal_gui_text(')
+    expect(debug).toContain('literal_gui_text(')
+    expect(source).toContain('trusted_rich_text(')
+    expect(source).toContain('[item=')
+    expect(source).toContain('[img=')
+    expect(source).not.toContain('— ${item.reason}')
+  })
   it('rejects malformed snapshots instead of creating a second source of truth', () => {
     expect(sanitize_task_board_ui_snapshot(undefined)).toBeUndefined()
     expect(sanitize_task_board_ui_snapshot({ status: 'active' })).toBeUndefined()
@@ -93,11 +122,11 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('${board.completed_count} verified')
     expect(source).not.toContain('${board.completed_count} done')
     expect(refreshSteps).toContain('task_condition_text(board.blocker_summary, board.blocker')
-    expect(refreshSteps).toContain('tooltip: board.blocker')
+    expect(refreshSteps).not.toContain('tooltip: board.blocker')
     expect(refreshSteps).toContain("caption: step.status.toUpperCase()")
     expect(refreshSteps).toContain("if (step.status === 'completed' || step.status === 'pending') description.style.font_color = TONE_COLORS.muted")
     expect(statusPanel).toContain('entry.text === board.blocker || entry.text === board_blocker_text')
-    expect(statusPanel).toContain('last_tooltip = board.blocker')
+    expect(statusPanel).not.toContain('last_tooltip')
   })
 
   it('falls back to the canonical current step when an active task has no activity entries yet', () => {
@@ -247,6 +276,26 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('CONSOLE_LAYOUT.preview_min_height')
   })
 
+  it('makes preview coordinates a view-only button that uses the current runtime preview', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain("type: 'button', name: PREVIEW_POSITION_NAME")
+    expect(source).toContain("style: 'mini_button_aligned_to_text_vertically'")
+    expect(source).toContain("tooltip: 'Show NPC in remote view'")
+    const focus = source.split('function focus_npc_preview(')[1]?.split('/**\n * Updates the preview')[0] ?? ''
+    expect(focus).toContain('const preview = runtime_snapshot().preview')
+    expect(focus).toContain('const surface = game.get_surface(preview.surface_index)')
+    expect(focus).toContain('player.set_controller({ type: defines.controllers.remote, position: preview.position, surface })')
+    expect(focus).not.toContain('preview_position_caption')
+    expect(focus).not.toContain('enqueue_ui_input')
+    expect(focus).not.toContain('emit_control')
+    expect(focus).not.toContain('teleport')
+    expect(source).toContain("if (element.name === PREVIEW_POSITION_NAME) { focus_npc_preview(player); return }")
+
+    const refresh = source.split('function refresh_world_preview(')[1]?.split('function render_world_preview(')[0] ?? ''
+    expect(refresh).toContain('position.caption = preview_position_caption(preview)')
+    expect(refresh).toContain('camera.zoom = task_board_preview_zoom(player.index)')
+    expect(refresh).not.toContain('.clear()')
+  })
   it('shows live mod task state and when AIRI last synced', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     const control = readFileSync(new URL('./control.ts', import.meta.url), 'utf8')
@@ -378,9 +427,23 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('latest_round_cached_input_units')
   })
 
+  it('removes activity hover state and handlers while preserving scroll pause and explicit LIVE resume', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const activity = readFileSync(new URL('./task_board_activity.ts', import.meta.url), 'utf8')
+    const debug = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+    expect(source).not.toContain('defines.events.on_gui_hover')
+    expect(source).not.toContain('defines.events.on_gui_leave')
+    expect(activity).not.toContain('set_activity_hover')
+    expect(activity).not.toContain('hover:')
+    expect(debug).not.toContain('set_debug_activity_hover')
+    expect(debug).not.toContain('view.hover')
+    expect(debug).not.toContain('HOLD')
+    expect(source).toContain('activity_state.stop_activity_follow(player.index, last_shown_activity_key(element))')
+    expect(source).toContain('activity_state.resume_activity_follow(player.index, last_shown_activity_key(scroll))')
+  })
   it('only emits fixed UI control actions instead of arbitrary console commands', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
-    expect(source).toContain("type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow'")
+    expect(source).toContain("type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow' | 'new_task'")
     expect(source).toContain("kind: 'control'")
     expect(source).toContain('drain_inputs: () => drain_ui_inputs()')
     expect(source).not.toContain('rcon.print')
