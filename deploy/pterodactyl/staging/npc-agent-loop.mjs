@@ -21,6 +21,7 @@ const STATIC_PROTOTYPE_CACHE_LIMIT = 64
 const STATIC_PROTOTYPE_CONTEXT_LIMIT = 8
 const THROUGHPUT_POLL_MS = process.env.NODE_TEST_CONTEXT ? 1 : 250
 const THROUGHPUT_NO_PROGRESS_MS = process.env.NODE_TEST_CONTEXT ? 100 : 10000
+const OBSERVATION_DECISION_PRESSURE_ROUNDS = 4
 
 function check(ok, message) {
   if (!ok) throw new AgentLoopError(message)
@@ -309,6 +310,9 @@ export class NpcAgentLoop {
     this.prototypeRefsThisRequest = []
     this.duplicateToolRounds = 0
     this.observationRecoveryRounds = 0
+    this.observationOnlyRounds = 0
+    this.observationDecisionPressure = false
+    this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
     this.requestInfo = null
     this.generation = (this.generation ?? 0) + 1
@@ -415,6 +419,10 @@ export class NpcAgentLoop {
     this.prepareContinuationContext()
     this.toolCache.clear()
     this.duplicateToolRounds = 0
+    this.observationRecoveryRounds = 0
+    this.observationOnlyRounds = 0
+    this.observationDecisionPressure = false
+    this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
     this.messages.push({ role: 'user', content: '[MOD] All operations completed' })
     return this.runGuarded()
@@ -709,10 +717,15 @@ export class NpcAgentLoop {
       this.duplicateToolRounds = 0
       this.observationRecoveryRounds = 0
     }
+    this.observationOnlyRounds++
     this.compactWorkingContext()
   }
 
   async recoveryDiagnostic(_details) {}
+
+  finiteNoOperationPressure(_plan) {
+    return ''
+  }
 
   async blockedWithoutMutation(reason, failureClass = 'harness_blocker') {
     const current = await this.assertCurrent()
@@ -769,6 +782,13 @@ export class NpcAgentLoop {
           continue
         }
         this.toolValidationRetries = 0
+        if (this.observationDecisionPressure && prepared.length !== 1) {
+          return this.recoverPlan(
+            generation,
+            new AgentLoopError('Observation decision pressure allowed one targeted observation for one explicitly missing fact, but the provider requested multiple observations. Reuse the evidence already collected and return the next executable action or a truthful blocker.'),
+            round + 1,
+          )
+        }
         await this.handleToolBatch(message, prepared)
         if (this.duplicateToolRounds >= this.maxToolLoopRetries && this.duplicateToolRounds > 0) {
           const reason = `Repeated tool observation loop after ${this.duplicateToolRounds} no-progress round${this.duplicateToolRounds === 1 ? '' : 's'}`
@@ -793,6 +813,30 @@ export class NpcAgentLoop {
             content: `[HARNESS] ${reason}. The duplicate result was suppressed and earlier deterministic observations remain available. Tools stay enabled only for a specific missing fact: do not switch to a different read-only observation merely to avoid the duplicate guard. If the existing evidence already identifies a safe executable next action, return a strict-JSON plan now; otherwise make one targeted observation for the exact missing fact or report a truthful blocker. Do not guess an unobserved Factorio identity and do not force a mutation just to make progress.`,
           })
         }
+        if (this.observationOnlyRounds >= OBSERVATION_DECISION_PRESSURE_ROUNDS) {
+          if (!this.observationDecisionPressure) {
+            this.observationDecisionPressure = true
+            await this.recoveryDiagnostic({
+              failure_class: 'observation_no_progress',
+              reason_code: 'observation_decision_pressure',
+              reason: `Consecutive observation-only rounds reached ${this.observationOnlyRounds}`,
+              retry: 1,
+              retry_limit: 1,
+              tools_enabled: true,
+            })
+            this.messages.push({
+              role: 'user',
+              content: `[HARNESS] Decision pressure after ${this.observationOnlyRounds} consecutive observation-only rounds. If the live evidence already parameterizes a safe executable next action, return one strict-JSON plan now. If execution is still impossible, identify exactly one missing fact and use only one targeted observation tool call for that fact on the next round; otherwise report a truthful blocker. Do not switch among unrelated read-only tools merely to defer the decision.`,
+            })
+          }
+          else {
+            return this.recoverPlan(
+              generation,
+              new AgentLoopError('The single targeted observation allowed by decision pressure is complete. Stop observing. Reuse the live evidence already collected and return the next executable action, or a truthful blocker naming the still-missing fact.'),
+              round + 1,
+            )
+          }
+        }
         continue
       }
 
@@ -802,6 +846,20 @@ export class NpcAgentLoop {
       }
       catch (error) {
         return this.recoverPlan(generation, error, round + 1)
+      }
+      const finitePressure = this.finiteNoOperationPressure(plan)
+      if (finitePressure && !this.finiteNoOperationPressureUsed) {
+        this.finiteNoOperationPressureUsed = true
+        await this.recoveryDiagnostic({
+          failure_class: 'finite_goal_no_operation',
+          reason_code: 'finite_goal_continuation_pressure',
+          reason: cleanMemoryText(finitePressure, 1200),
+          retry: 1,
+          retry_limit: 1,
+          tools_enabled: true,
+        })
+        this.messages.push({ role: 'user', content: `[HARNESS] ${finitePressure}` })
+        continue
       }
       return this.commitPlan(plan)
     }
