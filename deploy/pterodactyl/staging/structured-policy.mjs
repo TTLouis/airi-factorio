@@ -482,6 +482,10 @@ function noExtra(args, allowed) {
   check(Object.keys(args).every(key => allowed.includes(key)), 'Unexpected tool argument')
 }
 
+export function isObservationToolName(name) {
+  return typeof name === 'string' && toolDefinitions.some(tool => tool?.type === 'function' && tool.function?.name === name)
+}
+
 export function toolCommand(name, rawArgs = {}) {
   const args = argsObject(rawArgs)
   switch (name) {
