@@ -116,6 +116,8 @@ test('tool surface matches current NPC observation contract and uses strict sche
     'getRecipeDetails',
     'discoverPrototypes',
     'getPrototypeDetails',
+    'findSkills',
+    'getSkillDetails',
     'getPlayerStatus',
     'getNearbyEntities',
     'findLongRangeEntities',
@@ -138,6 +140,8 @@ test('tool surface matches current NPC observation contract and uses strict sche
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getRecipeDetails').function.parameters.required, ['item_or_recipe'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'discoverPrototypes').function.parameters.required, ['capability'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getPrototypeDetails').function.parameters.required, ['name'])
+  assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'findSkills').function.parameters.required, ['query'])
+  assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getSkillDetails').function.parameters.required, ['id'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getEntityGeometry').function.parameters.required, ['unit_number'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getLogisticsTopology').function.parameters.required, ['unit_number'])
   assert.deepEqual(toolDefinitions.find(tool => tool.function.name === 'getPlayerStatus').function.parameters.required, ['player_name'])
@@ -156,6 +160,9 @@ test('read-only tool renderer targets native actor-aware interfaces without play
   assert.equal(toolCommand('getRecipeDetails', { item_or_recipe: "mod's-fluid" }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","recipe_details",\'mod\\\'s-fluid\')))')
   assert.match(toolCommand('discoverPrototypes', { capability: 'mining', resource_name: 'iron-ore' }), /autorio_prototypes.*discover/)
   assert.equal(toolCommand('getPrototypeDetails', { name: "mod's-machine" }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_prototypes","details",\'mod\\\'s-machine\')))')
+  assert.equal(toolCommand('findSkills', { query: 'early iron plate smelting' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_skills","find",\'early iron plate smelting\',3)))')
+  assert.equal(toolCommand('findSkills', { query: '煤蛇', limit: 2 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_skills","find",\'煤蛇\',2)))')
+  assert.equal(toolCommand('getSkillDetails', { id: 'burner-coal-loop' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_skills","get",\'burner-coal-loop\')))')
   assert.equal(toolCommand('getPlayerStatus', { player_name: 'TTLouis' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_player_status",\'TTLouis\')))')
   assert.equal(toolCommand('getNearbyEntities', { radius: 32, name: 'iron-ore', type: 'resource', limit: 25 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_nearby_entities",32,\'iron-ore\',\'resource\',25)))')
   assert.equal(toolCommand('findLongRangeEntities', { name: 'iron-ore', max_radius: 2048, limit: 4 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",\'iron-ore\',2048,4)))')
@@ -193,6 +200,11 @@ test('tool calls reject unknown names, unsafe names, extras, and out-of-bound sc
   assert.throws(() => toolCommand('discoverPrototypes', { capability: 'mining', resource_name: 'iron-ore', lua: 'game.clear()' }))
   assert.throws(() => toolCommand('getPrototypeDetails', { name: 'inserter', force: 'enemy' }))
   assert.throws(() => toolCommand('getPrototypeDetails', { name: 'inserter\n/c game.clear()' }))
+  assert.throws(() => toolCommand('findSkills', { query: '' }))
+  assert.throws(() => toolCommand('findSkills', { query: 'coal', limit: 6 }))
+  assert.throws(() => toolCommand('findSkills', { query: 'coal', lua: 'game.clear()' }))
+  assert.throws(() => toolCommand('getSkillDetails', { id: '../escape' }))
+  assert.throws(() => toolCommand('getSkillDetails', { id: 'burner-coal-loop', extra: true }))
   assert.throws(() => toolCommand('getEntityGeometry', { unit_number: 0 }))
   assert.throws(() => toolCommand('getEntityGeometry', { unit_number: 1.5 }))
   assert.throws(() => toolCommand('getEntityGeometry', { unit_number: 42, radius: 8 }))
