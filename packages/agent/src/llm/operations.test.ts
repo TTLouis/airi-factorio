@@ -6,6 +6,7 @@ describe('structured Autorio operations', () => {
     const operations = parseStructuredOperations([
       { name: 'mine_entity', args: { entity_name: 'iron-ore' } },
       { name: 'harvest_product', args: { product_name: 'stone', count: 6 } },
+      { name: 'clear_construction_area', args: { x: 10, y: -4, width: 12, height: 8 } },
       { name: 'craft_item', args: { item_name: 'iron-gear-wheel' } },
       { name: 'attack_nearest_enemy', args: {} },
       { name: 'clear_enemy_area', args: {} },
@@ -22,6 +23,7 @@ describe('structured Autorio operations', () => {
     expect(operations).toEqual([
       { name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } },
       { name: 'harvest_product', args: { product_name: 'stone', count: 6, search_radius: 256 } },
+      { name: 'clear_construction_area', args: { x: 10, y: -4, width: 12, height: 8 } },
       { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1 } },
       { name: 'attack_nearest_enemy', args: { search_radius: 50 } },
       { name: 'clear_enemy_area', args: { search_radius: 96 } },
@@ -87,6 +89,7 @@ describe('structured Autorio operations', () => {
     expect(() => parseStructuredOperations([{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1001 } }])).toThrow()
     expect(() => parseStructuredOperations([{ name: 'harvest_product', args: { product_name: 'stone', count: 100001 } }])).toThrow()
     expect(() => parseStructuredOperations([{ name: 'harvest_product', args: { product_name: 'wood', count: 1, search_radius: 4097 } }])).toThrow()
+    expect(() => parseStructuredOperations([{ name: 'clear_construction_area', args: { x: 0, y: 0, width: 65, height: 1 } }])).toThrow()
     expect(parseStructuredOperations([{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1000 } }])[0]).toEqual({ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1000 } })
     expect(() => parseStructuredOperations([{ name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } }])).toThrow()
     expect(parseStructuredOperations([{ name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1000 } }])[0]).toEqual({ name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1000 } })
@@ -116,6 +119,7 @@ describe('structured Autorio operations', () => {
       { name: 'clear_enemy_area', args: { search_radius: 128 } },
       { name: 'mine_entity', args: { entity_name: 'iron-ore', count: 8 } },
       { name: 'harvest_product', args: { product_name: 'stone', count: 6, search_radius: 128 } },
+      { name: 'clear_construction_area', args: { x: 10, y: -4, width: 12, height: 8 } },
       { name: 'move_items_exact', args: { item_name: 'firearm-magazine', unit_number: 4242, max_count: 10, to_entity: true } },
       { name: 'set_machine_recipe', args: { unit_number: 4242, recipe_name: 'iron-gear-wheel' } },
       { name: 'move_items_with_player', args: { item_name: 'stone', player_name: 'Louis', max_count: 10, to_player: true } },
@@ -132,6 +136,7 @@ describe('structured Autorio operations', () => {
       "remote.call('autorio_operations', 'clear_enemy_area', 128)",
       "remote.call('autorio_operations', 'mine_entity', 'iron-ore', 8)",
       "remote.call('autorio_operations', 'harvest_product', 'stone', 6, 128)",
+      "remote.call('autorio_operations', 'clear_construction_area', 10, -4, 12, 8)",
       "remote.call('autorio_operations', 'move_items_exact', 'firearm-magazine', 4242, 10, true)",
       "remote.call('autorio_operations', 'set_machine_recipe', 4242, 'iron-gear-wheel')",
       "remote.call('autorio_operations', 'move_items_with_player', 'stone', 'Louis', 10, true)",
