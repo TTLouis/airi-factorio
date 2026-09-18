@@ -86,11 +86,18 @@ class RouterRcon {
   }
 }
 
-function agentFor(intent, { running = true, withPlan = true, queueConflict = intent === 'amend_current' } = {}) {
+function agentFor(intent, {
+  running = true,
+  withPlan = true,
+  queueConflict = intent === 'amend_current',
+  decisionIntent,
+  decisionConflictProbability = 0.2,
+} = {}) {
   const memory = new CanonicalTaskBoardMemory()
   if (withPlan) memory.planByNpc.set('npc:airi', activePlan())
   const rcon = new RouterRcon({ running })
   const calls = []
+  const decisionCalls = []
   const mockProvider = async (_messages, context) => {
     calls.push(context)
     if (context.interactionRouter) {
@@ -107,6 +114,34 @@ function agentFor(intent, { running = true, withPlan = true, queueConflict = int
       }),
     }
   }
+  const interactionDecisionProvider = decisionIntent
+    ? async (state, questions, context) => {
+        decisionCalls.push({ state, questions, context })
+        const probabilities = Object.fromEntries(Object.keys(questions.intent.criteria).map(key => [key, key === decisionIntent ? 0.95 : 0.01]))
+        return {
+          model: 'jev-latest',
+          provider: 'TypeSafe',
+          answers: {
+            intent: {
+              type: 'choice',
+              choice: decisionIntent,
+              probabilities,
+              confidence: 0.91,
+            },
+            queue_conflict: {
+              type: 'noul',
+              noul: decisionConflictProbability,
+            },
+          },
+          usage: {
+            input_tokens: 120,
+            output_tokens: 20,
+            cost: 0.00000504,
+          },
+        }
+      }
+    : undefined
+
   const agent = new NpcAgentLoop({
     rcon,
     memory,
@@ -114,6 +149,7 @@ function agentFor(intent, { running = true, withPlan = true, queueConflict = int
     npcId: 'airi',
     provider: mockProvider,
     interactionProvider: mockProvider,
+    interactionDecisionProvider,
   })
   if (running && withPlan) {
     agent.active = true
@@ -127,7 +163,7 @@ function agentFor(intent, { running = true, withPlan = true, queueConflict = int
     agent.messages = agent.baseMessages.map(message => ({ ...message }))
     agent.requestInfo = { memoryKey: 'npc:airi', turnId: 1, sender: 'tester', text: 'build a continuous early iron production line' }
   }
-  return { agent, memory, rcon, calls }
+  return { agent, memory, rcon, calls, decisionCalls }
 }
 
 test('interaction route parser is strict and runtime health uses authoritative task state', () => {
@@ -157,6 +193,82 @@ test('constructor initializes routed lifecycle without requiring an intent varia
 
   assert.equal(agent.requestLifecycle, 'new_goal')
   assert.equal(agent.pendingInteractionAmendment, null)
+})
+
+test('Jev shadow disagreement is observed without changing the active interaction route', async () => {
+  const { agent, rcon, calls, decisionCalls } = agentFor('status_query', { decisionIntent: 'new_goal' })
+  const result = await agent.request('what are you doing?', { sender: 'tester' })
+
+  assert.equal(result.interactionIntent, 'status_query')
+  assert.equal(result.routedOnly, true)
+  assert.equal(calls.length, 1)
+  assert.equal(decisionCalls.length, 1)
+  assert.equal(decisionCalls[0].state.message, 'what are you doing?')
+  assert.equal(decisionCalls[0].questions.intent.type, 'choice')
+  assert.equal(decisionCalls[0].questions.queue_conflict.type, 'noul')
+  assert.ok(decisionCalls[0].context.signal instanceof AbortSignal)
+  assert.equal(rcon.cancelCount, 0)
+})
+
+test('deterministic no-goal routing skips Jev shadow entirely', async () => {
+  const { agent, decisionCalls } = agentFor('new_goal', {
+    running: false,
+    withPlan: false,
+    decisionIntent: 'chat_only',
+  })
+
+  await agent.request('build something new', { sender: 'tester' })
+  assert.equal(decisionCalls.length, 0)
+})
+
+test('cancelling the agent aborts an in-flight Jev shadow decision', async () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', activePlan())
+  const rcon = new RouterRcon({ running: true })
+
+  let decisionSignal
+  let routerSignal
+  let releaseRouter
+  const routerWait = new Promise(resolve => { releaseRouter = resolve })
+
+  const agent = new NpcAgentLoop({
+    rcon,
+    memory,
+    systemPrompt: 'interaction cancellation test',
+    npcId: 'airi',
+    provider: async () => {
+      throw new Error('main planner should not run')
+    },
+    interactionProvider: async (_messages, context) => {
+      routerSignal = context.signal
+      await routerWait
+      if (context.signal.aborted) throw new Error('router aborted')
+      return { content: JSON.stringify({ intent: 'status_query', queue_conflict: false, reply: '' }) }
+    },
+    interactionDecisionProvider: async (_state, _questions, context) => {
+      decisionSignal = context.signal
+      await new Promise((resolve, reject) => {
+        if (context.signal.aborted) return reject(new Error('decision aborted'))
+        context.signal.addEventListener('abort', () => reject(new Error('decision aborted')), { once: true })
+      })
+      throw new Error('unreachable')
+    },
+    traceFile: null,
+    stateFile: null,
+  })
+
+  const pending = agent.request('status?', { sender: 'tester' })
+  for (let index = 0; index < 50 && (!decisionSignal || !routerSignal); index++) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+
+  assert.ok(decisionSignal)
+  assert.equal(decisionSignal, routerSignal)
+  agent.cancel('test_cancel')
+  assert.equal(decisionSignal.aborted, true)
+  releaseRouter()
+
+  await assert.rejects(pending, /router aborted|cancelled|superseded/)
 })
 
 test('continue_current while Autorio is healthy does not restart the main planner or cancel world work', async () => {
