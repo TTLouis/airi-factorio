@@ -839,4 +839,11 @@ test('verified final completion is not mistaken for an action omission', async (
   assert.equal(finished.goalStatus, 'completed')
   assert.equal(finished.operations.length, 0)
   assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
+  assert.match(agent.memory.context('npc:airi'), /place one furnace|requested furnace/i)
+
+  await agent.finalizeCompletedTaskContext()
+  assert.equal(agent.active, false)
+  assert.equal(agent.messages.length, 0)
+  assert.equal(agent.baseMessages.length, 0)
+  assert.equal(agent.memory.context('npc:airi'), '')
 })

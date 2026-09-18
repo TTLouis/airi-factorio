@@ -844,6 +844,40 @@ async function discardTaskContext(session, reason, { clearDialogue = false } = {
   return cleared
 }
 
+function completedTaskResult(result) {
+  return result?.goalStatus === 'completed' || result?.taskBoard?.status === 'completed'
+}
+
+export async function finalizeCompletedTaskBoundary(session, result) {
+  if (!session?.agent || !completedTaskResult(result)) return false
+
+  // Publish exactly one final completed snapshot before clearing the live slot.
+  // This lets Old Tasks and learning consume the completed stages, evidence and
+  // player-facing conversation instead of seeing the task simply disappear.
+  const taskBoard = result?.taskBoard
+  if (taskBoard?.status === 'completed') {
+    const completedState = {
+      goal_id: result?.goalId ?? taskBoard.goal_id ?? '',
+      owner: session.agent?.requestInfo?.sender ?? '',
+      objective: session.agentLive?.objective ?? '',
+      status: 'completed',
+      blocker: '',
+      pause_reason: '',
+      plan: [],
+      current_step: 0,
+      last_chat_message: result?.chatMessage ?? '',
+      last_operations: [],
+      task_board: taskBoard,
+    }
+    await session.syncTaskBoardUi(completedState)
+  }
+
+  await session.agent.finalizeCompletedTaskContext?.()
+  resetLiveTaskContext(session)
+  await session.clearTaskBoardUi()
+  return true
+}
+
 export async function executeUiControl(session, event) {
   if (!session?.rcon || !session?.agent) return false
 
@@ -1511,7 +1545,8 @@ export class Session {
         this.appendUiConversation('user', sender, text)
         const result = await this.agent.request(text, { sender })
         if (result?.chatMessage) this.appendUiConversation('assistant', this.npcName || 'AIRI', result.chatMessage)
-        await this.syncTaskBoardUi()
+        const finalized = await finalizeCompletedTaskBoundary(this, result)
+        if (!finalized) await this.syncTaskBoardUi()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }
       finally {
@@ -1576,7 +1611,8 @@ export class Session {
         await this.ensureAuthorization()
         if (!this.agent.active) return
         const result = await this.agent.completed()
-        await this.syncTaskBoardUi()
+        const finalized = await finalizeCompletedTaskBoundary(this, result)
+        if (!finalized) await this.syncTaskBoardUi()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
       return

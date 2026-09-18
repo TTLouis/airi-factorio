@@ -461,6 +461,12 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return [this.dialogueContext(key), this.planContext(key)].filter(Boolean).join('\n')
   }
 
+  clearTaskContext(key) {
+    const result = super.clearTaskContext(key)
+    if (key) this.nextContextOverride.delete(key)
+    return result
+  }
+
   currentPlan(key) {
     const state = key ? this.planByNpc.get(key) : undefined
     this.ensureTaskBoard(state)
@@ -1804,6 +1810,32 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.persistState()
     super.cancel()
     return state
+  }
+
+  async finalizeCompletedTaskContext() {
+    await this.loadPersistentState()
+    const key = this.requestInfo?.memoryKey ?? this.lastMemoryKey ?? `npc:${this.npcId}`
+    this.memory.clearTaskContext?.(key)
+    await this.persistState()
+
+    // Completion is a hard planner boundary. Do not carry the completed task's
+    // provider working set, continuation counters, recovery state, or dialogue
+    // context into the next goal.
+    super.cancel()
+    this.traceRequest = null
+    this.planUpdateReason = 'request'
+    this.requestLifecycle = 'new_goal'
+    this.pendingInteractionAmendment = null
+    this.lastTaskStatusView = null
+    this.lastHandledRuntimeReceipt = { completion: null, failure: null }
+    this.outputBudgetRecoveryUsed = false
+    this.outputBudgetRecoveryGuard = null
+    this.clearActionOmissionRecovery()
+    this.liveEntityObservations = new Map()
+    this.rejectedExactTargets = new Set()
+    this.staleExactPreflightRetries = 0
+    this.bootstrapDependencyPreflightRetries = 0
+    return true
   }
 
   traceEvent(event, data = {}) {
