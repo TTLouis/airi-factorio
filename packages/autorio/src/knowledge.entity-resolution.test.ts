@@ -9,7 +9,7 @@ describe('knowledge exact entity resolution', () => {
     ;(globalThis as any).game.get_entity_by_unit_number = originalLookup
   })
 
-  it('does not treat an observed location hint as a live exact entity after native lookup fails', () => {
+  it('does not treat a same-position replacement as the observed exact entity after native lookup fails', () => {
     const drill = {
       valid: true,
       name: 'modded-miner',
@@ -36,6 +36,8 @@ describe('knowledge exact entity resolution', () => {
     } as any
 
     remember_entity_reference(drill)
+    const replacement = { ...drill, unit_number: 746 }
+    drill.surface.find_entities_filtered = () => [replacement]
     ;(globalThis as any).game.get_entity_by_unit_number = () => undefined
 
     const result = entity_geometry_for_actor(actor, 744) as any
@@ -69,7 +71,8 @@ describe('knowledge exact entity resolution', () => {
       drop_target: chest,
       fluidbox: { length: 0 },
     } as any
-    surface.find_entities_filtered = (filter: any) => filter?.type === 'inserter' ? [] : [drill]
+    const replacement = { ...drill, unit_number: 746 }
+    surface.find_entities_filtered = (filter: any) => filter?.type === 'inserter' ? [] : [replacement]
 
     const actor = {
       is_valid: true,
