@@ -173,7 +173,7 @@ test('decision provider auto-configures from TypeSafe credentials without persis
   assert.equal(effective.decisionProvider?.maxRequestsPerHour, 45)
   assert.equal(Object.prototype.hasOwnProperty.call(effective.decisionProvider, 'enabled'), false)
 
-  const persisted = await migrateConfigFile(filename, env)
+  const persisted = (await migrateCanonicalConfig(root, env)).config
   assert.equal(Object.prototype.hasOwnProperty.call(persisted, 'decisionProvider'), false)
   const text = await fsp.readFile(filename, 'utf8')
   assert.equal(text.includes(decisionKey), false)
