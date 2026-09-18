@@ -789,7 +789,8 @@ function compactInteractionTaskStatus(raw) {
 
 export function interactionRuntimeHealthy(status) {
   if (!status || status.status_error) return false
-  return (typeof status.task_state === 'string' && status.task_state !== 'idle')
+  const taskState = typeof status.task_state === 'string' ? status.task_state.trim().toLowerCase() : ''
+  return (taskState !== '' && taskState !== 'idle')
     || (Number.isSafeInteger(status.queue_length) && status.queue_length > 0)
 }
 
@@ -921,6 +922,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     })
     this.stateFile = stateFileFromOptions(options)
     this.stateLoaded = false
+    this.interactionProvider = typeof options.interactionProvider === 'function' ? options.interactionProvider : null
     this.persistQueue = Promise.resolve()
     this.traceRequest = null
     this.traceRequestSequence = 0
@@ -1124,7 +1126,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
             : undefined,
         }
       : null
-    const message = await this.provider([
+    if (!this.interactionProvider) throw new AgentLoopError('Interaction router provider is unavailable')
+    const message = await this.interactionProvider([
       { role: 'system', content: INTERACTION_ROUTER_PROMPT },
       {
         role: 'user',
@@ -1189,7 +1192,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const taskStatus = await this.readInteractionTaskStatus()
     const healthyRuntime = interactionRuntimeHealthy(taskStatus)
     let routed
-    if (!planBefore && !healthyRuntime) {
+    if (!this.interactionProvider) {
+      routed = {
+        route: { intent: planBefore ? 'continue_current' : 'new_goal', queue_conflict: false, reply: '' },
+        epoch: undefined,
+        router_bypassed: true,
+      }
+    }
+    else if (!planBefore && !healthyRuntime) {
       routed = {
         route: { intent: 'new_goal', queue_conflict: false, reply: '' },
         epoch: undefined,
@@ -1221,27 +1231,28 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       queue_length: taskStatus.queue_length,
       router_error: routed.router_error,
       classifier_skipped: routed.classifier_skipped,
+      router_bypassed: routed.router_bypassed === true,
     })
 
-    if (intent === 'continue_current' && healthyRuntime) {
+    if (!routed.router_bypassed && intent === 'continue_current' && healthyRuntime) {
       const reply = `Current Autorio work is still running (${taskStatus.task_state ?? 'active'}, queue ${taskStatus.queue_length ?? 0}); I will let it continue without restarting the planner.`
       await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
       return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true }
     }
 
-    if (intent === 'status_query') {
+    if (!routed.router_bypassed && intent === 'status_query') {
       const reply = interactionStatusReply(taskStatus, planBefore)
       await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
       return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true }
     }
 
-    if (intent === 'chat_only') {
+    if (!routed.router_bypassed && intent === 'chat_only') {
       const reply = routed.route.reply || 'I am here.'
       await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
       return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true }
     }
 
-    if (intent === 'cancel_current') {
+    if (!routed.router_bypassed && intent === 'cancel_current') {
       if (healthyRuntime) await this.cancelInteractionWorldWork(routed.epoch)
       const state = this.memory.pausePlan?.(memoryKey, 'user_cancel')
       await this.persistState()
@@ -1253,7 +1264,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true }
     }
 
-    if (intent === 'amend_current' && healthyRuntime && routed.route.queue_conflict !== true) {
+    if (!routed.router_bypassed && intent === 'amend_current' && healthyRuntime && routed.route.queue_conflict !== true) {
       if (this.stageCompatibleAmendment(sender, text)) {
         const reply = `The amendment is compatible with the Autorio work already running (queue ${taskStatus.queue_length ?? 0}), so I will not cancel that batch. I will apply the amendment at the next main-planner boundary.`
         await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
@@ -1261,11 +1272,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
     }
 
-    if (intent === 'amend_current' && healthyRuntime) {
+    if (!routed.router_bypassed && intent === 'amend_current' && healthyRuntime) {
       await this.cancelInteractionWorldWork(routed.epoch)
       super.cancel()
     }
-    else if (intent === 'new_goal') {
+    else if (!routed.router_bypassed && intent === 'new_goal') {
       if (healthyRuntime) await this.cancelInteractionWorldWork(routed.epoch)
       super.cancel()
       this.memory.clearTaskContext?.(memoryKey)
