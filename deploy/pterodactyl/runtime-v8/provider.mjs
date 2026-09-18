@@ -287,8 +287,8 @@ export async function decisionProviderRequest(config, state, questions, {
 } = {}) {
   check(config && typeof config === 'object' && typeof config.key === 'string' && config.key.trim().length > 0, 'Decision provider is not configured')
   const { serialized } = normalizeDecisionProviderRequest(config, state, questions)
-
-  if (typeof reserve === 'function') await reserve()
+  check(typeof reserve === 'function', 'Decision provider request requires a budget reservation callback')
+  await reserve()
 
   const timeoutSignal = AbortSignal.timeout(config.timeoutMs)
   const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
