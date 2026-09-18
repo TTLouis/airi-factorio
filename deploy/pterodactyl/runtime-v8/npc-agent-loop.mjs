@@ -2754,12 +2754,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         return this.finishNoOperationBlock(plan, before, 'provider_reported_blocker', explicitBlocker, 'provider_blocker')
       }
       if (this.outputBudgetRecoveryGuard && this.outputBudgetRecoveryGuard.world_evidence_observed !== true) {
-        return this.finishNoOperationBlock(
-          plan,
-          before,
-          'output_budget_recovery_no_operation',
-          'Output-budget recovery supplied no fresh world evidence and no executable operation for the remaining canonical work.',
-          'output_budget_recovery',
+        // Output-budget recovery is provider orchestration, not Factorio world
+        // truth. If the bounded recovery cannot produce grounded evidence or an
+        // executable operation, fail the request upward instead of persisting a
+        // durable BLOCKED task. The supervisor will pause the durable plan only
+        // when Autorio is authoritatively idle, preserving the verified prefix
+        // for a fresh normal tool-capable Continue turn.
+        throw new AgentLoopError(
+          'provider_output_budget_exhausted: bounded output-budget recovery produced no fresh world evidence and no executable operation for remaining canonical work',
         )
       }
       if (this.actionOmissionRepairActive) {

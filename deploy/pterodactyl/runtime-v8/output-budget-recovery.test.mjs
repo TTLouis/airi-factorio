@@ -191,6 +191,50 @@ test('output-budget recovery keeps the canonical Task Board at the evidenced ste
   assert.equal(agent.messages.some(message => String(message.content ?? '').includes('immediately preceding provider response exhausted its output budget')), false)
 })
 
+test('output-budget recovery with no fresh evidence does not invent a durable world blocker', async () => {
+  const canonical = ['Inspect the crash-site wreck', 'Build the coal bootstrap', 'Verify coal']
+  const calls = []
+  const rcon = new FakeRcon()
+  const agent = makeAgent({
+    rcon,
+    provider: async (_messages, context) => {
+      calls.push(context)
+      if (calls.length === 1) {
+        return planMessage({
+          chatMessage: 'Checking the crash-site wreck before committing to a bootstrap plan.',
+          plan: canonical,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        })
+      }
+      if (calls.length === 2) return exhaustedMessage()
+      assert.equal(context.allowTools, true)
+      assert.equal(context.recoveryKind, 'output_budget_exhaustion')
+      return planMessage({
+        chatMessage: 'I still need a grounded next action.',
+        plan: canonical,
+        currentStep: 0,
+        operations: [],
+      })
+    },
+  })
+
+  await agent.request('build a small working coal production setup', { sender: 'TTLouis' })
+
+  await assert.rejects(
+    agent.completed(),
+    /provider_output_budget_exhausted: bounded output-budget recovery produced no fresh world evidence/i,
+  )
+
+  const state = agent.memory.currentPlan('npc:airi')
+  assert.equal(state.status, 'active')
+  assert.equal(state.task_board.status, 'active')
+  assert.equal(state.task_board.active_index, 0)
+  assert.deepEqual(state.plan, canonical)
+  assert.notEqual(state.blocker, 'output_budget_recovery_no_operation')
+  assert.notEqual(state.task_board.blocker, 'output_budget_recovery_no_operation')
+})
+
 test('output-budget recovery rejects replay of a completed mutation before admission and falls through the bounded recovery path', async () => {
   const canonical = ['Wait for the machine cycle', 'Inspect the result']
   const calls = []
