@@ -32,6 +32,16 @@ def run(client: Rcon, results: Path) -> None:
     def status(context: str) -> dict:
         return json_command(operation_status_command(), context)
 
+    def operation_admission(expression: str, context: str) -> dict:
+        return json_command(
+            "/silent-command local result=" + expression + "; "
+            "local accepted=false; local message=nil; "
+            "if type(result)=='table' then accepted=result[1]==true; message=result[2] "
+            "else accepted=result==true end; "
+            "rcon.print(helpers.table_to_json({accepted=accepted,message=message}))",
+            f'{context} admission',
+        )
+
     fixture = json_command(
         "/silent-command local s=game.surfaces[1]; local a=nil; "
         f"for _,e in pairs(s.find_entities_filtered{{name='character'}}) do if e.unit_number=={actor_id} then a=e end end; "
@@ -69,20 +79,20 @@ def run(client: Rcon, results: Path) -> None:
     )
     require(live_preflight.get('ok') is True and live_preflight.get('identity') == fixture['chest_id'], live_preflight)
 
-    legacy = json_command(
-        lua_json(remote_call('autorio_operations', 'mine_entity', repr('wooden-chest'), '1')),
-        'legacy remote name mine admission',
+    legacy = operation_admission(
+        remote_call('autorio_operations', 'mine_entity', repr('wooden-chest'), '1'),
+        'legacy remote name mine',
     )
-    require(legacy is True, legacy)
+    require(legacy.get('accepted') is True, legacy)
     legacy_after = wait_until_idle(status, 'legacy remote name mining failure', 8)
     legacy_result = (legacy_after.get('basic_operation') or {}).get('last_result') or {}
     require(legacy_result.get('code') == 'no_target', legacy_after)
 
-    exact = json_command(
-        lua_json(remote_call('autorio_operations', 'mine_entity_exact', str(fixture['chest_id']))),
-        'exact remote mining admission',
+    exact = operation_admission(
+        remote_call('autorio_operations', 'mine_entity_exact', str(fixture['chest_id'])),
+        'exact remote mining',
     )
-    require(exact is True, exact)
+    require(exact.get('accepted') is True, exact)
     exact_after = wait_until_idle(status, 'exact remote mining auto approach', 20)
     exact_result = (exact_after.get('basic_operation') or {}).get('last_result') or {}
     require(exact_result.get('code') == 'completed' and exact_result.get('completed') is True, exact_after)
