@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  export_project,
+  handle_project_export_click,
   project_by_id,
+  project_export_payload,
+  project_export_relative_directory,
   project_history,
   projects_ui_is_open,
   record_project_snapshot,
@@ -14,6 +18,10 @@ declare const globalThis: any
 beforeEach(() => {
   globalThis.storage = {}
   globalThis.math = Math
+  globalThis.helpers = {
+    table_to_json: (value: unknown) => JSON.stringify(value),
+    write_file: () => {},
+  }
 })
 
 function snapshot(goal_id: string, objective: string, activity: any[] = []) {
@@ -111,6 +119,74 @@ describe('project history model', () => {
     expect(selected_project_id(1, 'goal-a')).toBe('goal-a')
     expect(select_project(1, 'goal-b')).toBe(true)
     expect(selected_project_id(1, 'goal-a')).toBe('goal-b')
+  })
+})
+
+describe('old task export', () => {
+  it('exports the selected archived task as structured JSON plus an agent-readable markdown companion', () => {
+    const conversation = [
+      { id: 'u1', role: 'user', sender: 'TTLouis', text: 'Build power and smelting' },
+      { id: 'a1', role: 'assistant', sender: 'AIRI', text: 'I will build power first.' },
+    ]
+    const activity = [
+      { id: 'receipt-1', kind: 'result', text: 'Autorio batch 1 completed', timestamp: '00:01:00' },
+    ]
+    record_project_snapshot({
+      ...snapshot('goal-export', 'Build power and smelting', activity),
+      response: 'I will build power first.',
+      blocker: 'waiting_for_iron',
+      conversation,
+    }, 120)
+
+    const project = project_by_id('goal-export')!
+    const payload = project_export_payload(project)
+    expect(payload.schema_version).toBe(1)
+    expect(payload.kind).toBe('airi_old_task_export')
+    expect(payload.goal.id).toBe('goal-export')
+    expect(payload.goal.objective).toBe('Build power and smelting')
+    expect(payload.conversation.map(message => message.text)).toEqual([
+      'Build power and smelting',
+      'I will build power first.',
+    ])
+    expect(payload.activity[0].text).toBe('Autorio batch 1 completed')
+    expect(project_export_relative_directory(project)).toBe('airi-old-tasks/goal-export')
+
+    const writes: Array<{ path: string, content: string, append: boolean }> = []
+    globalThis.helpers.write_file = (path: string, content: string, append: boolean) => writes.push({ path, content, append })
+    const result = export_project('goal-export')
+    expect(result.relative_path).toBe('script-output/airi-old-tasks/goal-export')
+    expect(writes.map(write => write.path)).toEqual([
+      'airi-old-tasks/goal-export/task.json',
+      'airi-old-tasks/goal-export/TASK.md',
+    ])
+    expect(JSON.parse(writes[0].content).conversation).toHaveLength(2)
+    expect(writes[1].content).toContain('## Conversation')
+    expect(writes[1].content).toContain('TTLouis (user)')
+    expect(writes.every(write => write.append === false)).toBe(true)
+  })
+
+  it('routes EXPORT TASK through the selected Old Tasks project and reports the exported path', async () => {
+    record_project_snapshot(snapshot('goal-a', 'Build power'), 60)
+    select_project(1, 'goal-a')
+    const messages: string[] = []
+    const writes: string[] = []
+    globalThis.helpers.write_file = (path: string) => writes.push(path)
+    const player = { index: 1, print: (message: string) => messages.push(message) } as any
+
+    expect(handle_project_export_click(player, 'not-export')).toBe(false)
+    expect(handle_project_export_click(player, 'airi_task_board_project_export')).toBe(true)
+    expect(writes).toEqual([
+      'airi-old-tasks/goal-a/task.json',
+      'airi-old-tasks/goal-a/TASK.md',
+    ])
+    expect(messages[0]).toContain('script-output/airi-old-tasks/goal-a/task.json and TASK.md')
+
+    const { readFileSync } = await import('node:fs')
+    const window_source = readFileSync(new URL('./project_window.ts', import.meta.url), 'utf8')
+    const console_source = readFileSync(new URL('../task_board_ui.ts', import.meta.url), 'utf8')
+    expect(window_source).toContain("caption: 'EXPORT TASK'")
+    expect(window_source).toContain('task.json plus a readable TASK.md')
+    expect(console_source).toContain('project_ui.handle_project_export_click(player, element.name')
   })
 })
 

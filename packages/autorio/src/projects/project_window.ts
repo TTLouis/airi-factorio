@@ -8,6 +8,7 @@ import * as activity_state from '../task_board_activity'
 // whenever the main console/debug window was rebuilt.
 export const PROJECTS_BUTTON_NAME = 'airi_task_board_projects'
 export const PROJECTS_CLOSE_BUTTON_NAME = 'airi_task_board_projects_close'
+export const PROJECT_EXPORT_BUTTON_NAME = 'airi_task_board_project_export'
 export const PROJECT_LIST_NAME = 'airi_task_board_project_list'
 
 const ROOT_NAME = 'airi_task_board_projects_panel'
@@ -72,6 +73,33 @@ export interface ProjectHistoryRecord {
   conversation: ProjectHistoryConversationMessage[]
   created_tick: number
   updated_tick: number
+}
+
+export interface ProjectExportPayload {
+  schema_version: 1
+  kind: 'airi_old_task_export'
+  goal: {
+    id: string
+    name: string
+    objective: string
+    status: string
+    response: string
+    blocker: string
+    pause_reason: string
+    completed_count: number
+    total_steps: number
+    active_index: number
+    created_tick: number
+    updated_tick: number
+  }
+  steps: ProjectHistoryStep[]
+  conversation: ProjectHistoryConversationMessage[]
+  activity: ProjectHistoryActivity[]
+}
+
+export interface ProjectExportResult {
+  project_id: string
+  relative_path: string
 }
 
 declare const storage: {
@@ -306,6 +334,123 @@ export function selected_project_id(player_index: number, current_goal_id = '') 
   return history.length > 0 ? history[0].id : ''
 }
 
+function project_export_path_component(value: string) {
+  let safe = clean_text(value, 100)
+  for (const token of ['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' ']) safe = safe.split(token).join('_')
+  while (safe.includes('..')) safe = safe.split('..').join('_')
+  return safe.length > 0 ? safe : 'task'
+}
+
+export function project_export_payload(project: ProjectHistoryRecord): ProjectExportPayload {
+  return {
+    schema_version: 1,
+    kind: 'airi_old_task_export',
+    goal: {
+      id: project.id,
+      name: project.name,
+      objective: project.objective,
+      status: project.status,
+      response: project.response,
+      blocker: project.blocker,
+      pause_reason: project.pause_reason,
+      completed_count: project.completed_count,
+      total_steps: project.total_steps,
+      active_index: project.active_index,
+      created_tick: project.created_tick,
+      updated_tick: project.updated_tick,
+    },
+    steps: project.steps.map(step => ({ ...step })),
+    conversation: (project.conversation ?? []).map(message => ({ ...message })),
+    activity: project.activity.map(entry => ({ ...entry })),
+  }
+}
+
+export function serialize_project_export_json(project: ProjectHistoryRecord) {
+  return `${helpers.table_to_json(project_export_payload(project))}\n`
+}
+
+function project_export_markdown(project: ProjectHistoryRecord) {
+  const lines: string[] = [
+    `# ${project.name}`,
+    '',
+    '> AIRI Old Task export. This contains player-facing task history only; it does not include hidden model reasoning or private model memory.',
+    '',
+    '## Task',
+    '',
+    `- Goal ID: ${project.id}`,
+    `- Status: ${project.status}`,
+    `- Progress: ${project.completed_count}/${project.total_steps}`,
+    `- Active step index: ${project.active_index}`,
+    `- Created tick: ${project.created_tick}`,
+    `- Updated tick: ${project.updated_tick}`,
+    '',
+    '## Objective',
+    '',
+    project.objective || 'No objective retained.',
+  ]
+  if (project.response.length > 0) lines.push('', '## Latest AIRI Response', '', project.response)
+  if (project.blocker.length > 0) lines.push('', '## Blocker', '', project.blocker)
+  if (project.pause_reason.length > 0) lines.push('', '## Pause Reason', '', project.pause_reason)
+
+  lines.push('', '## Steps', '')
+  if (project.steps.length === 0) lines.push('- No durable steps retained.')
+  else {
+    for (let index = 0; index < project.steps.length; index++) {
+      const step = project.steps[index]
+      lines.push(`- ${index + 1}. [${step.status.toUpperCase()}] ${step.description}`)
+    }
+  }
+
+  lines.push('', '## Conversation', '')
+  if ((project.conversation ?? []).length === 0) lines.push('- No explicit player/AIRI conversation retained.')
+  else {
+    for (const message of project.conversation) {
+      lines.push(`- **${message.sender} (${message.role})**: ${message.text}`)
+    }
+  }
+
+  lines.push('', '## Activity / Evidence', '')
+  if (project.activity.length === 0) lines.push('- No retained activity.')
+  else {
+    for (const entry of project.activity) {
+      const timestamp = entry.timestamp ? `${entry.timestamp} · ` : ''
+      lines.push(`- ${timestamp}${entry.kind.toUpperCase()} · ${entry.text}`)
+    }
+  }
+  lines.push('')
+  return lines.join('\n')
+}
+
+export function project_export_relative_directory(project: Pick<ProjectHistoryRecord, 'id'>) {
+  return `airi-old-tasks/${project_export_path_component(project.id)}`
+}
+
+export function export_project(project_id: string): ProjectExportResult {
+  const project = project_by_id(project_id)
+  if (project === undefined) throw new Error(`unknown old task: ${project_id}`)
+  const directory = project_export_relative_directory(project)
+  helpers.write_file(`${directory}/task.json`, serialize_project_export_json(project), false)
+  helpers.write_file(`${directory}/TASK.md`, project_export_markdown(project), false)
+  return { project_id: project.id, relative_path: `script-output/${directory}` }
+}
+
+export function handle_project_export_click(player: LuaPlayer, element_name: string, current_goal_id = '') {
+  if (element_name !== PROJECT_EXPORT_BUTTON_NAME) return false
+  const project_id = selected_project_id(player.index, current_goal_id)
+  if (project_id.length === 0) {
+    player.print('[AIRI] Old Task export failed: no task is selected.')
+    return true
+  }
+  try {
+    const result = export_project(project_id)
+    player.print(`[AIRI] Exported old task ${project_id}: ${result.relative_path}/task.json and TASK.md`)
+  }
+  catch (error) {
+    player.print(`[AIRI] Old Task export failed: ${error instanceof Error ? error.message : 'invalid task'}`)
+  }
+  return true
+}
+
 function destroy_projects_popout(player: LuaPlayer) {
   const existing = player.gui.screen[ROOT_NAME]
   const location = existing?.valid ? existing.location : undefined
@@ -426,6 +571,16 @@ function render_project_detail_skeleton(parent: LuaGuiElement, project: ProjectH
   const header = frame.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' })
   header.style.horizontally_stretchable = true
   header.add({ type: 'label', caption: 'Project Detail', style: 'subheader_caption_label' })
+  const header_spacer = header.add({ type: 'empty-widget' })
+  header_spacer.style.horizontally_stretchable = true
+  const export_button = header.add({
+    type: 'button',
+    name: PROJECT_EXPORT_BUTTON_NAME,
+    caption: 'EXPORT TASK',
+    style: 'confirm_button',
+    tooltip: 'Export this archived task as task.json plus a readable TASK.md under script-output/airi-old-tasks for analysis by another agent.',
+  })
+  export_button.enabled = project !== undefined
   const body = frame.add({ type: 'flow', name: DETAIL_BODY_NAME, direction: 'vertical' })
   body.style.padding = 10
   body.style.vertical_spacing = 6
