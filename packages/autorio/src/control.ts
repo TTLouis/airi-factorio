@@ -21,6 +21,7 @@ import { create_discovery_remote_interface } from './discovery'
 import { new_equipment_controller } from './equipment'
 import { entity_reference_hint, resolve_exact_entity } from './entity_reference'
 import { new_follow_controller } from './follow'
+import { new_harvest_controller } from './harvest'
 import { new_interaction_recovery } from './interaction_recovery'
 import { create_knowledge_remote_interface } from './knowledge'
 import { new_navigation_controller } from './navigation'
@@ -28,7 +29,7 @@ import { new_navigation_obstacle_recovery } from './navigation_obstacle_recovery
 import { new_orientation_runtime } from './orientation_runtime'
 import { execute_placement_candidate } from './placement_candidates'
 import { create_production_planning_remote_interface } from './production_planning_remote'
-import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
+import { create_prototype_knowledge_remote_interface, harvest_source_prototype_names } from './prototype_knowledge'
 import { new_recipe_configuration_runtime } from './recipe_configuration'
 import { new_research_controller } from './research'
 import { ensure_basic_skill_definitions } from './skills'
@@ -59,6 +60,7 @@ const recipe_configuration_runtime = new_recipe_configuration_runtime(task_manag
 const interaction_recovery = new_interaction_recovery(task_manager)
 const navigation_controller = new_navigation_controller(get_controlled_actor, task_manager)
 const composite_operation_controller = new_composite_operation_controller(navigation_controller, basic_operation_controller, task_manager)
+const harvest_controller = new_harvest_controller(get_controlled_actor, task_manager)
 const navigation_obstacle_recovery = new_navigation_obstacle_recovery()
 const crafting_controller = new_crafting_controller(get_controlled_actor, task_manager)
 const research_controller = new_research_controller(get_controlled_actor, task_manager)
@@ -246,6 +248,31 @@ function operation_preflight(name: string, args: Record<string, any>) {
     return accept({ field: 'item_name', identity: item_name, recipe_name: recipe.name })
   }
 
+  if (name === 'harvest_product') {
+    if (!actor || !actor.is_valid) return reject('no_actor')
+    const product_name = args.product_name
+    if (typeof product_name !== 'string' || !prototypes.item[product_name]) {
+      return reject('unknown_product', {
+        field: 'product_name',
+        identity: product_name,
+        expected: 'item prototype mined from a non-resource entity',
+      })
+    }
+    const source_names = harvest_source_prototype_names(product_name)
+    if (source_names.length === 0) {
+      return reject('no_harvest_sources', {
+        field: 'product_name',
+        identity: product_name,
+        expected: 'non-resource mineable entity product',
+      })
+    }
+    return accept({
+      field: 'product_name',
+      identity: product_name,
+      source_count: source_names.length,
+    })
+  }
+
   if (name === 'gather_resource' || name === 'mine_resource_at') {
     const resource_name = args.resource_name
     const prototype = typeof resource_name === 'string' ? prototypes.entity[resource_name] : undefined
@@ -361,6 +388,11 @@ remote.add_interface('autorio_operations', {
   gather_resource: (resource_name: string, count: number = 1, search_radius: number = 256): [boolean, string] => {
     const result = composite_operation_controller.gather_resource(resource_name, count, search_radius)
     if (result[0]) log(`[AUTORIO] New gather_resource task: ${resource_name} x${count}, radius=${search_radius}`)
+    return result
+  },
+  harvest_product: (product_name: string, count: number = 1, search_radius: number = 256): [boolean, string] => {
+    const result = harvest_controller.submit(product_name, count, search_radius)
+    if (result[0]) log(`[AUTORIO] New harvest_product task: ${product_name} +${count}, radius=${search_radius}`)
     return result
   },
   supply_entity: (unit_number: number, items: Array<{ item_name: string, count: number }>): [boolean, string] => {
@@ -516,7 +548,12 @@ script.on_event(defines.events.on_script_path_request_finished, (event: OnScript
 script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEntityEvent) => {
   const actor = get_controlled_actor()
   if (!actor) return
-  basic_operation_runtime.on_player_mined_entity(actor, event.player_index)
+  if (task_manager.player_state.task_state === TaskStates.HARVESTING) {
+    harvest_controller.on_player_mined_entity(actor, event.player_index)
+  }
+  else {
+    basic_operation_runtime.on_player_mined_entity(actor, event.player_index)
+  }
 })
 
 function setup() {
@@ -567,6 +604,9 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     navigation_obstacle_recovery.suspend(actor)
     if (task_manager.player_state.task_state === TaskStates.MINING) {
       basic_operation_runtime.state_mining(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.HARVESTING) {
+      harvest_controller.tick(actor)
     }
     else if (task_manager.player_state.task_state === TaskStates.PLACING) {
       basic_operation_runtime.state_placing(actor)
