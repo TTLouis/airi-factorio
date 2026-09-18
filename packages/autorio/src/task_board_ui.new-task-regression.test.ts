@@ -14,6 +14,7 @@ describe('task board New Task control regression', () => {
     expect(prompt).toContain("caption: 'Prompt AIRI'")
     expect(prompt).toContain("name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK'")
     expect(prompt).toContain('header_spacer.style.horizontally_stretchable = true')
+    expect(prompt).not.toContain('header.style.horizontal_spacing')
     expect(handler).toContain('if (element_name === NEW_TASK_BUTTON_NAME)')
     expect(handler).toMatch(/NEW_TASK_BUTTON_NAME\)[^\n]*clear_terminate_confirmation\(player\.index\)[^\n]*emit_control\(player, 'new_task'\)/)
   })
