@@ -113,6 +113,18 @@ function agentFor(intent, { running = true, withPlan = true, queueConflict = int
       }
     },
   })
+  if (running && withPlan) {
+    agent.active = true
+    agent.epoch = deployment()
+    agent.lastMemoryKey = 'npc:airi'
+    agent.baseMessages = [
+      { role: 'system', content: agent.systemPrompt },
+      { role: 'user', content: memory.planContext('npc:airi') },
+      { role: 'user', content: '[CHAT] tester: build a continuous early iron production line' },
+    ]
+    agent.messages = agent.baseMessages.map(message => ({ ...message }))
+    agent.requestInfo = { memoryKey: 'npc:airi', turnId: 1, sender: 'tester', text: 'build a continuous early iron production line' }
+  }
   return { agent, memory, rcon, calls }
 }
 
