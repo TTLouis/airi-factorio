@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
+import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
 
 function deployment() {
@@ -114,6 +115,7 @@ async function runTwoObservations(snapshots) {
   const agent = new NpcAgentLoop({
     rcon,
     systemPrompt: 'NPC test prompt',
+    memory: new CanonicalTaskBoardMemory(),
     stateFile: null,
     traceFile: null,
     provider: async messages => {

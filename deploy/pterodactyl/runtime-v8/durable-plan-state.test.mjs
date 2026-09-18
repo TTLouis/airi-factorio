@@ -178,6 +178,7 @@ test('durable plan survives a new agent instance and empty actions cannot preten
     rcon: new FakeRcon(),
     provider: async () => firstReplies.shift(),
     systemPrompt: 'NPC test prompt',
+    memory: new CanonicalTaskBoardMemory(),
     stateFile,
     traceFile: null,
   })
@@ -211,6 +212,7 @@ test('durable plan survives a new agent instance and empty actions cannot preten
       return planMessage({ chatMessage: 'The saved plan is still available.', plan: [], operations: [] })
     },
     systemPrompt: 'NPC test prompt',
+    memory: new CanonicalTaskBoardMemory(),
     stateFile,
     traceFile: null,
   })
@@ -362,7 +364,7 @@ class ActionOmissionRcon {
   }
 }
 
-function toolMessage(id = 'observe-chest') {
+function toolMessage(id = 'observe-chest', radius = 16) {
   return {
     content: null,
     tool_calls: [{
@@ -370,7 +372,7 @@ function toolMessage(id = 'observe-chest') {
       type: 'function',
       function: {
         name: 'getNearbyEntities',
-        arguments: JSON.stringify({ radius: 16, name: 'steel-chest', limit: 4 }),
+        arguments: JSON.stringify({ radius, name: 'steel-chest', limit: 4 }),
       },
     }],
   }
@@ -482,7 +484,7 @@ test('completed observation followed by prose-only intent gets exactly one cheap
 
   const result = await agent.request('take ten iron plates from that chest', { sender: 'TTLouis' })
   assert.equal(calls.length, 3)
-  assert.equal(rcon.observationCalls, 1)
+  assert.equal(rcon.observationCalls, 5)
   assert.equal(result.operations[0].name, 'move_items_exact')
   assert.equal(rcon.mutations.length, 1)
   assert.equal(calls[2].options.recoveryAttempt, 1)
@@ -721,7 +723,7 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
     provider: async (_messages, options) => {
       calls++
       optionsSeen.push(options)
-      if (calls <= 5) return toolMessage(`preplan-observe-${calls}`)
+      if (calls <= 5) return toolMessage(`preplan-observe-${calls}`, 15 + calls)
       return planMessage({
         chatMessage: '',
         plan: [],
@@ -770,6 +772,7 @@ test('verified final completion is not mistaken for an action omission', async (
       })
     },
     systemPrompt: 'Verified final completion omission test',
+    memory: new CanonicalTaskBoardMemory(),
     stateFile: null,
     traceFile: null,
   })

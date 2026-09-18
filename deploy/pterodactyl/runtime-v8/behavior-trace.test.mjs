@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
 import { providerRequest } from './provider.mjs'
 
@@ -136,6 +137,7 @@ test('behavior trace correlates request through verification, records usage, and
     rcon: new FakeRcon(),
     provider: async () => withProviderUsage(replies.shift()),
     reserve: async () => ({ count: ++budgetCount, token: 'budget-secret-token' }),
+    memory: new CanonicalTaskBoardMemory(),
     systemPrompt: 'NPC test prompt',
     traceFile,
   })
@@ -209,6 +211,7 @@ test('duplicate completion receipts do not spend another provider call, while a 
       providerCalls++
       return replies.shift()
     },
+    memory: new CanonicalTaskBoardMemory(),
     systemPrompt: 'NPC test prompt',
     traceFile: null,
     onActivity: (event, data) => activity.push({ event, data }),

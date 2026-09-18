@@ -1738,6 +1738,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.actionOmissionObservationUsed = false
     this.actionOmissionForceNoTools = false
     this.pendingFiniteNoOperationPlan = null
+    this.freshObservationSinceContinuation = false
+    this.genericRecoveryDecisionActive = false
     if (resumeActionOmission) {
       this.memory.setNextContextOverride?.(memoryKey, actionOmissionRecoveryCapsule(planBefore, taskStatus))
     }
@@ -2510,6 +2512,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
       if (explicitBlocker) {
         return this.finishNoOperationBlock(plan, before, 'provider_reported_blocker', explicitBlocker, 'provider_blocker')
+      }
+      if (this.outputBudgetRecoveryGuard && this.outputBudgetRecoveryGuard.world_evidence_observed !== true) {
+        return this.finishNoOperationBlock(
+          plan,
+          before,
+          'output_budget_recovery_no_operation',
+          'Output-budget recovery supplied no fresh world evidence and no executable operation for the remaining canonical work.',
+          'output_budget_recovery',
+        )
       }
       if (this.genericRecoveryDecisionActive) {
         return this.finishNoOperationBlock(
