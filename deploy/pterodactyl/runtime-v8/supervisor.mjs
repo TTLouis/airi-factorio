@@ -924,7 +924,7 @@ export class Session {
     this.lastErrorAt = 0
     this.lastStatus = null
     this.authorizationPromise = null
-    this.npcName = 'SGLuna'
+    this.npcName = 'AIRI'
     this.npcId = 'airi'
     this.activityEpoch = Date.now().toString(36)
     this.conversationGeneration = 0
