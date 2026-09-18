@@ -222,6 +222,11 @@ const PREFLIGHTED_OPERATIONS = new Set([
   'place_entity',
   'mine_entity',
   'walk_to_entity',
+  'walk_to_entity_exact',
+  'mine_entity_exact',
+  'supply_entity',
+  'rotate_entity',
+  'move_items_exact',
   'set_machine_recipe',
 ])
 
