@@ -30,7 +30,7 @@ import { create_production_planning_remote_interface } from './production_planni
 import { create_prototype_knowledge_remote_interface } from './prototype_knowledge'
 import { new_recipe_configuration_runtime } from './recipe_configuration'
 import { new_research_controller } from './research'
-import { create_skill_remote_interface, ensure_basic_skill_definitions } from './skills'
+import { ensure_basic_skill_definitions } from './skills'
 import { with_research_trigger } from './research_trigger'
 import { new_task_manager } from './task_manager'
 import { create_task_board_ui_remote_interface, set_task_board_world_task_provider } from './task_board_ui'
@@ -45,7 +45,6 @@ create_knowledge_remote_interface(get_controlled_actor)
 create_prototype_knowledge_remote_interface(get_controlled_actor)
 create_production_planning_remote_interface(get_controlled_actor)
 create_task_board_ui_remote_interface()
-create_skill_remote_interface()
 
 let setup_complete = false
 
