@@ -83,9 +83,12 @@ def run(client: Rcon, results: Path) -> None:
             context,
         )
 
-    def run_tuple_operation(expression: str, context: str, timeout: float = 30.0) -> dict:
+    def run_operation(expression: str, context: str, timeout: float = 30.0) -> dict:
         admission = json_command(lua_json(expression), f'{context} admission')
-        require(admission[0] is True, {'context': context, 'admission': admission})
+        accepted = admission is True or (
+            isinstance(admission, list) and len(admission) > 0 and admission[0] is True
+        )
+        require(accepted, {'context': context, 'admission': admission})
         return wait_until_idle(operation_status, context, timeout)
 
     furnace_recipe = recipe(
@@ -129,7 +132,7 @@ def run(client: Rcon, results: Path) -> None:
         ('coal', fixture['coal'], FUEL_COUNT),
         ('iron-ore', fixture['iron'], ore_needed),
     ]:
-        run_tuple_operation(
+        run_operation(
             remote_call(
                 'autorio_operations',
                 'mine_resource_at',
@@ -147,7 +150,7 @@ def run(client: Rcon, results: Path) -> None:
     require(mined['coal'] >= FUEL_COUNT, mined)
     require(mined['iron_ore'] >= ore_needed, mined)
 
-    run_tuple_operation(
+    run_operation(
         remote_call('autorio_operations', 'craft_item', repr('stone-furnace'), '1'),
         'craft stone furnace',
         30.0,
@@ -193,7 +196,7 @@ def run(client: Rcon, results: Path) -> None:
     for attempt in range(max_wait_rounds):
         if entity_item_count(produced, 'iron-plate') >= TARGET_PLATES:
             break
-        run_tuple_operation(
+        run_operation(
             remote_call('autorio_operations', 'wait', str(wait_ticks)),
             f'wait for furnace production round {attempt + 1}',
             30.0,
