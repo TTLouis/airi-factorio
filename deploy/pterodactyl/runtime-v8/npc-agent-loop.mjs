@@ -723,6 +723,83 @@ function taskStatusDecisionView(raw) {
   }
 }
 
+const INTERACTION_INTENTS = new Set([
+  'continue_current',
+  'status_query',
+  'amend_current',
+  'new_goal',
+  'cancel_current',
+  'chat_only',
+])
+
+const INTERACTION_ROUTER_PROMPT = `Classify one incoming human message relative to the currently active Factorio goal.
+You are a side-channel interaction router only. You have no Factorio tools and must never propose or execute world operations.
+
+Intents:
+- continue_current: asks to keep/resume the same goal without changing its constraints.
+- status_query: asks what is happening, progress, blocker, or why it is stuck.
+- amend_current: changes instructions/constraints for the same goal, including "continue but ignore X".
+- new_goal: requests a materially different goal.
+- cancel_current: asks to stop/cancel the current goal.
+- chat_only: social/conversational text that should not alter task state.
+
+Use current_goal and runtime only to classify relationship/lifecycle. Never infer world facts beyond them.
+Return exactly one JSON object with exactly two fields:
+{"intent":"continue_current|status_query|amend_current|new_goal|cancel_current|chat_only","reply":""}
+reply must be empty except for chat_only, where it may contain one brief conversational response. No markdown.`
+
+export function parseInteractionRoute(message) {
+  if (!message || typeof message !== 'object' || message.tool_calls !== undefined) {
+    throw new AgentLoopError('Interaction router returned tools or no message')
+  }
+  let parsed
+  try { parsed = JSON.parse(String(message.content ?? '')) }
+  catch { throw new AgentLoopError('Interaction router returned invalid JSON') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new AgentLoopError('Interaction router returned invalid object')
+  const keys = Object.keys(parsed).sort()
+  if (keys.length !== 2 || keys[0] !== 'intent' || keys[1] !== 'reply') throw new AgentLoopError('Interaction router returned unexpected fields')
+  if (!INTERACTION_INTENTS.has(parsed.intent)) throw new AgentLoopError('Interaction router returned invalid intent')
+  if (typeof parsed.reply !== 'string' || parsed.reply.length > 500) throw new AgentLoopError('Interaction router returned invalid reply')
+  return { intent: parsed.intent, reply: cleanMemoryText(parsed.reply, 500) }
+}
+
+function compactInteractionTaskStatus(raw) {
+  try {
+    const status = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (!status || typeof status !== 'object' || Array.isArray(status)) return { status_error: 'invalid_task_status' }
+    return {
+      task_state: typeof status.task_state === 'string' ? status.task_state : undefined,
+      queue_empty: status.queue_empty === true,
+      queue_length: Number.isSafeInteger(status.queue_length) ? status.queue_length : undefined,
+      current_task: status.current_task && typeof status.current_task === 'object' && !Array.isArray(status.current_task)
+        ? status.current_task
+        : undefined,
+      last_completed_batch: compactTaskBatch(status.last_completed_batch),
+      last_cancelled_batch: compactTaskBatch(status.last_cancelled_batch),
+    }
+  }
+  catch {
+    return { status_error: 'invalid_task_status_json' }
+  }
+}
+
+export function interactionRuntimeHealthy(status) {
+  if (!status || status.status_error) return false
+  return (typeof status.task_state === 'string' && status.task_state !== 'idle')
+    || (Number.isSafeInteger(status.queue_length) && status.queue_length > 0)
+}
+
+function interactionStatusReply(status, plan) {
+  if (status?.status_error) return `I could not read authoritative Autorio task state: ${status.status_error}`
+  const task = status?.task_state || 'idle'
+  const queue = Number.isSafeInteger(status?.queue_length) ? status.queue_length : 0
+  const objective = cleanMemoryText(plan?.objective ?? '', 180)
+  const step = Number.isSafeInteger(plan?.task_board?.active_index) ? plan.task_board.active_index + 1 : undefined
+  const total = Number.isSafeInteger(plan?.task_board?.total_steps) ? plan.task_board.total_steps : undefined
+  const progress = step && total ? `, canonical step ${Math.min(step, total)}/${total}` : ''
+  return `Autorio is currently ${task} with ${queue} queued task${queue === 1 ? '' : 's'}${progress}.${objective ? ` Current goal: ${objective}` : ''}`
+}
+
 function sameJsonValue(left, right) {
   return JSON.stringify(left) === JSON.stringify(right)
 }
@@ -1018,13 +1095,157 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
+  async readInteractionTaskStatus() {
+    try {
+      const raw = String(await this.rcon.command(toolCommand('getTaskStatus', {}))).slice(0, 16000)
+      return compactInteractionTaskStatus(raw)
+    }
+    catch (error) {
+      return { status_error: cleanMemoryText(error instanceof Error ? error.message : String(error), 300) }
+    }
+  }
+
+  async classifyInteraction(text, sender, taskStatus, planState) {
+    const current = await super.captureEpoch()
+    await this.reserve({ epoch: current.epoch, actorId: current.actor_id })
+    const currentGoal = planState
+      ? {
+          goal_id: planState.goal_id,
+          objective: cleanMemoryText(planState.objective, 500),
+          status: planState.status,
+          active_step: Number.isSafeInteger(planState.task_board?.active_index)
+            ? cleanMemoryText(planState.task_board?.steps?.[planState.task_board.active_index]?.description, 300)
+            : undefined,
+        }
+      : null
+    const message = await this.provider([
+      { role: 'system', content: INTERACTION_ROUTER_PROMPT },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          message: cleanMemoryText(text, 4000),
+          sender: cleanMemoryText(sender, 128),
+          current_goal: currentGoal,
+          runtime: taskStatus,
+        }),
+      },
+    ], {
+      epoch: current.epoch,
+      actorId: current.actor_id,
+      round: 0,
+      allowTools: false,
+      recoveryAttempt: 0,
+      triggerSource: 'interaction_router',
+      interactionRouter: true,
+      requestBodyPatch: {
+        max_tokens: 180,
+        response_format: { type: 'json_object' },
+      },
+    })
+    return { route: parseInteractionRoute(message), epoch: current }
+  }
+
+  async cancelInteractionWorldWork(epoch) {
+    if (!epoch || !Number.isSafeInteger(epoch.epoch)) return
+    await executeAuthorizedBatch(
+      this.rcon,
+      epoch.epoch,
+      [`remote.call('autorio_operations','cancel_all_tasks')`],
+    )
+  }
+
+  async rememberRoutedInteraction(key, sender, text, assistant) {
+    if (!this.memory?.remember) return
+    this.memory.remember(key, ++this.turnSequence, {
+      sender,
+      user: text,
+      assistant,
+      operations: [],
+    })
+    await this.persistState()
+  }
+
   async request(text, options = {}) {
     await this.loadPersistentState()
+    const sender = options.sender ?? 'unknown'
+    this.lastMemoryKey = `npc:${this.npcId}`
+    const memoryKey = this.activePlanKey()
+    const planBefore = this.memory.currentPlan?.(memoryKey)
+    const taskStatus = await this.readInteractionTaskStatus()
+    let routed
+    try {
+      routed = await this.classifyInteraction(text, sender, taskStatus, planBefore)
+    }
+    catch (error) {
+      const fallbackIntent = planBefore ? 'amend_current' : 'new_goal'
+      routed = {
+        route: { intent: fallbackIntent, reply: '' },
+        epoch: await super.captureEpoch(),
+        router_error: cleanMemoryText(error instanceof Error ? error.message : String(error), 300),
+      }
+    }
+
+    const intent = routed.route.intent
+    const healthyRuntime = interactionRuntimeHealthy(taskStatus)
+    await this.traceEvent('interaction.routed', {
+      sender,
+      text,
+      intent,
+      runtime_healthy: healthyRuntime,
+      task_state: taskStatus.task_state,
+      queue_length: taskStatus.queue_length,
+      router_error: routed.router_error,
+    })
+
+    if (intent === 'continue_current' && healthyRuntime) {
+      const reply = `Current Autorio work is still running (${taskStatus.task_state ?? 'active'}, queue ${taskStatus.queue_length ?? 0}); I will let it continue without restarting the planner.`
+      await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
+      return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true }
+    }
+
+    if (intent === 'status_query') {
+      const reply = interactionStatusReply(taskStatus, planBefore)
+      await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
+      return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true }
+    }
+
+    if (intent === 'chat_only') {
+      const reply = routed.route.reply || 'I am here.'
+      await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
+      return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true }
+    }
+
+    if (intent === 'cancel_current') {
+      if (healthyRuntime) await this.cancelInteractionWorldWork(routed.epoch)
+      const state = this.memory.pausePlan?.(memoryKey, 'user_cancel')
+      await this.persistState()
+      super.cancel()
+      const reply = state
+        ? 'Cancelled the remaining Autorio work and paused the current goal.'
+        : 'There is no active goal to cancel.'
+      await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
+      return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true }
+    }
+
+    if (intent === 'amend_current' && healthyRuntime) {
+      await this.cancelInteractionWorldWork(routed.epoch)
+      super.cancel()
+    }
+    else if (intent === 'new_goal') {
+      if (healthyRuntime) await this.cancelInteractionWorldWork(routed.epoch)
+      super.cancel()
+      this.memory.clearTaskContext?.(memoryKey)
+      await this.persistState()
+    }
+
     this.liveEntityObservations = new Map()
     this.staleExactPreflightRetries = 0
     this.bootstrapDependencyPreflightRetries = 0
-    this.lastMemoryKey = `npc:${this.npcId}`
-    this.planUpdateReason = 'request'
+    this.planUpdateReason = intent === 'new_goal'
+      ? 'new_goal'
+      : intent === 'amend_current'
+        ? 'amend_current'
+        : 'continue_current'
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
@@ -1035,11 +1256,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       seq: 0,
       usage: emptyUsageSummary(),
     }
-    await this.traceEvent('request.received', { sender: options.sender ?? 'unknown', text })
+    await this.traceEvent('request.received', { sender, text, interaction_intent: intent })
     try {
       const result = await super.request(text, options)
       if (this.requestInfo?.memoryKey) this.lastMemoryKey = this.requestInfo.memoryKey
-      return result
+      return { ...result, interactionIntent: intent, routedOnly: false }
     }
     catch (error) {
       if (this.traceRequest) {
