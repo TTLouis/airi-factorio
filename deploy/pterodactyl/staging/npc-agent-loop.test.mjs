@@ -157,7 +157,7 @@ test('tool-budget exhaustion gets up to three no-tool recovery attempts', async 
   assert.equal(contexts[2].recoveryAttempt, 1)
 })
 
-test('duplicate observation loops preserve grounded evidence and never force tools-disabled mutation recovery', async () => {
+test('duplicate observation exhaustion gets one bounded no-tool decision without forcing mutation', async () => {
   const rcon = new FakeRcon()
   const contexts = []
   let calls = 0
@@ -167,6 +167,7 @@ test('duplicate observation loops preserve grounded evidence and never force too
     provider: async (_messages, context) => {
       contexts.push(context)
       calls++
+      if (context.allowTools === false) return planMessage([], 'No safe mutation is grounded from the current evidence.')
       return toolMessage(`tool-${calls}`, 'getActorStatus')
     },
     systemPrompt: 'NPC test prompt',
@@ -174,13 +175,16 @@ test('duplicate observation loops preserve grounded evidence and never force too
 
   const result = await agent.request('keep looking')
   const actorReads = rcon.commands.filter(command => command.includes('remote.call("autorio_actor","status")'))
-  assert.equal(result.blocked, true)
-  assert.equal(result.blocker.class, 'observation_no_progress')
+  assert.equal(result.chatMessage, 'No safe mutation is grounded from the current evidence.')
+  assert.equal(result.operations.length, 0)
+  assert.equal(rcon.mutations.length, 0)
   assert.equal(actorReads.length, 1)
-  assert.equal(calls, 3)
-  assert.ok(contexts.every(context => context.allowTools === true))
+  assert.equal(calls, 4)
+  assert.equal(contexts.slice(0, 3).every(context => context.allowTools === true), true)
+  assert.equal(contexts[3].allowTools, false)
   assert.ok(agent.messages.some(message => message.role === 'tool' && /"actor_id":18/.test(message.content)))
   assert.ok(agent.messages.some(message => message.role === 'user' && /duplicate result was suppressed/i.test(message.content)))
+  assert.ok(agent.messages.some(message => message.role === 'user' && /Observation retries are exhausted/i.test(message.content)))
 })
 
 test('two consecutive five-tool observation batches get bounded tools-on validation recovery', async () => {
