@@ -60,11 +60,14 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   if (Number.isSafeInteger(options.recoveryAttempt) && options.recoveryAttempt > 0) {
     return { effort: 'none', reason: 'strict_recovery' }
   }
+  if (options.triggerSource === 'amend_current') {
+    return { effort: 'high', reason: 'same_goal_amendment' }
+  }
+  if (options.triggerSource === 'new_goal') {
+    return { effort: 'high', reason: 'new_goal' }
+  }
   if (completionContinuation(messages, options)) {
     return { effort: 'low', reason: 'deterministic_completion' }
-  }
-  if (options.lifecycle === 'interaction_router') {
-    return { effort: 'none', reason: 'interaction_router' }
   }
 
   const failures = currentDifficultySignals(messages)
@@ -73,9 +76,8 @@ export function selectReasoningPolicy(config, messages, options = {}) {
     return { effort: 'high', reason: 'ordinary_replan' }
   }
 
-  if (options.triggerSource === 'new_goal') return { effort: 'high', reason: 'new_goal' }
-  if (options.triggerSource === 'amend_current' || options.triggerSource === 'continue_current') {
-    return { effort: 'high', reason: 'ordinary_replan' }
+  if (options.triggerSource === 'continue_current') {
+    return { effort: 'low', reason: 'same_goal_continue' }
   }
   return { effort: 'high', reason: 'ordinary_planning' }
 }
