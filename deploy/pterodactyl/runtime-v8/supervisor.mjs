@@ -29,7 +29,7 @@ import {
 import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 import { createSave, prepareGameConfig, prepareMods, prepareServerSettings, selectSave } from './game-files.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
-import { providerEndpoint, providerRequest } from './provider.mjs'
+import { decisionProviderConfiguration, providerEndpoint, providerRequest } from './provider.mjs'
 import { configureNpcSession } from './supervisor-adapter.mjs'
 import { luaString } from './structured-policy.mjs'
 
@@ -81,6 +81,7 @@ export function configuration(raw = {}, env = process.env) {
     model: cleanString(env.OPENAI_MODEL ?? raw.model ?? 'replace-me', 'OPENAI_MODEL', 200),
     base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? 'https://provider.invalid/v1',
     key: env.OPENAI_API_KEY ?? '',
+    decisionProvider: decisionProviderConfiguration(env),
     providerTimeoutMs: safeInteger(env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? 120000, 'PROVIDER_TIMEOUT_MS', 1000, 600000),
     gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? 34197, 'SERVER_PORT', 1024, 65535),
     budget: safeInteger(env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? 30, 'MAX_PROVIDER_REQUESTS_PER_HOUR', 1, 1200),
