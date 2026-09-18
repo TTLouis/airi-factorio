@@ -513,6 +513,51 @@ test('New Task starts a fresh UI conversation generation and old messages do not
   assert.equal(refreshed.conversation.some(entry => entry.text.startsWith('old ')), false)
 })
 
+test('terminate aborts provider thinking before queued cleanup starts', async () => {
+  const session = Object.assign(Object.create(Session.prototype), sessionFixture())
+  const queued = []
+  const events = []
+  session.agent.cancel = reason => { events.push(`cancel:${reason}`) }
+  session.queueEvent = fn => { queued.push(fn); events.push('queued'); return true }
+  session.ackTaskBoardUiLifecycle = async () => true
+
+  session.queueUiControl({ action: 'terminate', player_index: 7, player_name: 'TTLouis' })
+
+  assert.deepEqual(events, ['cancel:ui_terminate_immediate', 'queued'])
+  assert.equal(queued.length, 1)
+
+  await queued.shift()()
+  assert.ok(events.includes('cancel:ui_terminate'))
+})
+
+test('NpcAgentLoop cancel aborts the active provider controller immediately', () => {
+  const loop = Object.create(NpcAgentLoop.prototype)
+  const controller = new AbortController()
+  Object.assign(loop, {
+    providerAbort: controller,
+    traceEvent: async () => {},
+    traceRequest: null,
+    generation: 3,
+    active: true,
+    messages: [],
+    baseMessages: [],
+    epoch: { actor_id: 7, epoch: 3 },
+    continuations: 0,
+    toolCache: new Map(),
+    staticPrototypeCache: new Map(),
+    prototypeRefsThisRequest: [],
+    duplicateToolRounds: 0,
+    observationRecoveryRounds: 0,
+    toolValidationRetries: 0,
+    requestInfo: { sender: 'TTLouis', text: 'keep thinking' },
+  })
+
+  loop.cancel('ui_terminate_immediate')
+
+  assert.equal(controller.signal.aborted, true)
+  assert.equal(loop.active, false)
+})
+
 test('pause/terminate and resume acknowledge only after their queued runtime work settles', async () => {
   const session = Object.assign(Object.create(Session.prototype), sessionFixture())
   const queued = []

@@ -1304,6 +1304,11 @@ export class Session {
   }
 
   queueUiControl(input) {
+    // Terminate is an emergency stop, not ordinary queued work. Abort the
+    // current provider turn before entering eventQueue so a long model response
+    // cannot delay termination. The queued handler still owns durable-state
+    // deletion, Autorio cancellation, UI clearing, and the final lifecycle ACK.
+    if (input.action === 'terminate') this.agent?.cancel?.('ui_terminate_immediate')
     this.queueEvent(async () => {
       try {
         await executeUiControl(this, input)
