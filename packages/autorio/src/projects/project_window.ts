@@ -49,6 +49,13 @@ export interface ProjectHistoryActivity {
   timestamp?: string
 }
 
+export interface ProjectHistoryConversationMessage {
+  id: string
+  role: 'user' | 'assistant'
+  sender: string
+  text: string
+}
+
 export interface ProjectHistoryRecord {
   id: string
   name: string
@@ -62,6 +69,7 @@ export interface ProjectHistoryRecord {
   active_index: number
   steps: ProjectHistoryStep[]
   activity: ProjectHistoryActivity[]
+  conversation: ProjectHistoryConversationMessage[]
   created_tick: number
   updated_tick: number
 }
@@ -123,6 +131,23 @@ function sanitize_steps(value: any): ProjectHistoryStep[] {
   return steps
 }
 
+function sanitize_conversation(value: any): ProjectHistoryConversationMessage[] {
+  const raw = Array.isArray(value) ? value as any[] : []
+  const messages: ProjectHistoryConversationMessage[] = []
+  for (let index = 0; index < raw.length && messages.length < 96; index++) {
+    const role = raw[index]?.role === 'assistant' ? 'assistant' : raw[index]?.role === 'user' ? 'user' : undefined
+    const text = clean_text(raw[index]?.text, 2000)
+    if (role === undefined || text.length === 0) continue
+    messages.push({
+      id: clean_text(raw[index]?.id || `message_${index + 1}`, 120),
+      role,
+      sender: clean_text(raw[index]?.sender || (role === 'assistant' ? 'AIRI' : 'Player'), 128),
+      text,
+    })
+  }
+  return messages
+}
+
 function merge_activity(previous: ProjectHistoryActivity[], value: any): ProjectHistoryActivity[] {
   const result = previous.slice(0, MAX_ACTIVITY)
   const seen: Record<string, boolean> = {}
@@ -166,6 +191,14 @@ function same_activity(left: ProjectHistoryActivity[], right: ProjectHistoryActi
   return true
 }
 
+function same_conversation(left: ProjectHistoryConversationMessage[], right: ProjectHistoryConversationMessage[]) {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index++) {
+    if (left[index].id !== right[index].id || left[index].role !== right[index].role || left[index].sender !== right[index].sender || left[index].text !== right[index].text) return false
+  }
+  return true
+}
+
 function same_project_content(previous: ProjectHistoryRecord, next: ProjectHistoryRecord) {
   return previous.name === next.name
     && previous.objective === next.objective
@@ -178,6 +211,7 @@ function same_project_content(previous: ProjectHistoryRecord, next: ProjectHisto
     && previous.active_index === next.active_index
     && same_steps(previous.steps, next.steps)
     && same_activity(previous.activity, next.activity)
+    && same_conversation(previous.conversation ?? [], next.conversation ?? [])
 }
 
 /**
@@ -211,6 +245,7 @@ export function record_project_snapshot(board: any, tick: number) {
     active_index: integer(board?.active_index),
     steps: sanitize_steps(board?.steps),
     activity: merge_activity(previous?.activity ?? [], board?.activity),
+    conversation: sanitize_conversation(board?.conversation),
     created_tick: previous?.created_tick ?? tick,
     updated_tick: tick,
   }
@@ -484,20 +519,33 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
   if (project.pause_reason.length > 0) add_detail_row(meta, 'PAUSED', project.pause_reason)
   conversation_flow.clear()
   let conversation_count = 0
-  for (const entry of project.activity) {
-    const text = clean_text(entry.text, 1200)
-    if (entry.kind === 'decision' && text.length > 0) {
-      const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${text}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
-      continue
+  if ((project.conversation ?? []).length > 0) {
+    for (const message of project.conversation) {
+      const text = clean_text(message.text, 2000)
+      if (text.length === 0) continue
+      const sender = clean_text(message.sender || (message.role === 'assistant' ? 'AIRI' : 'Player'), 128)
+      const line = conversation_flow.add({ type: 'label', caption: `${sender} · ${text}` })
+      line.style.single_line = false
+      line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60
+      conversation_count++
     }
-    if (entry.kind !== 'observation' || !String(entry.id ?? '').startsWith('live_')) continue
-    const separator = text.indexOf(': ')
-    if (separator < 1 || text.startsWith('Tool ')) continue
-    const line = conversation_flow.add({ type: 'label', caption: `${text.substring(0, separator)} · ${text.substring(separator + 2)}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
   }
-  if (project.response.length > 0) {
-    const duplicate = project.activity.some(entry => entry.kind === 'decision' && clean_text(entry.text, 1200) === project.response)
-    if (!duplicate) { const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${project.response}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++ }
+  else {
+    for (const entry of project.activity) {
+      const text = clean_text(entry.text, 1200)
+      if (entry.kind === 'decision' && text.length > 0) {
+        const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${text}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
+        continue
+      }
+      if (entry.kind !== 'observation' || !String(entry.id ?? '').startsWith('live_')) continue
+      const separator = text.indexOf(': ')
+      if (separator < 1 || text.startsWith('Tool ')) continue
+      const line = conversation_flow.add({ type: 'label', caption: `${text.substring(0, separator)} · ${text.substring(separator + 2)}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
+    }
+    if (project.response.length > 0) {
+      const duplicate = project.activity.some(entry => entry.kind === 'decision' && clean_text(entry.text, 1200) === project.response)
+      if (!duplicate) { const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${project.response}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++ }
+    }
   }
   if (conversation_count === 0) conversation_flow.add({ type: 'label', caption: 'No player/AIRI conversation retained for this project.' })
 

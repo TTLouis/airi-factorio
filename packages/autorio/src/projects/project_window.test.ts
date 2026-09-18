@@ -113,3 +113,19 @@ describe('project history model', () => {
     expect(selected_project_id(1, 'goal-a')).toBe('goal-b')
   })
 })
+
+describe('project conversation archive', () => {
+  it('stores the explicit task conversation instead of reconstructing only the recent activity tail', () => {
+    const conversation = Array.from({ length: 8 }, (_, index) => ({
+      id: `message_${index + 1}`,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      sender: index % 2 === 0 ? 'TTLouis' : 'AIRI',
+      text: `message ${index + 1}`,
+    }))
+    record_project_snapshot({ ...snapshot('goal-a', 'Build power'), conversation }, 60)
+    expect(project_by_id('goal-a')?.conversation.map(message => message.text)).toEqual([
+      'message 1', 'message 2', 'message 3', 'message 4',
+      'message 5', 'message 6', 'message 7', 'message 8',
+    ])
+  })
+})
