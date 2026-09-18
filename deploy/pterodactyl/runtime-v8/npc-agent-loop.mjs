@@ -314,6 +314,13 @@ function compactBasicOperationResult(result) {
     item_name: typeof result.item_name === 'string' ? cleanMemoryText(result.item_name, 200) : undefined,
     requested_count: Number.isSafeInteger(result.requested_count) ? result.requested_count : undefined,
     moved_count: Number.isSafeInteger(result.moved_count) ? result.moved_count : undefined,
+    placed_unit_number: Number.isSafeInteger(result.placed_unit_number) ? result.placed_unit_number : undefined,
+    placed_entity_type: typeof result.placed_entity_type === 'string' ? cleanMemoryText(result.placed_entity_type, 100) : undefined,
+    placed_position: result.placed_position && Number.isFinite(result.placed_position.x) && Number.isFinite(result.placed_position.y)
+      ? { x: result.placed_position.x, y: result.placed_position.y }
+      : undefined,
+    placed_surface_index: Number.isSafeInteger(result.placed_surface_index) ? result.placed_surface_index : undefined,
+    placed_direction: Number.isSafeInteger(result.placed_direction) ? result.placed_direction : undefined,
     to_entity: typeof result.to_entity === 'boolean' ? result.to_entity : undefined,
     to_player: typeof result.to_player === 'boolean' ? result.to_player : undefined,
   }
@@ -1558,6 +1565,36 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
+  recordPlacementReceipt(raw) {
+    let parsed
+    try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw }
+    catch { return }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+
+    const batch = parsed.last_completed_batch
+    const result = parsed.basic_operation?.last_result
+    if (!batch || !result || result.completed !== true || result.code !== 'completed' || result.type !== 'placing') return
+    if (!Array.isArray(batch.task_types) || !batch.task_types.includes('placing')) return
+    if (Number.isFinite(batch.tick) && Number.isFinite(result.tick) && result.tick > batch.tick) return
+    if (Number.isSafeInteger(result.actor_id) && Number.isSafeInteger(this.epoch?.actor_id)
+      && result.actor_id !== this.epoch.actor_id) return
+    if (!Number.isSafeInteger(result.placed_unit_number)
+      || typeof result.entity_name !== 'string'
+      || !result.placed_position
+      || !Number.isFinite(result.placed_position.x)
+      || !Number.isFinite(result.placed_position.y)) return
+
+    this.recordLiveEntityObservation({
+      name: result.entity_name,
+      type: result.placed_entity_type,
+      unit_number: result.placed_unit_number,
+      position: { x: result.placed_position.x, y: result.placed_position.y },
+      surface_index: result.placed_surface_index,
+    }, parsed.actor?.position, 'placement_receipt', {
+      surface_index: result.placed_surface_index,
+    })
+  }
+
   liveObservedExactTarget(unitNumber) {
     return Number.isSafeInteger(unitNumber)
       ? this.liveEntityObservations?.get?.(`unit:${unitNumber}`)
@@ -2062,6 +2099,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   async taskStatusReceipt() {
     try {
       const raw = String(await this.rcon.command(toolCommand('getTaskStatus', {}))).slice(0, 16000)
+      this.recordPlacementReceipt(raw)
       const evidence = receiptEvidence(raw, this.planUpdateReason === 'failure' ? 'failed' : 'completed')
       if (this.memory.recordBoardEvidence?.(this.activePlanKey(), evidence)) await this.persistState()
       const view = taskStatusDecisionView(raw)

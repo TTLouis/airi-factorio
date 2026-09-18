@@ -339,7 +339,13 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
 
     item_stack.count = item_stack.count - 1
     log(`[AUTORIO] Entity placed successfully: ${task.entity_name} at ${serpent.line(task.position)} direction=${task.direction ?? 'default'}`)
-    controller.complete(actor, task)
+    controller.complete(actor, task, {
+      placed_unit_number: entity.unit_number,
+      placed_entity_type: entity.type,
+      placed_position: { x: entity.position.x, y: entity.position.y },
+      placed_surface_index: entity.surface.index,
+      placed_direction: entity.direction,
+    })
     return [true, 'Entity placed successfully', entity]
   }
 

@@ -10,11 +10,20 @@ function fixture() {
   const inventory: any = []
   inventory.find_item_stack = vi.fn(() => [item, 1])
 
-  const surface = {
+  const surface: any = {
+    index: 1,
     find_non_colliding_position: vi.fn(() => ({ x: 1, y: 0 })),
     can_place_entity: vi.fn(() => true),
-    create_entity: vi.fn(() => ({ valid: true, unit_number: 77 })),
   }
+  surface.create_entity = vi.fn((args: any) => ({
+    valid: true,
+    name: args.name,
+    type: 'container',
+    unit_number: 77,
+    position: { x: args.position.x, y: args.position.y },
+    direction: args.direction ?? 0,
+    surface,
+  }))
   const actor = {
     is_valid: true,
     character: { valid: true },
@@ -74,6 +83,11 @@ describe('precise placement runtime', () => {
       completed: true,
       requested_position: { x: 4.5, y: -2 },
       direction: 6,
+      placed_unit_number: 77,
+      placed_entity_type: 'container',
+      placed_position: { x: 4.5, y: -2 },
+      placed_surface_index: 1,
+      placed_direction: 6,
     })
   })
 
