@@ -41,6 +41,18 @@ class RuntimeRcon {
   async command(text) {
     this.commands.push(text)
     if (text.includes('remote.call("airi_deployment","status")')) return JSON.stringify(deployment())
+    if (text.includes('remote.call("autorio_tools","get_inventory_items")')) {
+      return JSON.stringify({ items: [{ name: 'iron-ore', count: 5 }, { name: 'coal', count: 5 }] })
+    }
+    if (text.includes('remote.call("autorio_tools","get_nearby_entities"')) {
+      return JSON.stringify({
+        actor_position: { x: 0, y: 0 },
+        entities: [{ name: 'stone-furnace', type: 'furnace', unit_number: 582, position: { x: 2, y: 0 } }],
+      })
+    }
+    if (text.includes('remote.call("autorio_navigation","status")')) {
+      return JSON.stringify({ state: 'idle', target: null, last_result: 'arrived' })
+    }
     if (text.includes('remote.call("autorio_preflight","operation"')) {
       if (text.includes("'craft_item'") && text.includes("'iron-mining-drill'")) {
         return JSON.stringify({
@@ -187,4 +199,82 @@ test('normal successful operation admission remains waiting with an active durab
   assert.equal(result.goalStatus, 'active')
   assert.equal(memory.currentPlan('npc:airi').admission_status, 'admitted')
   assert.equal(memory.currentPlan('npc:airi').task_board.completed_count, 0)
+})
+
+
+test('repeated cached and irrelevant observations recover into an executable plan from existing evidence', async () => {
+  const rcon = new RuntimeRcon()
+  const memory = new NpcDialogueMemory()
+  const calls = []
+
+  const toolCall = (id, name, args = {}) => ({
+    id,
+    type: 'function',
+    function: { name, arguments: JSON.stringify(args) },
+  })
+
+  const agent = new NpcAgentLoop({
+    rcon,
+    memory,
+    provider: async (messages, context) => {
+      calls.push({ messages, context })
+      const call = calls.length
+
+      if (call === 1) {
+        return {
+          content: null,
+          tool_calls: [toolCall('inventory-1', 'getInventoryItems')],
+        }
+      }
+
+      if (call === 2) {
+        return {
+          content: null,
+          tool_calls: [
+            toolCall('inventory-2', 'getInventoryItems'),
+            toolCall('nearby-1', 'getNearbyEntities', { radius: 16, type: 'furnace', limit: 8 }),
+          ],
+        }
+      }
+
+      if (call === 3) {
+        const steering = messages.map(message => String(message.content ?? '')).join('\n')
+        assert.match(steering, /do not switch to a different read-only observation merely to avoid the duplicate guard/)
+        assert.match(steering, /stone-furnace/)
+        assert.match(steering, /unit_number/)
+        return {
+          content: null,
+          tool_calls: [
+            toolCall('inventory-3', 'getInventoryItems'),
+            toolCall('navigation-1', 'getNavigationStatus'),
+          ],
+        }
+      }
+
+      assert.equal(context.allowTools, false)
+      const recovery = messages.map(message => String(message.content ?? '')).join('\n')
+      assert.match(recovery, /Observation retries are exhausted/)
+      assert.match(recovery, /Reuse the deterministic observations already collected/)
+      assert.match(recovery, /stone-furnace/)
+      assert.match(recovery, /iron-ore/)
+      return planMessage([
+        { name: 'move_items_exact', args: { item_name: 'iron-ore', unit_number: 582, max_count: 5, to_entity: true } },
+      ], 'Loading five iron ore into the nearby furnace.')
+    },
+    systemPrompt: 'NPC observation-loop recovery test prompt',
+  })
+
+  const result = await agent.request('produce 5 iron plates using the existing nearby infrastructure', { sender: 'tester' })
+
+  assert.equal(calls.length, 4)
+  assert.equal(calls[0].context.allowTools, true)
+  assert.equal(calls[1].context.allowTools, true)
+  assert.equal(calls[2].context.allowTools, true)
+  assert.equal(calls[3].context.allowTools, false)
+  assert.equal(result.operations.length, 1)
+  assert.equal(result.operations[0].name, 'move_items_exact')
+  assert.deepEqual(result.operations[0].args, { item_name: 'iron-ore', unit_number: 582, max_count: 5, to_entity: true })
+  assert.equal(rcon.mutations.length, 1)
+  assert.match(rcon.mutations[0], /move_items_exact/)
+  assert.equal(memory.currentPlan('npc:airi').admission_status, 'admitted')
 })
