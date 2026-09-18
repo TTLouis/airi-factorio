@@ -82,6 +82,38 @@ describe('prototype build knowledge', () => {
       belt_speed: 0.03125,
       max_underground_distance: undefined,
     }
+    const rockA = {
+      name: 'mod-rock-a',
+      type: 'simple-entity',
+      mineable_properties: {
+        mining_time: 0.4,
+        products: runtimeCollection([{ type: 'item', name: 'stone', amount: 20 }]),
+      },
+    }
+    const rockB = {
+      name: 'mod-rock-b',
+      type: 'simple-entity',
+      mineable_properties: {
+        mining_time: 0.6,
+        products: runtimeCollection([{ type: 'item', name: 'stone', amount_min: 8, amount_max: 12, probability: 1 }]),
+      },
+    }
+    const treeA = {
+      name: 'mod-tree-a',
+      type: 'tree',
+      mineable_properties: {
+        mining_time: 0.5,
+        products: runtimeCollection([{ type: 'item', name: 'wood', amount: 4 }]),
+      },
+    }
+    const treeB = {
+      name: 'mod-tree-b',
+      type: 'tree',
+      mineable_properties: {
+        mining_time: 0.5,
+        products: runtimeCollection([{ type: 'item', name: 'wood', amount: 4 }]),
+      },
+    }
     const inserter = {
       name: 'inserter',
       type: 'inserter',
@@ -107,6 +139,10 @@ describe('prototype build knowledge', () => {
         'electric-mining-drill': electricMiningDrill,
         'chemical-plant': chemicalPlant,
         'transport-belt': belt,
+        'mod-rock-a': rockA,
+        'mod-rock-b': rockB,
+        'mod-tree-a': treeA,
+        'mod-tree-b': treeB,
         inserter,
       },
       item: {
@@ -114,6 +150,8 @@ describe('prototype build knowledge', () => {
         'electric-mining-drill': { name: 'electric-mining-drill', stack_size: 50, place_result: electricMiningDrill },
         'chemical-plant': { name: 'chemical-plant', stack_size: 10, place_result: chemicalPlant },
         'transport-belt': { name: 'transport-belt', stack_size: 100, place_result: belt },
+        stone: { name: 'stone', stack_size: 50 },
+        wood: { name: 'wood', stack_size: 100 },
         inserter: { name: 'inserter', stack_size: 50, place_result: inserter },
       },
       fluid: {
@@ -222,6 +260,47 @@ describe('prototype build knowledge', () => {
       available_count: 13,
       max_limit: 12,
       narrowing: { energy_sources: ['electric'] },
+    })
+  })
+
+  it('discovers non-resource harvest sources by mined item product across prototype variants', () => {
+    const actor = {
+      is_valid: true,
+      force: { recipes: {} },
+      get_main_inventory: () => ({ get_contents: () => [] }),
+    } as unknown as ControlledActor
+
+    const stone = discover_prototypes_for_actor(actor, { capability: 'harvest', product_name: 'stone' }) as any
+    expect(stone).toMatchObject({
+      ok: true,
+      matched_count: 2,
+      available_count: 2,
+      candidates: [
+        { name: 'mod-rock-a', type: 'simple-entity' },
+        { name: 'mod-rock-b', type: 'simple-entity' },
+      ],
+    })
+    expect(stone.candidates[0].mineable_products).toEqual([{ type: 'item', name: 'stone', amount: 20 }])
+
+    const wood = discover_prototypes_for_actor(actor, { capability: 'harvest', product_name: 'wood' }) as any
+    expect(wood.candidates.map((candidate: any) => candidate.name)).toEqual(['mod-tree-a', 'mod-tree-b'])
+    expect(wood.candidates.every((candidate: any) => candidate.type === 'tree')).toBe(true)
+  })
+
+  it('exposes bounded mineable product data in prototype details', () => {
+    expect((prototype_details('mod-rock-b') as any).entity.mineable).toEqual({
+      mining_time: 0.6,
+      required_fluid: undefined,
+      fluid_amount: undefined,
+      products: [{
+        type: 'item',
+        name: 'stone',
+        amount: undefined,
+        amount_min: 8,
+        amount_max: 12,
+        probability: 1,
+      }],
+      products_truncated: false,
     })
   })
 
