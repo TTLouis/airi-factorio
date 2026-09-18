@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 describe('task board New Task control regression', () => {
   it('renders New Task in the Prompt AIRI heading and queues the server-authoritative action', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
-    const controls = source.split('function render_controls_panel(')[1]?.split('/**\n * Usable GUI height')[0] ?? ''
+    const controls = source.split('function render_controls_panel(')[1]?.split('export function task_board_gui_height(')[0] ?? ''
     const prompt = source.split('function render_prompt(')[1]?.split('function render_titlebar(')[0] ?? ''
     const handler = source.split('function handle_control_click(')[1]?.split('\n}\n\nexport function create_task_board_ui_remote_interface')[0] ?? ''
 
