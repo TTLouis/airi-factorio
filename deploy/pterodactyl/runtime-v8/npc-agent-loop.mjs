@@ -1276,6 +1276,18 @@ function persistentRuntimeHealthy(runtime) {
   return runtime?.active === true && runtime.healthy === true && runtime.controller_live === true
 }
 
+function verifiedFinalCompletion(plan, state, triggerSource) {
+  if (triggerSource !== 'completion' || plan?.operations?.length !== 0 || plan?.plan?.length !== 0) return false
+  const board = state?.task_board
+  if (state?.status !== 'active' || state?.last_mutation_verified !== true) return false
+  if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps) || board.steps.length === 0) return false
+  if (board.active_index !== board.steps.length - 1) return false
+  const ref = Number.isSafeInteger(state.last_verified_batch_id) ? `batch_${state.last_verified_batch_id}` : ''
+  return [...(board.evidence ?? [])].reverse().some(item => item?.kind === 'deterministic_verification'
+    && item?.step_id === board.active_step_id
+    && (!ref || item?.ref === ref))
+}
+
 function actionOmissionRecoveryCapsule(state, runtimeStatus) {
   const board = state?.task_board
   const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : state?.current_step ?? 0
@@ -2476,8 +2488,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       ? this.memory.currentPlan?.(this.requestInfo.memoryKey)
       : undefined
     const runtimeHealthy = persistentRuntimeHealthy(persistentRuntime)
-    const remainingCanonicalWork = canonicalWorkRemains(previousState)
+    const finalCompletionVerified = verifiedFinalCompletion(plan, previousState, this.planUpdateReason)
+    const remainingCanonicalWork = !finalCompletionVerified && (
+      canonicalWorkRemains(previousState)
       || (!previousState && Array.isArray(plan.plan) && plan.plan.length > 0)
+    )
     const explicitBlocker = providerBlockerReason(plan)
 
     if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
