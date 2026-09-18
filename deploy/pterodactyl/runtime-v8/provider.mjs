@@ -273,6 +273,14 @@ function validateDecisionAnswer(id, question, answer) {
   }
   else if (question.type === 'score') {
     check(typeof answer.score === 'number' && Number.isFinite(answer.score), `Decision provider answer ${id} has an invalid score`)
+    check(answer.score >= 0 && answer.score <= question.criteria.length - 1, `Decision provider answer ${id} score is outside the declared rubric`)
+    check(answer.legend && typeof answer.legend === 'object' && !Array.isArray(answer.legend), `Decision provider answer ${id} has an invalid legend`)
+    check(answer.probabilities && typeof answer.probabilities === 'object' && !Array.isArray(answer.probabilities), `Decision provider answer ${id} has invalid probabilities`)
+    for (let index = 0; index < question.criteria.length; index++) {
+      const key = String(index)
+      check(answer.legend[key] === question.criteria[index], `Decision provider answer ${id} legend does not match the declared rubric`)
+      check(validProbability(answer.probabilities[key]), `Decision provider answer ${id} has an invalid probability`)
+    }
     check(validProbability(answer.confidence), `Decision provider answer ${id} has invalid confidence`)
   }
   else {
@@ -325,10 +333,12 @@ export async function decisionProviderRequest(config, state, questions, {
       for (const field of ['input_tokens', 'output_tokens']) {
         if (data.usage[field] !== undefined) check(Number.isSafeInteger(data.usage[field]) && data.usage[field] >= 0, `Decision provider returned invalid ${field}`)
       }
+      if (data.usage.cost !== undefined) check(typeof data.usage.cost === 'number' && Number.isFinite(data.usage.cost) && data.usage.cost >= 0, 'Decision provider returned invalid cost')
     }
 
     return {
       model: typeof data.model === 'string' ? data.model : config.model,
+      provider: typeof data.provider === 'string' ? data.provider : config.provider,
       answers: data.answers,
       usage: data.usage,
     }
