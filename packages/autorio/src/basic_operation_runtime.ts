@@ -30,7 +30,7 @@ function squared_distance(a: { x: number, y: number }, b: { x: number, y: number
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
 
-reach funcsfunction mining_reposition_task(actor: ControlledActor, entity: LuaEntity): PlayerParametersWalkToEntity | undefined {
+function mining_reposition_task(actor: ControlledActor, entity: LuaEntity): PlayerParametersWalkToEntity | undefined {
   const identity = actor.status_snapshot()
   if (identity.actor_id === undefined) return undefined
   return {

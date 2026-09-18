@@ -23,7 +23,7 @@ function fixture() {
   let mining = false
   const treeA = entity('mod-tree-a', 'tree', 1)
   const treeB = entity('mod-tree-b', 'tree', 2)
-  const rock = entity('mod-rock-z', 'simple-entity', 3)
+  const rock = entity('mod-rock-z', 'simple-entity', 2.4)
   const resource = entity('iron-resource-x', 'resource', 1.5)
   const machine = entity('existing-machine-x', 'assembling-machine', 2.5, { building: true })
   const treeOutside = entity('mod-tree-outside', 'tree', 8)
