@@ -607,17 +607,6 @@ script.on_event(defines.events.on_tick, (unused_event) => {
 
   if (interaction_recovery.tick(actor)) return
 
-  task_state = task_manager.player_state.task_state
-  if (task_state === TaskStates.IDLE) {
-    navigation_obstacle_recovery.suspend(actor)
-    return
-  }
-  if (!is_runtime_task_state(task_state)) {
-    navigation_obstacle_recovery.suspend(actor)
-    task_manager.fail_unsupported_task_state(task_state)
-    return
-  }
-
   if (task_state !== TaskStates.WALKING_TO_ENTITY) {
     navigation_obstacle_recovery.suspend(actor)
   }
