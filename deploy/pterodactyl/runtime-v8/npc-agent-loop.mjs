@@ -744,8 +744,10 @@ Intents:
 - chat_only: social/conversational text that should not alter task state.
 
 Use current_goal and runtime only to classify relationship/lifecycle. Never infer world facts beyond them.
-Return exactly one JSON object with exactly two fields:
-{"intent":"continue_current|status_query|amend_current|new_goal|cancel_current|chat_only","reply":""}
+For amend_current, set queue_conflict=true only when the amendment conflicts with work that is already running or queued. Otherwise set it false.
+For every non-amend intent, queue_conflict must be false.
+Return exactly one JSON object with exactly three fields:
+{"intent":"continue_current|status_query|amend_current|new_goal|cancel_current|chat_only","queue_conflict":false,"reply":""}
 reply must be empty except for chat_only, where it may contain one brief conversational response. No markdown.`
 
 export function parseInteractionRoute(message) {
@@ -757,10 +759,12 @@ export function parseInteractionRoute(message) {
   catch { throw new AgentLoopError('Interaction router returned invalid JSON') }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new AgentLoopError('Interaction router returned invalid object')
   const keys = Object.keys(parsed).sort()
-  if (keys.length !== 2 || keys[0] !== 'intent' || keys[1] !== 'reply') throw new AgentLoopError('Interaction router returned unexpected fields')
+  if (keys.length !== 3 || keys[0] !== 'intent' || keys[1] !== 'queue_conflict' || keys[2] !== 'reply') throw new AgentLoopError('Interaction router returned unexpected fields')
   if (!INTERACTION_INTENTS.has(parsed.intent)) throw new AgentLoopError('Interaction router returned invalid intent')
+  if (typeof parsed.queue_conflict !== 'boolean') throw new AgentLoopError('Interaction router returned invalid queue_conflict')
+  if (parsed.intent !== 'amend_current' && parsed.queue_conflict !== false) throw new AgentLoopError('Interaction router queue_conflict is only valid for amendments')
   if (typeof parsed.reply !== 'string' || parsed.reply.length > 500) throw new AgentLoopError('Interaction router returned invalid reply')
-  return { intent: parsed.intent, reply: cleanMemoryText(parsed.reply, 500) }
+  return { intent: parsed.intent, queue_conflict: parsed.intent === 'amend_current' ? parsed.queue_conflict : false, reply: cleanMemoryText(parsed.reply, 500) }
 }
 
 function compactInteractionTaskStatus(raw) {
@@ -922,10 +926,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.traceRequestSequence = 0
     this.planUpdateReason = 'request'
     this.requestLifecycle = 'new_goal'
+    this.pendingInteractionAmendment = null
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
+    this.requestLifecycle = intent
+    this.pendingInteractionAmendment = null
     this.liveEntityObservations = new Map()
     this.staleExactPreflightRetries = 0
     this.onActivity = typeof options.onActivity === 'function' ? options.onActivity : null
@@ -1166,6 +1173,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.persistState()
   }
 
+  stageCompatibleAmendment(sender, text) {
+    if (!this.active || !this.epoch || !Array.isArray(this.baseMessages)) return false
+    const content = `[CHAT] ${cleanMemoryText(sender, 128)}: ${cleanMemoryText(text, 4000)}`
+    const alreadyPresent = this.baseMessages.some(message => message?.role === 'user' && message?.content === content)
+    if (!alreadyPresent) this.baseMessages.push({ role: 'user', content })
+    this.pendingInteractionAmendment = { sender: cleanMemoryText(sender, 128), text: cleanMemoryText(text, 4000) }
+    return true
+  }
+
   async request(text, options = {}) {
     await this.loadPersistentState()
     const sender = options.sender ?? 'unknown'
@@ -1177,7 +1193,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     let routed
     if (!planBefore && !healthyRuntime) {
       routed = {
-        route: { intent: 'new_goal', reply: '' },
+        route: { intent: 'new_goal', queue_conflict: false, reply: '' },
         epoch: undefined,
         classifier_skipped: 'no_current_goal_or_runtime_work',
       }
@@ -1189,7 +1205,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       catch (error) {
         const fallbackIntent = healthyRuntime ? 'continue_current' : (planBefore ? 'amend_current' : 'new_goal')
         routed = {
-          route: { intent: fallbackIntent, reply: '' },
+          route: { intent: fallbackIntent, queue_conflict: false, reply: '' },
           epoch: healthyRuntime ? await super.captureEpoch() : undefined,
           router_error: cleanMemoryText(error instanceof Error ? error.message : String(error), 300),
         }
@@ -1201,6 +1217,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       sender,
       text,
       intent,
+      queue_conflict: routed.route.queue_conflict,
       runtime_healthy: healthyRuntime,
       task_state: taskStatus.task_state,
       queue_length: taskStatus.queue_length,
@@ -1236,6 +1253,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         : 'There is no active goal to cancel.'
       await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
       return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true }
+    }
+
+    if (intent === 'amend_current' && healthyRuntime && routed.route.queue_conflict !== true) {
+      if (this.stageCompatibleAmendment(sender, text)) {
+        const reply = `The amendment is compatible with the Autorio work already running (queue ${taskStatus.queue_length ?? 0}), so I will not cancel that batch. I will apply the amendment at the next main-planner boundary.`
+        await this.rememberRoutedInteraction(memoryKey, sender, text, reply)
+        return { chatMessage: reply, plan: [], currentStep: 0, operations: [], interactionIntent: intent, routedOnly: true, amendmentDeferred: true }
+      }
     }
 
     if (intent === 'amend_current' && healthyRuntime) {
@@ -1418,8 +1443,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   async completed() {
     await this.loadPersistentState()
     if (!this.active) return null
-    this.planUpdateReason = 'completion'
-    await this.traceEvent('factorio.completed_signal')
+    const pendingAmendment = this.pendingInteractionAmendment
+    this.planUpdateReason = pendingAmendment ? 'amend_current' : 'completion'
+    if (pendingAmendment) this.requestLifecycle = 'amend_current'
+    await this.traceEvent('factorio.completed_signal', pendingAmendment ? { pending_amendment: true } : {})
     const receipt = await this.taskStatusReceipt()
     const receiptKey = runtimeReceiptKey('completion', receipt.view, '', this.epoch?.epoch)
     if (this.lastHandledRuntimeReceipt.completion === receiptKey) {
@@ -1432,10 +1459,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return null
     }
     this.lastHandledRuntimeReceipt.completion = receiptKey
-    return this.continueFromModMessage(
+    const result = await this.continueFromModMessage(
       `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
       'factorio.completion_continuation',
     )
+    if (pendingAmendment) this.pendingInteractionAmendment = null
+    return result
   }
 
   async failed(errorText) {
