@@ -733,3 +733,40 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
   assert.equal(result.taskBoard.steps[0].description, 'inspect the chest and take the needed plates')
   assert.equal(rcon.mutations.length, 0)
 })
+
+
+test('verified final completion is not mistaken for an action omission', async () => {
+  let calls = 0
+  const rcon = new ActionOmissionRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      calls++
+      if (calls === 1) {
+        return planMessage({
+          chatMessage: 'Placing the requested furnace.',
+          plan: ['Place the furnace'],
+          currentStep: 0,
+          operations: [{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 5 } }],
+        })
+      }
+      return planMessage({
+        chatMessage: 'The requested furnace is placed and verified.',
+        plan: [],
+        currentStep: 0,
+        operations: [],
+      })
+    },
+    systemPrompt: 'Verified final completion omission test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const started = await agent.request('place one furnace', { sender: 'TTLouis' })
+  assert.equal(started.operations[0].name, 'place_entity')
+  const finished = await agent.completed()
+  assert.equal(calls, 2)
+  assert.equal(finished.goalStatus, 'completed')
+  assert.equal(finished.operations.length, 0)
+  assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
+})
