@@ -133,6 +133,25 @@ test('successful grounded execution de-escalates back to low after earlier failu
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
 })
 
+test('routed lifecycle drives main-planner reasoning instead of raw CHAT framing', () => {
+  const messages = [
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: 继续当前目标，但别清周围了' },
+  ]
+  assert.deepEqual(selectReasoningPolicy(config(), messages, { allowTools: true, triggerSource: 'amend_current' }), {
+    effort: 'high',
+    reason: 'same_goal_amendment',
+  })
+  assert.deepEqual(selectReasoningPolicy(config(), messages, { allowTools: true, triggerSource: 'continue_current' }), {
+    effort: 'low',
+    reason: 'same_goal_continue',
+  })
+  assert.deepEqual(selectReasoningPolicy(config(), messages, { allowTools: true, triggerSource: 'new_goal' }), {
+    effort: 'high',
+    reason: 'new_goal',
+  })
+})
+
 test('interaction router is tool-free, disables reasoning, and CHAT alone is not new_goal', async () => {
   const routed = await captureRequest([
     { role: 'system', content: 'classify only' },
