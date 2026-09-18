@@ -86,6 +86,12 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   return { effort: 'high', reason: 'ordinary_planning' }
 }
 
+function reasoningOutputBudget(policy) {
+  if (policy?.effort === 'max') return 6000
+  if (policy?.effort === 'high') return 4000
+  return undefined
+}
+
 function reasoningBodyPatch(policy) {
   return {
     reasoning_effort: policy.effort,
@@ -107,17 +113,22 @@ export async function providerRequest(config, messages, options = {}) {
 
   const actualFetch = options.fetchImpl ?? fetch
   const actualEndpoint = providerEndpoint(config.base)
+  const compactPath = options.recoveryKind === 'output_budget_exhaustion' || completionContinuation(messages, options)
+  const callerPatch = options.requestBodyPatch && typeof options.requestBodyPatch === 'object' && !Array.isArray(options.requestBodyPatch)
+    ? options.requestBodyPatch
+    : {}
+  const policyBudget = !compactPath && callerPatch.max_tokens === undefined
+    ? reasoningOutputBudget(policy)
+    : undefined
   const requestOptions = {
     ...options,
     requestBodyPatch: {
-      ...(options.requestBodyPatch && typeof options.requestBodyPatch === 'object' && !Array.isArray(options.requestBodyPatch)
-        ? options.requestBodyPatch
-        : {}),
+      ...(policyBudget !== undefined ? { max_tokens: policyBudget } : {}),
+      ...callerPatch,
       ...reasoningBodyPatch(policy),
     },
     providerPolicy: policy,
   }
-  const compactPath = options.recoveryKind === 'output_budget_exhaustion' || completionContinuation(messages, options)
 
   if (!compactPath) return baseProviderRequest(config, messages, requestOptions)
 

@@ -63,6 +63,7 @@ test('new ordinary DeepSeek goal uses high effort only when lifecycle routing ma
 
   assert.equal(seen.body.reasoning_effort, 'high')
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
+  assert.equal(seen.body.max_tokens, 4000)
 })
 
 test('strict JSON recovery uses none and disables thinking', async () => {
@@ -104,6 +105,7 @@ test('meaningful failure following a low continuation escalates the next plannin
   })
   const { seen } = await captureRequest(messages, { allowTools: true })
   assert.equal(seen.body.reasoning_effort, 'high')
+  assert.equal(seen.body.max_tokens, 4000)
 })
 
 test('repeated meaningful failures can escalate a later planning turn to max', async () => {
@@ -118,6 +120,7 @@ test('repeated meaningful failures can escalate a later planning turn to max', a
   const { seen } = await captureRequest(messages, { allowTools: true })
   assert.equal(seen.body.reasoning_effort, 'max')
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
+  assert.equal(seen.body.max_tokens, 6000)
 })
 
 test('successful grounded execution de-escalates back to low after earlier failures', async () => {
@@ -176,6 +179,20 @@ test('interaction router is tool-free, disables reasoning, and CHAT alone is not
     effort: 'high',
     reason: 'ordinary_planning',
   })
+})
+
+test('explicit caller max_tokens remains authoritative over reasoning policy budget', async () => {
+  const { seen } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: plan something difficult' },
+  ], {
+    allowTools: true,
+    triggerSource: 'new_goal',
+    requestBodyPatch: { max_tokens: 900 },
+  })
+
+  assert.equal(seen.body.reasoning_effort, 'high')
+  assert.equal(seen.body.max_tokens, 900)
 })
 
 test('custom DeepSeek-compatible base URL keeps its endpoint while receiving model-gated reasoning policy', async () => {

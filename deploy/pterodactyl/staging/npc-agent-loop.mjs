@@ -30,7 +30,7 @@ const STATIC_PROTOTYPE_CACHE_LIMIT = 64
 const STATIC_PROTOTYPE_CONTEXT_LIMIT = 8
 const THROUGHPUT_POLL_MS = process.env.NODE_TEST_CONTEXT ? 1 : 250
 const THROUGHPUT_NO_PROGRESS_MS = process.env.NODE_TEST_CONTEXT ? 100 : 10000
-const OBSERVATION_DECISION_PRESSURE_ROUNDS = 4
+const OBSERVATION_DECISION_PRESSURE_ROUNDS = 3
 
 function check(ok, message) {
   if (!ok) throw new AgentLoopError(message)
@@ -273,8 +273,8 @@ export class NpcAgentLoop {
     maxToolLoopRetries = 1,
     maxToolValidationRetries = 3,
     maxRecoveryAttempts = 3,
-    maxWorkingMessages = 36,
-    maxWorkingChars = 60000,
+    maxWorkingMessages = 28,
+    maxWorkingChars = 40000,
     memory = new NpcDialogueMemory(),
     npcId = 'airi',
     memoryKeyForStatus,
