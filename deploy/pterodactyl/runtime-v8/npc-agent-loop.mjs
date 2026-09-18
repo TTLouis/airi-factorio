@@ -1339,6 +1339,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     if (!this.behaviorTrace) return Promise.resolve()
     const request = this.traceRequest
+    // interaction.routed is a pre-request side-channel lifecycle signal. Keep it
+    // available to the live UI via onActivity above, but do not write it into
+    // the main planner behavior trace before a canonical request_id exists.
+    if (event === 'interaction.routed' && !request) return Promise.resolve()
     if (['request.received', 'provider.error', 'plan.accepted', 'operations.ack', 'request.completed', 'request.failed'].includes(event)) {
       this.log(`[trace ${request?.id ?? '-'}] ${event}`)
     }
