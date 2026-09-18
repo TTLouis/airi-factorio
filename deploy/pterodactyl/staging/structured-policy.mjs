@@ -9,6 +9,16 @@ export function factorioName(value) {
   return value
 }
 
+function boundedText(value, label, max) {
+  check(typeof value === 'string' && value.trim().length >= 1 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value), `Invalid ${label}`)
+  return value.trim()
+}
+
+function skillId(value) {
+  check(typeof value === 'string' && value.length >= 1 && value.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value), 'Invalid skill id')
+  return value
+}
+
 function integer(value, label, min, max) {
   check(Number.isSafeInteger(value) && value >= min && value <= max, `${label} must be an integer from ${min} to ${max}`)
   return value
@@ -372,6 +382,224 @@ export const toolDefinitions = [
   }),
   functionTool('getPrototypeDetails', 'Read bounded static prototype/build knowledge for an item, fluid, or entity: stack/place result, footprint, crafting/mining capability, belt speed, inserter offsets, fluidbox roles, and selected energy metadata.', {
     type: 'object', properties: { name: nameStringSchema }, required: ['name'], additionalProperties: false,
+  }),
+  functionTool('findSkills', 'Search AIRI\'s bounded local skill/pattern library for reusable gameplay experience relevant to a task. Skill matches are guidance, not live world truth or mutation authority; validate recipes, prototypes, inventory, geometry, and placement before acting.', {
+    type: 'object',
+    properties: {
+      query: { type: 'string', minLength: 1, maxLength: 240 },
+      limit: { type: 'integer', minimum: 1, maximum: 5, default: 3 },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  }),
+  functionTool('getSkillDetails', 'Open one exact AIRI skill/pattern by id after discovery. Treat candidate/manual skills as experienced-player heuristics: reuse the decision pattern, but revalidate all mutable and game-version-specific facts before execution.', {
+    type: 'object',
+    properties: {
+      id: { type: 'string', minLength: 1, maxLength: 80, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*  functionTool('getPlayerStatus', 'Read one exact human player by name, including availability, surface, position, and distance from AIRI when comparable.', {
+    type: 'object', properties: { player_name: nameStringSchema }, required: ['player_name'], additionalProperties: false,
+  }),
+  functionTool('getNearbyEntities', 'Inspect a bounded local area around AIRI.', {
+    type: 'object',
+    properties: {
+      radius: { type: 'integer', minimum: 1, maximum: 64, default: 20 },
+      name: nameStringSchema,
+      type: nameStringSchema,
+      limit: { type: 'integer', minimum: 1, maximum: 40, default: 20 },
+    },
+    additionalProperties: false,
+  }),
+  functionTool('findLongRangeEntities', 'Search outward for an exact Factorio prototype name, up to 4096 tiles, returning a bounded number of distant targets.', {
+    type: 'object',
+    properties: {
+      name: nameStringSchema,
+      max_radius: { type: 'integer', minimum: 64, maximum: 4096, default: 1024 },
+      limit: { type: 'integer', minimum: 1, maximum: 16, default: 8 },
+    },
+    required: ['name'],
+    additionalProperties: false,
+  }),
+  functionTool('findNearestEnemy', 'Use Factorio native nearest-enemy search to find the closest hostile entity without knowing its prototype name, up to 4096 tiles.', {
+    type: 'object',
+    properties: {
+      max_distance: { type: 'integer', minimum: 1, maximum: 4096, default: 1024 },
+    },
+    additionalProperties: false,
+  }),
+  functionTool('getEntityStatus', 'Inspect one nearest exact-name local entity.', {
+    type: 'object',
+    properties: { name: nameStringSchema, radius: { type: 'integer', minimum: 1, maximum: 32, default: 8 } },
+    required: ['name'],
+    additionalProperties: false,
+  }),
+  functionTool('getEntityGeometry', 'Inspect exact same-surface runtime I/O geometry for one entity by stable Factorio unit_number.', {
+    type: 'object',
+    properties: { unit_number: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } },
+    required: ['unit_number'],
+    additionalProperties: false,
+  }),
+  functionTool('getLogisticsTopology', 'Inspect a bounded semantic logistics graph centered on one exact same-surface entity: belt inputs/outputs, actual inserter routes touching the center, direct mining output, and connected fluid neighbours.', {
+    type: 'object',
+    properties: {
+      unit_number: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+      radius: { type: 'integer', minimum: 1, maximum: 16, default: 8 },
+    },
+    required: ['unit_number'],
+    additionalProperties: false,
+  }),
+  throughputMeasurementDefinition,
+  functionTool('getNavigationStatus', 'Read bounded navigation target and last result.', emptyObjectSchema),
+  functionTool('getFollowStatus', 'Read persistent player-follow state, target player, configured distance, and current distance.', emptyObjectSchema),
+  functionTool('getDefenseStatus', 'Read persistent follow auto-defense policy, defensive radius, and current nearby hostile target.', emptyObjectSchema),
+  functionTool('getCraftingStatus', 'Read bounded native crafting ownership and last result.', emptyObjectSchema),
+  functionTool('getResearchStatus', 'Read force research and latest request/follow-through state.', emptyObjectSchema),
+  functionTool('getResearchRequest', 'Read one exact correlated research request and follow-through record by request ID.', {
+    type: 'object',
+    properties: { request_id: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } },
+    required: ['request_id'],
+    additionalProperties: false,
+  }),
+  functionTool('getTechnology', 'Read one exact technology.', {
+    type: 'object', properties: { name: nameStringSchema }, required: ['name'], additionalProperties: false,
+  }),
+  functionTool('getCombatStatus', 'Read bounded combat target and last result.', emptyObjectSchema),
+]
+
+function argsObject(args) {
+  check(args && typeof args === 'object' && !Array.isArray(args), 'Invalid tool arguments')
+  return args
+}
+
+function noExtra(args, allowed) {
+  check(Object.keys(args).every(key => allowed.includes(key)), 'Unexpected tool argument')
+}
+
+export function toolCommand(name, rawArgs = {}) {
+  const args = argsObject(rawArgs)
+  switch (name) {
+    case 'getActorStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_actor","status")))'
+    case 'getTaskStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_operations","status")))'
+    case 'getInventoryItems':
+      noExtra(args, [])
+      return '/silent-command remote.call("autorio_tools","get_inventory_items")'
+    case 'getEquipmentStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_equipment","status")))'
+    case 'getRecipe':
+      noExtra(args, ['item'])
+      return `/silent-command remote.call("autorio_tools","get_recipe",${luaString(factorioName(args.item))})`
+    case 'getRecipeDetails':
+      noExtra(args, ['item_or_recipe'])
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","recipe_details",${luaString(factorioName(args.item_or_recipe))})))`
+    case 'discoverPrototypes': {
+      noExtra(args, ['capability', 'resource_name', 'resource_category', 'crafting_category', 'entity_type', 'energy_source', 'availability', 'limit'])
+      check(['mining', 'crafting', 'entity-type'].includes(args.capability), 'Invalid prototype discovery capability')
+      const request = { capability: args.capability }
+      if (args.resource_name !== undefined) request.resource_name = factorioName(args.resource_name)
+      if (args.resource_category !== undefined) request.resource_category = factorioName(args.resource_category)
+      if (args.crafting_category !== undefined) request.crafting_category = factorioName(args.crafting_category)
+      if (args.entity_type !== undefined) request.entity_type = factorioName(args.entity_type)
+      if (args.energy_source !== undefined) {
+        check(['burner', 'electric', 'heat', 'fluid', 'void', 'none'].includes(args.energy_source), 'Invalid prototype discovery energy_source')
+        request.energy_source = args.energy_source
+      }
+      if (args.availability !== undefined) {
+        check(args.availability === 'force-available' || args.availability === 'all', 'Invalid prototype discovery availability')
+        request.availability = args.availability
+      }
+      if (args.limit !== undefined) request.limit = integer(args.limit, 'limit', 1, 12)
+      return `/silent-command local request=helpers.json_to_table(${luaString(JSON.stringify(request))}); rcon.print(helpers.table_to_json(remote.call("autorio_prototypes","discover",request)))`
+    }
+    case 'getPrototypeDetails':
+      noExtra(args, ['name'])
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_prototypes","details",${luaString(factorioName(args.name))})))`
+    case 'findSkills': {
+      noExtra(args, ['query', 'limit'])
+      const query = boundedText(args.query, 'skill search query', 240)
+      const limit = integer(args.limit ?? 3, 'limit', 1, 5)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_skills","find",${luaString(query)},${limit})))`
+    }
+    case 'getSkillDetails':
+      noExtra(args, ['id'])
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_skills","get",${luaString(skillId(args.id))})))`
+    case 'getPlayerStatus':
+      noExtra(args, ['player_name'])
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_player_status",${luaString(factorioName(args.player_name))})))`
+    case 'getNearbyEntities': {
+      noExtra(args, ['radius', 'name', 'type', 'limit'])
+      const radius = integer(args.radius ?? 20, 'radius', 1, 64)
+      const limit = integer(args.limit ?? 20, 'limit', 1, 40)
+      const entityName = args.name === undefined ? 'nil' : luaString(factorioName(args.name))
+      const entityType = args.type === undefined ? 'nil' : luaString(factorioName(args.type))
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_nearby_entities",${radius},${entityName},${entityType},${limit})))`
+    }
+    case 'findLongRangeEntities': {
+      noExtra(args, ['name', 'max_radius', 'limit'])
+      const entityName = factorioName(args.name)
+      const maxRadius = integer(args.max_radius ?? 1024, 'max_radius', 64, 4096)
+      const limit = integer(args.limit ?? 8, 'limit', 1, 16)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_entities",${luaString(entityName)},${maxRadius},${limit})))`
+    }
+    case 'findNearestEnemy': {
+      noExtra(args, ['max_distance'])
+      const maxDistance = integer(args.max_distance ?? 1024, 'max_distance', 1, 4096)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_discovery","find_nearest_enemy",${maxDistance})))`
+    }
+    case 'getEntityStatus': {
+      noExtra(args, ['name', 'radius'])
+      const radius = integer(args.radius ?? 8, 'radius', 1, 32)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_tools","get_entity_status",${luaString(factorioName(args.name))},${radius})))`
+    }
+    case 'getEntityGeometry': {
+      noExtra(args, ['unit_number'])
+      const unitNumber = integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","entity_geometry",${unitNumber})))`
+    }
+    case 'getLogisticsTopology': {
+      noExtra(args, ['unit_number', 'radius'])
+      const unitNumber = integer(args.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER)
+      const radius = integer(args.radius ?? 8, 'radius', 1, 16)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","logistics_topology",${unitNumber},${radius})))`
+    }
+    case 'measureTransportThroughput':
+      return renderThroughputMeasurement(args)
+    case 'getNavigationStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_navigation","status")))'
+    case 'getFollowStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_follow","status")))'
+    case 'getDefenseStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_defense","status")))'
+    case 'getCraftingStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_crafting","status")))'
+    case 'getResearchStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","status")))'
+    case 'getResearchRequest': {
+      noExtra(args, ['request_id'])
+      const requestId = integer(args.request_id, 'request_id', 1, Number.MAX_SAFE_INTEGER)
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","request_result",${requestId})))`
+    }
+    case 'getTechnology':
+      noExtra(args, ['name'])
+      return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_research","technology",${luaString(factorioName(args.name))})))`
+    case 'getCombatStatus':
+      noExtra(args, [])
+      return '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_combat","status")))'
+    default:
+      throw new PolicyError(`Unapproved tool: ${name}`)
+  }
+}
+ },
+    },
+    required: ['id'],
+    additionalProperties: false,
   }),
   functionTool('getPlayerStatus', 'Read one exact human player by name, including availability, surface, position, and distance from AIRI when comparable.', {
     type: 'object', properties: { player_name: nameStringSchema }, required: ['player_name'], additionalProperties: false,
