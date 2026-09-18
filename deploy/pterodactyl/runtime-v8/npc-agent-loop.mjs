@@ -1109,7 +1109,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.prepareContinuationContext()
     this.toolCache.clear()
     this.duplicateToolRounds = 0
+    this.observationRecoveryRounds = 0
+    this.observationOnlyRounds = 0
+    this.observationDecisionPressure = false
+    this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
+    this.planCategoryRetries = 0
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
     this.messages.push({ role: 'user', content: cleanMemoryText(modMessage, 18000) })
@@ -1420,7 +1425,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   finiteNoOperationPressure(plan) {
     if (plan?.operations?.length > 0 || !Array.isArray(plan?.plan) || plan.plan.length === 0) return ''
     const state = this.memory.currentPlan?.(this.activePlanKey())
-    if (this.planUpdateReason !== 'completion' || state?.status !== 'active') return ''
+    if (this.planUpdateReason !== 'completion' || state?.status !== 'active' || state?.last_mutation_verified !== true) return ''
+    const latestVerification = [...(state?.task_board?.evidence ?? [])].reverse().find(item => item?.kind === 'deterministic_verification')
+    if (!latestVerification) return ''
     return 'The previous Autorio batch completed, but the finite user goal still has remaining canonical work. Completing navigation, crafting, or another prerequisite does not start the next mutation. Continue now: submit the next executable operation if it is already parameterized, make only one targeted observation if one mutable fact is truly missing, or report a truthful blocker. Do not stop and wait for a human “continue” message, and do not claim a later action has started unless its mutation was admitted or runtime evidence proves it.'
   }
 
