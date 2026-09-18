@@ -1098,6 +1098,53 @@ Return exactly one JSON object with exactly three fields:
 {"intent":"continue_current|status_query|amend_current|new_goal|cancel_current|chat_only","queue_conflict":false,"reply":""}
 reply must be empty except for chat_only, where it may contain one brief conversational response. No markdown.`
 
+export function interactionDecisionQuestions() {
+  return {
+    intent: {
+      type: 'choice',
+      instructions: 'Classify the incoming human message relative to the current Factorio goal and authoritative runtime state.',
+      criteria: {
+        continue_current: 'The player asks SGLuna to keep or resume the same goal without changing its constraints.',
+        status_query: 'The player asks what is happening, current progress, a blocker, or why the agent is stuck.',
+        amend_current: 'The player changes instructions or constraints for the same active goal.',
+        new_goal: 'The player requests a materially different world goal.',
+        cancel_current: 'The player asks to stop or cancel the current goal.',
+        chat_only: 'The message is social or conversational and should not change task state.',
+      },
+    },
+    queue_conflict: {
+      type: 'noul',
+      instructions: 'Only when the message amends the current goal: would applying that amendment conflict with world work that is already running or queued? For every other intent, answer false.',
+      criteria: {
+        true: 'The amendment conflicts with work that is already running or queued and should not be deferred.',
+        false: 'There is no amendment, or the amendment is compatible with the work already running or queued.',
+      },
+    },
+  }
+}
+
+export function parseInteractionDecisionShadow(response) {
+  const intentAnswer = response?.answers?.intent
+  const conflictAnswer = response?.answers?.queue_conflict
+  if (!intentAnswer || !INTERACTION_INTENTS.has(intentAnswer.choice)) throw new AgentLoopError('Decision provider returned invalid interaction intent')
+  if (typeof intentAnswer.confidence !== 'number' || !Number.isFinite(intentAnswer.confidence) || intentAnswer.confidence < 0 || intentAnswer.confidence > 1) {
+    throw new AgentLoopError('Decision provider returned invalid interaction confidence')
+  }
+  if (!conflictAnswer || typeof conflictAnswer.noul !== 'number' || !Number.isFinite(conflictAnswer.noul) || conflictAnswer.noul < 0 || conflictAnswer.noul > 1) {
+    throw new AgentLoopError('Decision provider returned invalid queue-conflict probability')
+  }
+  return {
+    intent: intentAnswer.choice,
+    intent_confidence: intentAnswer.confidence,
+    intent_probabilities: intentAnswer.probabilities,
+    queue_conflict_probability: conflictAnswer.noul,
+    queue_conflict: intentAnswer.choice === 'amend_current' && conflictAnswer.noul >= 0.5,
+    model: typeof response?.model === 'string' ? response.model : undefined,
+    provider: typeof response?.provider === 'string' ? response.provider : undefined,
+    usage: response?.usage && typeof response.usage === 'object' ? response.usage : undefined,
+  }
+}
+
 export function parseInteractionRoute(message) {
   if (!message || typeof message !== 'object' || message.tool_calls !== undefined) {
     throw new AgentLoopError('Interaction router returned tools or no message')
@@ -1345,6 +1392,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.stateFile = stateFileFromOptions(options)
     this.stateLoaded = false
     this.interactionProvider = typeof options.interactionProvider === 'function' ? options.interactionProvider : null
+    this.interactionDecisionProvider = typeof options.interactionDecisionProvider === 'function' ? options.interactionDecisionProvider : null
+    this.interactionAbort = null
     this.persistQueue = Promise.resolve()
     this.traceRequest = null
     this.traceRequestSequence = 0
@@ -1567,31 +1616,64 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         }
       : null
     if (!this.interactionProvider) throw new AgentLoopError('Interaction router provider is unavailable')
-    const message = await this.interactionProvider([
-      { role: 'system', content: INTERACTION_ROUTER_PROMPT },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          message: cleanMemoryText(text, 4000),
-          sender: cleanMemoryText(sender, 128),
-          current_goal: currentGoal,
-          runtime: taskStatus,
-        }),
-      },
-    ], {
-      epoch: current.epoch,
-      actorId: current.actor_id,
-      round: 0,
-      allowTools: false,
-      recoveryAttempt: 0,
-      triggerSource: 'interaction_router',
-      interactionRouter: true,
-      requestBodyPatch: {
-        max_tokens: 180,
-        response_format: { type: 'json_object' },
-      },
-    })
-    return { route: parseInteractionRoute(message), epoch: current }
+
+    const state = {
+      message: cleanMemoryText(text, 4000),
+      sender: cleanMemoryText(sender, 128),
+      current_goal: currentGoal,
+      runtime: taskStatus,
+    }
+
+    this.interactionAbort?.abort()
+    const controller = new AbortController()
+    this.interactionAbort = controller
+
+    const decisionStartedAt = Date.now()
+    const decisionPromise = this.interactionDecisionProvider
+      ? this.interactionDecisionProvider(state, interactionDecisionQuestions(), {
+          epoch: current.epoch,
+          actorId: current.actor_id,
+          signal: controller.signal,
+        }).then(response => ({
+          shadow: parseInteractionDecisionShadow(response),
+          latency_ms: Date.now() - decisionStartedAt,
+        })).catch(error => ({
+          error: cleanMemoryText(error instanceof Error ? error.message : String(error), 300),
+          latency_ms: Date.now() - decisionStartedAt,
+        }))
+      : Promise.resolve(undefined)
+
+    try {
+      const message = await this.interactionProvider([
+        { role: 'system', content: INTERACTION_ROUTER_PROMPT },
+        { role: 'user', content: JSON.stringify(state) },
+      ], {
+        epoch: current.epoch,
+        actorId: current.actor_id,
+        round: 0,
+        allowTools: false,
+        recoveryAttempt: 0,
+        triggerSource: 'interaction_router',
+        interactionRouter: true,
+        signal: controller.signal,
+        requestBodyPatch: {
+          max_tokens: 180,
+          response_format: { type: 'json_object' },
+        },
+      })
+      const decision = await decisionPromise
+      return {
+        route: parseInteractionRoute(message),
+        epoch: current,
+        decision_shadow: decision?.shadow,
+        decision_shadow_error: decision?.error,
+        decision_shadow_latency_ms: decision?.latency_ms,
+      }
+    }
+    finally {
+      controller.abort()
+      if (this.interactionAbort === controller) this.interactionAbort = null
+    }
   }
 
   async cancelInteractionWorldWork(epoch) {
@@ -1672,6 +1754,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       router_error: routed.router_error,
       classifier_skipped: routed.classifier_skipped,
       router_bypassed: routed.router_bypassed === true,
+      decision_shadow: routed.decision_shadow,
+      decision_shadow_error: routed.decision_shadow_error,
+      decision_shadow_latency_ms: routed.decision_shadow_latency_ms,
     })
 
     if (!routed.router_bypassed && intent === 'continue_current' && healthyRuntime) {
@@ -1970,6 +2055,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   cancel(reason = 'cancelled') {
+    this.interactionAbort?.abort()
+    this.interactionAbort = null
     void this.traceEvent('request.cancelled', { reason, usage: this.traceRequest?.usage })
     this.traceRequest = null
     this.outputBudgetRecoveryUsed = false
