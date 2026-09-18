@@ -27,7 +27,6 @@ const TURRET_STAGING_DISTANCE = 24
 const TURRET_MIN_ADVANCE_DISTANCE = 6
 const TURRET_FRONTLINE_ADVANCE_DISTANCE = 6
 const TURRET_FRONTLINE_REAR_DISTANCE = 2.5
-const TURRET_LATERAL_SPACING = 2.5
 const TURRET_ACTOR_CLEARANCE = 2.5
 const TURRET_TARGET_SAFETY_MARGIN = 0.5
 const TURRET_COVER_MARGIN = 2
@@ -800,7 +799,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return owned_count < (task.support_stage_target_turret_count ?? owned_count)
   }
 
-  function support_anchor(actor: ControlledActor, target: LuaEntity, turret_index: number) {
+  function support_anchor(actor: ControlledActor, target: LuaEntity, _turret_index: number) {
     let toward_x = target.position.x - actor.position.x
     let toward_y = target.position.y - actor.position.y
     const magnitude = math.sqrt(toward_x * toward_x + toward_y * toward_y)
@@ -812,17 +811,12 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       toward_x = 1
       toward_y = 0
     }
-    const perpendicular_x = -toward_y
-    const perpendicular_y = toward_x
-    let lateral = 0
-    if (turret_index > 0) {
-      const rank = math.floor((turret_index + 1) / 2)
-      const side = turret_index % 2 === 1 ? 1 : -1
-      lateral = rank * TURRET_LATERAL_SPACING * side
-    }
+    // Do not impose artificial spacing between support turrets. The placement
+    // planner and Factorio collision rules decide how tightly a frontline can be
+    // packed; combat only cares that the position is safe and reaches the target.
     return {
-      x: actor.position.x + toward_x * TURRET_FRONTLINE_ADVANCE_DISTANCE + perpendicular_x * lateral,
-      y: actor.position.y + toward_y * TURRET_FRONTLINE_ADVANCE_DISTANCE + perpendicular_y * lateral,
+      x: actor.position.x + toward_x * TURRET_FRONTLINE_ADVANCE_DISTANCE,
+      y: actor.position.y + toward_y * TURRET_FRONTLINE_ADVANCE_DISTANCE,
     }
   }
 
