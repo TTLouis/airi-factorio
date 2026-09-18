@@ -114,6 +114,45 @@ def run(client: Rcon, results: Path) -> None:
     require(tree_resource.get('ok') is False and tree_resource.get('code') == 'invalid_target_kind', tree_resource)
     require(tree_resource.get('expected_type') == 'resource' and tree_resource.get('observed_type') == 'tree', tree_resource)
 
+    # Curated early-game skills must exist in the real Factorio storage/runtime,
+    # not only in TypeScript fixtures. They remain manual candidate patterns:
+    # useful planning guidance, never live-world authority.
+    skills = json_command(
+        lua_json(remote_call('autorio_skills', 'list')),
+        'curated skill seed',
+    )
+    require(isinstance(skills, list), skills)
+    skill_ids = {skill.get('id') for skill in skills if isinstance(skill, dict)}
+    expected_basic_skills = {
+        'missing-item-bootstrap',
+        'burner-coal-loop',
+        'direct-miner-smelting',
+        'starter-smelting-row',
+        'two-item-half-belt',
+        'belt-side-load-merge',
+        'direct-insertion-chain',
+        'steam-power-bootstrap',
+        'starter-mining-belt-output',
+        'automation-science-bootstrap',
+    }
+    require(expected_basic_skills.issubset(skill_ids), {'skills': sorted(skill_ids)})
+
+    coal_skills = json_command(
+        lua_json(remote_call('autorio_skills', 'find', repr('coal snake'), '3')),
+        'curated skill search',
+    )
+    require(coal_skills.get('ok') is True, coal_skills)
+    require(len(coal_skills.get('results') or []) > 0, coal_skills)
+    require(coal_skills['results'][0].get('id') == 'burner-coal-loop', coal_skills)
+
+    coal_skill = json_command(
+        lua_json(remote_call('autorio_skills', 'get', repr('burner-coal-loop'))),
+        'curated skill details',
+    )
+    require(coal_skill.get('source', {}).get('kind') == 'manual', coal_skill)
+    require(coal_skill.get('status') == 'candidate' and coal_skill.get('stage') == 'pattern', coal_skill)
+    require(coal_skill.get('verification', {}).get('production_output') == 'not_tested', coal_skill)
+
     # 1. Bounded wait is actor-owned and must produce a concrete completion
     # receipt instead of relying on generic idle.
     wait_admission = json_command(lua_json(remote_call('autorio_operations', 'wait', '30')), 'basic wait admission')
