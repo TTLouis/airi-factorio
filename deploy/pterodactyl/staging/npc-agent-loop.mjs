@@ -775,14 +775,15 @@ export class NpcAgentLoop {
             tools_enabled: true,
           })
           if (this.duplicateToolRounds > this.maxToolLoopRetries) {
-            return this.blockedWithoutMutation(
-              `${reason}. Reuse the deterministic observations already collected; no mutation was submitted.`,
-              'observation_no_progress',
+            return this.recoverPlan(
+              generation,
+              new AgentLoopError(`${reason}. Observation retries are exhausted. Reuse the deterministic observations already collected and make the next decision from that evidence. Return one valid strict-JSON plan with the next executable action when the evidence supports it, or a truthful blocker with no mutation when a required fact is still missing.`),
+              round + 1,
             )
           }
           this.messages.push({
             role: 'user',
-            content: `[HARNESS] ${reason}. The duplicate result was suppressed and earlier deterministic observations remain available. Tools stay enabled: use a different approved read-only tool only if a missing fact is still required, otherwise return a strict-JSON plan or a truthful blocker. Do not guess an unobserved Factorio identity and do not force a mutation just to make progress.`,
+            content: `[HARNESS] ${reason}. The duplicate result was suppressed and earlier deterministic observations remain available. Tools stay enabled only for a specific missing fact: do not switch to a different read-only observation merely to avoid the duplicate guard. If the existing evidence already identifies a safe executable next action, return a strict-JSON plan now; otherwise make one targeted observation for the exact missing fact or report a truthful blocker. Do not guess an unobserved Factorio identity and do not force a mutation just to make progress.`,
           })
         }
         continue
