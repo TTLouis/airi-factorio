@@ -49,7 +49,7 @@ function bounded_runtime_values(value: any, limit: number) {
   const values: any[] = []
   let count = 0
   if (!value) return { values, count, truncated: false }
-  for (const [, entry] of pairs(value)) {
+  for (const [, entry] of pairs(value as Record<number, any>)) {
     count++
     if (values.length < limit) values.push(entry)
   }
@@ -62,7 +62,7 @@ function sorted_place_item_summaries(prototype: any, limit: number, observe?: (i
   const runtime_values = prototype?.items_to_place_this
   if (!runtime_values) return { values, count, truncated: false }
 
-  for (const [, item] of pairs(runtime_values)) {
+  for (const [, item] of pairs(runtime_values as Record<number, any>)) {
     if (!item || typeof item.name !== 'string') continue
     count++
     if (observe) observe(item)
@@ -249,7 +249,7 @@ function enabled_item_recipes(actor: ControlledActor) {
   const result: Record<string, string> = {}
   for (const [recipe_name, recipe] of pairs(actor.force.recipes)) {
     if (!recipe || recipe.enabled !== true || recipe.hidden === true) continue
-    for (const [, product] of pairs(recipe.products ?? {})) {
+    for (const [, product] of pairs((recipe.products ?? {}) as Record<number, any>)) {
       if (product?.type !== 'item' || typeof product?.name !== 'string') continue
       const existing = result[product.name]
       if (!existing || recipe_name < existing) result[product.name] = recipe_name
