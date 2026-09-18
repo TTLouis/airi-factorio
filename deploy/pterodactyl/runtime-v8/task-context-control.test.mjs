@@ -6,7 +6,7 @@ import path from 'node:path'
 
 import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
-import { executeUiControl, parseUiControlLine } from './supervisor.mjs'
+import { executeUiControl, parseUiControlLine, Session } from './supervisor.mjs'
 
 function activePlan(goalId, objective) {
   return {
@@ -61,13 +61,33 @@ function controlSession(agent, order = []) {
     order.push('persist')
     return originalPersist()
   }
-  return {
+  const syncs = []
+  const session = Object.create(Session.prototype)
+  Object.assign(session, {
     npcId: 'airi',
+    npcName: 'AIRI',
+    activityEpoch: 'test',
+    conversationGeneration: 2,
+    conversationSequence: 2,
     agent,
     commands,
     chats,
-    agentLive: { phase: 'thinking', detail: 'waiting on provider', objective: 'old task', at: Date.now(), activity: [{ kind: 'note', text: 'old live state' }], debug: {} },
+    syncs,
+    agentLive: {
+      phase: 'thinking',
+      detail: 'waiting on provider',
+      objective: 'old task',
+      at: Date.now(),
+      activity: [{ kind: 'note', text: 'old live state' }],
+      conversation_id: 'task_test_2',
+      conversation: [
+        { id: 'message_test_2_1', role: 'user', sender: 'TTLouis', text: 'old task' },
+        { id: 'message_test_2_2', role: 'assistant', sender: 'AIRI', text: 'Working.' },
+      ],
+      debug: {},
+    },
     ensureAuthorization: async () => ({ allowed: true }),
+    currentPlanState: () => agent.memory?.currentPlan?.('npc:airi'),
     rcon: {
       command: async command => {
         commands.push(command)
@@ -76,9 +96,11 @@ function controlSession(agent, order = []) {
         return ''
       },
     },
+    syncTaskBoardUi: async next => { order.push('ui:sync'); syncs.push(next); return true },
     clearTaskBoardUi: async () => { order.push('ui:clear'); commands.push('CLEAR_UI'); return true },
     printChat: async text => { chats.push(text) },
-  }
+  })
+  return session
 }
 
 test('UI control parser accepts server-authoritative new_task and still rejects arbitrary actions', () => {
@@ -87,7 +109,7 @@ test('UI control parser accepts server-authoritative new_task and still rejects 
   assert.equal(parseUiControlLine('[AIRI_UI_CONTROL] {"version":1,"action":"clear_memory","player_index":7,"player_name":"TTLouis","tick":900}'), undefined)
 })
 
-test('terminate aborts request and world work before durable deletion, then persists before clearing UI', async t => {
+test('terminate aborts world work and durable goal while preserving the visible conversation', async t => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-ui-terminate-'))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
   const stateFile = path.join(dir, 'npc-state.json')
@@ -112,13 +134,17 @@ test('terminate aborts request and world work before durable deletion, then pers
     'world:cancel',
     'memory:terminate:npc:airi',
     'persist',
-    'ui:clear',
+    'ui:sync',
   ])
   assert.equal(memory.currentPlan('npc:airi'), undefined)
   assert.match(memory.context('npc:airi'), /remember old terminate task/)
   assert.equal(session.agentLive.phase, 'idle')
   assert.equal(session.agentLive.objective, '')
   assert.deepEqual(session.agentLive.activity, [])
+  assert.equal(session.agentLive.conversation_id, 'task_test_2')
+  assert.deepEqual(session.agentLive.conversation.map(entry => entry.text), ['old task', 'Working.'])
+  assert.equal(session.commands.includes('CLEAR_UI'), false)
+  assert.deepEqual(session.syncs, [undefined])
 
   const restarted = persistentAgent(stateFile)
   await restarted.loadPersistentState()
@@ -159,6 +185,8 @@ test('new task clears only the target NPC dialogue and durable plan after cancel
   assert.doesNotMatch(memory.context('npc:airi'), /remember AIRI old context/)
   assert.equal(memory.currentPlan('npc:other')?.goal_id, 'goal_other')
   assert.match(memory.context('npc:other'), /remember other NPC context/)
+  assert.equal(session.agentLive.conversation_id, 'task_test_3')
+  assert.deepEqual(session.agentLive.conversation, [])
 
   const restarted = persistentAgent(stateFile)
   await restarted.loadPersistentState()

@@ -698,7 +698,7 @@ async function pausePlanIfPresent(session, reason) {
   return session.agent.pausePersistentPlan(reason)
 }
 
-function resetLiveTaskContext(session) {
+function resetLiveTaskContext(session, { clearConversation = true } = {}) {
   if (!session.agentLive || typeof session.agentLive !== 'object') return
   Object.assign(session.agentLive, {
     phase: 'idle',
@@ -707,7 +707,10 @@ function resetLiveTaskContext(session) {
     at: Date.now(),
     activity: [],
   })
-  session.startNewUiConversation?.()
+  // Terminate discards the durable goal but intentionally preserves bounded
+  // dialogue memory. Keep the visible Current Task Conversation aligned with
+  // that contract; only New Task is the destructive conversation boundary.
+  if (clearConversation) session.startNewUiConversation?.()
 }
 
 async function discardTaskContext(session, reason, { clearDialogue = false } = {}) {
@@ -726,8 +729,16 @@ async function discardTaskContext(session, reason, { clearDialogue = false } = {
     ? agent.memory?.clearTaskContext?.(key)
     : agent.memory?.terminatePlan?.(key)
   await agent.persistState?.()
-  resetLiveTaskContext(session)
-  await session.clearTaskBoardUi()
+  resetLiveTaskContext(session, { clearConversation: clearDialogue })
+  if (clearDialogue) {
+    await session.clearTaskBoardUi()
+  }
+  else {
+    // Keep the retained conversation visible as an idle, plan-less snapshot.
+    // The snapshot is still server-authoritative and replicated through the
+    // existing Task Board remote interface; GUI render code remains read-only.
+    await session.syncTaskBoardUi()
+  }
   return cleared
 }
 

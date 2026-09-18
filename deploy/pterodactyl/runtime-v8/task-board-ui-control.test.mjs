@@ -290,14 +290,15 @@ test('pause preserves plan and stops autorio work plus follow mode', async () =>
   assert.ok(session.commands.some(command => command.includes('stop_follow_player')))
 })
 
-test('terminate discards durable state, stops work, and clears the task board', async () => {
+test('terminate discards durable state and stops work without forcibly erasing retained conversation UI', async () => {
   const session = sessionFixture()
   let terminated = false
   session.agent.memory.terminatePlan = () => { terminated = true; return { status: 'active' } }
   await executeUiControl(session, { action: 'terminate', player_name: 'TTLouis' })
   assert.equal(terminated, true)
   assert.equal(session.agent.cancelReason, 'ui_terminate')
-  assert.ok(session.commands.includes('CLEAR_UI'))
+  assert.equal(session.commands.includes('CLEAR_UI'), false)
+  assert.deepEqual(session.syncs, [undefined])
 })
 
 test('follow pauses the active plan, cancels old work, and directly enables follow', async () => {
