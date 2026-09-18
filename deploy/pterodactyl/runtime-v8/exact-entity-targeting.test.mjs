@@ -70,7 +70,7 @@ class ExactTargetRcon {
     if (text.includes('remote.call("autorio_operations","status")')) return JSON.stringify(this.operationStatus)
     if (text.includes('remote.call("autorio_follow","status")')) return JSON.stringify({ active: false })
     if (text.includes('remote.call("autorio_preflight","operation"')) {
-      const match = text.match(/\["unit_number"\]=(\d+)/)
+      const match = text.match(/unit_number[^0-9]*(\d+)/)
       const unitNumber = match ? Number(match[1]) : undefined
       if (unitNumber !== undefined && this.preflightByUnit.has(unitNumber)) {
         return JSON.stringify(this.preflightByUnit.get(unitNumber))
