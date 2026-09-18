@@ -6,12 +6,17 @@ describe('NPC console information architecture', () => {
   const debugSource = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
   const projectsSource = readFileSync(new URL('./projects/project_window.ts', import.meta.url), 'utf8')
 
-  it('keeps controls in the top row and gives the main column to plan plus conversation', () => {
+  it('keeps operational controls in the top row and puts New Task with Prompt AIRI', () => {
     expect(consoleSource).toContain("create_section(parent, 'Plan Tracker'")
     expect(consoleSource).toContain('activity_header.visible = false')
     expect(consoleSource).toContain('activity_scroll.visible = false')
     expect(consoleSource).toMatch(/render_tracker\(left, board, player\); debug_ui\.render_ai_reply\(dynamic,[\s\S]*render_prompt\(left, player\)/)
     expect(consoleSource).toContain("create_section(parent, 'Controls', CONTROLS_SECTION_WIDTH")
+    const controls = consoleSource.split('function render_controls_panel(')[1]?.split('/**\n * Usable GUI height')[0] ?? ''
+    const prompt = consoleSource.split('function render_prompt(')[1]?.split('function render_titlebar(')[0] ?? ''
+    expect(controls).not.toContain('NEW_TASK_BUTTON_NAME')
+    expect(prompt).toContain("caption: 'Prompt AIRI'")
+    expect(prompt).toContain('NEW_TASK_BUTTON_NAME')
   })
 
   it('promotes current step and last meaningful result into Status', () => {

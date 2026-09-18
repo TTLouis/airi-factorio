@@ -658,7 +658,6 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   compact_button(controls.add({ type: 'button', name: SKILLS_BUTTON_NAME, caption: skills_open ? 'CLOSE' : 'LEARN', style: 'dialog_button', tooltip: skills_open ? 'Close the area learning window.' : 'Open area learning and saved skill candidates in a separate movable window.' }))
   const debug_open = debug_ui.debug_ui_is_open(player.index)
   compact_button(controls.add({ type: 'button', name: debug_ui.DEBUG_BUTTON_NAME, caption: debug_ui.debug_button_caption(player.index), style: debug_open ? 'confirm_button' : 'dialog_button', tooltip: debug_open ? 'Close the AIRI runtime diagnostics window.' : 'Open structured AIRI runtime diagnostics, provider usage, actor state, and UI sync information.' }))
-  compact_button(controls.add({ type: 'button', name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK', style: 'dialog_button', tooltip: "Stop current work and clear this NPC's conversation and durable plan. Learned skills and Factorio world state are kept." }))
   const projects_open = project_ui.projects_ui_is_open(player.index)
   compact_button(controls.add({ type: 'button', name: project_ui.PROJECTS_BUTTON_NAME, caption: 'OLD TASKS', style: projects_open ? 'confirm_button' : 'dialog_button', tooltip: projects_open ? 'Close old task history.' : 'Open old task history, conversations, and evidence.' }))
   // A blank last_failure is still truthy, which drew a lone warning triangle with
@@ -969,7 +968,10 @@ function render_resource_sidebar(parent: LuaGuiElement, board: TaskBoardUiSnapsh
 }
 function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   const section = parent.add({ type: 'frame', name: PROMPT_SECTION_NAME, direction: 'vertical', style: 'inside_shallow_frame' }); section.style.width = LEFT_COLUMN_WIDTH; section.style.horizontally_stretchable = false
-  const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'; header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
+  const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'; header.style.horizontal_spacing = 8
+  header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
+  const header_spacer = header.add({ type: 'empty-widget' }); header_spacer.style.horizontally_stretchable = true
+  compact_button(header.add({ type: 'button', name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK', style: 'dialog_button', tooltip: "Stop current work and clear this NPC's conversation and durable plan. Learned skills and Factorio world state are kept." }))
   const row = section.add({ type: 'flow', name: PROMPT_FLOW_NAME, direction: 'horizontal' }); row.style.padding = SECTION_PADDING; row.style.horizontally_stretchable = true; row.style.vertical_align = 'center'; row.style.horizontal_spacing = 8
   const field = row.add({ type: 'textfield', name: PROMPT_FIELD_NAME, text: task_board_ui_prompt_draft(player.index), tooltip: 'Send a prompt directly to AIRI without typing !airi in chat. Press Enter to send.' }); field.style.width = PROMPT_FIELD_WIDTH; field.style.minimal_width = PROMPT_FIELD_WIDTH; field.style.maximal_width = PROMPT_FIELD_WIDTH
   const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: 'Send this prompt directly to AIRI' }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.maximal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
