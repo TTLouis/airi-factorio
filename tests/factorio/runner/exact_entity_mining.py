@@ -50,8 +50,13 @@ def run(client: Rcon, results: Path) -> None:
     )
     matches = [entity for entity in observed.get('entities', []) if entity.get('unit_number') == fixture['chest_id']]
     require(len(matches) == 1, observed)
-    distance = matches[0].get('distance')
-    require(isinstance(distance, (int, float)) and distance > 5, observed)
+    actor_position = observed.get('actor_position') or {}
+    target_position = matches[0].get('position') or {}
+    distance = (
+        ((target_position.get('x', 0) - actor_position.get('x', 0)) ** 2
+         + (target_position.get('y', 0) - actor_position.get('y', 0)) ** 2) ** 0.5
+    )
+    require(distance > 5, observed)
 
     live_preflight = json_command(
         lua_json(remote_call(
