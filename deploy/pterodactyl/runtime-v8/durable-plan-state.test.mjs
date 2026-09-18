@@ -167,6 +167,12 @@ test('durable plan survives a new agent instance and empty actions cannot preten
       currentStep: 1,
       operations: [],
     }),
+    planMessage({
+      chatMessage: 'I will load the furnace next.',
+      plan: ['Mine fuel', 'Load the furnace'],
+      currentStep: 1,
+      operations: [],
+    }),
   ]
   const first = new NpcAgentLoop({
     rcon: new FakeRcon(),
@@ -190,9 +196,12 @@ test('durable plan survives a new agent instance and empty actions cannot preten
 
   const saved = JSON.parse(await fsp.readFile(stateFile, 'utf8'))
   assert.equal(saved.plans[0].state.status, 'blocked')
+  assert.equal(saved.plans[0].state.blocker, 'action_omission_after_repair')
   assert.equal(saved.plans[0].state.current_step, 1)
   assert.equal(saved.plans[0].state.task_board.total_steps, 2)
-  assert.equal(saved.plans[0].state.task_board.evidence.at(-1).ref, 'batch_7')
+  assert.equal(saved.plans[0].state.task_board.completed_count, 1)
+  assert.equal(saved.plans[0].state.task_board.evidence.some(item => item.ref === 'batch_7'), true)
+  assert.equal(saved.plans[0].state.task_board.evidence.at(-1).kind, 'action_omission')
 
   let observed
   const second = new NpcAgentLoop({
@@ -211,7 +220,7 @@ test('durable plan survives a new agent instance and empty actions cannot preten
   assert.match(context, /\[PLAN_STATE\]/)
   assert.match(context, /task_board/)
   assert.match(context, /prepare the furnace/)
-  assert.match(context, /no_autorio_operation_for_remaining_plan/)
+  assert.match(context, /action_omission_after_repair/)
   assert.match(context, /Load the furnace/)
 })
 
@@ -299,4 +308,393 @@ test('Autorio errors feed the detailed task receipt back into the active goal fo
   assert.match(continuation, /\[MOD\] Autorio operation error:/)
   assert.match(continuation, /no_target/)
   assert.match(continuation, /last_completed_batch/)
+})
+
+
+class ActionOmissionRcon {
+  constructor({ followActive = false } = {}) {
+    this.status = deployment()
+    this.followActive = followActive
+    this.mutations = []
+    this.observationCalls = 0
+    this.batchId = 0
+    this.lastTaskTypes = []
+  }
+
+  async command(text) {
+    if (text.includes('remote.call("airi_deployment","status")')) return JSON.stringify(this.status)
+    if (text.includes('remote.call("autorio_operations","status")')) {
+      return JSON.stringify({
+        task_state: 'idle',
+        queue_empty: true,
+        queue_length: 0,
+        last_completed_batch: this.batchId > 0
+          ? { batch_id: this.batchId, task_count: this.lastTaskTypes.length, task_types: this.lastTaskTypes, tick: 600 + this.batchId }
+          : undefined,
+      })
+    }
+    if (text.includes('remote.call("autorio_follow","status")')) {
+      return JSON.stringify(this.followActive
+        ? { active: true, healthy: true, controller_live: true, state: 'following', target_player: 'TTLouis' }
+        : { active: false, healthy: false, controller_live: false, state: 'idle' })
+    }
+    if (text.includes('remote.call("autorio_preflight","operation"')) return JSON.stringify({ ok: true })
+    if (text.includes('remote.call("autorio_tools","get_nearby_entities"')) {
+      this.observationCalls++
+      return JSON.stringify({
+        actor_position: { x: 0, y: 0 },
+        entities: [{ name: 'steel-chest', type: 'container', unit_number: 582, position: { x: 3, y: 0 } }],
+      })
+    }
+    if (text.includes('local ok,result=pcall')) {
+      const marker = text.match(/AIRI_RESULT_[a-f0-9]{24}:/)?.[0]
+      assert.ok(marker)
+      this.mutations.push(text)
+      this.batchId++
+      if (text.includes("'place_entity'")) this.lastTaskTypes = ['placing']
+      else if (text.includes("'move_items_exact'")) this.lastTaskTypes = ['moving_items']
+      else if (text.includes("'mine_entity_exact'")) this.lastTaskTypes = ['mining']
+      else this.lastTaskTypes = ['waiting']
+      const admissions = [...text.matchAll(/return remote\.call\('autorio_operations'/g)].length
+      return `${marker}${JSON.stringify({ ok: true, result: Array.from({ length: admissions }, () => [true, 'Task started']) })}`
+    }
+    return 'tool-output'
+  }
+}
+
+function toolMessage(id = 'observe-chest') {
+  return {
+    content: null,
+    tool_calls: [{
+      id,
+      type: 'function',
+      function: {
+        name: 'getNearbyEntities',
+        arguments: JSON.stringify({ radius: 16, name: 'steel-chest', limit: 4 }),
+      },
+    }],
+  }
+}
+
+test('normal execution has zero action-omission provider overhead', async () => {
+  const calls = []
+  const agent = new NpcAgentLoop({
+    rcon: new ActionOmissionRcon(),
+    provider: async (messages, options) => {
+      calls.push({ messages, options })
+      return planMessage({
+        chatMessage: 'Starting the requested wait.',
+        plan: ['Wait once'],
+        currentStep: 0,
+        operations: [{ name: 'wait', args: { ticks: 1 } }],
+      })
+    },
+    systemPrompt: 'Action omission normal-path test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const result = await agent.request('wait once', { sender: 'TTLouis' })
+  assert.equal(result.operations.length, 1)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].options.recoveryAttempt, 0)
+  assert.equal(calls[0].options.requestBodyPatch, undefined)
+})
+
+test('healthy persistent runtime and explicit truthful blocker do not trigger omission repair', async () => {
+  let followCalls = 0
+  const followAgent = new NpcAgentLoop({
+    rcon: new ActionOmissionRcon({ followActive: true }),
+    provider: async () => {
+      followCalls++
+      return planMessage({
+        chatMessage: 'Follow is already running.',
+        plan: ['Keep following TTLouis'],
+        currentStep: 0,
+        operations: [],
+      })
+    },
+    systemPrompt: 'Persistent runtime omission test',
+    stateFile: null,
+    traceFile: null,
+  })
+  const following = await followAgent.request('follow me', { sender: 'TTLouis' })
+  assert.equal(followCalls, 1)
+  assert.equal(following.goalStatus, 'active')
+  assert.equal(following.persistentRuntime?.controller_live, true)
+
+  let blockerCalls = 0
+  const blockedAgent = new NpcAgentLoop({
+    rcon: new ActionOmissionRcon(),
+    provider: async () => {
+      blockerCalls++
+      return planMessage({
+        chatMessage: 'BLOCKED: required capability is unavailable in the current runtime.',
+        plan: ['Use the unavailable capability'],
+        currentStep: 0,
+        operations: [],
+      })
+    },
+    systemPrompt: 'Explicit blocker omission test',
+    stateFile: null,
+    traceFile: null,
+  })
+  const blocked = await blockedAgent.request('use that capability', { sender: 'TTLouis' })
+  assert.equal(blockerCalls, 1)
+  assert.equal(blocked.goalStatus, 'blocked')
+  assert.equal(blocked.taskBoard.blocker, 'provider_reported_blocker')
+  assert.equal(blockedAgent.rcon.mutations.length, 0)
+})
+
+test('completed observation followed by prose-only intent gets exactly one cheap act-or-block repair', async () => {
+  const calls = []
+  let reply = 0
+  const rcon = new ActionOmissionRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async (messages, options) => {
+      calls.push({ messages, options })
+      reply++
+      if (reply === 1) return toolMessage()
+      if (reply === 2) {
+        return planMessage({
+          chatMessage: 'I found the chest. I will take the plates and continue.',
+          plan: ['Take plates from the observed chest'],
+          currentStep: 0,
+          operations: [],
+        })
+      }
+      return planMessage({
+        chatMessage: 'Taking the plates from the observed chest now.',
+        plan: ['Take plates from the observed chest'],
+        currentStep: 0,
+        operations: [{
+          name: 'move_items_exact',
+          args: { item_name: 'iron-plate', unit_number: 582, max_count: 10, to_entity: false },
+        }],
+      })
+    },
+    systemPrompt: 'Observed-action omission test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const result = await agent.request('take ten iron plates from that chest', { sender: 'TTLouis' })
+  assert.equal(calls.length, 3)
+  assert.equal(rcon.observationCalls, 1)
+  assert.equal(result.operations[0].name, 'move_items_exact')
+  assert.equal(rcon.mutations.length, 1)
+  assert.equal(calls[2].options.recoveryAttempt, 1)
+  assert.deepEqual(calls[2].options.requestBodyPatch, { max_tokens: 700 })
+  assert.equal(calls[2].options.recoveryKind, undefined)
+  const repairContext = calls[2].messages.map(message => message.content ?? '').join('\n')
+  assert.match(repairContext, /Finite canonical work remains/)
+  assert.match(repairContext, /no executable operation was submitted/)
+})
+
+test('repeated prose-only omission blocks once with a specific reason and never invents a mutation', async () => {
+  let calls = 0
+  const rcon = new ActionOmissionRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      calls++
+      return planMessage({
+        chatMessage: calls === 1 ? 'I will take the items now.' : 'I am about to take the items.',
+        plan: ['Take items'],
+        currentStep: 0,
+        operations: [],
+      })
+    },
+    systemPrompt: 'Repeated omission test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const result = await agent.request('take the items', { sender: 'TTLouis' })
+  assert.equal(calls, 2)
+  assert.equal(result.goalStatus, 'blocked')
+  assert.equal(result.taskBoard.blocker, 'action_omission_after_repair')
+  assert.equal(rcon.mutations.length, 0)
+  const state = agent.memory.currentPlan('npc:airi')
+  assert.equal(state.plan[0], 'Take items')
+  assert.equal(state.current_step, 0)
+})
+
+test('one genuinely missing mutable fact gets one targeted observation, then action is required', async () => {
+  let calls = 0
+  const optionsSeen = []
+  const rcon = new ActionOmissionRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async (_messages, options) => {
+      calls++
+      optionsSeen.push(options)
+      if (calls === 1) {
+        return planMessage({
+          chatMessage: 'I need the chest identity before transferring.',
+          plan: ['Identify chest', 'Take plates'],
+          currentStep: 0,
+          operations: [],
+        })
+      }
+      if (calls === 2) return toolMessage('targeted-chest')
+      return planMessage({
+        chatMessage: 'The missing identity is known; taking the plates now.',
+        plan: ['Identify chest', 'Take plates'],
+        currentStep: 0,
+        operations: [{
+          name: 'move_items_exact',
+          args: { item_name: 'iron-plate', unit_number: 582, max_count: 5, to_entity: false },
+        }],
+      })
+    },
+    systemPrompt: 'One-observation omission test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const result = await agent.request('get five plates from the chest', { sender: 'TTLouis' })
+  assert.equal(calls, 3)
+  assert.equal(rcon.observationCalls, 1)
+  assert.equal(optionsSeen[1].allowTools, true)
+  assert.equal(optionsSeen[2].allowTools, false)
+  assert.equal(result.operations[0].name, 'move_items_exact')
+})
+
+test('repair cannot loop on a duplicate or second observation', async () => {
+  let calls = 0
+  const rcon = new ActionOmissionRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      calls++
+      if (calls === 1) {
+        return planMessage({
+          chatMessage: 'I need one current fact.',
+          plan: ['Use observed chest'],
+          currentStep: 0,
+          operations: [],
+        })
+      }
+      return toolMessage(`observation-${calls}`)
+    },
+    systemPrompt: 'Observation-loop omission test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const result = await agent.request('use the chest', { sender: 'TTLouis' })
+  assert.equal(calls, 3)
+  assert.equal(rcon.observationCalls, 1)
+  assert.equal(result.goalStatus, 'blocked')
+  assert.equal(result.taskBoard.blocker, 'action_omission_after_repair')
+  assert.equal(rcon.mutations.length, 0)
+})
+
+test('omission repair preserves goal id, verified prefix, and active canonical step', async () => {
+  let calls = 0
+  const rcon = new ActionOmissionRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      calls++
+      if (calls === 1) {
+        return planMessage({
+          chatMessage: 'Placing the first machine.',
+          plan: ['Place first machine', 'Continue setup'],
+          currentStep: 0,
+          operations: [{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 5 } }],
+        })
+      }
+      if (calls === 2) {
+        return planMessage({
+          chatMessage: 'The first placement is verified. I will continue setup.',
+          plan: ['Place first machine', 'Continue setup'],
+          currentStep: 1,
+          operations: [],
+        })
+      }
+      return planMessage({
+        chatMessage: 'Continuing setup now.',
+        plan: ['Place first machine', 'Continue setup'],
+        currentStep: 1,
+        operations: [{ name: 'wait', args: { ticks: 1 } }],
+      })
+    },
+    systemPrompt: 'Canonical preservation omission test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const first = await agent.request('set up two steps', { sender: 'TTLouis' })
+  const goalId = first.goalId
+  const continued = await agent.completed()
+  assert.equal(calls, 3)
+  assert.equal(continued.goalId, goalId)
+  assert.equal(continued.taskBoard.completed_count, 1)
+  assert.equal(continued.taskBoard.active_index, 1)
+  assert.equal(continued.taskBoard.steps[0].status, 'completed')
+  assert.equal(continued.taskBoard.steps[1].description, 'Continue setup')
+  assert.equal(continued.operations[0].name, 'wait')
+})
+
+test('interrupted omission recovery uses a compact capsule instead of replaying unrelated dialogue', async () => {
+  let calls = 0
+  const memory = new CanonicalTaskBoardMemory()
+  memory.remember('npc:airi', 99, {
+    sender: 'Old chat',
+    user: 'unrelated ancient chatter that must not be replayed',
+    assistant: 'unrelated old answer',
+    operations: [],
+  })
+  const rcon = new ActionOmissionRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    memory,
+    provider: async () => {
+      calls++
+      if (calls === 1) {
+        return planMessage({
+          chatMessage: 'I will do the next action.',
+          plan: ['Perform current action'],
+          currentStep: 0,
+          operations: [],
+        })
+      }
+      throw new Error('simulated provider interruption during omission repair')
+    },
+    systemPrompt: 'Compact recovery capsule test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  await assert.rejects(
+    agent.request('perform the current action', { sender: 'TTLouis' }),
+    /simulated provider interruption/,
+  )
+  const interrupted = memory.currentPlan('npc:airi')
+  assert.equal(interrupted.status, 'active')
+  assert.equal(interrupted.admission_status, 'action_omission_repair')
+  const goalId = interrupted.goal_id
+
+  let resumedMessages
+  agent.provider = async (messages) => {
+    resumedMessages = messages
+    return planMessage({
+      chatMessage: 'BLOCKED: the required live capability is still unavailable.',
+      plan: ['Perform current action'],
+      currentStep: 0,
+      operations: [],
+    })
+  }
+  const resumed = await agent.request('continue', { sender: 'TTLouis' })
+  const context = resumedMessages.map(message => message.content ?? '').join('\n')
+  assert.match(context, /\[ACTION_OMISSION_RECOVERY\]/)
+  assert.match(context, /"reason":"action_omission_recovery"/)
+  assert.doesNotMatch(context, /unrelated ancient chatter/)
+  assert.doesNotMatch(context, /Recent dialogue:/)
+  assert.equal(resumed.goalId, goalId)
+  assert.equal(resumed.goalStatus, 'blocked')
+  assert.equal(rcon.mutations.length, 0)
 })
