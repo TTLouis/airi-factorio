@@ -25,7 +25,9 @@ describe('in-game task board UI projection', () => {
       objective: 'Climb the technology tree',
       status: 'blocked',
       blocker: 'provider recovery exhausted',
+      blocker_summary: 'AIRI could not get a usable provider response after retrying.',
       pause_reason: '',
+      pause_summary: '',
       completed_count: 2,
       total_steps: 5,
       active_index: 2,
@@ -48,6 +50,8 @@ describe('in-game task board UI projection', () => {
     })
     expect(board).toMatchObject({
       status: 'blocked',
+      blocker: 'provider recovery exhausted',
+      blocker_summary: 'AIRI could not get a usable provider response after retrying.',
       completed_count: 2,
       total_steps: 5,
       active_index: 2,
@@ -79,6 +83,21 @@ describe('in-game task board UI projection', () => {
   it('rejects malformed snapshots instead of creating a second source of truth', () => {
     expect(sanitize_task_board_ui_snapshot(undefined)).toBeUndefined()
     expect(sanitize_task_board_ui_snapshot({ status: 'active' })).toBeUndefined()
+  })
+
+  it('labels canonical evidence as verified and keeps internal task codes diagnostic-only in the main console', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const statusPanel = source.split('function render_status_panel(')[1]?.split('function follow_button_tooltip(')[0] ?? ''
+    const refreshSteps = source.split('function refresh_steps(')[1]?.split('function refresh_activity(')[0] ?? ''
+
+    expect(source).toContain('${board.completed_count} verified')
+    expect(source).not.toContain('${board.completed_count} done')
+    expect(refreshSteps).toContain('task_condition_text(board.blocker_summary, board.blocker')
+    expect(refreshSteps).toContain('tooltip: board.blocker')
+    expect(refreshSteps).toContain("caption: step.status.toUpperCase()")
+    expect(refreshSteps).toContain("if (step.status === 'completed' || step.status === 'pending') description.style.font_color = TONE_COLORS.muted")
+    expect(statusPanel).toContain('entry.text === board.blocker || entry.text === board_blocker_text')
+    expect(statusPanel).toContain('last_tooltip = board.blocker')
   })
 
   it('falls back to the canonical current step when an active task has no activity entries yet', () => {

@@ -7,6 +7,7 @@ import {
   deriveWantedItems,
   evidenceText,
   executeUiControl,
+  formatTaskCondition,
   liveAgentEvent,
   parseUiControlLine,
   parseUiInputBatch,
@@ -190,6 +191,51 @@ test('activity is an auditable summary rather than hidden model reasoning', () =
   ])
 })
 
+test('task blocker presentation is human-readable without changing authoritative blocker codes', () => {
+  const raw = 'no_autorio_operation_for_remaining_plan'
+  const summary = 'AIRI has more work planned, but did not start the next action.'
+  assert.deepEqual(formatTaskCondition(raw), { raw, summary })
+  assert.deepEqual(formatTaskCondition('future_internal_blocker'), {
+    raw: 'future_internal_blocker',
+    summary: 'AIRI is blocked by an internal task condition.',
+  })
+  assert.deepEqual(formatTaskCondition('future_internal_pause', 'pause'), {
+    raw: 'future_internal_pause',
+    summary: 'AIRI is paused by an internal task condition.',
+  })
+
+  const state = {
+    goal_id: 'goal_blocked',
+    objective: 'Build power',
+    blocker: raw,
+    pause_reason: '',
+    last_chat_message: '',
+    last_operations: [],
+    task_board: {
+      kind: 'task_board_lite',
+      goal_id: 'goal_blocked',
+      status: 'blocked',
+      blocker: raw,
+      pause_reason: '',
+      completed_count: 0,
+      total_steps: 2,
+      active_index: 0,
+      steps: [
+        { id: 'step_1', description: 'Build power', status: 'blocked' },
+        { id: 'step_2', description: 'Start research', status: 'pending' },
+      ],
+      evidence: [],
+    },
+  }
+  const snapshot = taskBoardUiSnapshot(state)
+  assert.equal(snapshot.blocker, raw)
+  assert.equal(snapshot.blocker_summary, summary)
+  assert.deepEqual(snapshot.activity, [{ kind: 'blocker', text: summary }])
+  assert.equal(snapshot.activity.some(entry => entry.text === raw), false)
+  assert.equal(state.blocker, raw)
+  assert.equal(state.task_board.blocker, raw)
+})
+
 test('one finished batch is one result line, not a receipt plus a restated verification', () => {
   const receipt = { kind: 'operation_receipt', summary: JSON.stringify({ batch_id: 1, outcome: 'completed', task_count: 1, task_types: ['placing'] }) }
   const verification = { kind: 'deterministic_verification', summary: JSON.stringify({ batch_id: 1, operations: ['place_entity'] }) }
@@ -207,7 +253,7 @@ test('one finished batch is one result line, not a receipt plus a restated verif
 test('an exhausted provider recovery is reported once, by the failed request', () => {
   const state = { last_chat_message: '', last_operations: [], blocker: '', task_board: { evidence: [] } }
   assert.deepEqual(deriveActivity({ ...state, pause_reason: 'provider_recovery_exhausted: Provider response recovery exhausted after 3 attempts: Invalid provider content JSON' }), [])
-  assert.deepEqual(deriveActivity({ ...state, pause_reason: 'player_requested' }), [{ kind: 'system', text: 'Paused: player_requested' }])
+  assert.deepEqual(deriveActivity({ ...state, pause_reason: 'player_requested' }), [{ kind: 'system', text: 'AIRI was paused by the player.' }])
 })
 
 test('the live batch-completed line gives way to the receipt only when a plan carries receipts', () => {

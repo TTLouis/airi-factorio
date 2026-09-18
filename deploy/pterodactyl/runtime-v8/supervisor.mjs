@@ -197,6 +197,52 @@ function uiText(value, max = 500) {
   return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
 }
 
+const UI_TASK_BLOCKER_SUMMARIES = new Map([
+  ['no_autorio_operation_for_remaining_plan', 'AIRI has more work planned, but did not start the next action.'],
+  ['operation_admission_failed', 'The game did not accept AIRI’s next action, so it did not start.'],
+  ['provider_recovery_exhausted', 'AIRI could not get a usable model response after retrying.'],
+  ['unverified_transfer_step', 'AIRI cannot continue until the transfer step is verified.'],
+  ['placement_collision', 'AIRI cannot place the planned entity at the current location.'],
+])
+const UI_TASK_PAUSE_SUMMARIES = new Map([
+  ['player_requested', 'AIRI was paused by the player.'],
+  ['npc_identity_or_session_changed', 'AIRI paused because the active NPC session changed.'],
+  ['actor_replaced', 'AIRI paused because the controlled NPC was replaced.'],
+  ['follow_mode', 'AIRI paused the current task while following a player.'],
+])
+
+export function formatTaskCondition(value, kind = 'blocker') {
+  const raw = uiText(value, kind === 'pause' ? 300 : 500)
+  if (!raw) return { raw: '', summary: '' }
+
+  if (kind === 'pause') {
+    if (raw.startsWith('provider_recovery_exhausted:')) {
+      return { raw, summary: 'AIRI could not get a usable model response after retrying.' }
+    }
+    if (raw.startsWith('server_stop_')) {
+      return { raw, summary: 'AIRI paused because the server is stopping.' }
+    }
+    return {
+      raw,
+      summary: UI_TASK_PAUSE_SUMMARIES.get(raw) ?? 'AIRI is paused by an internal task condition.',
+    }
+  }
+
+  if (raw === 'operation_preflight_failed:stale_exact_target') {
+    return { raw, summary: 'AIRI’s saved entity target is no longer current and must be observed again.' }
+  }
+  if (raw === 'operation_preflight_failed:bootstrap_dependency_unresolved') {
+    return { raw, summary: 'AIRI cannot start the next action until a required bootstrap dependency is available.' }
+  }
+  if (raw.startsWith('operation_preflight_failed:')) {
+    return { raw, summary: 'AIRI’s next action failed a preflight check before it could start.' }
+  }
+  return {
+    raw,
+    summary: UI_TASK_BLOCKER_SUMMARIES.get(raw) ?? 'AIRI is blocked by an internal task condition.',
+  }
+}
+
 function exactUiObjectKeys(value, allowed) {
   return value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).every(key => allowed.includes(key))
@@ -391,12 +437,12 @@ export function deriveActivity(state) {
     const text = uiText(operation, 1000)
     if (text) entries.push({ kind: 'action', text })
   }
-  const blocker = uiText(state.blocker, 500)
-  if (blocker) entries.push({ kind: 'blocker', text: blocker })
-  const pauseReason = uiText(state.pause_reason, 300)
+  const blocker = formatTaskCondition(state.blocker, 'blocker')
+  if (blocker.raw) entries.push({ kind: 'blocker', text: blocker.summary })
+  const pauseReason = formatTaskCondition(state.pause_reason, 'pause')
   // An exhausted provider recovery already reached the feed as the request's
   // failure, with the same message; the pause adds only its reason code.
-  if (pauseReason && !pauseReason.startsWith('provider_recovery_exhausted:')) entries.push({ kind: 'system', text: `Paused: ${pauseReason}` })
+  if (pauseReason.raw && !pauseReason.raw.startsWith('provider_recovery_exhausted:')) entries.push({ kind: 'system', text: pauseReason.summary })
   return entries.slice(-UI_ACTIVITY_LIMIT)
 }
 
@@ -622,7 +668,9 @@ export function taskBoardUiSnapshot(state, live) {
       objective: uiText(live.objective, 500),
       status: 'idle',
       blocker: '',
+      blocker_summary: '',
       pause_reason: '',
+      pause_summary: '',
       completed_count: 0,
       total_steps: 0,
       active_index: 0,
@@ -635,12 +683,16 @@ export function taskBoardUiSnapshot(state, live) {
       debug,
     }
   }
+  const blocker = formatTaskCondition(board.blocker, 'blocker')
+  const pauseReason = formatTaskCondition(board.pause_reason, 'pause')
   return {
     goal_id: String(board.goal_id ?? state.goal_id ?? '').slice(0, 100),
     objective: String(state.objective ?? '').slice(0, 500),
     status: board.status,
-    blocker: String(board.blocker ?? '').slice(0, 500),
-    pause_reason: String(board.pause_reason ?? '').slice(0, 300),
+    blocker: blocker.raw,
+    blocker_summary: blocker.summary,
+    pause_reason: pauseReason.raw,
+    pause_summary: pauseReason.summary,
     completed_count: board.completed_count,
     total_steps: board.total_steps,
     active_index: board.active_index,

@@ -211,7 +211,9 @@ export interface TaskBoardUiSnapshot {
   response: string
   status: 'idle' | 'active' | 'blocked' | 'paused' | 'completed'
   blocker: string
+  blocker_summary?: string
   pause_reason: string
+  pause_summary?: string
   completed_count: number
   total_steps: number
   active_index: number
@@ -266,6 +268,7 @@ function text(value: unknown, max = MAX_TEXT) {
   while (clean.includes('  ')) clean = clean.split('  ').join(' ')
   return clean.length <= max ? clean : `${clean.slice(0, math.max(0, max - 1))}…`
 }
+function task_condition_text(summary: unknown, raw: string, fallback: string) { const clean = text(summary, 500); return clean.length > 0 ? clean : raw.length > 0 ? fallback : '' }
 function integer(value: unknown, fallback = 0) { return typeof value === 'number' && value === math.floor(value) && value >= 0 ? value : fallback }
 function positive_integer(value: unknown, fallback = 1) { return math.max(1, integer(value, fallback)) }
 function status(value: unknown): TaskBoardUiSnapshot['status'] { return value === 'idle' || value === 'blocked' || value === 'paused' || value === 'completed' ? value : 'active' }
@@ -334,7 +337,7 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
   const agent = value.agent !== null && typeof value.agent === 'object' ? value.agent : undefined
   const debug = value.debug !== undefined ? debug_ui.sanitize_debug_snapshot(value.debug) : undefined
   return {
-    goal_id: text(value.goal_id, 100), objective: text(value.objective, 500), response: text(value.response, 2000), status: status(value.status), blocker: text(value.blocker, 500), pause_reason: text(value.pause_reason, 300),
+    goal_id: text(value.goal_id, 100), objective: text(value.objective, 500), response: text(value.response, 2000), status: status(value.status), blocker: text(value.blocker, 500), blocker_summary: text(value.blocker_summary, 500), pause_reason: text(value.pause_reason, 300), pause_summary: text(value.pause_summary, 500),
     completed_count: math.min(integer(value.completed_count), total), total_steps: total, active_index: math.min(integer(value.active_index), math.max(0, total - 1)), steps, activity, wanted_items,
     conversation_id: text(value.conversation_id, 120), conversation,
     agent: { phase: agent_phase(agent?.phase), detail: text(agent?.detail, 300) }, debug,
@@ -633,16 +636,24 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   }
   const retained = activity_state.activity_history()
   const recent = retained.length > 0 ? retained : (board?.activity ?? [])
+  const board_blocker_text = board === undefined ? '' : task_condition_text(board.blocker_summary, board.blocker, 'AIRI is blocked by an internal task condition.')
   let last = ''
+  let last_tooltip = ''
   let last_tone: Tone = 'muted'
   let action_fallback = ''
   for (let index = recent.length - 1; index >= 0; index--) {
     const entry = recent[index]
-    if ((entry.kind === 'result' || entry.kind === 'blocker') && entry.text.length > 0) { last = entry.text; last_tone = activity_tone(entry.kind); break }
+    if ((entry.kind === 'result' || entry.kind === 'blocker') && entry.text.length > 0) {
+      const current_board_blocker = entry.kind === 'blocker' && board !== undefined && board.blocker.length > 0 && (entry.text === board.blocker || entry.text === board_blocker_text)
+      last = current_board_blocker ? board_blocker_text : entry.text
+      if (current_board_blocker) last_tooltip = board.blocker
+      last_tone = activity_tone(entry.kind)
+      break
+    }
     if (action_fallback.length === 0 && entry.kind === 'action' && entry.text.length > 0) action_fallback = entry.text
   }
   if (last.length === 0 && action_fallback.length > 0) { last = action_fallback; last_tone = 'good' }
-  if (last.length > 0) add_key_value(table, 'LAST', text(last, 90), { tone: last_tone, tooltip: last, width: STATUS_VALUE_WIDTH })
+  if (last.length > 0) add_key_value(table, 'LAST', text(last, 90), { tone: last_tone, tooltip: last_tooltip.length > 0 ? last_tooltip : last, width: STATUS_VALUE_WIDTH })
   add_key_value(table, 'SYNC', sync_summary(synced_tick), { tone: 'muted', width: STATUS_VALUE_WIDTH })
 }
 function follow_button_tooltip(follow: TaskBoardUiFollowStatus | undefined) { if (!follow?.active) return 'Temporarily suspend current world work and follow this player. A goal paused by Follow automatically resumes when Follow stops.'; const details = ['Click to stop following. A goal paused by Follow will automatically resume.']; if (follow.target_player.length > 0) details.push(`Target: ${follow.target_player}`); if (follow.state.length > 0) details.push(`State: ${follow.state.split('_').join(' ')}`); if (follow.current_distance !== undefined) details.push(`Distance: ${math.floor(follow.current_distance * 10) / 10} tiles`); if (follow.desired_distance !== undefined) details.push(`Desired: ${math.floor(follow.desired_distance * 10) / 10} tiles`); if (follow.last_failure.length > 0) details.push(`Issue: ${follow.last_failure}`); return details.join('\n') }
@@ -846,7 +857,7 @@ function refresh_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | und
   if (board !== undefined && has_steps) {
     if (!refresh_steps(plan, board, tracker_heights.steps)) return false
     const active_number = board.status === 'completed' ? board.total_steps : math.min(board.active_index + 1, board.total_steps)
-    summary.caption = `STEP ${active_number}/${board.total_steps} · ${board.completed_count} done`
+    summary.caption = `STEP ${active_number}/${board.total_steps} · ${board.completed_count} verified`
   }
   refresh_activity(activity_header, activity_empty, activity_scroll, activity_table, all_activity, tracker_heights.activity, player)
   activity_empty.visible = false
@@ -884,7 +895,11 @@ function refresh_steps(plan: LuaGuiElement, board: TaskBoardUiSnapshot, max_heig
     if (active_label !== undefined && previous_active !== active_index) (steps_scroll as ScrollPaneGuiElement).scroll_to_element(active_label, 'top-third')
   }
   attention.clear()
-  if (board.blocker.length > 0 || board.pause_reason.length > 0) { const table = create_key_value_table(attention); const width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12; if (board.blocker.length > 0) add_key_value(table, 'BLOCKED', board.blocker, { tone: 'bad', width }); if (board.pause_reason.length > 0) add_key_value(table, 'PAUSED', board.pause_reason, { tone: 'warn', width }) }
+  if (board.blocker.length > 0 || board.pause_reason.length > 0) {
+    const table = create_key_value_table(attention); const width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12
+    if (board.blocker.length > 0) add_key_value(table, 'BLOCKED', task_condition_text(board.blocker_summary, board.blocker, 'AIRI is blocked by an internal task condition.'), { tone: 'bad', tooltip: board.blocker, width })
+    if (board.pause_reason.length > 0) add_key_value(table, 'PAUSED', task_condition_text(board.pause_summary, board.pause_reason, 'AIRI is paused by an internal task condition.'), { tone: 'warn', tooltip: board.pause_reason, width })
+  }
   return true
 }
 /**
