@@ -127,7 +127,8 @@ function copy_position(position: { x: number, y: number }) {
   return { x: position.x, y: position.y }
 }
 
-function support_registry_matches(owner_actor_id: number, owner_actor_kind: string, owner_force_index: number) {
+function support_registry_matches(owner_actor_id?: number, owner_actor_kind?: string, owner_force_index?: number) {
+  if (owner_actor_id === undefined || owner_actor_kind === undefined || owner_force_index === undefined) return false
   const registry = storage.airi_owned_combat_support
   return registry !== undefined
     && registry.actor_id === owner_actor_id
@@ -135,7 +136,7 @@ function support_registry_matches(owner_actor_id: number, owner_actor_kind: stri
     && registry.force_index === owner_force_index
 }
 
-function registered_support_turrets(owner_actor_id: number, owner_actor_kind: string, owner_force_index: number) {
+function registered_support_turrets(owner_actor_id?: number, owner_actor_kind?: string, owner_force_index?: number) {
   const registry = storage.airi_owned_combat_support
   if (!registry || !support_registry_matches(owner_actor_id, owner_actor_kind, owner_force_index)) return []
   const live = registry.turrets.filter(entity => entity.valid)
@@ -145,7 +146,10 @@ function registered_support_turrets(owner_actor_id: number, owner_actor_kind: st
 }
 
 function sync_support_registry(task: CombatTask, turrets: LuaEntity[]) {
-  if (task.combat_mode !== 'clear_area') return
+  if (task.combat_mode !== 'clear_area'
+    || task.owner_actor_id === undefined
+    || task.owner_actor_kind === undefined
+    || task.owner_force_index === undefined) return
   const live = turrets.filter(entity => entity.valid)
   if (live.length === 0) {
     if (support_registry_matches(task.owner_actor_id, task.owner_actor_kind, task.owner_force_index)) {
@@ -810,7 +814,10 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     initialize_support_plan(task, enemies)
     const target = preferred_target(actor, enemies)
     if (!target) {
-      if (task.combat_mode === 'clear_area') enter_safety(actor, task)
+      if (task.combat_mode === 'clear_area') {
+        const cleanup_goal = live_owned_turrets(task).length > 0 ? 'cleanup' : undefined
+        enter_safety(actor, task, cleanup_goal)
+      }
       else fail(actor, task, 'no_target')
       return false
     }
