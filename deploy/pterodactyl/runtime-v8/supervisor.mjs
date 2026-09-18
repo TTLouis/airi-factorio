@@ -1397,9 +1397,10 @@ export class Session {
         }
         await this.ensureAuthorization()
         await this.applyNavigationObstaclePolicy(text)
-        // The interaction router owns task-conversation lifecycle. It emits
-        // interaction.routed before any main planner reset so same-goal follow-ups
-        // remain in the current conversation and only true new goals start another.
+        // Bind the visible user turn immediately. interaction.routed/request.received
+        // deduplicate this same entry; a true new_goal can still rotate the
+        // conversation before re-appending the message.
+        this.appendUiConversation('user', sender, text)
         const result = await this.agent.request(text, { sender })
         if (result?.chatMessage) this.appendUiConversation('assistant', this.npcName || 'AIRI', result.chatMessage)
         await this.syncTaskBoardUi()
