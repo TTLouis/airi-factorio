@@ -16,7 +16,7 @@ function recipe(name: string, product: string, category = 'crafting') {
   }
 }
 
-function actorWithRecipes(recipes: Record<string, any>) {
+function actorWithRecipes(recipes: Record<string, any>, inventory: Record<string, number> = {}, craftable: Record<string, number> = {}) {
   return {
     is_valid: true,
     force: { recipes },
@@ -25,6 +25,10 @@ function actorWithRecipes(recipes: Record<string, any>) {
         crafting_categories: { crafting: true },
       },
     },
+    get_main_inventory: () => ({
+      get_item_count: (name: string) => inventory[name] ?? 0,
+    }),
+    get_craftable_count: (name: string) => craftable[name] ?? 0,
   } as unknown as ControlledActor
 }
 
@@ -85,6 +89,27 @@ describe('recipe details use Factorio 2.0 recipe category fields', () => {
     expect(result.recipes[0].categories).toEqual(['crafting'])
     expect(result.recipes[0].ingredients[0]).toMatchObject({ name: 'iron-plate', amount: 1 })
     expect(result.recipes[0].products[0]).toMatchObject({ name: 'iron-gear-wheel', amount: 1 })
+  })
+
+  it('attaches only dependency-relevant inventory counts for the requested craft quantity', () => {
+    const gear = recipe('iron-gear-wheel', 'iron-gear-wheel') as any
+    gear.ingredients = [{ type: 'item', name: 'iron-plate', amount: 2 }]
+    const actor = actorWithRecipes(
+      { 'iron-gear-wheel': gear },
+      { 'iron-plate': 2, 'iron-gear-wheel': 1, coal: 99, stone: 50 },
+    )
+
+    const result = recipe_details_for_actor(actor, 'iron-gear-wheel', 3) as any
+
+    expect(result.recipes[0].requested_crafts).toBe(3)
+    expect(result.recipes[0].inventory_overlay.outputs).toEqual([
+      { type: 'item', name: 'iron-gear-wheel', required: 3, held: 1 },
+    ])
+    expect(result.recipes[0].inventory_overlay.ingredients).toEqual([
+      { type: 'item', name: 'iron-plate', required: 6, held: 2, missing: 4, status: 'needs_acquisition/processing' },
+    ])
+    expect(JSON.stringify(result.recipes[0].inventory_overlay)).not.toContain('coal')
+    expect(JSON.stringify(result.recipes[0].inventory_overlay)).not.toContain('stone')
   })
 
   it('does not require JavaScript map methods on runtime recipe ingredient/product arrays', () => {

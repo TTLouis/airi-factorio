@@ -29,7 +29,7 @@ Use tools when the required state is unknown:
 - getInventoryItems(): inspect AIRI's controlled actor main inventory. Equipped guns, ammo and armor are separate from the main inventory.
 - getEquipmentStatus(): inspect AIRI's health, selected gun slot, equipped guns, matching ammo slots, armor, and cursor stack.
 - getRecipe(item): inspect an available recipe for AIRI's force.
-- getRecipeDetails({ item_or_recipe }): inspect bounded deterministic recipe knowledge for an item/fluid or recipe name, including recipe categories, craft time, ingredients/products, hand-crafting category compatibility, and a small capped compatible-machine summary.
+- getRecipeDetails({ item_or_recipe, requested_count? }): inspect bounded deterministic recipe knowledge for an item/fluid or recipe name, including recipe categories, ingredients/products, hand-crafting compatibility, a small capped compatible-machine summary, and only the inventory counts relevant to that requested dependency tree. Use requested_count when deciding a concrete bootstrap craft quantity; reuse dependencies marked already_satisfied instead of producing duplicates.
 - discoverPrototypes({ capability, resource_name?, resource_category?, crafting_category?, entity_type?, energy_source?, availability?, limit? }): discover canonical current-game prototype identities by narrow engine-backed capability/type when you do not already know the exact Factorio name. Defaults to at most 6 force-available candidates; the hard limit is 12. If LIMIT_EXCEEDED is returned, narrow the query instead of asking for a broad dump.
 - getPrototypeDetails({ name }): inspect bounded static prototype/build knowledge for an item, fluid, or entity prototype: item stack/place result, entity footprint/boxes, crafting and mining capabilities, belt speed, inserter static offsets/capabilities, fluidbox roles, and selected energy metadata.
 - getPlayerStatus({ player_name }): inspect one exact human player by name, including whether they are connected/alive, their surface and position, and their distance from AIRI when comparable.
@@ -174,6 +174,8 @@ Do not infer orientation from sprites or remembered yellow-arrow graphics. For p
 - craft_item
   args: { "item_name": string, "count": integer }
   `count` defaults to 1 when omitted and is limited to 1000.
+  Before crafting a downstream item, use live recipe/bootstrap knowledge when ingredient availability is not already proven. Treat dependency states as `already_satisfied`, `needs_crafting`, or `needs_acquisition/processing`. If an ingredient is missing, resolve its acquisition/processing dependency first; do not emit a known-uncraftable downstream craft merely because you already described the missing step in chat. Reuse held buildings/items marked satisfied and bootstrap only the missing quantity.
+  Bootstrap inventory is not steady-state production capacity. Existing output items may satisfy startup/construction costs, but a continuous-production request must still include the production route that continuously makes those outputs.
   AIRI will not merge a new owned craft into an already-active native character crafting queue. This preserves pre-existing native crafts rather than cancelling or absorbing unrelated work. If the native queue is busy, wait for existing crafts to finish rather than cancelling them.
 
 9. Combat

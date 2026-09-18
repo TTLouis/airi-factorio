@@ -103,6 +103,27 @@ describe('live production planning adapter', () => {
     expect(result.evidence_ids_used).toEqual(['engine:recipe:copper-cable', 'engine:recipe:electronic-circuit'])
   })
 
+  it('does not let bootstrap inventory erase steady-state continuous-production inputs', () => {
+    const actor = {
+      ...actorWith(baseRecipes()),
+      get_main_inventory: () => ({
+        get_item_count: (name: string) => name === 'electronic-circuit' ? 100 : name === 'iron-plate' ? 50 : 0,
+      }),
+    } as unknown as ControlledActor
+
+    const result = solve_live_production(actor, {
+      calculation_id: 'steady-state-ignores-bootstrap-inventory',
+      target: { type: 'item', name: 'electronic-circuit', rate_per_second: 10 },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.external_inputs).toEqual([
+      { type: 'item', name: 'copper-plate', rate_per_second: 15 },
+      { type: 'item', name: 'iron-plate', rate_per_second: 10 },
+    ])
+  })
+
   it('uses explicit machine selections without silently picking an assembler tier', () => {
     const result = solve_live_production(actorWith(baseRecipes()), {
       calculation_id: 'live-sized',

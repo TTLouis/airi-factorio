@@ -1,5 +1,6 @@
 import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
+import { recipe_bootstrap_for_actor } from './bootstrap_planning'
 import { resolve_exact_entity } from './entity_reference'
 
 const MAX_RECIPE_MATCHES = 8
@@ -273,7 +274,7 @@ function add_inserter_route(relations: Array<Record<string, unknown>>, inserter:
   })
 }
 
-export function recipe_details_for_actor(actor: ControlledActor, item_or_recipe: string) {
+export function recipe_details_for_actor(actor: ControlledActor, item_or_recipe: string, requested_count: number = 1) {
   const { candidates, truncated } = recipe_candidates(actor, item_or_recipe)
   if (candidates.length === 0) {
     return {
@@ -290,9 +291,18 @@ export function recipe_details_for_actor(actor: ControlledActor, item_or_recipe:
     recipes: candidates.map(({ name, recipe }) => {
       const categories = categories_for(recipe)
       const machine_result = machine_summaries(categories)
+      const bootstrap = recipe_bootstrap_for_actor(actor, recipe, requested_count)
       return {
         name,
         enabled: recipe.enabled,
+        requested_crafts: bootstrap.requested_crafts,
+        craftable_now_count: bootstrap.craftable_now_count,
+        craftable_now: bootstrap.craftable_now,
+        inventory_overlay: bootstrap.inventory_overlay,
+        bootstrap: {
+          dependencies: bootstrap.dependencies,
+          first_unresolved: bootstrap.first_unresolved,
+        },
         hidden: recipe.hidden,
         energy: recipe.energy,
         categories,
@@ -455,7 +465,7 @@ export function logistics_topology_for_actor(actor: ControlledActor, unit_number
 
 export function create_knowledge_remote_interface(get_actor: () => ControlledActor | undefined) {
   remote.add_interface('autorio_knowledge', {
-    recipe_details: (item_or_recipe: string) => {
+    recipe_details: (item_or_recipe: string, requested_count: number = 1) => {
       const actor = get_actor()
       if (!actor || !actor.is_valid) {
         return {
@@ -464,7 +474,7 @@ export function create_knowledge_remote_interface(get_actor: () => ControlledAct
           error: 'no controlled actor',
         }
       }
-      return recipe_details_for_actor(actor, item_or_recipe)
+      return recipe_details_for_actor(actor, item_or_recipe, requested_count)
     },
     entity_geometry: (unit_number: number) => {
       const actor = get_actor()

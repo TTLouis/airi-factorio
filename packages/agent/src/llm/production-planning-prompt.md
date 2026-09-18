@@ -2,7 +2,7 @@
 
 Use `solveProduction` for production-rate planning instead of doing recipe-chain arithmetic from memory.
 
-`solveProduction` reads the live enabled recipe graph for AIRI's force. Give it a bounded `calculation_id` and a target `{ type, name, rate_per_second }`. If you need an explicit internal production boundary, provide `included_recipe_names`; materials whose producer is outside that scope are intentionally returned as external inputs. If exact machine sizing matters, provide explicit `machine_selections` by recipe name and machine prototype. Do not silently choose an assembler tier when the choice is unknown.
+`solveProduction` reads the live enabled recipe graph for AIRI's force. It models steady-state flow and intentionally does not subtract AIRI's current inventory from continuous input/output rates; held items are bootstrap inventory, not ongoing production capacity. Give it a bounded `calculation_id` and a target `{ type, name, rate_per_second }`. If you need an explicit internal production boundary, provide `included_recipe_names`; materials whose producer is outside that scope are intentionally returned as external inputs. If exact machine sizing matters, provide explicit `machine_selections` by recipe name and machine prototype. Do not silently choose an assembler tier when the choice is unknown.
 
 Treat solver failures such as ambiguous producers, unsupported probabilistic/productivity-sensitive models, recipe cycles, invalid machine selections, or bounded-limit errors as blockers that require more observation or a narrower/explicit request. Do not replace a rejected deterministic result with guessed arithmetic.
 

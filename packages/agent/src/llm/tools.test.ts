@@ -86,7 +86,13 @@ describe('agent observation tools', () => {
   it('reads detailed recipe and compatible-machine knowledge by item or recipe name', async () => {
     await getTool('getRecipeDetails').fn({ parameters: { item_or_recipe: "mod's-fluid" } })
     expect(mocks.raw).toHaveBeenCalledWith({ body: {
-      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "recipe_details", \'mod\\\'s-fluid\')))',
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "recipe_details", \'mod\\\'s-fluid\', 1)))',
+    } })
+
+    mocks.raw.mockClear()
+    await getTool('getRecipeDetails').fn({ parameters: { item_or_recipe: 'iron-gear-wheel', requested_count: 3 } })
+    expect(mocks.raw).toHaveBeenCalledWith({ body: {
+      input: '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge", "recipe_details", \'iron-gear-wheel\', 3)))',
     } })
 
     mocks.raw.mockClear()

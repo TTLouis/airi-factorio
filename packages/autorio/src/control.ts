@@ -10,6 +10,7 @@ import type {
 import type { ControlledActor } from './actors/types'
 import { get_controlled_actor } from './actors/actor_controller'
 import { new_awareness_controller } from './awareness'
+import { craft_bootstrap_preflight_for_actor } from './bootstrap_planning'
 import { new_basic_operation_runtime } from './basic_operation_runtime'
 import { new_basic_operation_controller } from './basic_operations'
 import { new_combat_controller } from './combat'
@@ -230,47 +231,14 @@ function operation_preflight(name: string, args: Record<string, any>) {
   if (name === 'craft_item') {
     if (!actor || !actor.is_valid) return reject('no_actor')
     const item_name = args.item_name
-    const recipe = typeof item_name === 'string' ? actor.force.recipes[item_name] : undefined
-    if (!recipe) {
+    if (typeof item_name !== 'string') {
       return reject('unknown_recipe', {
         field: 'item_name',
         identity: item_name,
         expected: 'force recipe',
       })
     }
-    if (!recipe.enabled) {
-      return reject('recipe_locked', {
-        field: 'item_name',
-        identity: item_name,
-        recipe_name: recipe.name,
-      })
-    }
-    return accept({ field: 'item_name', identity: item_name, recipe_name: recipe.name })
-  }
-
-  if (name === 'harvest_product') {
-    if (!actor || !actor.is_valid) return reject('no_actor')
-    const product_name = args.product_name
-    if (typeof product_name !== 'string' || !prototypes.item[product_name]) {
-      return reject('unknown_product', {
-        field: 'product_name',
-        identity: product_name,
-        expected: 'item prototype mined from a non-resource entity',
-      })
-    }
-    const source_names = harvest_source_prototype_names(product_name)
-    if (source_names.length === 0) {
-      return reject('no_harvest_sources', {
-        field: 'product_name',
-        identity: product_name,
-        expected: 'non-resource mineable entity product',
-      })
-    }
-    return accept({
-      field: 'product_name',
-      identity: product_name,
-      source_count: source_names.length,
-    })
+    return craft_bootstrap_preflight_for_actor(actor, item_name, args.count ?? 1)
   }
 
   if (name === 'gather_resource' || name === 'mine_resource_at') {

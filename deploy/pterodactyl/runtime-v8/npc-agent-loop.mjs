@@ -1022,6 +1022,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.loadPersistentState()
     this.liveEntityObservations = new Map()
     this.staleExactPreflightRetries = 0
+    this.bootstrapDependencyPreflightRetries = 0
     this.lastMemoryKey = `npc:${this.npcId}`
     this.planUpdateReason = 'request'
     this.lastTaskStatusView = null
@@ -1664,11 +1665,44 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       try {
         preflight = await this.preflightOperations(plan.operations)
         this.staleExactPreflightRetries = 0
+        this.bootstrapDependencyPreflightRetries = 0
         await this.traceEvent('operations.preflight_ok', {
           operations: operations.map((operation, index) => ({ ...operation, preflight: preflight[index] })),
         })
       }
       catch (error) {
+        if (error?.preflight?.code === 'bootstrap_dependency_unresolved' && this.bootstrapDependencyPreflightRetries < 2) {
+          this.bootstrapDependencyPreflightRetries++
+          if (this.requestInfo) {
+            const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'preflight_rejected')
+            if (state) stateResult = { ...(stateResult ?? {}), state }
+            this.memory.recordBoardEvidence?.(this.requestInfo.memoryKey, {
+              kind: 'operation_preflight_rejection',
+              ref: `${this.traceRequest?.id ?? 'request'}/bootstrap_dependency_unresolved`,
+              summary: JSON.stringify({
+                code: 'bootstrap_dependency_unresolved',
+                operation_index: error.preflight.operation_index,
+                operation: error.preflight.operation,
+                item_name: error.preflight.identity,
+                requested_count: error.preflight.requested_count,
+                craftable_now_count: error.preflight.craftable_now_count,
+                first_unresolved: error.preflight.bootstrap?.first_unresolved,
+              }),
+            })
+            await this.persistState()
+          }
+          await this.traceEvent('operations.preflight_recoverable', {
+            failure_class: 'bootstrap_dependency_unresolved',
+            preflight: error.preflight,
+            tools_enabled: true,
+            retry: this.bootstrapDependencyPreflightRetries,
+          })
+          this.messages.push({
+            role: 'user',
+            content: `[HARNESS] Deterministic craft preflight rejected the requested craft before Autorio admission because it is not currently craftable. Resolve the first unresolved bootstrap dependency before retrying the downstream craft. Reuse held items/buildings marked already_satisfied; bootstrap only missing quantities. This bootstrap inventory is for construction/startup only and does not remove steady-state recipe flow from a continuous production topology. Preflight: ${JSON.stringify(error.preflight.bootstrap ?? {})}`,
+          })
+          return this.runTurn()
+        }
         if (error?.preflight?.code === 'stale_exact_target' && this.staleExactPreflightRetries < 1) {
           this.staleExactPreflightRetries++
           if (this.requestInfo) {
