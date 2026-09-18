@@ -112,11 +112,23 @@ describe('mining reach recovery', () => {
     expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
     expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
       entity_name: 'mod-tree-a',
-      target_kind: 'exact_entity',
-      target: natural,
-      target_unit_number: 191,
+      target_kind: 'position',
+      requested_position: { x: 8, y: 0 },
+      target: null,
+      target_unit_number: undefined,
       target_position: { x: 8, y: 0 },
       reach_distance: 2.45,
+    })
+    expect(f.manager.get_status_snapshot()).toMatchObject({
+      queue_length: 1,
+      queued_task_types: [TaskStates.MINING],
+    })
+    f.manager.reset_task_state()
+    f.manager.next_task()
+    expect(f.manager.player_state.task_state).toBe(TaskStates.MINING)
+    expect(f.manager.player_state.parameters_mine_entity).toMatchObject({
+      target_unit_number: 191,
+      count: 1,
     })
     expect(f.set_mining_state).toHaveBeenCalledWith({ mining: false })
   })
