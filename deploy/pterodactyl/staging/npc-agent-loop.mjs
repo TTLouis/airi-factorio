@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { actorChanged, deploymentStatus, executeAuthorizedBatch } from './supervisor-adapter.mjs'
-import { isApprovedOperationName, parsePlan, renderOperation, toolCommand } from './structured-policy.mjs'
+import { isApprovedOperationName, isObservationToolName, parsePlan, renderOperation, toolCommand } from './structured-policy.mjs'
 
 export class AgentLoopError extends Error {}
 
@@ -10,6 +10,15 @@ class ToolValidationError extends AgentLoopError {
     super(message)
     this.code = code
     this.failureClass = 'tool_validation'
+    this.details = details
+  }
+}
+
+class PlanCategoryError extends AgentLoopError {
+  constructor(message, code, details = {}) {
+    super(message)
+    this.code = code
+    this.failureClass = 'plan_category'
     this.details = details
   }
 }
@@ -314,6 +323,7 @@ export class NpcAgentLoop {
     this.observationDecisionPressure = false
     this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
+    this.planCategoryRetries = 0
     this.requestInfo = null
     this.generation = (this.generation ?? 0) + 1
   }
@@ -424,6 +434,7 @@ export class NpcAgentLoop {
     this.observationDecisionPressure = false
     this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
+    this.planCategoryRetries = 0
     this.messages.push({ role: 'user', content: '[MOD] All operations completed' })
     return this.runGuarded()
   }
@@ -497,10 +508,29 @@ export class NpcAgentLoop {
     return message
   }
 
+  isObservationToolName(name) {
+    return isObservationToolName(name)
+  }
+
+  observationToolCommand(name, args) {
+    return toolCommand(name, args)
+  }
+
   parsePlanMessage(message) {
     check(message.tool_calls === undefined, 'Provider attempted a tool call while tools were disabled')
     check(typeof message.content === 'string', 'Provider message has no strict JSON content')
-    return parsePlan(strictJson(message.content, 'provider content'))
+    const raw = strictJson(message.content, 'provider content')
+    const misplaced = Array.isArray(raw?.operations)
+      ? raw.operations.find(operation => this.isObservationToolName(operation?.name))
+      : undefined
+    if (misplaced) {
+      throw new PlanCategoryError(
+        `${misplaced.name} is an observation/planning tool, not an approved world-mutation operation. Call it as a tool instead of placing it in the strict-JSON operations array.`,
+        'observation_tool_as_operation',
+        { tool_name: misplaced.name },
+      )
+    }
+    return parsePlan(raw)
   }
 
   async commitPlan(plan) {
@@ -588,7 +618,7 @@ export class NpcAgentLoop {
           { operation_name: tool.function.name },
         )
       }
-      const command = toolCommand(tool.function.name, args)
+      const command = this.observationToolCommand(tool.function.name, args)
       return {
         tool,
         args,
@@ -845,8 +875,31 @@ export class NpcAgentLoop {
         plan = this.parsePlanMessage(message)
       }
       catch (error) {
+        if (error?.failureClass === 'plan_category' && error?.code === 'observation_tool_as_operation') {
+          this.planCategoryRetries++
+          const reason = error instanceof Error ? error.message : String(error)
+          await this.recoveryDiagnostic({
+            failure_class: 'plan_category',
+            reason_code: error.code,
+            reason,
+            retry: this.planCategoryRetries,
+            retry_limit: this.maxToolValidationRetries,
+            tools_enabled: true,
+            ...(error?.details && typeof error.details === 'object' ? error.details : {}),
+          })
+          if (this.planCategoryRetries > this.maxToolValidationRetries) {
+            return this.blockedWithoutMutation(`Provider repeatedly placed an observation tool in operations (${error?.details?.tool_name ?? 'unknown'}).`, 'plan_category')
+          }
+          this.messages.push({ role: 'assistant', content: cleanMemoryText(message.content, 4000) })
+          this.messages.push({
+            role: 'user',
+            content: `[HARNESS] Tool/operation category error (${this.planCategoryRetries}/${this.maxToolValidationRetries}; ${error.code}): ${reason} Tools remain enabled. Preserve the observations and canonical Task Board already collected. If that observation is still required, call the named tool correctly now; if it is not required, return a strict-JSON plan containing only approved world-mutation operations. Do not convert or execute an observation tool as a mutation.`,
+          })
+          continue
+        }
         return this.recoverPlan(generation, error, round + 1)
       }
+      this.planCategoryRetries = 0
       const finitePressure = this.finiteNoOperationPressure(plan)
       if (finitePressure && !this.finiteNoOperationPressureUsed) {
         this.finiteNoOperationPressureUsed = true
