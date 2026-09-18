@@ -1454,6 +1454,13 @@ function terminalControlOnlyPlanStep(value) {
     || text === 'finished'
     || text === 'complete'
     || text === 'completed'
+    || text === 'report completion'
+    || text === 'report completion to player'
+    || text === 'report completion to the player'
+    || text === 'report completion to user'
+    || text === 'report completion to the user'
+    || text === 'report completion to requester'
+    || text === 'report completion to the requester'
 }
 
 function verifiedFinalCompletion(plan, state, triggerSource, { freshObservation = false } = {}) {
@@ -3132,12 +3139,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         )
       }
       if (this.actionOmissionRepairActive) {
-        return this.finishNoOperationBlock(
-          plan,
-          before,
-          'action_omission_after_repair',
-          'The bounded act-or-block repair returned no executable operation and no explicit BLOCKED: reason.',
-          'action_omission',
+        await this.traceEvent('recovery.action_omission_failed', {
+          reason_code: 'repair_no_executable_action',
+          detail: 'bounded repair returned no executable operation and no explicit BLOCKED reason',
+        })
+        throw new AgentLoopError(
+          'provider_action_omission_repair_failed: bounded act-or-block repair returned no executable operation and no explicit BLOCKED: reason',
         )
       }
       const state = await this.beginActionOmissionRepair(plan, 'no_operation_for_remaining_plan')
@@ -3477,21 +3484,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         plan = this.parsePlanMessage(message)
       }
       catch (error) {
-        const fallbackPlan = currentState?.plan?.length
-          ? currentState.plan
-          : [cleanMemoryText(this.requestInfo?.text ?? 'Unresolved user goal', 500)]
-        const fallback = {
-          chatMessage: 'Action-omission repair did not produce a valid executable plan.',
-          plan: fallbackPlan,
-          currentStep: currentState?.current_step ?? 0,
-          operations: [],
-        }
-        return this.finishNoOperationBlock(
-          fallback,
-          current,
-          'action_omission_after_repair',
-          `The bounded act-or-block repair was invalid: ${error instanceof Error ? error.message : String(error)}`,
-          'action_omission',
+        const detail = error instanceof Error ? error.message : String(error)
+        await this.traceEvent('recovery.action_omission_failed', {
+          reason_code: 'repair_invalid_response',
+          detail: cleanMemoryText(detail, 800),
+        })
+        throw new AgentLoopError(
+          `provider_action_omission_repair_failed: bounded act-or-block repair returned an invalid provider response: ${detail}`,
         )
       }
       if (plan.operations.length === 0 && plan.plan.length === 0) {
@@ -3506,20 +3505,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
 
     if (this.actionOmissionRepairActive) {
-      const current = await this.assertCurrent()
-      const fallbackState = this.memory.currentPlan?.(this.activePlanKey())
-      const fallback = {
-        chatMessage: 'Action-omission repair exhausted without a valid executable action.',
-        plan: fallbackState?.plan ?? [],
-        currentStep: fallbackState?.current_step ?? 0,
-        operations: [],
-      }
-      return this.finishNoOperationBlock(
-        fallback,
-        current,
-        'action_omission_after_repair',
-        `The bounded act-or-block repair could not produce a valid final decision: ${reasonText}`,
-        'action_omission',
+      await this.assertCurrent()
+      await this.traceEvent('recovery.action_omission_failed', {
+        reason_code: 'repair_exhausted',
+        detail: cleanMemoryText(reasonText, 800),
+      })
+      throw new AgentLoopError(
+        `provider_action_omission_repair_failed: bounded act-or-block repair could not produce a valid final decision: ${reasonText}`,
       )
     }
 
