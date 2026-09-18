@@ -2564,6 +2564,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const explicitBlocker = providerBlockerReason(plan)
 
     if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
+      if (this.genericRecoveryDecisionActive) {
+        // Generic strict recovery exists because the provider already failed to
+        // produce a valid decision. Tools are intentionally disabled there, so
+        // a no-op/"BLOCKED" answer can describe the recovery sandbox rather
+        // than a real Factorio blocker. Never persist that as semantic world
+        // truth. Let the request fail upward; the supervisor will pause the
+        // durable plan when Autorio is authoritatively idle, preserving the
+        // verified prefix for a fresh tool-capable Continue turn.
+        const attemptedBlocker = explicitBlocker
+          ? ` Recovery attempted BLOCKED: ${cleanMemoryText(explicitBlocker, 600)}`
+          : ''
+        throw new AgentLoopError(
+          `Provider strict recovery could not safely resolve remaining canonical work without a fresh normal tool-capable turn.${attemptedBlocker}`,
+        )
+      }
       if (explicitBlocker) {
         return this.finishNoOperationBlock(plan, before, 'provider_reported_blocker', explicitBlocker, 'provider_blocker')
       }
@@ -2574,15 +2589,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           'output_budget_recovery_no_operation',
           'Output-budget recovery supplied no fresh world evidence and no executable operation for the remaining canonical work.',
           'output_budget_recovery',
-        )
-      }
-      if (this.genericRecoveryDecisionActive) {
-        return this.finishNoOperationBlock(
-          plan,
-          before,
-          'recovery_no_operation',
-          'The bounded provider recovery returned no executable operation and no explicit BLOCKED: reason.',
-          'recovery_no_operation',
         )
       }
       if (this.actionOmissionRepairActive) {
