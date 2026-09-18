@@ -12,10 +12,18 @@ function squared_distance(a: { x: number, y: number }, b: { x: number, y: number
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
 
+export function is_placed_building_entity(entity: LuaEntity) {
+  const prototype = entity.prototype
+  const place_items = prototype.items_to_place_this
+  return prototype.is_building === true
+    && (prototype.is_entity_with_owner === true
+      || (place_items !== undefined && place_items.length > 0))
+}
+
 function finite_world_mining_target(entity: LuaEntity) {
   if (entity.type === 'resource') return true
   const prototype = entity.prototype
-  return prototype.is_building !== true
+  return !is_placed_building_entity(entity)
     && prototype.mineable_properties !== undefined
     && prototype.mineable_properties.minable !== false
 }

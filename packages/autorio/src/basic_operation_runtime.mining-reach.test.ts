@@ -133,6 +133,51 @@ describe('mining reach recovery', () => {
     expect(f.set_mining_state).toHaveBeenCalledWith({ mining: false })
   })
 
+  it('uses resource mining reach for a natural simple-entity rock even when the engine marks it as a building', () => {
+    const f = fixture(8)
+    const rock = {
+      valid: true,
+      minable: true,
+      name: 'big-modded-rock',
+      type: 'simple-entity',
+      unit_number: 192,
+      position: { x: 8, y: 0 },
+      surface: f.surface,
+      force: { index: 1 },
+      prototype: {
+        type: 'simple-entity',
+        is_building: true,
+        is_entity_with_owner: false,
+        items_to_place_this: undefined,
+        mineable_properties: { minable: true, mining_time: 0.5, products: [] },
+      },
+    } as any
+    ;(globalThis as any).prototypes.entity['big-modded-rock'] = rock.prototype
+    ;(globalThis as any).game.get_entity_by_unit_number = (unit: number) => unit === 192 ? rock : undefined
+
+    expect(f.controller.submit_mining_exact(192)).toBe(true)
+    f.runtime.state_mining(f.actor)
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      entity_name: 'big-modded-rock',
+      target_kind: 'position',
+      requested_position: { x: 8, y: 0 },
+      reach_distance: 2.45,
+    })
+    expect(f.manager.get_status_snapshot()).toMatchObject({
+      queue_length: 1,
+      queued_task_types: [TaskStates.MINING],
+    })
+
+    f.manager.reset_task_state()
+    f.manager.next_task()
+    expect(f.manager.player_state.parameters_mine_entity).toMatchObject({
+      target_unit_number: 192,
+      count: 1,
+    })
+  })
+
   it('starts mining immediately when the target is already inside real resource reach', () => {
     const f = fixture(2)
     expect(f.controller.submit_mining('iron-ore', 20)).toBe(true)

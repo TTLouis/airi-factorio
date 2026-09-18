@@ -1,6 +1,6 @@
 import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
-import { MAX_MINING_START_REJECTIONS, mining_navigation_reach, mining_navigation_requires_movement, select_exact_mining_target, within_mining_reach } from './mining_reach'
+import { is_placed_building_entity, MAX_MINING_START_REJECTIONS, mining_navigation_reach, mining_navigation_requires_movement, select_exact_mining_target, within_mining_reach } from './mining_reach'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersClearConstructionArea, PlayerParametersWalkToEntity } from './types'
 import { TaskStates } from './types'
@@ -31,14 +31,6 @@ function task_area(task: PlayerParametersClearConstructionArea) {
   }
 }
 
-function placed_building(entity: LuaEntity) {
-  const prototype = entity.prototype
-  const place_items = prototype.items_to_place_this
-  return prototype.is_building === true
-    && (prototype.is_entity_with_owner === true
-      || (place_items !== undefined && place_items.length > 0))
-}
-
 /**
  * Authoritative construction-clearing predicate.
  *
@@ -52,7 +44,7 @@ export function clearable_construction_blocker(entity: LuaEntity | undefined) {
   const prototype = entity.prototype
   const prototype_type = prototype.type
   if (prototype_type === 'resource' || prototype_type === 'character') return false
-  if (placed_building(entity)) return false
+  if (is_placed_building_entity(entity)) return false
   const mineable = prototype.mineable_properties
   return entity.minable === true && mineable.minable === true
 }
