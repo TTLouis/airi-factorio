@@ -126,20 +126,20 @@ describe('exact entity item transfers', () => {
     })
   })
 
-  it('fails closed when an observed exact unit no longer resolves natively', () => {
+  it('fails closed when the observed unit is gone and only a replacement remains at the hint location', () => {
     const c = context()
     const selectedInventory = inventory()
     const distractorInventory = inventory()
     const selected = entity(101, selectedInventory)
-    const distractor = entity(202, distractorInventory)
+    const replacement = entity(202, distractorInventory, { position: selected.position })
     remember_entity_reference(selected)
-    c.findEntities.mockReturnValue([distractor, selected] as any)
+    c.findEntities.mockReturnValue([replacement] as any)
     ;(globalThis as any).game.get_entity_by_unit_number = vi.fn(() => undefined)
 
     expect(c.controller.submit_move_exact('firearm-magazine', 101, 7, true)).toEqual([true, 'Task started'])
     expect(c.runtime.state_moving_items(c.actor)).toBe(0)
 
-    expect(c.findEntities).not.toHaveBeenCalled()
+    expect(c.findEntities).toHaveBeenCalled()
     expect(selectedInventory.counts['firearm-magazine'] ?? 0).toBe(0)
     expect(distractorInventory.counts['firearm-magazine'] ?? 0).toBe(0)
     expect(c.controller.status().last_result).toMatchObject({
