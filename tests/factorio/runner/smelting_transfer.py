@@ -83,12 +83,20 @@ def run(client: Rcon, results: Path) -> None:
             context,
         )
 
-    def run_operation(expression: str, context: str, timeout: float = 30.0) -> dict:
-        admission = json_command(lua_json(expression), f'{context} admission')
-        accepted = admission is True or (
-            isinstance(admission, list) and len(admission) > 0 and admission[0] is True
+    def operation_admission(expression: str, context: str) -> dict:
+        # Autorio's established remote surface contains both scalar-boolean
+        # admissions (for example mine_resource_at/place_entity) and
+        # [boolean, message] admissions (for example supply/transfer/wait).
+        # Normalize both shapes without changing production APIs.
+        return json_command(
+            "/silent-command local accepted,message=" + expression + "; "
+            "rcon.print(helpers.table_to_json({accepted=accepted==true,message=message}))",
+            f'{context} admission',
         )
-        require(accepted, {'context': context, 'admission': admission})
+
+    def run_operation(expression: str, context: str, timeout: float = 30.0) -> dict:
+        admission = operation_admission(expression, context)
+        require(admission.get('accepted') is True, {'context': context, 'admission': admission})
         return wait_until_idle(operation_status, context, timeout)
 
     furnace_recipe = recipe(
@@ -158,11 +166,11 @@ def run(client: Rcon, results: Path) -> None:
     crafted = actor_counts('stone furnace crafted')
     require(crafted['stone_furnace'] >= 1, crafted)
 
-    placement = json_command(
-        lua_json(remote_call('autorio_operations', 'place_entity', repr('stone-furnace'))),
-        'place stone furnace admission',
+    placement = operation_admission(
+        remote_call('autorio_operations', 'place_entity', repr('stone-furnace')),
+        'place stone furnace',
     )
-    require(placement is True, placement)
+    require(placement.get('accepted') is True, placement)
     wait_until_idle(operation_status, 'place stone furnace', 20.0)
 
     furnace = entity_status('placed stone furnace status')
@@ -170,16 +178,16 @@ def run(client: Rcon, results: Path) -> None:
     unit_number = furnace.get('unit_number')
     require(isinstance(unit_number, int) and unit_number > 0, furnace)
 
-    supply = json_command(
-        lua_json(remote_call(
+    supply = operation_admission(
+        remote_call(
             'autorio_operations',
             'supply_entity',
             str(unit_number),
             "{{item_name='iron-ore',count=" + str(ore_needed) + "},{item_name='coal',count=" + str(FUEL_COUNT) + "}}",
-        )),
-        'supply furnace admission',
+        ),
+        'supply furnace',
     )
-    require(supply[0] is True, supply)
+    require(supply.get('accepted') is True, supply)
     supplied_status = wait_until_idle(operation_status, 'supply furnace', 20.0)
     supply_result = (supplied_status.get('basic_operation') or {}).get('last_result') or {}
     require(supply_result.get('completed') is True and supply_result.get('code') == 'completed', supplied_status)
@@ -211,18 +219,18 @@ def run(client: Rcon, results: Path) -> None:
     })
 
     before_retrieve = actor_counts('before plate retrieval')
-    retrieve = json_command(
-        lua_json(remote_call(
+    retrieve = operation_admission(
+        remote_call(
             'autorio_operations',
             'move_items_exact',
             repr('iron-plate'),
             str(unit_number),
             str(TARGET_PLATES),
             'false',
-        )),
-        'retrieve iron plates admission',
+        ),
+        'retrieve iron plates',
     )
-    require(retrieve[0] is True, retrieve)
+    require(retrieve.get('accepted') is True, retrieve)
     retrieved_status = wait_until_idle(operation_status, 'retrieve iron plates', 20.0)
     retrieve_result = (retrieved_status.get('basic_operation') or {}).get('last_result') or {}
     require(retrieve_result.get('accepted') is True and retrieve_result.get('completed') is True, retrieved_status)
