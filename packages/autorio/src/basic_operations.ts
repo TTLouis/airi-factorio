@@ -116,7 +116,11 @@ function result_for(actor: ControlledActor | undefined, task: BasicTask | undefi
     recipe_name: task?.type === TaskStates.SETTING_RECIPE ? task.recipe_name : undefined,
     player_name: task?.type === TaskStates.MOVING_ITEMS ? task.player_name : undefined,
     item_name: task && 'item_name' in task ? task.item_name : undefined,
-    requested_count: task?.type === TaskStates.MINING ? (task.requested_count ?? task.count) : undefined,
+    requested_count: task?.type === TaskStates.MINING
+      ? (task.requested_count ?? task.count)
+      : task?.type === TaskStates.MOVING_ITEMS
+        ? task.max_count
+        : undefined,
     to_entity: task?.type === TaskStates.MOVING_ITEMS ? task.to_entity : undefined,
     to_player: task?.type === TaskStates.MOVING_ITEMS ? task.to_player : undefined,
     requested_ticks: task?.type === TaskStates.WAITING ? (task.requested_ticks ?? task.remaining_ticks) : undefined,
