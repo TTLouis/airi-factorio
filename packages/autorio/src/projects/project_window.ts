@@ -2,6 +2,7 @@ import type { ButtonGuiElement, FrameGuiElement, LuaGuiElement, LuaPlayer, Scrol
 import type { TaskBoardUiActivity } from '../task_board_ui'
 
 import * as activity_state from '../task_board_activity'
+import * as gui_text from '../task_board_gui_text'
 
 // Projects owns stable, independent button ids. It must never borrow Debug's
 // close route: doing so made the old-task entry disappear or toggle unexpectedly
@@ -477,7 +478,7 @@ function project_list_values(selected_id: string) {
   let selected_index = 0
   for (let index = 0; index < history.length; index++) {
     const project = history[index]
-    items.push(project.name)
+    items.push(`Task ${index + 1} · ${project.completed_count}/${project.total_steps}`)
     ids.push(project.id)
     if (project.id === selected_id) selected_index = index + 1
   }
@@ -529,7 +530,7 @@ function add_detail_row(parent: LuaGuiElement, key: string, value: string) {
   row.style.horizontal_spacing = 8
   const label = row.add({ type: 'label', caption: key, style: 'semibold_label' })
   label.style.minimal_width = 82
-  const content = row.add({ type: 'label', caption: value.length > 0 ? value : '—' })
+  const content = gui_text.literal_gui_text(row.add({ type: 'label', caption: value.length > 0 ? value : '—' }))
   content.style.single_line = false
   content.style.maximal_width = PROJECT_DETAIL_WIDTH - 120
 }
@@ -554,7 +555,7 @@ function activity_rows_diff(shown: string[], wanted: string[]) {
 
 function add_activity_line(parent: LuaGuiElement, entry: ProjectHistoryActivity) {
   const prefix = entry.timestamp !== undefined ? `${entry.timestamp} · ` : ''
-  const line = parent.add({ type: 'label', caption: `${prefix}${entry.kind.toUpperCase()} · ${entry.text}` })
+  const line = gui_text.literal_gui_text(parent.add({ type: 'label', caption: `${prefix}${entry.kind.toUpperCase()} · ${entry.text}` }))
   line.style.single_line = false
   line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60
 }
@@ -679,7 +680,7 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
       const text = clean_text(message.text, 2000)
       if (text.length === 0) continue
       const sender = clean_text(message.sender || (message.role === 'assistant' ? 'AIRI' : 'Player'), 128)
-      const line = conversation_flow.add({ type: 'label', caption: `${sender} · ${text}` })
+      const line = gui_text.literal_gui_text(conversation_flow.add({ type: 'label', caption: `${sender} · ${text}` }))
       line.style.single_line = false
       line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60
       conversation_count++
@@ -689,17 +690,17 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
     for (const entry of project.activity) {
       const text = clean_text(entry.text, 1200)
       if (entry.kind === 'decision' && text.length > 0) {
-        const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${text}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
+        const line = gui_text.literal_gui_text(conversation_flow.add({ type: 'label', caption: `AIRI · ${text}` })); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
         continue
       }
       if (entry.kind !== 'observation' || !String(entry.id ?? '').startsWith('live_')) continue
       const separator = text.indexOf(': ')
       if (separator < 1 || text.startsWith('Tool ')) continue
-      const line = conversation_flow.add({ type: 'label', caption: `${text.substring(0, separator)} · ${text.substring(separator + 2)}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
+      const line = gui_text.literal_gui_text(conversation_flow.add({ type: 'label', caption: `${text.substring(0, separator)} · ${text.substring(separator + 2)}` })); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++
     }
     if (project.response.length > 0) {
       const duplicate = project.activity.some(entry => entry.kind === 'decision' && clean_text(entry.text, 1200) === project.response)
-      if (!duplicate) { const line = conversation_flow.add({ type: 'label', caption: `AIRI · ${project.response}` }); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++ }
+      if (!duplicate) { const line = gui_text.literal_gui_text(conversation_flow.add({ type: 'label', caption: `AIRI · ${project.response}` })); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++ }
     }
   }
   if (conversation_count === 0) conversation_flow.add({ type: 'label', caption: 'No player/AIRI conversation retained for this project.' })
@@ -711,7 +712,7 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
     else {
       for (let index = 0; index < project.steps.length; index++) {
         const step = project.steps[index]
-        const line = step_flow.add({ type: 'label', caption: `${index + 1}. [${step.status.toUpperCase()}] ${step.description}` })
+        const line = gui_text.literal_gui_text(step_flow.add({ type: 'label', caption: `${index + 1}. [${step.status.toUpperCase()}] ${step.description}` }))
         line.style.single_line = false
         line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60
       }

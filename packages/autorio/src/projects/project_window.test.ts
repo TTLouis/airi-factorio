@@ -43,6 +43,37 @@ function snapshot(goal_id: string, objective: string, activity: any[] = []) {
   }
 }
 
+describe('project GUI literal-text boundary', () => {
+  it('keeps archived player/model text out of rich-text-capable list items and uses literal labels for details', async () => {
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync(new URL('./project_window.ts', import.meta.url), 'utf8')
+    expect(source).toContain("import * as gui_text from '../task_board_gui_text'")
+    expect(source).toContain('items.push(`Task ${index + 1} · ${project.completed_count}/${project.total_steps}`)')
+    expect(source).not.toContain('items.push(project.name)')
+    expect(source).toContain('gui_text.literal_gui_text(row.add(')
+    expect(source).toContain('gui_text.literal_gui_text(parent.add(')
+    expect(source).toContain('gui_text.literal_gui_text(conversation_flow.add(')
+    expect(source).toContain('gui_text.literal_gui_text(step_flow.add(')
+  })
+
+  it('preserves archived rich-text-looking content in durable data instead of mutating it for presentation', () => {
+    const rich = '[item=iron-plate] [color=red]hello[/color] [ ]] 普通中文 English'
+    record_project_snapshot({
+      ...snapshot('goal-rich', rich, [{ id: 'a', kind: 'result', text: rich }]),
+      response: rich,
+      blocker: rich,
+      conversation: [{ id: 'm1', role: 'assistant', sender: rich, text: rich }],
+      steps: [{ id: 's1', description: rich, status: 'active' }],
+    }, 60)
+    const project = project_by_id('goal-rich')!
+    expect(project.objective).toBe(rich)
+    expect(project.response).toBe(rich)
+    expect(project.blocker).toBe(rich)
+    expect(project.activity[0].text).toBe(rich)
+    expect(project.conversation[0].text).toBe(rich)
+    expect(project.steps[0].description).toBe(rich)
+  })
+})
 describe('project activity filters', () => {
   it('filters the Projects feed with its own toggles, routed by the console click handler', async () => {
     const { readFileSync } = await import('node:fs')

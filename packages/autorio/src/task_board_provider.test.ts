@@ -70,11 +70,18 @@ describe('provider avatar selection', () => {
     expect(provider_button_sprite(1, 'item/logistic-robot')).toMatch(/^airi-provider-deepseek-[1-4]$/)
   })
 
-  it('names the provider and the exact model in the button tooltip', () => {
+  it('names only the UI-owned provider in the button tooltip', () => {
     remember_provider_model('claude-sonnet-4-5')
-    expect(provider_button_tooltip('AIRI NPC Console')).toBe('AIRI NPC Console\nClaude · claude-sonnet-4-5')
+    expect(provider_button_tooltip('AIRI NPC Console')).toBe('AIRI NPC Console\nClaude')
   })
 
+  it('never reflects rich-text-looking model ids into the tooltip', () => {
+    remember_provider_model('claude-[item=iron-plate]-[color=red]x[/color]')
+    const tooltip = provider_button_tooltip('AIRI NPC Console')
+    expect(tooltip).toBe('AIRI NPC Console\nClaude')
+    expect(tooltip).not.toContain('[item=')
+    expect(tooltip).not.toContain('[color=')
+  })
   it('leaves the button alone until a model has been reported', () => {
     expect(provider_button_tooltip('AIRI NPC Console')).toBe('AIRI NPC Console')
     expect(provider_button_sprite(1, 'item/logistic-robot')).toBe('item/logistic-robot')
@@ -83,7 +90,7 @@ describe('provider avatar selection', () => {
   it('keeps the default sprite for a model no vendor claims', () => {
     remember_provider_model('llama-3.3-70b')
     expect(provider_button_sprite(1, 'item/logistic-robot')).toBe('item/logistic-robot')
-    expect(provider_button_tooltip('AIRI NPC Console')).toBe('AIRI NPC Console\nUnrecognized provider · llama-3.3-70b')
+    expect(provider_button_tooltip('AIRI NPC Console')).toBe('AIRI NPC Console\nUnrecognized provider')
   })
 })
 

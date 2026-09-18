@@ -111,8 +111,8 @@ export function provider_button_sprite(player_index: number, fallback: SpritePat
   return helpers.is_valid_sprite_path(avatar) ? avatar : fallback
 }
 
-/** Button tooltip naming the provider and the exact model behind the avatar. */
+/** Button tooltip names only UI-owned provider text; exact model ids are external text. */
 export function provider_button_tooltip(base: string) {
   const model = current_provider_model()
-  return model.length > 0 ? `${base}\n${task_board_provider_of(model).label} · ${model}` : base
+  return model.length > 0 ? `${base}\n${task_board_provider_of(model).label}` : base
 }
