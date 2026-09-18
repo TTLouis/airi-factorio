@@ -97,6 +97,7 @@ function agentFor(intent, {
   decisionConflictProbability = 0.2,
   decisionError,
   decisionTraceFile = null,
+  routerError,
 } = {}) {
   const memory = new CanonicalTaskBoardMemory()
   if (withPlan) memory.planByNpc.set('npc:airi', activePlan())
@@ -108,6 +109,7 @@ function agentFor(intent, {
     if (context.interactionRouter) {
       assert.equal(context.allowTools, false)
       assert.equal(context.triggerSource, 'interaction_router')
+      if (routerError) throw new Error(routerError)
       return { content: JSON.stringify({ intent, queue_conflict: intent === 'amend_current' ? queueConflict : false, reply: intent === 'chat_only' ? 'Hello from the side router.' : '' }) }
     }
     return {
@@ -261,15 +263,94 @@ test('Jev shadow provider failure records fallback while the existing router rem
   assert.equal(events[2].data.shadow_available, false)
 })
 
-test('deterministic no-goal routing skips Jev shadow entirely', async () => {
-  const { agent, decisionCalls } = agentFor('new_goal', {
+test('idle no-plan status query is classified, reaches Jev shadow, and skips the main planner', async () => {
+  const { agent, memory, rcon, calls, decisionCalls } = agentFor('status_query', {
+    running: false,
+    withPlan: false,
+    decisionIntent: 'new_goal',
+  })
+
+  const result = await agent.request('What are you doing right now?', { sender: 'tester' })
+
+  assert.equal(result.interactionIntent, 'status_query')
+  assert.equal(result.routedOnly, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].interactionRouter, true)
+  assert.equal(decisionCalls.length, 1)
+  assert.equal(decisionCalls[0].state.current_goal, null)
+  assert.equal(decisionCalls[0].state.runtime.task_state, 'idle')
+  assert.equal(decisionCalls[0].state.runtime.queue_length, 0)
+  assert.equal(rcon.cancelCount, 0)
+  assert.equal(Boolean(memory.currentPlan('npc:airi')), false)
+})
+
+test('idle no-plan chat_only is routed without the main planner and reaches Jev shadow', async () => {
+  const { agent, memory, calls, decisionCalls } = agentFor('chat_only', {
     running: false,
     withPlan: false,
     decisionIntent: 'chat_only',
   })
 
-  await agent.request('build something new', { sender: 'tester' })
-  assert.equal(decisionCalls.length, 0)
+  const result = await agent.request('How are things going?', { sender: 'tester' })
+
+  assert.equal(result.interactionIntent, 'chat_only')
+  assert.equal(result.routedOnly, true)
+  assert.equal(result.chatMessage, 'Hello from the side router.')
+  assert.equal(calls.length, 1)
+  assert.equal(decisionCalls.length, 1)
+  assert.equal(Boolean(memory.currentPlan('npc:airi')), false)
+})
+
+test('idle no-plan real new goal is classified before the main planner runs once', async () => {
+  const { agent, rcon, calls, decisionCalls } = agentFor('new_goal', {
+    running: false,
+    withPlan: false,
+    decisionIntent: 'chat_only',
+  })
+
+  const result = await agent.request('Build a small coal production setup.', { sender: 'tester' })
+
+  assert.equal(result.interactionIntent, 'new_goal')
+  assert.equal(result.routedOnly, false)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].interactionRouter, true)
+  assert.equal(calls[1].triggerSource, 'new_goal')
+  assert.equal(decisionCalls.length, 1)
+  assert.equal(rcon.cancelCount, 0)
+})
+
+test('idle no-plan Jev shadow failure does not alter the active routed interaction', async () => {
+  const { agent, memory, rcon, calls, decisionCalls } = agentFor('status_query', {
+    running: false,
+    withPlan: false,
+    decisionError: 'temporary Jev outage',
+  })
+
+  const result = await agent.request('What are you doing right now?', { sender: 'tester' })
+
+  assert.equal(result.interactionIntent, 'status_query')
+  assert.equal(result.routedOnly, true)
+  assert.equal(calls.length, 1)
+  assert.equal(decisionCalls.length, 1)
+  assert.equal(rcon.cancelCount, 0)
+  assert.equal(Boolean(memory.currentPlan('npc:airi')), false)
+})
+
+test('idle no-plan interaction-router failure keeps the conservative new_goal fallback', async () => {
+  const { agent, rcon, calls } = agentFor('status_query', {
+    running: false,
+    withPlan: false,
+    routerError: 'temporary interaction-router outage',
+  })
+
+  const result = await agent.request('Build a small coal production setup.', { sender: 'tester' })
+
+  assert.equal(result.interactionIntent, 'new_goal')
+  assert.equal(result.routedOnly, false)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].interactionRouter, true)
+  assert.equal(calls[1].triggerSource, 'new_goal')
+  assert.equal(rcon.cancelCount, 0)
 })
 
 test('cancelling the agent aborts an in-flight Jev shadow decision', async () => {

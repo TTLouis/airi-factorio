@@ -1806,13 +1806,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         route: { intent: planBefore ? 'continue_current' : 'new_goal', queue_conflict: false, reply: '' },
         epoch: undefined,
         router_bypassed: true,
-      }
-    }
-    else if (!planBefore && !healthyRuntime) {
-      routed = {
-        route: { intent: 'new_goal', queue_conflict: false, reply: '' },
-        epoch: undefined,
-        classifier_skipped: 'no_current_goal_or_runtime_work',
+        classifier_skipped: 'interaction_router_unavailable',
       }
     }
     else {
@@ -1844,6 +1838,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       decision_shadow: routed.decision_shadow,
       decision_shadow_error: routed.decision_shadow_error,
       decision_shadow_latency_ms: routed.decision_shadow_latency_ms,
+      decision_shadow_status: routed.classifier_skipped
+        ? 'classifier_skipped'
+        : routed.decision_shadow
+          ? 'called_success'
+          : routed.decision_shadow_error
+            ? 'call_failed'
+            : this.interactionDecisionProvider
+              ? 'configured_not_called'
+              : 'not_configured',
     })
 
     if (!routed.router_bypassed && intent === 'continue_current' && healthyRuntime) {
