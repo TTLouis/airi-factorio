@@ -60,8 +60,10 @@ function planMessage({ chatMessage = 'Working.', plan = [], currentStep = 0, ope
 
 class RejectingTransferRcon extends FakeRcon {
   async command(text) {
-    if (text.includes('remote.call("autorio_preflight","operation"') && text.includes('move_items_exact')) {
-      return JSON.stringify({ ok: false, code: 'transfer_target_rejected', operation: 'move_items_exact' })
+    if (text.includes('local ok,result=pcall') && text.includes("remote.call('autorio_operations','move_items_exact'")) {
+      const marker = text.match(/AIRI_RESULT_[a-f0-9]{24}:/)?.[0]
+      assert.ok(marker)
+      return `${marker}${JSON.stringify({ ok: false, result: 'autorio rejected operation 1: [false,"transfer target rejected"]' })}`
     }
     return super.command(text)
   }
@@ -97,19 +99,23 @@ test('rejected transfer cannot advance or complete the canonical plan step', asy
     traceFile: null,
   })
 
-  const rejected = await agent.request('produce 20 iron plates', { sender: 'TTLouis' })
-  assert.equal(rejected.goalStatus, 'blocked')
-  assert.equal(rejected.taskBoard.active_index, 0)
-  assert.equal(rejected.taskBoard.completed_count, 0)
-  assert.equal(rejected.taskBoard.steps[0].status, 'blocked')
-  assert.equal(rejected.taskBoard.blocker, 'operation_preflight_failed:transfer_target_rejected')
+  await assert.rejects(
+    agent.request('produce 20 iron plates', { sender: 'TTLouis' }),
+    /operation batch was not replayed|operation batch|rejected operation/i,
+  )
+  const rejectedState = agent.memory.currentPlan('npc:airi')
+  assert.equal(rejectedState.status, 'blocked')
+  assert.equal(rejectedState.task_board.active_index, 0)
+  assert.equal(rejectedState.task_board.completed_count, 0)
+  assert.equal(rejectedState.task_board.steps[0].status, 'blocked')
+  assert.equal(rejectedState.task_board.blocker, 'operation_admission_failed')
 
   const attemptedSkip = await agent.request('continue', { sender: 'TTLouis' })
   assert.equal(attemptedSkip.goalStatus, 'blocked')
   assert.equal(attemptedSkip.taskBoard.active_index, 0)
   assert.equal(attemptedSkip.taskBoard.completed_count, 0)
   assert.equal(attemptedSkip.taskBoard.steps[0].status, 'blocked')
-  assert.equal(attemptedSkip.taskBoard.blocker, 'operation_preflight_failed:transfer_target_rejected')
+  assert.equal(attemptedSkip.taskBoard.blocker, 'operation_admission_failed')
   assert.equal(agent.memory.currentPlan('npc:airi').current_step, 0)
 })
 
