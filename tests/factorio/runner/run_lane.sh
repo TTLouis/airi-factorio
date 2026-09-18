@@ -135,6 +135,8 @@ case "$LANE" in
     run_py basic_outcomes.py
     printf '[npc-test][core] Running exact non-resource mining auto-approach gate...\n'
     run_py exact_entity_mining.py
+    printf '[npc-test][core] Running construction-area finite blocker clearing gate...\n'
+    run_py construction_area_clearing.py
     ;;
 
   research-combat)

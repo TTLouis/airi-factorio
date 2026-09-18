@@ -26,11 +26,22 @@ function fixture() {
   const rock = entity('mod-rock-z', 'simple-entity', 3)
   const resource = entity('iron-resource-x', 'resource', 1.5)
   const machine = entity('existing-machine-x', 'assembling-machine', 2.5, { building: true })
-  const entities = [treeA, treeB, rock, resource, machine]
+  const treeOutside = entity('mod-tree-outside', 'tree', 8)
+  const entities = [treeA, treeB, rock, resource, machine, treeOutside]
 
   const surface: any = {
     index: 1,
-    find_entities_filtered: vi.fn(() => entities.filter(item => item.valid)),
+    find_entities_filtered: vi.fn((query: any) => {
+      const leftTop = query.area?.left_top
+      const rightBottom = query.area?.right_bottom
+      return entities
+        .filter(item => item.valid)
+        .filter(item => !leftTop || !rightBottom
+          || (item.position.x >= leftTop.x
+            && item.position.x <= rightBottom.x
+            && item.position.y >= leftTop.y
+            && item.position.y <= rightBottom.y))
+    }),
   }
   const actor = {
     is_valid: true,
@@ -55,7 +66,7 @@ function fixture() {
   } as unknown as ControlledActor
   const manager = new_task_manager(() => actor)
   const controller = new_area_clearing_controller(() => actor, manager)
-  return { actor, manager, controller, treeA, treeB, rock, resource, machine }
+  return { actor, manager, controller, treeA, treeB, rock, resource, machine, treeOutside }
 }
 
 beforeEach(() => {
@@ -67,6 +78,11 @@ describe('construction-area finite blocker clearing', () => {
   it('clears heterogeneous mineable non-resource blockers until a live rescan verifies the area is clear', () => {
     const f = fixture()
     expect(f.controller.submit(2, 0, 8, 4)[0]).toBe(true)
+    f.manager.add_task({
+      type: TaskStates.PLACING,
+      entity_name: 'future-machine-x',
+      position: { x: 2, y: 0 },
+    })
 
     f.controller.tick(f.actor)
     expect(f.actor.set_mining_state).toHaveBeenCalledWith({ mining: true, position: f.treeA.position })
@@ -85,9 +101,14 @@ describe('construction-area finite blocker clearing', () => {
     f.controller.on_player_mined_entity(f.actor, 1)
     f.controller.tick(f.actor)
 
-    expect(f.manager.player_state.task_state).toBe(TaskStates.IDLE)
+    expect(f.manager.player_state.task_state).toBe(TaskStates.PLACING)
+    expect(f.manager.player_state.parameters_place_entity).toMatchObject({
+      entity_name: 'future-machine-x',
+      position: { x: 2, y: 0 },
+    })
     expect(f.resource.valid).toBe(true)
     expect(f.machine.valid).toBe(true)
+    expect(f.treeOutside.valid).toBe(true)
   })
 
   it('does not treat normal resource patches or placed buildings as finite natural clear targets', () => {
@@ -102,5 +123,6 @@ describe('construction-area finite blocker clearing', () => {
     expect(f.manager.player_state.task_state).toBe(TaskStates.IDLE)
     expect(f.resource.valid).toBe(true)
     expect(f.machine.valid).toBe(true)
+    expect(f.treeOutside.valid).toBe(true)
   })
 })

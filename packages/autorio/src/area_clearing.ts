@@ -31,10 +31,10 @@ function mining_reach_distance(actor: ControlledActor) {
 function task_area(task: PlayerParametersClearConstructionArea) {
   const half_width = task.width / 2
   const half_height = task.height / 2
-  return [
-    { x: task.center.x - half_width, y: task.center.y - half_height },
-    { x: task.center.x + half_width, y: task.center.y + half_height },
-  ]
+  return {
+    left_top: { x: task.center.x - half_width, y: task.center.y - half_height },
+    right_bottom: { x: task.center.x + half_width, y: task.center.y + half_height },
+  }
 }
 
 function clearable_blocker(entity: LuaEntity | undefined) {

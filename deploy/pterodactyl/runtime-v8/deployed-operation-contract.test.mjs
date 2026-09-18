@@ -55,3 +55,22 @@ test('semantic placement tool advertises candidate-id execution that runtime-v8 
     "remote.call('autorio_operations','place_candidate','placement-12','candidate-4')",
   )
 })
+
+
+test('construction area clearing contract stays advertised by full and compact provider prompts', () => {
+  const prompt = readFileSync(deployedPromptSource, 'utf8')
+  const compactPrompt = readFileSync(new URL('./provider-base.mjs', import.meta.url), 'utf8')
+  assert.match(prompt, /^- clear_construction_area$/m)
+  assert.match(prompt, /Completion is area clearance, not entity count or inventory gain/)
+  assert.match(compactPrompt, /clear_construction_area \{x,y,width,height\}/)
+
+  const operation = {
+    name: 'clear_construction_area',
+    args: { x: 10, y: -4, width: 12, height: 8 },
+  }
+  assert.deepEqual(parseOperation(operation), operation)
+  assert.equal(
+    renderOperation(operation),
+    "remote.call('autorio_operations','clear_construction_area',10,-4,12,8)",
+  )
+})
