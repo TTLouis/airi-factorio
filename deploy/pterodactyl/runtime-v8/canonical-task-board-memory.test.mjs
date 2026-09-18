@@ -410,3 +410,46 @@ test('terminatePlan removes one durable goal without implying completion', () =>
   assert.equal(memory.planByNpc.has('npc:airi'), false)
   assert.equal(memory.currentPlan('npc:airi'), undefined)
 })
+
+
+test('completed prefix stays completed when a later placement recovery blocks', () => {
+  const placementBoard = {
+    ...board(),
+    active_index: 1,
+    active_step_id: 'step_2',
+    completed_count: 1,
+    total_steps: 3,
+    steps: [
+      { id: 'step_1', description: 'Craft chest', status: 'completed' },
+      { id: 'step_2', description: 'Choose placement', status: 'active' },
+      { id: 'step_3', description: 'Place chest', status: 'pending' },
+    ],
+  }
+  const memory = new CanonicalTaskBoardMemory()
+  const key = 'npc:airi'
+  memory.planByNpc.set(key, planState({
+    task_board: placementBoard,
+    plan: placementBoard.steps.map(step => step.description),
+    current_step: 1,
+    last_operations: ['craft_item {"item_name":"wooden-chest","count":1}'],
+    last_mutation_verified: true,
+    last_verified_batch_id: 3,
+  }))
+
+  const blockedPlan = {
+    chatMessage: 'Placement geometry is still unresolved.',
+    plan: placementBoard.steps.map(step => step.description),
+    currentStep: 1,
+    operations: [],
+  }
+  const previous = memory.currentPlan(key)
+  const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'Place a chest nearby' }, blockedPlan, { continuation: true })
+  const reconciled = memory.reconcileTaskBoard(key, placementBoard, blockedPlan, recorded, { previousState: previous })
+
+  assert.equal(reconciled.state.status, 'blocked')
+  assert.equal(reconciled.state.task_board.completed_count, 1)
+  assert.equal(reconciled.state.task_board.active_index, 1)
+  assert.equal(reconciled.state.task_board.steps[0].status, 'completed')
+  assert.equal(reconciled.state.task_board.steps[1].status, 'blocked')
+  assert.equal(reconciled.state.task_board.steps[2].status, 'pending')
+})
