@@ -1,4 +1,5 @@
 import type { LuaGuiElement, LuaPlayer } from 'factorio:runtime'
+import { BASIC_SKILL_DEFINITIONS } from './basic_skill_library'
 import { get_controlled_actor } from './actors/actor_controller'
 import {
   analyze_factory_area,
@@ -496,6 +497,68 @@ function ensure_definitions() {
   return storage.airi_skill_definitions
 }
 
+export function ensure_basic_skill_definitions() {
+  const registry = ensure_definitions()
+  let added = 0
+  for (const raw of BASIC_SKILL_DEFINITIONS) {
+    const skill = canonicalize_skill_definition(raw)
+    if (registry[skill.id] === undefined) {
+      registry[skill.id] = skill
+      added++
+    }
+  }
+  return { added, total: BASIC_SKILL_DEFINITIONS.length }
+}
+
+function skill_search_text(skill: SkillDefinition) {
+  const values: string[] = [
+    skill.id,
+    skill.name,
+    skill.kind,
+    skill.stage,
+    skill.status,
+    skill.summary,
+    ...skill.preconditions.map(value => `${value.subject} ${value.description}`),
+    ...skill.inputs.map(value => `${value.item} ${value.role ?? ''}`),
+    ...skill.outputs.map(value => `${value.item} ${value.role ?? ''}`),
+    ...skill.topology.nodes.map(value => `${value.id} ${value.role} ${value.entity_name ?? ''} ${value.recipe ?? ''}`),
+    ...skill.topology.relations.map(value => `${value.kind} ${value.description ?? ''}`),
+    ...skill.constraints.map(value => value.description),
+    ...skill.parameters.map(value => `${value.name} ${value.description}`),
+    ...skill.known_failure_modes,
+    ...skill.examples.map(value => `${value.summary} ${value.notes ?? ''}`),
+  ]
+  return values.join(' ').toLowerCase()
+}
+
+export function find_skill_definitions(query: unknown, limit: unknown = 3) {
+  const normalized = clean_text(query, 'skill search query', 240).toLowerCase()
+  const bounded_limit = positive_integer(limit, 'skill search limit')
+  if (bounded_limit > 5) throw new Error('skill search limit must be at most 5')
+  const terms = normalized.split(' ').filter(term => term.length >= 2)
+  const scored: Array<{ score: number, skill: SkillDefinition }> = []
+  for (const skill of list_skill_definitions()) {
+    const haystack = skill_search_text(skill)
+    let score = haystack.includes(normalized) ? 10 : 0
+    for (const term of terms) if (haystack.includes(term)) score++
+    if (score > 0) scored.push({ score, skill })
+  }
+  scored.sort((left, right) => right.score - left.score
+    || (left.skill.name < right.skill.name ? -1 : left.skill.name > right.skill.name ? 1 : 0))
+  return scored.slice(0, bounded_limit).map(({ score, skill }) => ({
+    score,
+    id: skill.id,
+    name: skill.name,
+    kind: skill.kind,
+    stage: skill.stage,
+    status: skill.status,
+    summary: skill.summary,
+    inputs: skill.inputs.map(value => value.item),
+    outputs: skill.outputs.map(value => value.item),
+    warnings: skill_ui_summary(skill).warnings,
+  }))
+}
+
 function exports_state() {
   if (storage.airi_skill_exports === undefined) storage.airi_skill_exports = {}
   return storage.airi_skill_exports
@@ -740,6 +803,10 @@ export function create_skill_remote_interface() {
     get: (id: string) => {
       try { return get_skill_definition(id) }
       catch { return undefined }
+    },
+    find: (query: unknown, limit: unknown = 3) => {
+      try { return { ok: true, results: find_skill_definitions(query, limit) } }
+      catch (error) { return { ok: false, error: error_message(error), results: [] } }
     },
     list: () => list_skill_definitions(),
     analyze_area: (request: unknown = {}) => {
