@@ -32,13 +32,13 @@ test('main and NPC E2E eggs resolve different default source refs on reinstall',
   const e2eEgg = JSON.parse(canonical.e2eEggJson)
 
   assert.equal(mainEgg.name, 'SGLuna Factorio Server (Main)')
-  assert.equal(e2eEgg.name, 'SGLuna Factorio Server (NPC E2E)')
+  assert.equal(e2eEgg.name, 'SGLuna Factorio Server (NPC E2E / Jev Experiment)')
   assert.equal(mainEgg.config.startup, '{"done": "SGLuna Factorio ready"}')
   assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.name, 'SGLuna Source Ref')
   assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_ACTOR_MODE')?.name, 'SGLuna Actor Mode')
   assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS')?.name, 'SGLuna Chat Players')
   assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.default_value, 'main')
-  assert.equal(e2eEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.default_value, 'feat/npc-transition-work')
+  assert.equal(e2eEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.default_value, 'experiment/jev-agent-architecture')
   assert.notEqual(mainEgg.scripts.installation.script, e2eEgg.scripts.installation.script)
   assert.match(mainEgg.scripts.installation.script, /CHANNEL="main"/)
   assert.match(e2eEgg.scripts.installation.script, /CHANNEL="npc-e2e"/)
@@ -74,6 +74,24 @@ test('generated egg variable contract keeps safe provider defaults and 300 reque
   }
 })
 
+test('Jev credentials and conservation controls exist only on the NPC E2E experiment egg', () => {
+  const { mainEggJson, e2eEggJson } = buildArtifacts(source)
+  const mainEgg = JSON.parse(mainEggJson)
+  const e2eEgg = JSON.parse(e2eEggJson)
+
+  assert.equal(mainEgg.variables.some(entry => entry.env_variable === 'TYPESAFE_API_KEY'), false)
+  assert.equal(mainEgg.variables.some(entry => entry.env_variable === 'DECISION_PROVIDER_MODEL'), false)
+  assert.equal(mainEgg.variables.some(entry => entry.env_variable === 'MAX_DECISION_PROVIDER_REQUESTS_PER_HOUR'), false)
+
+  const key = e2eEgg.variables.find(entry => entry.env_variable === 'TYPESAFE_API_KEY')
+  assert.equal(key?.default_value, '')
+  assert.equal(key?.user_viewable, false)
+  assert.match(key?.description ?? '', /Leave blank to disable the decision lane/)
+
+  assert.equal(e2eEgg.variables.find(entry => entry.env_variable === 'DECISION_PROVIDER_MODEL')?.default_value, 'jev-latest')
+  assert.equal(e2eEgg.variables.find(entry => entry.env_variable === 'MAX_DECISION_PROVIDER_REQUESTS_PER_HOUR')?.default_value, '60')
+})
+
 test('generated artifact verifier rejects source or channel drift', () => {
   const canonical = buildArtifacts(source)
   assert.equal(
@@ -85,7 +103,7 @@ test('generated artifact verifier rejects source or channel drift', () => {
     () => verifyGeneratedArtifacts(changedSource, canonical.installScript, canonical.mainEggJson, canonical.e2eEggJson),
     /install\.sh loader is stale|egg schema is stale/,
   )
-  const changedE2e = canonical.e2eEggJson.replace('feat/npc-transition-work', 'main')
+  const changedE2e = canonical.e2eEggJson.replace('experiment/jev-agent-architecture', 'main')
   assert.throws(
     () => verifyGeneratedArtifacts(source, canonical.installScript, canonical.mainEggJson, changedE2e),
     /npcE2e egg schema is stale|wrong source ref/,
