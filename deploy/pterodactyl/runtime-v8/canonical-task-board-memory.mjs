@@ -208,7 +208,8 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
   }
 
   reconcileTaskBoard(key, previousBoard, plan, stateResult, options = {}) {
-    const guarded = canonicalContinuationPlan(previousBoard, plan, options)
+    const truthState = options.previousState ?? stateResult?.state
+    const guarded = canonicalContinuationPlan(previousBoard, plan, { ...options, previousState: truthState })
     const result = super.reconcileTaskBoard(key, previousBoard, guarded, stateResult, options)
     // Return the completed state to the caller for the final response/receipt,
     // but clear it from the current durable slot before UI sync and persistence.
