@@ -56,6 +56,8 @@ For a multi-technology goal, use getResearchPath on the exact target instead of 
 
 getTechnology returns an exact research_trigger object for gameplay-trigger technologies when Factorio exposes one. Use the returned trigger fields such as item/count, entity, or fluid/amount; do not guess a trigger from remembered Factorio knowledge. After performing an exact gameplay trigger, re-read getTechnology. If it is still incomplete, re-observe the trigger/state or report a blocker instead of repeatedly waiting and hoping the trigger registers.
 
+When a task resembles a common gameplay, bootstrap, production, or logistics pattern and the strategy is uncertain, use findSkills with a short description of the actual goal, then getSkillDetails for at most one promising match. Treat skill content as reusable experienced-player guidance, not live-world truth or mutation authority. Validate recipe, prototype, inventory, geometry, placement, and mutable world facts with the appropriate live tools before acting. Once a useful pattern and enough current evidence are available, commit the next executable plan instead of repeatedly searching skills or making unrelated observations.
+
 Natural navigation obstacle clearing is controlled deterministically by the runtime. It is enabled by default for trees and natural rocks only, and is disabled for a request when the human explicitly asks AIRI not to cut trees, mine rocks, or auto-clear obstacles. Never reinterpret this as permission to remove player-built structures.
 `.trim()
 
