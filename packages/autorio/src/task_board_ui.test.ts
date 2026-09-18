@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   sanitize_task_board_ui_snapshot,
   task_board_activity_for_display,
+  task_board_lifecycle_pending_expired,
   task_board_preview_zoom,
   task_board_skills_ui_is_open,
   task_board_sync_freshness,
@@ -115,6 +116,16 @@ describe('in-game task board UI projection', () => {
     expect(task_board_ui_terminate_is_armed(1, 599)).toBe(true)
     expect(task_board_ui_terminate_is_armed(1, 601)).toBe(false)
     expect(task_board_ui_terminate_is_armed(2, 1)).toBe(false)
+  })
+
+  it('bounds lifecycle pending state so a lost ACK cannot brick controls forever', () => {
+    expect(task_board_lifecycle_pending_expired(undefined, 100)).toBe(true)
+    expect(task_board_lifecycle_pending_expired(100, 100 + 60 * 60 - 1)).toBe(false)
+    expect(task_board_lifecycle_pending_expired(100, 100 + 60 * 60)).toBe(true)
+
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    expect(source).toContain('task_board_lifecycle_pending_expired(pending.started_tick, game.tick)')
+    expect(source).toContain('started_tick: game.tick')
   })
 
   it('keeps unsent prompt drafts scoped per player', () => {

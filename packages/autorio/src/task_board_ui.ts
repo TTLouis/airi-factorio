@@ -93,6 +93,10 @@ const POLL_REQUEST_TICKS = 60
 // status, and the console has to say so instead of repeating it as current.
 const SYNC_STALE_TICKS = 10 * 60
 const TERMINATE_CONFIRM_TICKS = 5 * 60
+// Lifecycle requests are normally ACKed quickly, but this state is persisted in
+// synchronized storage. Bound it so a lost runtime/RCON ACK cannot leave the
+// controls disabled forever across save/reload cycles.
+const LIFECYCLE_PENDING_TICKS = 60 * 60
 const LEFT_COLUMN_WIDTH = 640
 const PREVIEW_COLUMN_WIDTH = 680
 const COLUMN_SPACING = 12
@@ -221,7 +225,7 @@ export interface TaskBoardUiSnapshot {
 }
 
 interface TaskBoardUiFollowStatus { active: boolean, state: string, target_player: string, current_distance?: number, desired_distance?: number, last_failure: string }
-interface TaskBoardUiLifecyclePending { action: TaskBoardUiLifecycleAction, goal_id: string }
+interface TaskBoardUiLifecyclePending { action: TaskBoardUiLifecycleAction, goal_id: string, started_tick?: number }
 interface TaskBoardUiControlInput { kind: 'control', version: 1, action: TaskBoardUiControlAction, player_index: number, player_name: string, tick: number }
 interface TaskBoardUiPromptInput { kind: 'prompt', version: 1, player_index: number, player_name: string, text: string, tick: number }
 interface TaskBoardUiPollInput { kind: 'poll', version: 1, tick: number, debug: boolean }
@@ -376,6 +380,13 @@ export function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBo
 }
 
 function ensure_open_state() { if (storage.airi_task_board_ui_open === undefined) storage.airi_task_board_ui_open = {}; return storage.airi_task_board_ui_open }
+export function task_board_lifecycle_pending_expired(started_tick: number | undefined, tick: number) {
+  // Missing timestamps are legacy persisted pending records from before the
+  // timeout existed. Treat them as expired so upgrading an old save repairs the
+  // stuck controls on the first render/click instead of preserving the lock.
+  if (started_tick === undefined) return true
+  return math.max(0, tick - started_tick) >= LIFECYCLE_PENDING_TICKS
+}
 const LIFECYCLE = {
   ensure: () => { if (storage.airi_task_board_lifecycle_pending === undefined) storage.airi_task_board_lifecycle_pending = {}; return storage.airi_task_board_lifecycle_pending },
   current: (player_index: number) => {
@@ -383,7 +394,8 @@ const LIFECYCLE = {
     if (pending === undefined) return undefined
     const board = storage.airi_task_board_ui
     const goal_changed = pending.goal_id.length > 0 && board?.goal_id !== pending.goal_id
-    const done = goal_changed
+    const expired = task_board_lifecycle_pending_expired(pending.started_tick, game.tick)
+    const done = expired || goal_changed
       || (pending.action === 'pause' && board?.status === 'paused')
       || (pending.action === 'resume' && board !== undefined && board.status !== 'paused')
       || (pending.action === 'terminate' && board === undefined)
@@ -393,7 +405,7 @@ const LIFECYCLE = {
   },
   begin: (player_index: number, action: TaskBoardUiLifecycleAction) => {
     if (LIFECYCLE.current(player_index) !== undefined) return false
-    LIFECYCLE.ensure()[player_index] = { action, goal_id: storage.airi_task_board_ui?.goal_id ?? '' }
+    LIFECYCLE.ensure()[player_index] = { action, goal_id: storage.airi_task_board_ui?.goal_id ?? '', started_tick: game.tick }
     return true
   },
   ack: (player_index: number, action: TaskBoardUiLifecycleAction) => {
@@ -971,7 +983,9 @@ function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'
   header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
   const header_spacer = header.add({ type: 'empty-widget' }); header_spacer.style.horizontally_stretchable = true
-  compact_button(header.add({ type: 'button', name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK', style: 'dialog_button', tooltip: "Stop current work and clear this NPC's conversation and durable plan. Learned skills and Factorio world state are kept." }))
+  const pending = LIFECYCLE.current(player.index)
+  const new_task = compact_button(header.add({ type: 'button', name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK', style: 'dialog_button', tooltip: pending === undefined ? "Stop current work and clear this NPC's conversation and durable plan. Learned skills and Factorio world state are kept." : `Waiting for AIRI runtime to confirm ${pending.action}.` })) as ButtonGuiElement
+  new_task.enabled = pending === undefined
   const row = section.add({ type: 'flow', name: PROMPT_FLOW_NAME, direction: 'horizontal' }); row.style.padding = SECTION_PADDING; row.style.horizontally_stretchable = true; row.style.vertical_align = 'center'; row.style.horizontal_spacing = 8
   const field = row.add({ type: 'textfield', name: PROMPT_FIELD_NAME, text: task_board_ui_prompt_draft(player.index), tooltip: 'Send a prompt directly to AIRI without typing !airi in chat. Press Enter to send.' }); field.style.width = PROMPT_FIELD_WIDTH; field.style.minimal_width = PROMPT_FIELD_WIDTH; field.style.maximal_width = PROMPT_FIELD_WIDTH
   const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: 'Send this prompt directly to AIRI' }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.maximal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
@@ -1062,7 +1076,7 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
     return true
   }
   if (element_name === FOLLOW_BUTTON_NAME) { clear_terminate_confirmation(player.index); const follow = read_follow_status(); emit_control(player, follow?.active ? 'stop_follow' : 'follow'); return true }
-  if (element_name === NEW_TASK_BUTTON_NAME) { clear_terminate_confirmation(player.index); debug_ui.suppress_snapshot(storage.airi_task_board_ui); debug_ui.reset_task_conversation(); emit_control(player, 'new_task'); render_panel(player); return true }
+  if (element_name === NEW_TASK_BUTTON_NAME) { if (LIFECYCLE.current(player.index) !== undefined) return true; clear_terminate_confirmation(player.index); debug_ui.suppress_snapshot(storage.airi_task_board_ui); debug_ui.reset_task_conversation(); emit_control(player, 'new_task'); render_panel(player); return true }
   if (element_name === PROMPT_SEND_BUTTON_NAME) { submit_prompt(player, task_board_ui_prompt_draft(player.index)); return true }
   return false
 }
