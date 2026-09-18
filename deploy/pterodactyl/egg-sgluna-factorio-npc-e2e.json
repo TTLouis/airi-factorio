@@ -99,6 +99,36 @@
             "field_type": "text"
         },
         {
+            "name": "TypeSafe API Key",
+            "description": "Optional Jev/System One decision-provider credential. Leave blank to disable the decision lane. Kept environment-only and never written to airi-config.json.",
+            "env_variable": "TYPESAFE_API_KEY",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        },
+        {
+            "name": "Jev Decision Model",
+            "description": "TypeSafe System One model used for bounded decision routing when a TypeSafe API key is present.",
+            "env_variable": "DECISION_PROVIDER_MODEL",
+            "default_value": "jev-latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:200",
+            "field_type": "text"
+        },
+        {
+            "name": "Max Jev Requests Per Hour",
+            "description": "Persisted hourly cap for Jev decision-provider calls. Separate from the main planner provider budget.",
+            "env_variable": "MAX_DECISION_PROVIDER_REQUESTS_PER_HOUR",
+            "default_value": "60",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|between:1,1200",
+            "field_type": "text"
+        },
+        {
             "name": "Save File Name",
             "description": "Save under /saves. Leave blank to use the newest existing save or create sgluna-world.zip.",
             "env_variable": "SAVE_NAME",
