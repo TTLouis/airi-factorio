@@ -68,7 +68,7 @@ function turret(unit_number: number, position: { x: number, y: number }) {
 }
 
 describe('combat support stage cap', () => {
-  it('caps one placement stage at eight but allows a ninth turret after the frontline advances', () => {
+  it('caps one placement stage at eight and opens another only when the active target leaves support coverage', () => {
     const enemies = Array.from({ length: 13 }, (_, index) => enemy(100 + index, 30 + index))
     const created: any[] = []
     const main = inventory([itemStack('gun-turret', 20), itemStack('firearm-magazine', 400)])
@@ -145,6 +145,11 @@ describe('combat support stage cap', () => {
     expect(created).toHaveLength(8)
 
     actor.position = { x: 14, y: 0 }
+    ;(globalThis as any).game.tick += 1
+    controller.tick(actor)
+    expect(created).toHaveLength(8)
+
+    enemies[0].position = { x: 34, y: 0 }
     ;(globalThis as any).game.tick += 1
     controller.tick(actor)
 
