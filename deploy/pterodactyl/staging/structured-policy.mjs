@@ -62,6 +62,7 @@ const operationKeys = {
   mine_resource_at: ['resource_name', 'x', 'y', 'count'],
   gather_resource: ['resource_name', 'count', 'search_radius'],
   harvest_product: ['product_name', 'count', 'search_radius'],
+  clear_construction_area: ['x', 'y', 'width', 'height'],
   supply_entity: ['unit_number', 'items'],
   execute_construction_plan: ['validation_id', 'placement_count'],
   place_entity: ['entity_name', 'x', 'y', 'direction'],
@@ -145,6 +146,20 @@ export function parseOperation(value) {
           search_radius: integer(args.search_radius ?? 256, 'search_radius', 1, 4096),
         },
       }
+    case 'clear_construction_area': {
+      const width = integer(args.width, 'width', 1, 64)
+      const height = integer(args.height, 'height', 1, 64)
+      check(width * height <= 4096, 'construction clearing area exceeds 4096 tiles')
+      return {
+        name,
+        args: {
+          x: finiteNumber(args.x, 'x', -1000000, 1000000),
+          y: finiteNumber(args.y, 'y', -1000000, 1000000),
+          width,
+          height,
+        },
+      }
+    }
     case 'supply_entity': {
       check(Array.isArray(args.items) && args.items.length >= 1 && args.items.length <= 8, 'items must contain between 1 and 8 entries')
       const seen = new Set()
@@ -229,6 +244,7 @@ const PREFLIGHTED_OPERATIONS = new Set([
   'craft_item',
   'gather_resource',
   'harvest_product',
+  'clear_construction_area',
   'mine_resource_at',
   'place_entity',
   'mine_entity',
@@ -266,6 +282,7 @@ export function renderOperation(value) {
     case 'mine_resource_at': return `remote.call('autorio_operations','mine_resource_at',${luaString(operation.args.resource_name)},${operation.args.x},${operation.args.y},${operation.args.count})`
     case 'gather_resource': return `remote.call('autorio_operations','gather_resource',${luaString(operation.args.resource_name)},${operation.args.count},${operation.args.search_radius})`
     case 'harvest_product': return `remote.call('autorio_operations','harvest_product',${luaString(operation.args.product_name)},${operation.args.count},${operation.args.search_radius})`
+    case 'clear_construction_area': return `remote.call('autorio_operations','clear_construction_area',${operation.args.x},${operation.args.y},${operation.args.width},${operation.args.height})`
     case 'supply_entity': {
       const items = operation.args.items.map(item => `{item_name=${luaString(item.item_name)},count=${item.count}}`).join(',')
       return `remote.call('autorio_operations','supply_entity',${operation.args.unit_number},{${items}})`
