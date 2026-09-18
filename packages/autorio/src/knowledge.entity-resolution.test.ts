@@ -9,7 +9,7 @@ describe('knowledge exact entity resolution', () => {
     ;(globalThis as any).game.get_entity_by_unit_number = originalLookup
   })
 
-  it('uses an observed entity reference when direct unit lookup later fails', () => {
+  it('does not treat an observed location hint as a live exact entity after native lookup fails', () => {
     const drill = {
       valid: true,
       name: 'modded-miner',
@@ -40,13 +40,12 @@ describe('knowledge exact entity resolution', () => {
 
     const result = entity_geometry_for_actor(actor, 744) as any
     expect(result).toMatchObject({
-      found: true,
-      entity: { unit_number: 744, name: 'modded-miner' },
-      item_io: { drop_position: { x: 62.5, y: 89.5 } },
+      found: false,
+      unit_number: 744,
     })
   })
 
-  it('uses the same resilient resolver for logistics topology', () => {
+  it('fails logistics topology closed when the exact entity identity is stale', () => {
     const chest = {
       valid: true,
       name: 'iron-chest',
@@ -83,14 +82,7 @@ describe('knowledge exact entity resolution', () => {
     ;(globalThis as any).game.get_entity_by_unit_number = () => undefined
 
     const result = logistics_topology_for_actor(actor, 744, 8) as any
-    expect(result.found).toBe(true)
-    expect(result.relations).toEqual([
-      expect.objectContaining({
-        kind: 'direct_item_output',
-        from: expect.objectContaining({ unit_number: 744 }),
-        to: expect.objectContaining({ unit_number: 745 }),
-        drop_position: { x: 62.5, y: 89.5 },
-      }),
-    ])
+    expect(result.found).toBe(false)
+    expect(result.unit_number).toBe(744)
   })
 })
