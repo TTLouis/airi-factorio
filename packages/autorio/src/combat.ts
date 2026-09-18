@@ -50,7 +50,7 @@ const COMBAT_PATH_PROGRESS_DISTANCE = 0.25
 const COMBAT_PATH_TARGET_REPATH_DISTANCE = 2
 const COMBAT_RECOVERY_REACHED_DISTANCE = 0.75
 
-type CombatPathMode = 'approach' | 'retreat' | 'frontline'
+type CombatPathMode = 'approach' | 'retreat'
 type CombatPhase = 'engage' | 'safety' | 'cleanup'
 type CombatSafetyGoal = 'cleanup' | 'resume'
 type CombatCode = 'started' | 'target_destroyed' | 'area_cleared' | 'no_actor' | 'invalid_radius'
@@ -932,7 +932,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
 
   function path_goal_radius(task: CombatTask, mode: CombatPathMode) {
     if (task.combat_recovery_position) return COMBAT_PATH_RECOVERY_GOAL_RADIUS
-    if (mode === 'retreat' || mode === 'frontline') return COMBAT_PATH_RETREAT_GOAL_RADIUS
+    if (mode === 'retreat') return COMBAT_PATH_RETREAT_GOAL_RADIUS
     return task.target && is_alive(task.target) && is_static_enemy(task.target)
       ? COMBAT_PATH_APPROACH_GOAL_RADIUS
       : COMBAT_PATH_CHASE_GOAL_RADIUS
@@ -1009,7 +1009,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       const target = task.target
       return target && is_alive(target) ? target.position : undefined
     }
-    if (task.combat_path_mode === 'retreat' || task.combat_path_mode === 'frontline') return task.combat_path_target_position
+    if (task.combat_path_mode === 'retreat') return task.combat_path_target_position
     return undefined
   }
 
@@ -1269,7 +1269,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
       && (support_resources_available(actor) || target.type === 'turret')) {
       const frontline_goal = frontline_rear_position(task, target)
       if (frontline_goal) {
-        follow_combat_path(actor, task, frontline_goal, 'frontline')
+        follow_combat_path(actor, task, frontline_goal, 'retreat')
         return
       }
     }
