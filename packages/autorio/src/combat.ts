@@ -635,6 +635,14 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return distance(actor.position, mobile.position) <= distance(actor.position, worm.position) ? mobile : worm
   }
 
+  function remaining_clear_target(actor: ControlledActor, task: CombatTask) {
+    const priority = nearby_priority_threat(actor)
+    if (priority) return priority
+    const enemies = area_enemies(actor, task).filter(is_alive)
+    initialize_support_plan(task, enemies)
+    return preferred_target(actor, enemies)
+  }
+
   function enter_cleanup(actor: ControlledActor, task: CombatTask) {
     clear_combat_path(task, true)
     task.combat_phase = 'cleanup'
@@ -647,12 +655,12 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function tick_cleanup(actor: ControlledActor, task: CombatTask) {
-    const immediate_threat = nearby_priority_threat(actor)
-    if (immediate_threat) {
+    const remaining_target = remaining_clear_target(actor, task)
+    if (remaining_target) {
       stop_actor_cleanup(actor)
       actor.set_walking_state({ walking: false, direction: defines.direction.north })
       task.combat_safety_goal = 'cleanup'
-      bind_target(actor, task, immediate_threat, 'preempted')
+      bind_target(actor, task, remaining_target, 'preempted')
       return
     }
 
@@ -700,9 +708,11 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function tick_safety(actor: ControlledActor, task: CombatTask) {
-    const immediate_threat = nearby_priority_threat(actor)
-    if (immediate_threat) {
-      bind_target(actor, task, immediate_threat, 'preempted')
+    const safety_target = task.combat_safety_goal === 'cleanup'
+      ? remaining_clear_target(actor, task)
+      : nearby_priority_threat(actor)
+    if (safety_target) {
+      bind_target(actor, task, safety_target, 'preempted')
       return
     }
 
@@ -820,6 +830,13 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     const encounter_static_destroyed = encounter_static !== undefined && !is_alive(encounter_static)
     clear_bound_target(task)
     stop_actor_combat(actor)
+
+    const remaining_target = remaining_clear_target(actor, task)
+    if (remaining_target) {
+      bind_target(actor, task, remaining_target, 'acquired')
+      return
+    }
+
     const owned_turrets = live_owned_turrets(task)
     if (task.combat_safety_goal === 'cleanup' || (owned_turrets.length > 0 && encounter_static_destroyed)) {
       enter_safety(actor, task, 'cleanup')
