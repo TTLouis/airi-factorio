@@ -6,6 +6,13 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.deepEqual(parseOperation({ name: 'mine_entity', args: { entity_name: 'iron-ore' } }), {
     name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 },
   })
+  assert.deepEqual(parseOperation({ name: 'harvest_product', args: { product_name: 'stone', count: 6 } }), {
+    name: 'harvest_product', args: { product_name: 'stone', count: 6, search_radius: 256 },
+  })
+  assert.equal(
+    renderOperation({ name: 'harvest_product', args: { product_name: 'wood', count: 10, search_radius: 128 } }),
+    "remote.call('autorio_operations','harvest_product','wood',10,128)",
+  )
   assert.deepEqual(parseOperation({ name: 'attack_nearest_enemy', args: {} }), {
     name: 'attack_nearest_enemy', args: { search_radius: 50 },
   })
@@ -87,6 +94,7 @@ test('operation policy rejects arbitrary code, extra args, and oversized bounded
     { name: 'stop_follow_player', args: { player_name: 'TTLouis' } },
     { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } },
     { name: 'mine_entity', args: { entity_name: 'iron-ore\n/c game.clear()', count: 1 } },
+    { name: 'harvest_product', args: { product_name: 'stone', count: 100001, search_radius: 64 } },
     { name: 'place_entity', args: { entity_name: 'steel-chest', x: 1 } },
     { name: 'place_entity', args: { entity_name: 'steel-chest', y: 1 } },
     { name: 'place_entity', args: { entity_name: 'steel-chest', x: 1, y: 1, direction: 16 } },
@@ -159,6 +167,7 @@ test('read-only tool renderer targets native actor-aware interfaces without play
   assert.equal(toolCommand('getRecipe', { item: 'iron-gear-wheel' }), '/silent-command remote.call("autorio_tools","get_recipe",\'iron-gear-wheel\')')
   assert.equal(toolCommand('getRecipeDetails', { item_or_recipe: "mod's-fluid" }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","recipe_details",\'mod\\\'s-fluid\')))')
   assert.match(toolCommand('discoverPrototypes', { capability: 'mining', resource_name: 'iron-ore' }), /autorio_prototypes.*discover/)
+  assert.match(toolCommand('discoverPrototypes', { capability: 'harvest', product_name: 'stone' }), /"capability":"harvest".*"product_name":"stone"/)
   assert.equal(toolCommand('getPrototypeDetails', { name: "mod's-machine" }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_prototypes","details",\'mod\\\'s-machine\')))')
   assert.equal(toolCommand('findSkills', { query: 'early iron plate smelting' }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_skills","find",\'early iron plate smelting\',3)))')
   assert.equal(toolCommand('findSkills', { query: '煤蛇', limit: 2 }), '/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_skills","find",\'煤蛇\',2)))')
@@ -180,6 +189,10 @@ test('mutation identity preflight is read-only and limited to operations that ne
   assert.match(craft, /^\/silent-command rcon\.print\(helpers\.table_to_json\(remote\.call\("autorio_preflight","operation",/)
   assert.match(craft, /'craft_item'/)
   assert.match(craft, /'burner-mining-drill'/)
+
+  const harvest = renderOperationPreflight({ name: 'harvest_product', args: { product_name: 'wood', count: 4, search_radius: 64 } })
+  assert.match(harvest, /'harvest_product'/)
+  assert.match(harvest, /'wood'/)
 
   const gather = renderOperationPreflight({ name: 'gather_resource', args: { resource_name: 'tree-02-red', count: 4, search_radius: 64 } })
   assert.match(gather, /'gather_resource'/)

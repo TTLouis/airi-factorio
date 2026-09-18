@@ -56,11 +56,12 @@ const prototypeDetailsSchema = z.object({
 }).strict()
 
 const prototypeDiscoverySchema = z.object({
-  capability: z.enum(['mining', 'crafting', 'entity-type']),
+  capability: z.enum(['mining', 'crafting', 'entity-type', 'harvest']),
   resource_name: factorioNameSchema.optional(),
   resource_category: factorioNameSchema.optional(),
   crafting_category: factorioNameSchema.optional(),
   entity_type: factorioNameSchema.optional(),
+  product_name: factorioNameSchema.optional(),
   energy_source: z.enum(['burner', 'electric', 'heat', 'fluid', 'void', 'none']).optional(),
   availability: z.enum(['force-available', 'all']).default('force-available'),
   limit: z.number().int().min(1).max(12).default(6),
@@ -152,7 +153,7 @@ export const tools: ToolFunction[] = [
   },
   {
     name: 'discoverPrototypes',
-    description: 'Discover a small canonical set of current-game entity prototype identities by engine-backed capability/type instead of guessing names. Mining accepts resource_name or resource_category; crafting accepts crafting_category; entity-type accepts entity_type. Defaults to force-available candidates only and fails with LIMIT_EXCEEDED instead of dumping large modded sets.',
+    description: 'Discover a bounded canonical set of current-game entity prototypes by engine-backed capability/type. Harvest accepts product_name and groups mineable non-resource entities by the item they yield; mining remains resource-drill discovery.',
     schema: prototypeDiscoverySchema,
     fn: async ({ parameters }) => {
       const parsed = prototypeDiscoverySchema.parse(parameters)
@@ -165,7 +166,7 @@ export const tools: ToolFunction[] = [
   },
   {
     name: 'getPrototypeDetails',
-    description: 'Read bounded static prototype/build knowledge for an item, fluid, or entity name: item stack/place result, entity footprint and build boxes, crafting/mining capabilities, belt speed, inserter offsets, fluidbox roles, and selected energy/capability metadata.',
+    description: 'Read bounded static prototype/build knowledge for an item, fluid, or entity name, including mineable products/yields for harvestable entities plus build/crafting/transport metadata.',
     schema: prototypeDetailsSchema,
     fn: async ({ parameters }) => {
       const parsed = prototypeDetailsSchema.parse(parameters)

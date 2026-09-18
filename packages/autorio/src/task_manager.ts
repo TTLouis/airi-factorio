@@ -96,7 +96,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     const stop_walking = state === TaskStates.WALKING_TO_ENTITY
       || state === TaskStates.WALKING_DIRECT
       || state === TaskStates.ATTACKING
-    const stop_mining = state === TaskStates.MINING
+    const stop_mining = state === TaskStates.MINING || state === TaskStates.HARVESTING
     const stop_shooting = state === TaskStates.ATTACKING
     if (!stop_walking && !stop_mining && !stop_shooting) return
 
@@ -113,6 +113,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     player_state.parameters_walk_to_entity = undefined
     player_state.parameters_walking_direct = undefined
     player_state.parameters_mine_entity = undefined
+    player_state.parameters_harvest_product = undefined
     player_state.parameters_place_entity = undefined
     player_state.parameters_rotate_entity = undefined
     player_state.parameters_move_items = undefined
@@ -158,6 +159,9 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
         break
       case TaskStates.MINING:
         player_state.parameters_mine_entity = task
+        break
+      case TaskStates.HARVESTING:
+        player_state.parameters_harvest_product = task
         break
       case TaskStates.PLACING:
         player_state.parameters_place_entity = task
@@ -239,6 +243,21 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
               count: task.count,
               position: task.position,
               last_target_amount: task.last_target_amount,
+            }
+          : { type: player_state.task_state }
+      }
+      case TaskStates.HARVESTING: {
+        const task = player_state.parameters_harvest_product
+        return task
+          ? {
+              type: task.type,
+              product_name: task.product_name,
+              requested_count: task.requested_count,
+              verified_gain: task.verified_gain,
+              search_radius: task.search_radius,
+              source_names: task.source_names,
+              target_name: task.target_name,
+              target_position: task.target_position,
             }
           : { type: player_state.task_state }
       }

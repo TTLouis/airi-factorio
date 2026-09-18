@@ -61,6 +61,7 @@ const operationKeys = {
   mine_entity_exact: ['unit_number'],
   mine_resource_at: ['resource_name', 'x', 'y', 'count'],
   gather_resource: ['resource_name', 'count', 'search_radius'],
+  harvest_product: ['product_name', 'count', 'search_radius'],
   supply_entity: ['unit_number', 'items'],
   execute_construction_plan: ['validation_id', 'placement_count'],
   place_entity: ['entity_name', 'x', 'y', 'direction'],
@@ -132,6 +133,15 @@ export function parseOperation(value) {
         args: {
           resource_name: factorioName(args.resource_name),
           count: integer(args.count ?? 1, 'count', 1, 1000),
+          search_radius: integer(args.search_radius ?? 256, 'search_radius', 1, 4096),
+        },
+      }
+    case 'harvest_product':
+      return {
+        name,
+        args: {
+          product_name: factorioName(args.product_name),
+          count: integer(args.count ?? 1, 'count', 1, 100000),
           search_radius: integer(args.search_radius ?? 256, 'search_radius', 1, 4096),
         },
       }
@@ -218,6 +228,7 @@ function luaPreflightValue(value) {
 const PREFLIGHTED_OPERATIONS = new Set([
   'craft_item',
   'gather_resource',
+  'harvest_product',
   'mine_resource_at',
   'place_entity',
   'mine_entity',
@@ -254,6 +265,7 @@ export function renderOperation(value) {
     case 'mine_entity_exact': return `remote.call('autorio_operations','mine_entity_exact',${operation.args.unit_number})`
     case 'mine_resource_at': return `remote.call('autorio_operations','mine_resource_at',${luaString(operation.args.resource_name)},${operation.args.x},${operation.args.y},${operation.args.count})`
     case 'gather_resource': return `remote.call('autorio_operations','gather_resource',${luaString(operation.args.resource_name)},${operation.args.count},${operation.args.search_radius})`
+    case 'harvest_product': return `remote.call('autorio_operations','harvest_product',${luaString(operation.args.product_name)},${operation.args.count},${operation.args.search_radius})`
     case 'supply_entity': {
       const items = operation.args.items.map(item => `{item_name=${luaString(item.item_name)},count=${item.count}}`).join(',')
       return `remote.call('autorio_operations','supply_entity',${operation.args.unit_number},{${items}})`
@@ -374,14 +386,15 @@ export const toolDefinitions = [
   functionTool('getRecipeDetails', 'Read bounded deterministic recipe knowledge, including categories, ingredients/products and compatible crafting-machine prototypes.', {
     type: 'object', properties: { item_or_recipe: nameStringSchema }, required: ['item_or_recipe'], additionalProperties: false,
   }),
-  functionTool('discoverPrototypes', 'Discover a small canonical set of current-game entity prototype identities by engine-backed capability/type instead of guessing names. Defaults to force-available candidates and fails bounded on oversized modded sets.', {
+  functionTool('discoverPrototypes', 'Discover a small canonical set of current-game entity prototype identities by engine-backed capability/type instead of guessing names. Harvest discovery groups non-resource mineable entities by item product and returns bounded engine-derived candidates.', {
     type: 'object',
     properties: {
-      capability: { type: 'string', enum: ['mining', 'crafting', 'entity-type'] },
+      capability: { type: 'string', enum: ['mining', 'crafting', 'entity-type', 'harvest'] },
       resource_name: nameStringSchema,
       resource_category: nameStringSchema,
       crafting_category: nameStringSchema,
       entity_type: nameStringSchema,
+      product_name: nameStringSchema,
       energy_source: { type: 'string', enum: ['burner', 'electric', 'heat', 'fluid', 'void', 'none'] },
       availability: { type: 'string', enum: ['force-available', 'all'], default: 'force-available' },
       limit: { type: 'integer', minimum: 1, maximum: 12, default: 6 },
@@ -389,7 +402,7 @@ export const toolDefinitions = [
     required: ['capability'],
     additionalProperties: false,
   }),
-  functionTool('getPrototypeDetails', 'Read bounded static prototype/build knowledge for an item, fluid, or entity: stack/place result, footprint, crafting/mining capability, belt speed, inserter offsets, fluidbox roles, and selected energy metadata.', {
+  functionTool('getPrototypeDetails', 'Read bounded static prototype/build knowledge for an item, fluid, or entity, including mineable products for harvestable entities plus build/crafting/transport metadata.', {
     type: 'object', properties: { name: nameStringSchema }, required: ['name'], additionalProperties: false,
   }),
   functionTool('findSkills', 'Search AIRI\'s bounded local skill/pattern library for reusable gameplay experience relevant to a task. Skill matches are guidance, not live world truth or mutation authority; validate recipes, prototypes, inventory, geometry, and placement before acting.', {
@@ -513,13 +526,14 @@ export function toolCommand(name, rawArgs = {}) {
       noExtra(args, ['item_or_recipe'])
       return `/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_knowledge","recipe_details",${luaString(factorioName(args.item_or_recipe))})))`
     case 'discoverPrototypes': {
-      noExtra(args, ['capability', 'resource_name', 'resource_category', 'crafting_category', 'entity_type', 'energy_source', 'availability', 'limit'])
-      check(['mining', 'crafting', 'entity-type'].includes(args.capability), 'Invalid prototype discovery capability')
+      noExtra(args, ['capability', 'resource_name', 'resource_category', 'crafting_category', 'entity_type', 'product_name', 'energy_source', 'availability', 'limit'])
+      check(['mining', 'crafting', 'entity-type', 'harvest'].includes(args.capability), 'Invalid prototype discovery capability')
       const request = { capability: args.capability }
       if (args.resource_name !== undefined) request.resource_name = factorioName(args.resource_name)
       if (args.resource_category !== undefined) request.resource_category = factorioName(args.resource_category)
       if (args.crafting_category !== undefined) request.crafting_category = factorioName(args.crafting_category)
       if (args.entity_type !== undefined) request.entity_type = factorioName(args.entity_type)
+      if (args.product_name !== undefined) request.product_name = factorioName(args.product_name)
       if (args.energy_source !== undefined) {
         check(['burner', 'electric', 'heat', 'fluid', 'void', 'none'].includes(args.energy_source), 'Invalid prototype discovery energy_source')
         request.energy_source = args.energy_source

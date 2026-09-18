@@ -123,6 +123,14 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     }).strict(),
   }).strict(),
   z.object({
+    name: z.literal('harvest_product'),
+    args: z.object({
+      product_name: factorioNameSchema,
+      count: z.number().int().min(1).max(100000).default(1),
+      search_radius: z.number().int().min(1).max(4096).default(256),
+    }).strict(),
+  }).strict(),
+  z.object({
     name: z.literal('place_candidate'),
     args: z.object({
       candidate_set_id: placementCandidateSetId,
@@ -228,6 +236,7 @@ const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]equip_armor['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]select_weapon_slot['"]${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]mine_entity['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
+  new RegExp(`${callStart}['"]harvest_product['"]${separator}${quotedSafeName}${separator}${positiveInteger}${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]place_entity['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]rotate_entity['"]${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]move_items['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
@@ -291,6 +300,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'mine_entity_exact', ${operation.args.unit_number})`
     case 'mine_resource_at':
       return `remote.call('autorio_operations', 'mine_resource_at', ${renderLuaString(operation.args.resource_name)}, ${operation.args.x}, ${operation.args.y}, ${operation.args.count})`
+    case 'harvest_product':
+      return `remote.call('autorio_operations', 'harvest_product', ${renderLuaString(operation.args.product_name)}, ${operation.args.count}, ${operation.args.search_radius})`
     case 'place_candidate':
       return `remote.call('autorio_operations', 'place_candidate', ${renderLuaString(operation.args.candidate_set_id)}, ${renderLuaString(operation.args.candidate_id)})`
     case 'place_entity': {

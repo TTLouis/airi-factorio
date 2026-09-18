@@ -250,6 +250,26 @@
       ],
       "pterodactyl_layer": "staging-base"
     },
+    "harvest_product": {
+      "args": [
+        "product_name",
+        "count",
+        "search_radius"
+      ],
+      "defaults": {
+        "count": 1,
+        "search_radius": 256
+      },
+      "remote": [
+        "autorio_operations",
+        "harvest_product"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
     "supply_entity": {
       "args": [
         "unit_number",
