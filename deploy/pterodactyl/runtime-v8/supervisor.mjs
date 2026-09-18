@@ -96,6 +96,11 @@ export function configuration(raw = {}, env = process.env) {
   return config
 }
 
+export function factorioVisibilityDiagnostics(factorio = { username: '', token: '', public: false }) {
+  if (factorio?.public === true) return ['Factorio visibility: PUBLIC']
+  return ['Factorio visibility: PRIVATE/HIDDEN', 'No Factorio listing credentials supplied']
+}
+
 export const AIRI_CONFIG_DEFAULTS = {
   actorMode: 'npc',
   chatPlayers: '',
@@ -919,7 +924,7 @@ export class Session {
     this.lastErrorAt = 0
     this.lastStatus = null
     this.authorizationPromise = null
-    this.npcName = 'AIRI'
+    this.npcName = 'SGLuna'
     this.npcId = 'airi'
     this.activityEpoch = Date.now().toString(36)
     this.conversationGeneration = 0
@@ -1272,7 +1277,7 @@ export class Session {
           continue
         }
         if (!chatAuthorized(this.config.chatPlayers, input.player_name)) {
-          this.log(`[AIRI UI] Ignored unauthorized ${input.kind} player=${input.player_name}${input.action ? ` action=${input.action}` : ''}`)
+          this.log(`[SGLuna UI] Ignored unauthorized ${input.kind} player=${input.player_name}${input.action ? ` action=${input.action}` : ''}`)
           continue
         }
         if (input.kind === 'control') this.queueUiControl(input)
@@ -1356,7 +1361,7 @@ export class Session {
         timeoutMs: this.config.providerTimeoutMs,
       }, messages, context),
       reserve: async () => reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget),
-      log: message => this.log(`[AIRI agent] ${redact(secrets, message)}`),
+      log: message => this.log(`[SGLuna agent] ${redact(secrets, message)}`),
       onActivity: (event, data) => this.onAgentActivity(event, data),
     })
     await this.agent.loadPersistentState()
@@ -1377,7 +1382,7 @@ export class Session {
         await this.recoverInterruptedPlan('runtime_restart', { actor_id: this.lastStatus?.actor_id, epoch: this.lastStatus?.epoch })
       })
     }
-    this.log(`AIRI Factorio ready; npc=${this.npcName} (${this.npcId}), actor_id=${this.lastStatus.actor_id}, chat=${describeChatPlayers(this.config.chatPlayers)}`)
+    this.log(`SGLuna Factorio ready; npc=${this.npcName} (${this.npcId}), actor_id=${this.lastStatus.actor_id}, chat=${describeChatPlayers(this.config.chatPlayers)}`)
     return this.lastStatus
   }
 
@@ -1477,7 +1482,7 @@ export class Session {
     const uiControl = parseUiControlLine(line)
     if (uiControl) {
       if (!chatAuthorized(this.config.chatPlayers, uiControl.player_name)) {
-        this.log(`[AIRI UI] Ignored unauthorized control action=${uiControl.action} player=${uiControl.player_name}`)
+        this.log(`[SGLuna UI] Ignored unauthorized control action=${uiControl.action} player=${uiControl.player_name}`)
         return
       }
       this.queueUiControl(uiControl)
@@ -1487,7 +1492,7 @@ export class Session {
     const uiPrompt = parseUiPromptLine(line)
     if (uiPrompt) {
       if (!chatAuthorized(this.config.chatPlayers, uiPrompt.player_name)) {
-        this.log(`[AIRI UI] Ignored unauthorized prompt player=${uiPrompt.player_name}`)
+        this.log(`[SGLuna UI] Ignored unauthorized prompt player=${uiPrompt.player_name}`)
         return
       }
       this.queueUiPrompt(uiPrompt)
@@ -1537,7 +1542,7 @@ export class Session {
       this.lastErrorAt = Date.now()
       this.queueEvent(async () => {
         if (!this.agent.active) {
-          this.log(`[AIRI agent] Autorio error with no active model goal: ${autorioError[1]}`)
+          this.log(`[SGLuna agent] Autorio error with no active model goal: ${autorioError[1]}`)
           return
         }
         await this.ensureAuthorization()
@@ -1601,7 +1606,7 @@ export class Session {
         clean = false
       }
       this.rcon?.close()
-      this.log(clean ? 'AIRI Factorio stopped cleanly' : 'AIRI Factorio shutdown required fallback handling')
+      this.log(clean ? 'SGLuna Factorio stopped cleanly' : 'SGLuna Factorio shutdown required fallback handling')
       return clean
     })()
     return this.stopPromise
@@ -1621,7 +1626,7 @@ export async function verifyManifest(app) {
 }
 
 async function main() {
-  check(os.arch() === 'x64', 'AIRI Pterodactyl v8 requires amd64')
+  check(os.arch() === 'x64', 'SGLuna Pterodactyl v8 requires amd64')
   const root = path.resolve(process.env.CONTAINER_ROOT || '/home/container')
   const app = installedAppRoot()
   const manifest = await verifyManifest(app)
@@ -1634,8 +1639,13 @@ async function main() {
   const work = await fsp.mkdtemp(path.join(root, '.airi', 'run-'))
   let session
   let requestedStop = false
-  const log = message => console.log(`[${new Date().toISOString()}] [AIRI Factorio] ${message}`)
+  const log = message => console.log(`[${new Date().toISOString()}] [SGLuna] ${message}`)
   log(describeRelease(manifest))
+  for (const message of factorioVisibilityDiagnostics(config.factorio)) log(message)
+  log(`Client mod download: ${path.join(root, 'client-mods', 'autorio_0.1.0.zip')}`)
+  log(`User Factorio mod directory: ${path.join(root, 'mods')}`)
+  log(`Managed runtime mod directory: ${path.join(root, '.airi', 'run-*', 'mods')} (internal; do not edit)`)
+  log(`Operator help: ${path.join(root, 'README-SGLUNA.txt')}`)
 
   const handleSignal = () => {
     requestedStop = true
@@ -1676,7 +1686,7 @@ async function main() {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(error => {
-    console.error(`[AIRI Factorio] ${error instanceof Error ? error.message : 'Startup failed'}`)
+    console.error(`[SGLuna] ${error instanceof Error ? error.message : 'Startup failed'}`)
     process.exitCode = 1
   })
 }

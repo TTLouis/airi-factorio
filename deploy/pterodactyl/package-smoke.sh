@@ -29,7 +29,7 @@ trap cleanup EXIT
 command -v docker >/dev/null || { echo '[pterodactyl-smoke] docker is required' >&2; exit 1; }
 command -v node >/dev/null || { echo '[pterodactyl-smoke] node is required to parse the committed egg' >&2; exit 1; }
 [[ -f "$HERE/install.sh" ]] || { echo '[pterodactyl-smoke] generated install.sh is missing' >&2; exit 1; }
-[[ -f "$HERE/egg-airi-factorio-server.json" ]] || { echo '[pterodactyl-smoke] generated egg is missing' >&2; exit 1; }
+[[ -f "$HERE/egg-sgluna-factorio-server.json" ]] || { echo '[pterodactyl-smoke] generated egg is missing' >&2; exit 1; }
 
 SOURCE_ENV_ARGS=()
 if [[ -n "$SMOKE_SOURCE_REF" ]]; then
@@ -42,7 +42,7 @@ echo '[pterodactyl-smoke] Verifying generated artifacts.'
 node "$HERE/build-payload.mjs" --check
 
 echo '[pterodactyl-smoke] Extracting the committed egg installation script.'
-node --input-type=module - "$HERE/egg-airi-factorio-server.json" "$EGG_INSTALL" <<'NODE'
+node --input-type=module - "$HERE/egg-sgluna-factorio-server.json" "$EGG_INSTALL" <<'NODE'
 import fs from 'node:fs'
 const [, , eggPath, outPath] = process.argv
 const egg = JSON.parse(fs.readFileSync(eggPath, 'utf8'))
@@ -83,6 +83,8 @@ docker run --rm \
     [[ -s /mnt/server/client-mods/SHA256SUMS ]] || { echo "[pterodactyl-smoke] managed client mod checksum is missing" >&2; exit 1; }
     [[ ! -e /mnt/server/autorio_0.1.0.zip ]] || { echo "[pterodactyl-smoke] legacy root client mod should have been removed" >&2; exit 1; }
     [[ -s /mnt/server/airi-config.json ]] || { echo "[pterodactyl-smoke] airi-config.json is missing" >&2; exit 1; }
+    [[ -s /mnt/server/README-SGLUNA.txt ]] || { echo "[pterodactyl-smoke] README-SGLUNA.txt is missing" >&2; exit 1; }
+    [[ -d /mnt/server/mods && -d /mnt/server/saves ]] || { echo "[pterodactyl-smoke] operator mod/save directories are missing" >&2; exit 1; }
     ! grep -q "smoke-secret" /mnt/server/airi-config.json || { echo "[pterodactyl-smoke] provider secret leaked to airi-config.json" >&2; exit 1; }
     target="$(readlink -- /mnt/server/start-airi.sh)"
     [[ "$target" == .airi/releases/*/start-airi.sh ]] || { echo "[pterodactyl-smoke] unexpected startup target: $target" >&2; exit 1; }
@@ -104,7 +106,7 @@ docker run -d --name "$NAME" \
 ready=0
 for _ in $(seq 1 180); do
   docker logs "$NAME" > "$LOG" 2>&1 || true
-  if grep -q 'AIRI Factorio ready;' "$LOG"; then
+  if grep -q 'SGLuna Factorio ready;' "$LOG"; then
     ready=1
     break
   fi
@@ -128,7 +130,7 @@ docker logs "$NAME" > "$LOG" 2>&1 || true
 cat "$LOG"
 grep -q 'Requesting Factorio graceful /quit shutdown' "$LOG" || { echo '[pterodactyl-smoke] supervisor did not request Factorio /quit' >&2; exit 1; }
 grep -q 'Goodbye' "$LOG" || { echo '[pterodactyl-smoke] Factorio clean Goodbye shutdown marker missing' >&2; exit 1; }
-grep -q 'AIRI Factorio stopped cleanly' "$LOG" || { echo '[pterodactyl-smoke] clean shutdown acknowledgement missing' >&2; exit 1; }
+grep -q 'SGLuna Factorio stopped cleanly' "$LOG" || { echo '[pterodactyl-smoke] clean shutdown acknowledgement missing' >&2; exit 1; }
 docker run --rm \
   -v "$ROOT:/mnt/server" \
   "$IMAGE" \

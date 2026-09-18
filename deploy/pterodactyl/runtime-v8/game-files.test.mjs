@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { prepareServerSettings } from './game-files.mjs'
+import { prepareServerSettings, selectSave } from './game-files.mjs'
 
 async function temp(t) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-game-files-'))
@@ -45,6 +45,8 @@ test('blank username/token produces a hidden server on first creation', async (t
   assert.equal(settings.username, '')
   assert.equal(settings.token, '')
   assert.equal(settings.require_user_verification, false)
+  assert.equal(settings.name, 'SGLuna Factorio NPC')
+  assert.equal(settings.description, 'SGLuna standalone NPC Factorio server')
 })
 
 test('matching username/token publishes the server', async (t) => {
@@ -83,6 +85,8 @@ test('an existing public file is switched back to require_user_verification=fals
   settings = await readSettings(root)
   assert.equal(settings.visibility.public, false)
   assert.equal(settings.require_user_verification, false)
+  assert.equal(settings.username, '')
+  assert.equal(settings.token, '')
 })
 
 test('unrelated settings survive repeated updates', async (t) => {
@@ -145,4 +149,27 @@ test('the secret token is never written to any log-visible location besides serv
   assert.match(settingsText, /super-secret-token/)
   const gameFiles = await fsp.readdir(path.join(root, 'data'))
   assert.deepEqual(gameFiles, ['server-settings.json'])
+})
+
+
+test('blank save selection creates the SGLuna default only when no save exists', async (t) => {
+  const root = await temp(t)
+  const selected = await selectSave(root, '')
+  assert.equal(path.basename(selected.filename), 'sgluna-world.zip')
+  assert.equal(selected.create, true)
+})
+
+test('blank save selection still prefers the newest existing valid save', async (t) => {
+  const root = await temp(t)
+  const saves = path.join(root, 'saves')
+  await fsp.mkdir(saves, { recursive: true })
+  const older = path.join(saves, 'older.zip')
+  const newer = path.join(saves, 'existing-world.zip')
+  await fsp.writeFile(older, 'older')
+  await fsp.writeFile(newer, 'newer')
+  await fsp.utimes(older, new Date(1000), new Date(1000))
+  await fsp.utimes(newer, new Date(2000), new Date(2000))
+  const selected = await selectSave(root, '')
+  assert.equal(selected.filename, newer)
+  assert.equal(selected.create, false)
 })

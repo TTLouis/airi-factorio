@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = (Resolve-Path (Join-Path $Here '..\..')).Path
 $InstallScript = (Resolve-Path (Join-Path $Here 'install.sh')).Path
-$EggPath = (Resolve-Path (Join-Path $Here 'egg-airi-factorio-server.json')).Path
+$EggPath = (Resolve-Path (Join-Path $Here 'egg-sgluna-factorio-server.json')).Path
 $Suffix = ([guid]::NewGuid().ToString('N')).Substring(0, 10)
 $Volume = "airi-ptero-smoke-$PID-$Suffix"
 $Container = "airi-ptero-smoke-$PID-$Suffix"
@@ -90,7 +90,7 @@ try {
         '-v', "${Volume}:/mnt/server",
         $Image,
         'bash', '-lc',
-        'set -Eeuo pipefail; test -L /mnt/server/start-airi.sh; test -x /mnt/server/rollback-airi.sh; test -s /mnt/server/client-mods/autorio_0.1.0.zip; test -s /mnt/server/client-mods/SHA256SUMS; test ! -e /mnt/server/autorio_0.1.0.zip; test -s /mnt/server/airi-config.json; ! grep -q smoke-secret /mnt/server/airi-config.json; target=$(readlink /mnt/server/start-airi.sh); case "$target" in .airi/releases/*/start-airi.sh) ;; *) echo "unexpected startup target: $target" >&2; exit 1;; esac; test -s "/mnt/server/${target%/start-airi.sh}/manifest.json"'
+        'set -Eeuo pipefail; test -L /mnt/server/start-airi.sh; test -x /mnt/server/rollback-airi.sh; test -s /mnt/server/client-mods/autorio_0.1.0.zip; test -s /mnt/server/client-mods/SHA256SUMS; test ! -e /mnt/server/autorio_0.1.0.zip; test -s /mnt/server/airi-config.json; test -s /mnt/server/README-SGLUNA.txt; test -d /mnt/server/mods; test -d /mnt/server/saves; ! grep -q smoke-secret /mnt/server/airi-config.json; target=$(readlink /mnt/server/start-airi.sh); case "$target" in .airi/releases/*/start-airi.sh) ;; *) echo "unexpected startup target: $target" >&2; exit 1;; esac; test -s "/mnt/server/${target%/start-airi.sh}/manifest.json"'
     )
 
     Write-Host '[pterodactyl-smoke] Starting packaged runtime with zero connected players.'
@@ -115,7 +115,7 @@ try {
     $lastLogs = ''
     for ($i = 0; $i -lt 180; $i++) {
         $lastLogs = (& docker logs $Container 2>&1) -join "`n"
-        if ($lastLogs -match 'AIRI Factorio ready;') {
+        if ($lastLogs -match 'SGLuna Factorio ready;') {
             $ready = $true
             break
         }
@@ -143,7 +143,7 @@ try {
     if ($logs -notmatch 'Goodbye') {
         throw 'Factorio clean Goodbye shutdown marker missing.'
     }
-    if ($logs -notmatch 'AIRI Factorio stopped cleanly') {
+    if ($logs -notmatch 'SGLuna Factorio stopped cleanly') {
         throw 'Clean shutdown acknowledgement missing.'
     }
 

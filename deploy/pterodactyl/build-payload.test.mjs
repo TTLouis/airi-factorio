@@ -1,14 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { buildArtifacts, channelInstaller, installerLoader, verifyGeneratedArtifacts } from './build-payload.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const PAYLOAD_REF = 'e22fb7088f61449c761cfb7db34c0a5a1acae336'
-const PAYLOAD_SHA256 = 'f06ec7589918aa2ee81e5d34e9e6931745657f8ed1bccde64b6e849570406cc2'
+const PAYLOAD_REF = 'e60621a937cec31c035f2d0345c08d57bd27a119'
+const PAYLOAD_SHA256 = '69d9b56481bab113d6005eea921f33d8697a96054e0a284e976f7a7f516a2d33'
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
 REVISION="test"
@@ -31,8 +31,12 @@ test('main and NPC E2E eggs resolve different default source refs on reinstall',
   const mainEgg = JSON.parse(canonical.mainEggJson)
   const e2eEgg = JSON.parse(canonical.e2eEggJson)
 
-  assert.equal(mainEgg.name, 'AIRI Factorio Server (Main)')
-  assert.equal(e2eEgg.name, 'AIRI Factorio Server (NPC E2E)')
+  assert.equal(mainEgg.name, 'SGLuna Factorio Server (Main)')
+  assert.equal(e2eEgg.name, 'SGLuna Factorio Server (NPC E2E)')
+  assert.equal(mainEgg.config.startup, '{"done": "SGLuna Factorio ready"}')
+  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.name, 'SGLuna Source Ref')
+  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_ACTOR_MODE')?.name, 'SGLuna Actor Mode')
+  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS')?.name, 'SGLuna Chat Players')
   assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.default_value, 'main')
   assert.equal(e2eEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.default_value, 'feat/npc-transition-work')
   assert.notEqual(mainEgg.scripts.installation.script, e2eEgg.scripts.installation.script)
@@ -42,13 +46,13 @@ test('main and NPC E2E eggs resolve different default source refs on reinstall',
 
 test('channel installer resolves to an exact SHA and only patches source/revision assignments', () => {
   const script = channelInstaller(source, 'npcE2e')
-  assert.match(script, /api\.github\.com\/repos\/TTLouis\/airi-factorio\/commits/)
+  assert.match(script, /api\.github\.com\/repos\/TTLouis\/factorio-npc\/commits/)
   assert.match(script, /RESOLVED_SHA/)
   assert.match(script, /Unexpected AIRI_REF assignment contract/)
   assert.match(script, /Unexpected REVISION assignment contract/)
   assert.match(script, /AIRI_REF=.*RESOLVED_SHA/)
   assert.match(script, /REVISION=.*CHANNEL.*SHORT_SHA/)
-  assert.doesNotMatch(script, /codeload\.github\.com\/TTLouis\/airi-factorio\/tar\.gz\/\$SOURCE_REF/)
+  assert.doesNotMatch(script, /codeload\.github\.com\/TTLouis\/factorio-npc\/tar\.gz\/\$SOURCE_REF/)
 })
 
 test('generated egg variable contract keeps safe provider defaults and 300 request budget', () => {
@@ -61,6 +65,10 @@ test('generated egg variable contract keeps safe provider defaults and 300 reque
     assert.equal(egg.variables.find(entry => entry.env_variable === 'PROVIDER_TIMEOUT_MS')?.default_value, '120000')
     assert.equal(egg.variables.find(entry => entry.env_variable === 'MAX_PROVIDER_REQUESTS_PER_HOUR')?.default_value, '300')
     assert.equal(egg.variables.find(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS')?.default_value, '')
+    assert.ok(egg.variables.some(entry => entry.env_variable === 'AIRI_SOURCE_REF'))
+    assert.ok(egg.variables.some(entry => entry.env_variable === 'AIRI_ACTOR_MODE'))
+    assert.ok(egg.variables.some(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS'))
+    assert.ok(!egg.variables.some(entry => entry.env_variable === 'PRIVATE_SERVER'))
     assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_PLAYER'))
     assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_CHAT_PLAYER'))
   }
@@ -87,8 +95,10 @@ test('generated artifact verifier rejects source or channel drift', () => {
 test('committed Pterodactyl artifacts are internally valid and reinstall stays deployment-only', () => {
   const committedSource = readFileSync(join(here, 'payload-src', 'installer.sh'))
   const committedInstall = readFileSync(join(here, 'install.sh'), 'utf8')
-  const committedMainEgg = readFileSync(join(here, 'egg-airi-factorio-server.json'), 'utf8')
-  const committedE2eEgg = readFileSync(join(here, 'egg-airi-factorio-npc-e2e.json'), 'utf8')
+  const committedMainEgg = readFileSync(join(here, 'egg-sgluna-factorio-server.json'), 'utf8')
+  const committedE2eEgg = readFileSync(join(here, 'egg-sgluna-factorio-npc-e2e.json'), 'utf8')
+  assert.equal(existsSync(join(here, 'egg-airi-factorio-server.json')), false)
+  assert.equal(existsSync(join(here, 'egg-airi-factorio-npc-e2e.json')), false)
   const sourceText = committedSource.toString('utf8')
 
   assert.equal(verifyGeneratedArtifacts(committedSource, committedInstall, committedMainEgg, committedE2eEgg), true)
@@ -105,4 +115,9 @@ test('committed Pterodactyl artifacts are internally valid and reinstall stays d
   assert.match(sourceText, /await import\(pathToFileURL\(process\.env\.AIRI_SUPERVISOR_VERIFY\)\.href\)/)
   assert.match(sourceText, /src\/runtime-v8\/canonical-task-board-memory\.mjs/)
   assert.match(sourceText, /src\/runtime-v8\/provider-base\.mjs/)
+  assert.match(sourceText, /README-SGLUNA\.txt/)
+  assert.doesNotMatch(sourceText, /TTLouis\/airi-factorio/)
+  assert.doesNotMatch(committedInstall, /TTLouis\/airi-factorio/)
+  assert.doesNotMatch(committedMainEgg, /TTLouis\/airi-factorio/)
+  assert.doesNotMatch(committedE2eEgg, /TTLouis\/airi-factorio/)
 })

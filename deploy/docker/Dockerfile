@@ -1,6 +1,6 @@
 FROM --platform=linux/amd64 debian:bookworm-slim
 
-ARG AIRI_REPO=TTLouis/airi-factorio
+ARG AIRI_REPO=TTLouis/factorio-npc
 ARG AIRI_SOURCE_REF=main
 ARG FACTORIO_VERSION=latest
 

@@ -77,10 +77,10 @@ Two PTDL_v2 eggs keep stable deployments separate from active E2E work:
 
 | Egg | Default source ref | Purpose |
 | --- | --- | --- |
-| [`deploy/pterodactyl/egg-airi-factorio-server.json`](./deploy/pterodactyl/egg-airi-factorio-server.json) | `main` | Stable/main deployment |
-| [`deploy/pterodactyl/egg-airi-factorio-npc-e2e.json`](./deploy/pterodactyl/egg-airi-factorio-npc-e2e.json) | `feat/npc-transition-work` | Active NPC/E2E testing |
+| [`deploy/pterodactyl/egg-sgluna-factorio-server.json`](./deploy/pterodactyl/egg-sgluna-factorio-server.json) | `main` | Stable/main deployment |
+| [`deploy/pterodactyl/egg-sgluna-factorio-npc-e2e.json`](./deploy/pterodactyl/egg-sgluna-factorio-npc-e2e.json) | `feat/npc-transition-work` | Active NPC/E2E testing |
 
-The filenames and `AIRI_*` deployment identifiers are retained temporarily for compatibility and will be migrated deliberately rather than renamed all at once.
+The user-facing egg filenames and display names now use **SGLuna**. Existing `AIRI_*` environment keys plus `.airi/`, `airi-config.json`, `start-airi.sh`, `!airi`, Autorio IDs, and runtime protocol identifiers remain compatibility surfaces and are intentionally not bulk-renamed.
 
 **Restart does not update application code.** A normal server restart keeps the already installed managed release.
 

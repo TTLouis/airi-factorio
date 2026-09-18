@@ -65,8 +65,8 @@ export async function prepareServerSettings(root, game, factorio = { username: '
   }
   else {
     current = JSON.parse(await fsp.readFile(path.join(game, 'data', 'server-settings.example.json'), 'utf8'))
-    current.name = 'AIRI Factorio NPC'
-    current.description = 'AIRI standalone NPC Factorio server'
+    current.name = 'SGLuna Factorio NPC'
+    current.description = 'SGLuna standalone NPC Factorio server'
   }
 
   // Factorio refuses to start a public game unless require_user_verification
@@ -118,7 +118,7 @@ export async function selectSave(root, requested = '') {
   }
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs || a.filename.localeCompare(b.filename))
   if (candidates.length) return { filename: candidates[0].filename, create: false }
-  return { filename: path.join(saves, 'airi-world.zip'), create: true }
+  return { filename: path.join(saves, 'sgluna-world.zip'), create: true }
 }
 
 export async function createSave(filename, game, modDir, configFile, root, log = () => {}) {

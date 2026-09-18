@@ -80,8 +80,8 @@ jobs:
 
           const version = process.env.VERSION
           const sha = process.env.GITHUB_SHA
-          const input = 'deploy/pterodactyl/egg-airi-factorio-server.json'
-          const output = `release-out/egg-airi-factorio-${version}.json`
+          const input = 'deploy/pterodactyl/egg-sgluna-factorio-server.json'
+          const output = `release-out/egg-sgluna-factorio-${version}.json`
           const egg = JSON.parse(fs.readFileSync(input, 'utf8'))
           const sourceVariable = egg.variables?.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')
           if (!sourceVariable) throw new Error('AIRI_SOURCE_REF variable is missing from the generated egg')
@@ -93,11 +93,11 @@ jobs:
           const expected = 'DEFAULT_SOURCE_REF="main"'
           if (!script.includes(expected)) throw new Error('main source fallback contract changed')
           egg.scripts.installation.script = script.replace(expected, `DEFAULT_SOURCE_REF="${sha}"`)
-          egg.name = `AIRI Factorio Server (${version})`
-          egg.description = `Immutable AIRI Factorio prerelease ${version}, pinned to ${sha}. Restart and reinstall stay on this release unless AIRI_SOURCE_REF is explicitly changed.`
+          egg.name = `SGLuna Factorio Server (${version})`
+          egg.description = `Immutable SGLuna Factorio prerelease ${version}, pinned to ${sha}. Restart and reinstall stay on this release unless AIRI_SOURCE_REF is explicitly changed.`
           fs.writeFileSync(output, `${JSON.stringify(egg, null, 4)}\n`)
           NODE
-          sha256sum "release-out/egg-airi-factorio-${VERSION}.json" > release-out/SHA256SUMS
+          sha256sum "release-out/egg-sgluna-factorio-${VERSION}.json" > release-out/SHA256SUMS
 
       - name: Build and smoke Docker release image
         id: docker
@@ -131,7 +131,7 @@ jobs:
           ready=0
           for _ in $(seq 1 180); do
             logs="$(docker logs "$name" 2>&1 || true)"
-            if grep -q 'AIRI Factorio ready;' <<<"$logs"; then
+            if grep -q 'SGLuna Factorio ready;' <<<"$logs"; then
               ready=1
               break
             fi
@@ -147,7 +147,7 @@ jobs:
           docker stop --time=60 "$name" >/dev/null
           docker logs "$name" > release-out/docker-smoke.log 2>&1 || true
           grep -q 'Goodbye' release-out/docker-smoke.log
-          grep -q 'AIRI Factorio stopped cleanly' release-out/docker-smoke.log
+          grep -q 'SGLuna Factorio stopped cleanly' release-out/docker-smoke.log
           cleanup
           trap - EXIT
 
@@ -181,11 +181,11 @@ jobs:
             exit 1
           fi
           gh release create "$VERSION" \
-            "release-out/egg-airi-factorio-${VERSION}.json#Pterodactyl egg (pinned)" \
+            "release-out/egg-sgluna-factorio-${VERSION}.json#Pterodactyl egg (pinned)" \
             "release-out/SHA256SUMS#Release asset checksums" \
             "release-out/docker-image.txt#Docker image reference" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "AIRI Factorio $VERSION" \
+            --title "SGLuna Factorio $VERSION" \
             --notes-file release-out/RELEASE_NOTES.md \
             --prerelease

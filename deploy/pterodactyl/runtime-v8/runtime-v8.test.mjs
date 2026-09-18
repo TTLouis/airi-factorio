@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 
 import { chatAuthorized, describeChatPlayers } from './common.mjs'
 import { providerEndpoint } from './provider.mjs'
-import { configuration, installedAppRoot, Session } from './supervisor.mjs'
+import { configuration, factorioVisibilityDiagnostics, installedAppRoot, Session } from './supervisor.mjs'
 
 async function temp(t) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-v8-'))
@@ -98,6 +98,16 @@ test('Factorio account: matching username and token publishes the server', () =>
 test('Factorio account: only one of username/token supplied fails configuration', () => {
   assert.throws(() => configuration({}, { ...baseEnv, FACTORIO_USERNAME: 'ttlouis' }))
   assert.throws(() => configuration({}, { ...baseEnv, FACTORIO_TOKEN: 'dummy-token-1234' }))
+})
+
+test('Factorio visibility diagnostics report state without exposing credentials', () => {
+  const token = 'never-print-this-token'
+  const publicText = factorioVisibilityDiagnostics({ username: 'ttlouis', token, public: true }).join('\n')
+  assert.match(publicText, /Factorio visibility: PUBLIC/)
+  assert.doesNotMatch(publicText, /ttlouis|never-print-this-token/)
+  const privateText = factorioVisibilityDiagnostics({ username: '', token: '', public: false }).join('\n')
+  assert.match(privateText, /Factorio visibility: PRIVATE\/HIDDEN/)
+  assert.match(privateText, /No Factorio listing credentials supplied/)
 })
 
 test('Factorio account: a stored factorioUsername in airi-config.json is never read', () => {
