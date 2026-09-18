@@ -1276,6 +1276,12 @@ function persistentRuntimeHealthy(runtime) {
   return runtime?.active === true && runtime.healthy === true && runtime.controller_live === true
 }
 
+function finalStepCanCloseFromFreshObservation(state) {
+  const stored = Array.isArray(state?.last_operations) ? state.last_operations.slice(-16) : []
+  if (stored.length === 0) return true
+  return stored.every(value => /^wait(?:\s|$)/i.test(String(value ?? '').trim()))
+}
+
 function verifiedFinalCompletion(plan, state, triggerSource, { freshObservation = false } = {}) {
   if (triggerSource !== 'completion' || plan?.operations?.length !== 0 || plan?.plan?.length !== 0) return false
   const board = state?.task_board
@@ -1287,7 +1293,7 @@ function verifiedFinalCompletion(plan, state, triggerSource, { freshObservation 
     && item?.step_id === board.active_step_id
     && (!ref || item?.ref === ref))
   if (deterministicCurrentStep) return true
-  return freshObservation === true && state?.last_mutation_verified === true
+  return freshObservation === true && finalStepCanCloseFromFreshObservation(state)
 }
 
 function actionOmissionRecoveryCapsule(state, runtimeStatus) {

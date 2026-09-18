@@ -484,7 +484,7 @@ test('completed observation followed by prose-only intent gets exactly one cheap
 
   const result = await agent.request('take ten iron plates from that chest', { sender: 'TTLouis' })
   assert.equal(calls.length, 3)
-  assert.equal(rcon.observationCalls, 5)
+  assert.equal(rcon.observationCalls, 1)
   assert.equal(result.operations[0].name, 'move_items_exact')
   assert.equal(rcon.mutations.length, 1)
   assert.equal(calls[2].options.recoveryAttempt, 1)
@@ -738,7 +738,7 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
 
   const result = await agent.request('inspect the chest and take the needed plates', { sender: 'TTLouis' })
   assert.equal(calls, 6)
-  assert.equal(rcon.observationCalls, 1)
+  assert.equal(rcon.observationCalls, 5)
   assert.equal(optionsSeen.at(-1).allowTools, false)
   assert.equal(optionsSeen.at(-1).recoveryAttempt, 1)
   assert.deepEqual(optionsSeen.at(-1).requestBodyPatch, { max_tokens: 700 })

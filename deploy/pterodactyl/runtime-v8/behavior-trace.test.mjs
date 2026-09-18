@@ -35,6 +35,7 @@ class FakeRcon {
   async command(text) {
     if (text.includes('remote.call("airi_deployment","status")')) return JSON.stringify(this.status)
     if (text.includes('remote.call("autorio_actor","status")')) return JSON.stringify({ actor: { actor_id: 18, kind: 'standalone_character' } })
+    if (text.includes('remote.call("autorio_preflight","operation"')) return JSON.stringify({ ok: true })
     if (text.includes('remote.call("autorio_operations","status")')) {
       return JSON.stringify({
         task_state: 'IDLE',
@@ -43,7 +44,7 @@ class FakeRcon {
         last_completed_batch: {
           batch_id: this.batchId,
           task_count: 1,
-          task_types: ['waiting'],
+          task_types: ['placing'],
           tick: 100 + this.batchId,
         },
         basic_operation: { last_result: { operation_id: 9, code: 'completed', completed: true } },
@@ -129,7 +130,7 @@ test('behavior trace correlates request through verification, records usage, and
   const traceFile = path.join(dir, 'airi-behavior.jsonl')
   const replies = [
     toolMessage(),
-    planMessage([{ name: 'wait', args: { ticks: 1 } }]),
+    planMessage([{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 4 } }]),
     planMessage([], 'Verified complete.'),
   ]
   let budgetCount = 0
@@ -142,7 +143,7 @@ test('behavior trace correlates request through verification, records usage, and
     traceFile,
   })
 
-  await agent.request('inspect Bearer abcdefghijklmnop then wait', { sender: 'TTLouis' })
+  await agent.request('inspect Bearer abcdefghijklmnop then place one furnace', { sender: 'TTLouis' })
   await agent.completed()
 
   const raw = await fsp.readFile(traceFile, 'utf8')
@@ -199,8 +200,8 @@ test('behavior trace correlates request through verification, records usage, and
 test('duplicate completion receipts do not spend another provider call, while a new batch still does', async () => {
   const rcon = new FakeRcon()
   const replies = [
-    planMessage([{ name: 'wait', args: { ticks: 1 } }]),
-    planMessage([{ name: 'wait', args: { ticks: 1 } }], 'Continue.'),
+    planMessage([{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 4 } }]),
+    planMessage([{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 6, y: 4 } }], 'Continue.'),
     planMessage([], 'Verified complete.'),
   ]
   let providerCalls = 0
@@ -217,7 +218,7 @@ test('duplicate completion receipts do not spend another provider call, while a 
     onActivity: (event, data) => activity.push({ event, data }),
   })
 
-  await agent.request('wait twice', { sender: 'TTLouis' })
+  await agent.request('place two furnaces', { sender: 'TTLouis' })
   assert.equal(providerCalls, 1)
 
   await agent.completed()

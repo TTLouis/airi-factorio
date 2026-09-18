@@ -18,7 +18,6 @@ const STRICT_TASKS_BY_OPERATION = new Map([
   ['craft_item', ['crafting']],
   ['attack_nearest_enemy', ['attacking']],
   ['clear_enemy_area', ['attacking']],
-  ['wait', ['waiting']],
 ])
 
 const TRANSFER_OPERATION_NAMES = new Set(['move_items', 'move_items_exact', 'move_items_with_player', 'supply_entity'])
