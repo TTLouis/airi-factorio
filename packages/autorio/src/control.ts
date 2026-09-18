@@ -1,6 +1,7 @@
 import type { MapPositionStruct } from 'factorio:prototype'
 import type {
   LuaEntity,
+  UnitNumber,
   OnPlayerCraftedItemEvent,
   OnPlayerMinedEntityEvent,
   OnScriptPathRequestFinishedEvent,
@@ -19,6 +20,7 @@ import { new_crafting_controller } from './crafting'
 import { new_defense_controller } from './defense'
 import { create_discovery_remote_interface } from './discovery'
 import { new_equipment_controller } from './equipment'
+import { entity_reference_hint } from './entity_reference'
 import { new_follow_controller } from './follow'
 import { new_interaction_recovery } from './interaction_recovery'
 import { create_knowledge_remote_interface } from './knowledge'
@@ -168,6 +170,62 @@ function operation_preflight(name: string, args: Record<string, any>) {
 
   if (!args || typeof args !== 'object') return reject('invalid_preflight_args')
 
+  let exact_target: Record<string, unknown> | undefined
+  const exact_unit_operations = [
+    'walk_to_entity_exact',
+    'mine_entity_exact',
+    'supply_entity',
+    'rotate_entity',
+    'move_items_exact',
+    'set_machine_recipe',
+  ]
+  if (exact_unit_operations.indexOf(name) >= 0) {
+    if (!actor || !actor.is_valid) return reject('no_actor')
+    const unit_number = args.unit_number
+    if (typeof unit_number !== 'number'
+      || unit_number !== math.floor(unit_number)
+      || unit_number < 1
+      || unit_number > 9007199254740991) {
+      return reject('invalid_unit_number', { field: 'unit_number', identity: unit_number })
+    }
+    const target = game.get_entity_by_unit_number(unit_number as UnitNumber)
+    if (!target || !target.valid) {
+      const hint = entity_reference_hint(unit_number)
+      return reject('stale_exact_target', {
+        field: 'unit_number',
+        identity: unit_number,
+        last_observed: hint
+          ? {
+              unit_number,
+              name: hint.name,
+              surface_index: hint.surface_index,
+              force_index: hint.force_index,
+              position: hint.position,
+              observed_tick: hint.observed_tick,
+            }
+          : undefined,
+      })
+    }
+    if (target.surface.index !== actor.surface.index) {
+      return reject('different_surface', {
+        field: 'unit_number',
+        identity: unit_number,
+        target_surface_index: target.surface.index,
+        actor_surface_index: actor.surface.index,
+      })
+    }
+    exact_target = {
+      unit_number,
+      name: target.name,
+      position: { x: target.position.x, y: target.position.y },
+      surface_index: target.surface.index,
+      force_index: target.force.index,
+    }
+    if (name !== 'set_machine_recipe') {
+      return accept({ field: 'unit_number', identity: unit_number, target: exact_target })
+    }
+  }
+
   if (name === 'craft_item') {
     if (!actor || !actor.is_valid) return reject('no_actor')
     const item_name = args.item_name
@@ -240,7 +298,12 @@ function operation_preflight(name: string, args: Record<string, any>) {
         expected: 'force recipe',
       })
     }
-    return accept({ field: 'recipe_name', identity: recipe_name, recipe_name: recipe.name })
+    return accept({
+      field: 'recipe_name',
+      identity: recipe_name,
+      recipe_name: recipe.name,
+      target: exact_target,
+    })
   }
 
   return accept({ validation: 'not_required' })
