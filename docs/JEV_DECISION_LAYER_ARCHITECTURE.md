@@ -437,25 +437,52 @@ the runtime should take a conservative fallback path.
 
 For V1, the preferred fallback is the existing interaction/planner route rather than inventing a new deterministic policy.
 
-The experiment must remain usable with Jev completely disabled.
+The experiment must remain usable with no decision-provider credentials configured.
 
 ## Configuration
 
 Jev credentials must remain environment-only and must never be persisted into `airi-config.json` or traces.
 
-Proposed experimental variables:
+There is deliberately **no separate enabled flag**. The decision provider is present when a decision-provider API key is present, and absent when it is not. Missing decision-provider credentials must never prevent an otherwise valid SGLuna server from starting.
+
+TypeSafe's documented native API is:
 
 ```text
-JEV_ENABLED=false
-JEV_API_KEY=
-JEV_API_BASEURL=
-JEV_MODEL=jev
-JEV_TIMEOUT_MS=...
+POST https://api.typesafe.ai/v1/systemone
+Authorization: Bearer <API_KEY>
+model: jev-latest
 ```
 
-Exact names/API shape should follow the direct TypeSafe API once verified.
+The repository accepts the official `TYPESAFE_API_KEY` name and the provider-generic `DECISION_PROVIDER_API_KEY` alias. Experimental tuning variables are:
 
-Do not add these to the stable Main egg until the experimental branch has a working end-to-end path. The first implementation may add them only to the experimental deployment/testing surface.
+```text
+DECISION_PROVIDER_API_KEY=        # optional; TYPESAFE_API_KEY is also accepted
+DECISION_PROVIDER_API_URL=https://api.typesafe.ai/v1/systemone
+DECISION_PROVIDER_MODEL=jev-latest
+DECISION_PROVIDER_TIMEOUT_MS=5000
+MAX_DECISION_PROVIDER_REQUESTS_PER_HOUR=180
+DECISION_PROVIDER_MAX_INPUT_CHARS=16000
+DECISION_PROVIDER_MAX_QUESTIONS=16
+```
+
+The API key is runtime-only. The URL/model/limits are also intentionally environment-owned during the experiment rather than being written into the compatibility `airi-config.json`.
+
+Do not add these to the stable Main egg until the experimental branch has a working end-to-end path.
+
+### Credit conservation from the first call
+
+Jev is inexpensive, but the integration should still be efficient by construction:
+
+- send one compact shared state instead of planner history;
+- batch independent questions that use the same state into one System One request;
+- cap the entire serialized decision request before transport;
+- cap question count;
+- use a separate decision-provider hourly request budget rather than consuming the planner budget;
+- do not automatically retry provider HTTP failures;
+- use the `usage.input_tokens` / `usage.output_tokens` fields returned by TypeSafe for observability;
+- during shadow rollout, call Jev only at the bounded decision seam being evaluated rather than mirroring every runtime event.
+
+TypeSafe explicitly recommends asking same-state questions together because they are evaluated in parallel. The goal is therefore to conserve **requests and repeated state tokens**, not to artificially force every workflow into one question.
 
 ## Observability
 
@@ -496,7 +523,7 @@ The existing provider trace should remain distinct from the Jev decision trace s
 - define decision-provider interface;
 - define typed decision schemas;
 - keep existing behavior unchanged;
-- add feature flags/config validation;
+- add implicit credential-based configuration and bounded request validation;
 - add tests for fallback and cancellation.
 
 ### Phase 1 - shadow interaction routing
@@ -546,7 +573,7 @@ Only after the model path is proven:
 
 The first real Jev change is successful when:
 
-- Jev can be fully disabled with no behavior change;
+- with no decision-provider API key, Jev is absent with no behavior change;
 - Jev credentials never enter persisted config or logs;
 - interaction classification can call Jev directly;
 - Jev output is schema/enum validated;
