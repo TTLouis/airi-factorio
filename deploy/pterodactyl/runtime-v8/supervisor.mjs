@@ -875,7 +875,9 @@ export class Session {
 
   onAgentActivity(event, data) {
     if (event === 'request.received') this.appendUiConversation('user', data?.sender, data?.text)
-    if (event === 'plan.accepted' && data?.chat_message) this.appendUiConversation('assistant', this.npcName || 'AIRI', data.chat_message)
+    if ((event === 'plan.accepted' || event === 'request.completed') && data?.chat_message) {
+      this.appendUiConversation('assistant', this.npcName || 'AIRI', data.chat_message)
+    }
     const fallback = {
       request_id: this.agent?.traceRequest?.id,
       turn: this.agent?.traceRequest ? this.agent.continuations + 1 : 0,
@@ -1288,6 +1290,10 @@ export class Session {
         }
         await this.ensureAuthorization()
         await this.applyNavigationObstaclePolicy(text)
+        // Bind the public request at the Session boundary before handing it to the
+        // provider loop. request.received repeats the same projection and is
+        // intentionally deduplicated by appendUiConversation().
+        this.appendUiConversation('user', sender, text)
         const result = await this.agent.request(text, { sender })
         if (result?.chatMessage) this.appendUiConversation('assistant', this.npcName || 'AIRI', result.chatMessage)
         await this.syncTaskBoardUi()
