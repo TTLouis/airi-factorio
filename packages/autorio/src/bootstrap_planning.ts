@@ -259,7 +259,7 @@ function machine_dependency_for(
   for (const candidate of machines.candidates) {
     if (candidate.place_items.length === 0) continue
     const place_item = candidate.place_items[0]
-    const resolved = resolve_item_dependency(actor, place_item.name, 1, depth + 1, state)
+    const resolved = resolve_item_dependency(actor, place_item.name, place_item.count, depth + 1, state)
     selected_item_dependency = { ...resolved.node, role: 'crafting_machine' }
     first = resolved.first ? { ...resolved.first, role: resolved.first.role ?? 'crafting_machine' } : selected_item_dependency
     break

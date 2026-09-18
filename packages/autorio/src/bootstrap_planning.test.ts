@@ -137,4 +137,54 @@ describe('recipe bootstrap dependency closure', () => {
     expect(result.bootstrap.craftable_now).toBe(true)
     expect(result.bootstrap.first_unresolved).toBeUndefined()
   })
+
+  it('uses the live place-item count when bootstrapping a missing compatible machine', () => {
+    ;(globalThis as any).prototypes.get_entity_filtered = (filters: Array<Record<string, string>>) => {
+      if (filters[0]?.crafting_category !== 'processing-x') return {}
+      return {
+        'processor-x': {
+          name: 'processor-x',
+          type: 'assembling-machine',
+          items_to_place_this: [{ name: 'processor-kit', count: 2 }],
+        },
+      }
+    }
+
+    const processing = recipe('process-widget', 'plate-x', {
+      category: 'processing-x',
+      ingredient: 'ore-x',
+      ingredientAmount: 1,
+    })
+    const actor = actorWith({ 'process-widget': processing }, { 'ore-x': 8, 'processor-kit': 1 })
+
+    const result = recipe_bootstrap_for_actor(actor, processing, 1)
+
+    expect(result.inventory_overlay.machine_dependency).toMatchObject({
+      required: 1,
+      held: 0,
+      status: 'needs_acquisition/processing',
+      satisfaction_scope: 'inventory_acquisition',
+      placed_instance_required: true,
+      candidates: [{
+        name: 'processor-x',
+        held_count: 0,
+        place_items: [{ name: 'processor-kit', count: 2 }],
+      }],
+      selected_item_dependency: {
+        name: 'processor-kit',
+        required: 2,
+        held: 1,
+        missing: 1,
+        role: 'crafting_machine',
+      },
+    })
+    expect(result.first_unresolved).toMatchObject({
+      name: 'processor-kit',
+      required: 2,
+      held: 1,
+      missing: 1,
+      role: 'crafting_machine',
+    })
+  })
+
 })

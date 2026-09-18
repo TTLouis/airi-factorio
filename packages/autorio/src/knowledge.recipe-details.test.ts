@@ -123,4 +123,26 @@ describe('recipe details use Factorio 2.0 recipe category fields', () => {
     expect(result.recipes[0].ingredients).toEqual([{ type: 'item', name: 'iron-plate', amount: 1 }])
     expect(result.recipes[0].products).toEqual([{ type: 'item', name: 'runtime-array-shape', amount: 1 }])
   })
+
+  it('treats requested_count as recipe craft executions even when one craft has multiple outputs', () => {
+    const batch = recipe('batch-widget', 'widget-x') as any
+    batch.products = [{ type: 'item', name: 'widget-x', amount: 2 }]
+    const actor = actorWithRecipes(
+      { 'batch-widget': batch },
+      { 'iron-plate': 3, 'widget-x': 1, unrelated: 77 },
+      { 'batch-widget': 3 },
+    )
+
+    const result = recipe_details_for_actor(actor, 'batch-widget', 3) as any
+
+    expect(result.recipes[0].requested_crafts).toBe(3)
+    expect(result.recipes[0].inventory_overlay.outputs).toEqual([
+      { type: 'item', name: 'widget-x', required: 6, held: 1 },
+    ])
+    expect(result.recipes[0].inventory_overlay.ingredients).toEqual([
+      { type: 'item', name: 'iron-plate', required: 3, held: 3, missing: 0, status: 'already_satisfied' },
+    ])
+    expect(JSON.stringify(result.recipes[0].inventory_overlay)).not.toContain('unrelated')
+  })
+
 })
