@@ -556,6 +556,12 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
 
   function bind_target(actor: ControlledActor, task: CombatTask, target: LuaEntity, reason: 'acquired' | 'preempted') {
     if (task.target !== target) clear_combat_path(task, true)
+    if (task.combat_mode === 'clear_area' && is_support_target(target)) {
+      const target_score = enemy_threat_weight(target)
+      task.initial_threat_score = math.max(task.initial_threat_score ?? 0, target_score)
+      task.support_turret_budget = math.max(task.support_turret_budget ?? 0, support_turret_budget(target_score))
+      if (is_static_enemy(target)) task.initial_static_threats = math.max(task.initial_static_threats ?? 0, 1)
+    }
     task.combat_phase = 'engage'
     task.local_safe_since_tick = undefined
     task.target = target
