@@ -840,6 +840,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
+    this.liveEntityObservations = new Map()
     this.onActivity = typeof options.onActivity === 'function' ? options.onActivity : null
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
@@ -895,6 +896,45 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     return toolCommand(name, args)
   }
 
+  recordLiveEntityObservation(entity, actorPosition, source) {
+    if (!entity || typeof entity !== 'object' || typeof entity.name !== 'string') return
+    const unitNumber = Number.isSafeInteger(entity.unit_number) ? entity.unit_number : undefined
+    const position = entity.position && Number.isFinite(entity.position.x) && Number.isFinite(entity.position.y)
+      ? { x: entity.position.x, y: entity.position.y }
+      : undefined
+    let distance = Number.isFinite(entity.distance) ? entity.distance : undefined
+    if (distance === undefined && position && actorPosition
+      && Number.isFinite(actorPosition.x) && Number.isFinite(actorPosition.y)) {
+      distance = Math.hypot(position.x - actorPosition.x, position.y - actorPosition.y)
+    }
+    const key = unitNumber !== undefined
+      ? `unit:${unitNumber}`
+      : `fallback:${entity.name}:${entity.type ?? 'unknown'}:${position?.x ?? '?'}:${position?.y ?? '?'}`
+    this.liveEntityObservations.set(key, {
+      name: entity.name,
+      type: entity.type,
+      unit_number: unitNumber,
+      position,
+      distance,
+      source,
+    })
+  }
+
+  recordLiveEntityToolResult(toolName, raw) {
+    if (!['getNearbyEntities', 'getEntityStatus', 'findLongRangeEntities'].includes(toolName)) return
+    let parsed
+    try { parsed = JSON.parse(String(raw ?? '')) }
+    catch { return }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+    const actorPosition = parsed.actor_position
+    if (Array.isArray(parsed.entities)) {
+      for (const entity of parsed.entities) this.recordLiveEntityObservation(entity, actorPosition, toolName)
+    }
+    if (parsed.entity && typeof parsed.entity === 'object') {
+      this.recordLiveEntityObservation(parsed.entity, actorPosition, toolName)
+    }
+  }
+
   observedMiningTargets(entityName) {
     const byReference = new Map()
     const remember = (entity, actorPosition) => {
@@ -917,13 +957,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
     }
 
-    for (const entry of this.nearbyEntitiesBaselines?.values?.() ?? []) {
-      const actorPosition = entry?.view?.actor_position
-      for (const entity of entry?.view?.entities ?? []) remember(entity, actorPosition)
-    }
-    for (const entry of this.entityStatusBaselines?.values?.() ?? []) {
-      remember(entry?.view?.entity, undefined)
-    }
+    for (const entity of this.liveEntityObservations?.values?.() ?? []) remember(entity, undefined)
     return [...byReference.values()]
   }
 
@@ -963,6 +997,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   async request(text, options = {}) {
     await this.loadPersistentState()
+    this.liveEntityObservations = new Map()
     this.lastMemoryKey = `npc:${this.npcId}`
     this.planUpdateReason = 'request'
     this.lastTaskStatusView = null
@@ -1400,6 +1435,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     for (let index = 0; index < results.length; index++) {
       const original = String(results[index].content ?? '')
+      this.recordLiveEntityToolResult(prepared[index]?.tool?.function?.name, original)
       if (cachedBefore[index]) results[index].content = DUPLICATE_OBSERVATION_MESSAGE
       const output = String(results[index].content ?? '')
       if (this.traceRequest?.usage) this.traceRequest.usage.tool_result_chars += output.length
