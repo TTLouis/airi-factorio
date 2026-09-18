@@ -6,11 +6,16 @@ const STRICT_TASKS_BY_OPERATION = new Map([
   ['mine_entity', ['mining']],
   ['gather_resource', ['walking_to_entity', 'mining']],
   ['place_entity', ['placing']],
+  ['move_items', ['moving_items']],
+  ['move_items_exact', ['moving_items']],
+  ['move_items_with_player', ['moving_items']],
   ['set_machine_recipe', ['setting_recipe']],
   ['craft_item', ['crafting']],
   ['attack_nearest_enemy', ['attacking']],
   ['clear_enemy_area', ['attacking']],
 ])
+
+const TRANSFER_OPERATION_NAMES = new Set(['move_items', 'move_items_exact', 'move_items_with_player', 'supply_entity'])
 
 function clean(value) {
   return String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLocaleLowerCase()
@@ -43,12 +48,31 @@ function taskTypesMatch(actual, expected) {
 }
 
 function strictTaskTypesForOperation(operation) {
+  if (operation.name === 'supply_entity') {
+    const items = operation.args?.items
+    if (!Array.isArray(items) || items.length < 1 || items.length > 8) return undefined
+    return Array.from({ length: items.length }, () => 'moving_items')
+  }
   if (operation.name === 'execute_construction_plan') {
     const count = operation.args?.placement_count
     if (!Number.isSafeInteger(count) || count < 1 || count > 16) return undefined
     return Array.from({ length: count }, () => 'placing')
   }
   return STRICT_TASKS_BY_OPERATION.get(operation.name)
+}
+
+function stateHasUnverifiedTransferIntent(state) {
+  if (!state || state.last_mutation_verified === true) return false
+  const stored = Array.isArray(state.last_operations) ? state.last_operations.slice(-16) : []
+  return stored.map(parseStoredOperation).some(operation => operation && TRANSFER_OPERATION_NAMES.has(operation.name))
+}
+
+function transferFailureReason(evidence) {
+  const receipt = parseReceiptSummary(evidence)
+  const basic = receipt?.basic_operation
+  const code = typeof basic?.code === 'string' && basic.code ? basic.code : undefined
+  const reason = typeof receipt?.reason === 'string' && receipt.reason ? receipt.reason : undefined
+  return code ?? reason ?? 'operation_failed'
 }
 
 export function verifyDeterministicReceipt(state, evidence) {
@@ -79,6 +103,37 @@ export function verifyDeterministicReceipt(state, evidence) {
     return { verified: false, reason: 'receipt_operation_mismatch' }
   }
 
+  const transferOperations = operations.filter(operation => TRANSFER_OPERATION_NAMES.has(operation.name))
+  if (transferOperations.length > 0) {
+    const basic = receipt.basic_operation
+    if (!basic
+      || basic.accepted !== true
+      || basic.completed !== true
+      || basic.code !== 'completed'
+      || basic.type !== 'moving_items'
+      || !Number.isSafeInteger(basic.moved_count)
+      || basic.moved_count <= 0) {
+      return { verified: false, reason: 'transfer_effect_not_verified' }
+    }
+    const finalOperation = operations[operations.length - 1]
+    if (TRANSFER_OPERATION_NAMES.has(finalOperation.name)) {
+      const expectedTarget = finalOperation.name === 'supply_entity'
+        ? finalOperation.args?.unit_number
+        : finalOperation.args?.unit_number
+      if (Number.isSafeInteger(expectedTarget) && basic.target_unit_number !== expectedTarget) {
+        return { verified: false, reason: 'transfer_target_mismatch' }
+      }
+      const expectedToEntity = finalOperation.name === 'move_items_with_player'
+        ? undefined
+        : finalOperation.name === 'supply_entity'
+          ? true
+          : finalOperation.args?.to_entity
+      if (typeof expectedToEntity === 'boolean' && basic.to_entity !== expectedToEntity) {
+        return { verified: false, reason: 'transfer_direction_mismatch' }
+      }
+    }
+  }
+
   return {
     verified: true,
     batchId: receipt.batch_id,
@@ -87,8 +142,8 @@ export function verifyDeterministicReceipt(state, evidence) {
   }
 }
 
-export function canonicalContinuationPlan(previousBoard, plan, { allowReplan = false } = {}) {
-  if (allowReplan || !previousBoard || previousBoard.kind !== 'task_board_lite' || !Array.isArray(previousBoard.steps)) return plan
+export function canonicalContinuationPlan(previousBoard, plan, { allowReplan = false, previousState } = {}) {
+  if (!previousBoard || previousBoard.kind !== 'task_board_lite' || !Array.isArray(previousBoard.steps)) return plan
   const canonical = previousBoard.steps.map(step => String(step?.description ?? '')).filter(Boolean)
   if (canonical.length === 0) return plan
 
@@ -103,6 +158,16 @@ export function canonicalContinuationPlan(previousBoard, plan, { allowReplan = f
   const matched = incomingActive === undefined
     ? -1
     : canonical.findIndex(description => clean(description) === clean(incomingActive))
+
+  if (stateHasUnverifiedTransferIntent(previousState) && matched > currentIndex) {
+    return {
+      ...plan,
+      plan: canonical,
+      currentStep: currentIndex,
+    }
+  }
+
+  if (allowReplan) return plan
   const nextIndex = matched >= currentIndex ? matched : currentIndex
 
   return {
@@ -155,7 +220,21 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
   recordBoardEvidence(key, evidence) {
     const boardAfterReceipt = super.recordBoardEvidence(key, evidence)
     const state = key ? this.planByNpc.get(key) : undefined
-    if (!state || state.status !== 'active' || !boardAfterReceipt || boardAfterReceipt.status !== 'active') return boardAfterReceipt
+    if (!state || !boardAfterReceipt) return boardAfterReceipt
+
+    if (evidence?.kind === 'operation_error_receipt' && stateHasUnverifiedTransferIntent(state)) {
+      const reason = transferFailureReason(evidence)
+      state.status = 'blocked'
+      state.blocker = `transfer_failed:${reason}`
+      state.pause_reason = ''
+      state.task_board = setTaskBoardStatus(boardAfterReceipt, 'blocked', { blocker: state.blocker, now: Date.now() })
+      state.revision += 1
+      state.updated_at = Date.now()
+      this.planByNpc.set(key, state)
+      return state.task_board
+    }
+
+    if (state.status !== 'active' || boardAfterReceipt.status !== 'active') return boardAfterReceipt
 
     const verification = verifyDeterministicReceipt(state, evidence)
     if (!verification.verified) return boardAfterReceipt
@@ -177,6 +256,11 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     })
 
     const current = this.planByNpc.get(key)
+    if (current) {
+      current.last_mutation_verified = true
+      current.last_verified_batch_id = verification.batchId
+      this.planByNpc.set(key, current)
+    }
     const verifiedBoard = this.ensureTaskBoard(current)
     if (!current || !verifiedBoard || verifiedBoard.status !== 'active' || verifiedBoard.steps.length === 0) return verifiedBoard
 
