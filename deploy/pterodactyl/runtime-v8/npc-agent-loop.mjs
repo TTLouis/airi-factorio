@@ -1960,7 +1960,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }) {
     const omissionRepair = this.actionOmissionRepairActive && recoveryKind !== 'output_budget_exhaustion'
     const effectiveAllowTools = omissionRepair && this.actionOmissionForceNoTools ? false : allowTools
-    const effectiveRecoveryKind = omissionRepair ? 'action_omission' : recoveryKind
+    const effectiveRecoveryAttempt = omissionRepair ? Math.max(1, recoveryAttempt) : recoveryAttempt
+    const traceRecoveryKind = omissionRepair ? 'action_omission' : recoveryKind
     if (omissionRepair && !effectiveAllowTools && this.actionOmissionObservationUsed) {
       this.actionOmissionNeedsPostObservationDecision = false
     }
@@ -1986,15 +1987,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         ...(this.traceRequest.recovery ?? {}),
         attempt: recoveryAttempt,
         round,
-        ...(effectiveRecoveryKind ? { kind: effectiveRecoveryKind } : {}),
+        ...(traceRecoveryKind ? { kind: traceRecoveryKind } : {}),
       }
     }
     await this.traceEvent('provider.request', {
       round,
       trigger_source: this.planUpdateReason,
       allow_tools: effectiveAllowTools,
-      recovery_attempt: recoveryAttempt,
-      recovery_kind: effectiveRecoveryKind,
+      recovery_attempt: effectiveRecoveryAttempt,
+      recovery_kind: traceRecoveryKind,
       message_count: providerMessages.length,
       message_chars: providerMessages.reduce((total, message) => total + messageChars(message), 0),
     })
@@ -2005,8 +2006,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         actorId: current.actor_id,
         round,
         allowTools: effectiveAllowTools,
-        recoveryAttempt,
-        recoveryKind: effectiveRecoveryKind,
+        recoveryAttempt: effectiveRecoveryAttempt,
+        recoveryKind,
         triggerSource: this.planUpdateReason,
         lifecycle: this.requestLifecycle,
         requestBodyPatch: omissionRepair ? { max_tokens: ACTION_OMISSION_MAX_TOKENS } : undefined,
@@ -2018,8 +2019,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         kind: 'response',
         round,
         trigger_source: this.planUpdateReason,
-        recovery_attempt: recoveryAttempt,
-        recovery_kind: effectiveRecoveryKind,
+        recovery_attempt: effectiveRecoveryAttempt,
+        recovery_kind: traceRecoveryKind,
         latency_ms: Date.now() - startedAt,
         has_tool_calls: message?.tool_calls !== undefined,
         content_chars: typeof message?.content === 'string' ? message.content.length : 0,
@@ -2035,8 +2036,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         kind: 'error',
         round,
         trigger_source: this.planUpdateReason,
-        recovery_attempt: recoveryAttempt,
-        recovery_kind: effectiveRecoveryKind,
+        recovery_attempt: effectiveRecoveryAttempt,
+        recovery_kind: traceRecoveryKind,
         latency_ms: Date.now() - startedAt,
         message: messageText,
         timeout: /timed out/i.test(messageText),
@@ -2052,8 +2053,25 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (generation !== this.generation || !this.active) throw new AgentLoopError('Model turn was cancelled or superseded')
     await this.assertCurrent()
     if (!message || typeof message !== 'object') throw new AgentLoopError('Provider returned no message')
+    if (omissionRepair && !effectiveAllowTools && message.tool_calls !== undefined) {
+      const state = this.memory.currentPlan?.(this.activePlanKey())
+      await this.traceEvent('recovery.action_omission_observation_rejected', {
+        reason_code: 'observation_budget_exhausted',
+        requested_tool_calls: Array.isArray(message.tool_calls) ? message.tool_calls.length : 0,
+      })
+      message = {
+        ...message,
+        tool_calls: undefined,
+        content: JSON.stringify({
+          chatMessage: 'Action-omission repair attempted another observation after the bounded observation budget was exhausted.',
+          plan: Array.isArray(state?.plan) ? state.plan : [],
+          currentStep: Number.isSafeInteger(state?.current_step) ? state.current_step : 0,
+          operations: [],
+        }),
+      }
+    }
 
-    if (effectiveAllowTools && !omissionRepair && recoveryAttempt === 0 && !this.outputBudgetRecoveryUsed && providerOutputBudgetExhausted(message)) {
+    if (effectiveAllowTools && !omissionRepair && effectiveRecoveryAttempt === 0 && !this.outputBudgetRecoveryUsed && providerOutputBudgetExhausted(message)) {
       this.outputBudgetRecoveryUsed = true
       const state = this.memory.currentPlan?.(this.activePlanKey())
       this.outputBudgetRecoveryGuard = {
