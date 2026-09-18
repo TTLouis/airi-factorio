@@ -341,6 +341,13 @@ describe('in-game task board UI projection', () => {
     expect(drain.indexOf('storage.airi_task_board_ui_inputs = []')).toBeLessThan(drain.indexOf('drained.push(poll)'))
   })
 
+  it('labels request-cumulative and latest completed round token usage separately', () => {
+    const source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+    expect(source).toContain("add_row(table, 'Tokens · request cumulative', tokens)")
+    expect(source).toContain("add_row(table, 'Latest completed round', latest_round_tokens)")
+    expect(source).toContain('latest_round_cached_input_units')
+  })
+
   it('only emits fixed UI control actions instead of arbitrary console commands', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain("type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow'")

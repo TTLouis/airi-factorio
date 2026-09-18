@@ -25,6 +25,12 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
     round: 4,
     recovery_attempt: 2,
     latency_ms: 10954,
+    usage: {
+      input_units: 4982,
+      cached_input_units: 4568,
+      output_units: 700,
+      total_units: 5682,
+    },
     provider: {
       model: 'deepseek-flash',
       finish_reason: 'length',
@@ -49,12 +55,140 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
   assert.equal(debug.cached_input_units, 13568)
   assert.equal(debug.output_units, 2000)
   assert.equal(debug.total_units, 15982)
+  assert.equal(debug.latest_round_provider_round, 4)
+  assert.equal(debug.latest_round_input_units, 4982)
+  assert.equal(debug.latest_round_cached_input_units, 4568)
+  assert.equal(debug.latest_round_output_units, 700)
+  assert.equal(debug.latest_round_total_units, 5682)
   assert.match(debug.last_error, /provider_output_truncated_empty_content/)
   assert.match(debug.last_error, /finish=length/)
 
   debug = liveAgentDebugEvent('tool.result', { name: 'getActorStatus' }, debug)
   assert.equal(debug.last_tool, 'getActorStatus')
   assert.equal(debug.last_event, 'tool.result')
+})
+
+test('request cumulative usage stays separate from the latest completed provider round', () => {
+  let debug = liveAgentDebugEvent('request.received', { sender: 'TTLouis', text: 'multi-round request' }, undefined, {
+    request_id: 'req-multi',
+    usage: {
+      input_units: 0,
+      cached_input_units: 0,
+      output_units: 0,
+      total_units: 0,
+    },
+  })
+
+  debug = liveAgentDebugEvent('provider.response', {
+    round: 0,
+    usage: {
+      input_units: 100,
+      cached_input_units: 80,
+      output_units: 10,
+      total_units: 110,
+    },
+    provider: { model: 'test-model', finish_reason: 'tool_calls' },
+  }, debug, {
+    usage: {
+      input_units: 100,
+      cached_input_units: 80,
+      output_units: 10,
+      total_units: 110,
+    },
+  })
+  assert.equal(debug.input_units, 100)
+  assert.equal(debug.cached_input_units, 80)
+  assert.equal(debug.output_units, 10)
+  assert.equal(debug.total_units, 110)
+  assert.equal(debug.latest_round_provider_round, 0)
+  assert.equal(debug.latest_round_input_units, 100)
+  assert.equal(debug.latest_round_cached_input_units, 80)
+  assert.equal(debug.latest_round_output_units, 10)
+  assert.equal(debug.latest_round_total_units, 110)
+
+  // Starting another provider call keeps the previous completed round visible;
+  // it does not fabricate usage for the in-flight round.
+  debug = liveAgentDebugEvent('provider.request', { round: 1 }, debug, {
+    usage: {
+      input_units: 100,
+      cached_input_units: 80,
+      output_units: 10,
+      total_units: 110,
+    },
+  })
+  assert.equal(debug.provider_round, 1)
+  assert.equal(debug.latest_round_provider_round, 0)
+  assert.equal(debug.latest_round_total_units, 110)
+
+  debug = liveAgentDebugEvent('provider.response', {
+    round: 1,
+    usage: {
+      input_units: 120,
+      cached_input_units: 90,
+      output_units: 20,
+      total_units: 140,
+    },
+    provider: { model: 'test-model', finish_reason: 'stop' },
+  }, debug, {
+    usage: {
+      input_units: 220,
+      cached_input_units: 170,
+      output_units: 30,
+      total_units: 250,
+    },
+  })
+
+  // Cached input is already included in input. Neither the per-round nor
+  // cumulative total adds cached tokens a second time.
+  assert.equal(debug.input_units, 220)
+  assert.equal(debug.cached_input_units, 170)
+  assert.ok(debug.cached_input_units <= debug.input_units)
+  assert.equal(debug.output_units, 30)
+  assert.equal(debug.total_units, 250)
+  assert.equal(debug.total_units, debug.input_units + debug.output_units)
+  assert.equal(debug.latest_round_provider_round, 1)
+  assert.equal(debug.latest_round_input_units, 120)
+  assert.equal(debug.latest_round_cached_input_units, 90)
+  assert.ok(debug.latest_round_cached_input_units <= debug.latest_round_input_units)
+  assert.equal(debug.latest_round_output_units, 20)
+  assert.equal(debug.latest_round_total_units, 140)
+  assert.equal(debug.latest_round_total_units, debug.latest_round_input_units + debug.latest_round_output_units)
+})
+
+test('starting a new request resets cumulative and latest-round debug usage', () => {
+  const previous = {
+    request_id: 'old-request',
+    input_units: 220,
+    cached_input_units: 170,
+    output_units: 30,
+    total_units: 250,
+    latest_round_provider_round: 1,
+    latest_round_input_units: 120,
+    latest_round_cached_input_units: 90,
+    latest_round_output_units: 20,
+    latest_round_total_units: 140,
+  }
+
+  const debug = liveAgentDebugEvent('request.received', { sender: 'TTLouis', text: 'new request' }, previous, {
+    request_id: 'new-request',
+    usage: {
+      input_units: 0,
+      cached_input_units: 0,
+      output_units: 0,
+      total_units: 0,
+    },
+  })
+
+  assert.equal(debug.request_id, 'new-request')
+  assert.equal(debug.input_units, 0)
+  assert.equal(debug.cached_input_units, 0)
+  assert.equal(debug.output_units, 0)
+  assert.equal(debug.total_units, 0)
+  assert.equal(debug.latest_round_provider_round, 0)
+  assert.equal(debug.latest_round_input_units, 0)
+  assert.equal(debug.latest_round_cached_input_units, 0)
+  assert.equal(debug.latest_round_output_units, 0)
+  assert.equal(debug.latest_round_total_units, 0)
 })
 
 test('request failure snapshot wins over transient debug state and remains displayable', () => {
@@ -151,6 +285,11 @@ test('task board UI snapshot includes live debug diagnostics', () => {
       cached_input_units: 80,
       output_units: 20,
       total_units: 120,
+      latest_round_provider_round: 5,
+      latest_round_input_units: 30,
+      latest_round_cached_input_units: 20,
+      latest_round_output_units: 5,
+      latest_round_total_units: 35,
       last_tool: 'getActorStatus',
       last_event: 'request.failed',
       recovery_attempt: 3,
@@ -167,6 +306,13 @@ test('task board UI snapshot includes live debug diagnostics', () => {
   assert.equal(snapshot.debug.provider_finish_reason, 'length')
   assert.equal(snapshot.debug.content_chars, 0)
   assert.equal(snapshot.debug.reasoning_content_chars, 8123)
+  assert.equal(snapshot.debug.input_units, 100)
+  assert.equal(snapshot.debug.cached_input_units, 80)
+  assert.equal(snapshot.debug.latest_round_provider_round, 5)
+  assert.equal(snapshot.debug.latest_round_input_units, 30)
+  assert.equal(snapshot.debug.latest_round_cached_input_units, 20)
+  assert.equal(snapshot.debug.latest_round_output_units, 5)
+  assert.equal(snapshot.debug.latest_round_total_units, 35)
   assert.equal(snapshot.debug.recovery_attempt, 3)
   assert.equal(snapshot.debug.last_event, 'request.failed')
 })

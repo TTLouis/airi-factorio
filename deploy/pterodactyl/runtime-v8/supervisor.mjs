@@ -419,6 +419,11 @@ function emptyAgentDebug(fallback = {}) {
     cached_input_units: 0,
     output_units: 0,
     total_units: 0,
+    latest_round_provider_round: 0,
+    latest_round_input_units: 0,
+    latest_round_cached_input_units: 0,
+    latest_round_output_units: 0,
+    latest_round_total_units: 0,
     last_tool: '',
     last_event: '',
     recovery_attempt: 0,
@@ -436,6 +441,18 @@ function applyDebugUsage(debug, usage) {
     cached_input_units: debugInteger(usage.cached_input_units),
     output_units: debugInteger(usage.output_units),
     total_units: debugInteger(usage.total_units),
+  }
+}
+
+function applyLatestRoundDebugUsage(debug, usage, round) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return debug
+  return {
+    ...debug,
+    latest_round_provider_round: debugInteger(round),
+    latest_round_input_units: debugInteger(usage.input_units),
+    latest_round_cached_input_units: debugInteger(usage.cached_input_units),
+    latest_round_output_units: debugInteger(usage.output_units),
+    latest_round_total_units: debugInteger(usage.total_units),
   }
 }
 
@@ -476,8 +493,15 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
     debug.provider_model = uiText(fallback.provider_model ?? debug.provider_model, 160)
   }
 
-  const usage = failure?.usage ?? fallback.usage ?? data?.usage ?? providerEvent?.usage
-  debug = applyDebugUsage(debug, usage)
+  // Request-cumulative usage comes from traceRequest/failure snapshots. A
+  // provider.response carries usage for only that provider call, so keep it in
+  // separate latest-round fields instead of letting the cumulative fallback
+  // shadow (or overwrite) it.
+  const cumulativeUsage = failure?.usage ?? fallback.usage
+  debug = applyDebugUsage(debug, cumulativeUsage)
+  if (event === 'provider.response') {
+    debug = applyLatestRoundDebugUsage(debug, data?.usage ?? providerEvent?.usage, providerEvent?.round ?? data?.round)
+  }
 
   if (event === 'tool.call' || event === 'tool.result') debug.last_tool = uiText(data.name, 120)
   if (event === 'actor.bound') {

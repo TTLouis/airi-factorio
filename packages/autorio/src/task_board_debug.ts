@@ -60,6 +60,11 @@ export interface TaskBoardUiDebugSnapshot {
   cached_input_units: number
   output_units: number
   total_units: number
+  latest_round_provider_round: number
+  latest_round_input_units: number
+  latest_round_cached_input_units: number
+  latest_round_output_units: number
+  latest_round_total_units: number
   last_tool: string
   last_event: string
   recovery_attempt: number
@@ -100,6 +105,11 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     cached_input_units: integer(debug.cached_input_units),
     output_units: integer(debug.output_units),
     total_units: integer(debug.total_units),
+    latest_round_provider_round: integer(debug.latest_round_provider_round),
+    latest_round_input_units: integer(debug.latest_round_input_units),
+    latest_round_cached_input_units: integer(debug.latest_round_cached_input_units),
+    latest_round_output_units: integer(debug.latest_round_output_units),
+    latest_round_total_units: integer(debug.latest_round_total_units),
     last_tool: clean_text(debug.last_tool, 120),
     last_event: clean_text(debug.last_event, 120),
     recovery_attempt: integer(debug.recovery_attempt),
@@ -510,6 +520,9 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const phase = board?.agent.phase ? String(board.agent.phase).toUpperCase() : 'IDLE'; const detail = clean_text(board?.agent.detail, 300)
   const provider = clean_text(debug.provider_model, 160); const latency = integer(debug.provider_latency_ms)
   const tokens = integer(debug.total_units) > 0 ? `${integer(debug.input_units)} in / ${integer(debug.cached_input_units)} cached / ${integer(debug.output_units)} out / ${integer(debug.total_units)} total` : '—'
+  const latest_round_tokens = integer(debug.latest_round_total_units) > 0
+    ? `round ${integer(debug.latest_round_provider_round) + 1} · ${integer(debug.latest_round_input_units)} in / ${integer(debug.latest_round_cached_input_units)} cached / ${integer(debug.latest_round_output_units)} out / ${integer(debug.latest_round_total_units)} total`
+    : '—'
   const actor = integer(debug.actor_id) > 0 ? `${runtime?.actor_name ?? 'AIRI'} · id ${integer(debug.actor_id)} · epoch ${integer(debug.actor_epoch)}` : `${runtime?.actor_name ?? 'AIRI'} · ${runtime?.actor_kind ?? 'unknown'}`
   const world_text = world === undefined ? 'unknown' : `${clean_text(world.task_state, 48) || 'idle'} · queue ${integer(world.queue_length)}`
   const follow_text = follow?.active ? `active · ${clean_text(follow.target_player, 128) || 'target'}${typeof follow.current_distance === 'number' ? ` · ${math.floor(follow.current_distance * 10) / 10} tiles` : ''}` : 'inactive'
@@ -522,7 +535,8 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Turn', integer(debug.turn) > 0 ? `${integer(debug.turn)}` : '—')
   add_row(table, 'Provider', provider.length > 0 ? `${provider} · round ${integer(debug.provider_round) + 1}` : '—')
   add_row(table, 'Latency', latency > 0 ? `${latency} ms` : '—')
-  add_row(table, 'Tokens', tokens)
+  add_row(table, 'Tokens · request cumulative', tokens)
+  add_row(table, 'Latest completed round', latest_round_tokens)
   add_row(table, 'Provider diag', clean_text(debug.provider_diagnostic_code, 160) || '—')
   add_row(table, 'Finish', clean_text(debug.provider_finish_reason, 80) || '—')
   add_row(table, 'Content chars', `${integer(debug.content_chars)}`)
