@@ -965,7 +965,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return owned_count < (task.support_stage_target_turret_count ?? owned_count)
   }
 
-  function support_anchor(actor: ControlledActor, target: LuaEntity, _turret_index: number) {
+  function support_anchor(actor: ControlledActor, target: LuaEntity, _turret_index: number, advance_distance = TURRET_FRONTLINE_ADVANCE_DISTANCE) {
     let toward_x = target.position.x - actor.position.x
     let toward_y = target.position.y - actor.position.y
     const magnitude = math.sqrt(toward_x * toward_x + toward_y * toward_y)
@@ -981,8 +981,23 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     // planner and Factorio collision rules decide how tightly a frontline can be
     // packed; combat only cares that the position is safe and reaches the target.
     return {
-      x: actor.position.x + toward_x * TURRET_FRONTLINE_ADVANCE_DISTANCE,
-      y: actor.position.y + toward_y * TURRET_FRONTLINE_ADVANCE_DISTANCE,
+      x: actor.position.x + toward_x * advance_distance,
+      y: actor.position.y + toward_y * advance_distance,
+    }
+  }
+
+  function support_staging_goal(actor: ControlledActor, target: LuaEntity) {
+    const actor_target_distance = distance(actor.position, target.position)
+    if (actor_target_distance <= 0.001) return copy_position(actor.position)
+    const desired_distance = math.max(
+      TURRET_ACTOR_CLEARANCE + 1,
+      support_placement_target_range(actor) + TURRET_FRONTLINE_ADVANCE_DISTANCE - 1,
+    )
+    const away_x = (actor.position.x - target.position.x) / actor_target_distance
+    const away_y = (actor.position.y - target.position.y) / actor_target_distance
+    return {
+      x: target.position.x + away_x * desired_distance,
+      y: target.position.y + away_y * desired_distance,
     }
   }
 
@@ -1029,10 +1044,20 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     const stage_start = task.support_stage_start_turret_count ?? owned_count
     const turret_index = math.max(0, owned_count - stage_start)
     const total_placements = (task.turrets_placed ?? 0) + 1
-    const anchor = support_anchor(actor, target, turret_index)
-    const position = planned_support_position(actor, task, target, anchor)
+    const anchor_distances = [
+      TURRET_FRONTLINE_ADVANCE_DISTANCE,
+      math.max(TURRET_ACTOR_CLEARANCE + 1, TURRET_FRONTLINE_ADVANCE_DISTANCE - 1.5),
+      TURRET_ACTOR_CLEARANCE + 0.75,
+    ]
+    let anchor = support_anchor(actor, target, turret_index, anchor_distances[0])
+    let position: { x: number, y: number } | undefined
+    for (const advance_distance of anchor_distances) {
+      anchor = support_anchor(actor, target, turret_index, advance_distance)
+      position = planned_support_position(actor, task, target, anchor)
+      if (position) break
+    }
     if (!position) {
-      log(`[AUTORIO] No safe shared-planner support turret position near ${serpent.line(anchor)}`)
+      log(`[AUTORIO] No safe shared-planner support turret position near frontline anchors; actor=${serpent.line(actor.position)} target=${serpent.line(target.position)}`)
       return false
     }
     if (distance(position, actor.position) < TURRET_ACTOR_CLEARANCE) {
@@ -1463,6 +1488,26 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     }
     if (task.combat_mode === 'clear_area' && is_static_enemy(target)
       && (support_resources_available(actor) || target.type === 'turret')) {
+      const support_available = support_resources_available(actor)
+      const covered = support_covers_target(task, target)
+      if (support_available && !covered) {
+        const staging_goal = support_staging_goal(actor, target)
+        const staging_distance = distance(staging_goal, target.position)
+        if (current_distance > staging_distance + DISTANCE_PROGRESS_EPSILON) {
+          // Old support must not pin AIRI in the rear when it no longer reaches
+          // the active static target. Advance only far enough to make a new
+          // frontline placement feasible, then retry support on the next tick.
+          follow_combat_path(actor, task, staging_goal, 'approach')
+          return
+        }
+        if (!is_worm_enemy(target)) {
+          // If local collision still prevents a new nest-facing support point,
+          // keep making combat progress instead of oscillating behind the stale
+          // line forever. Worms retain the more conservative ranged behavior.
+          follow_combat_path(actor, task, target.position, 'approach')
+          return
+        }
+      }
       const frontline_goal = frontline_rear_position(task, target)
       if (frontline_goal) {
         follow_combat_path(actor, task, frontline_goal, 'retreat')
