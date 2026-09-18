@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { navigationObstaclePolicy, taskBoardUiSnapshot } from './supervisor.mjs'
+import { liveAgentDebugEvent, liveAgentEvent, navigationObstaclePolicy, taskBoardUiSnapshot } from './supervisor.mjs'
 
 test('natural obstacle clearing defaults on for ordinary new requests', () => {
   assert.deepEqual(navigationObstaclePolicy('去最近的石矿'), {
@@ -35,6 +35,56 @@ test('bare continue preserves the obstacle policy of the durable request', () =>
   for (const request of ['继续', '继续吧', 'resume', 'continue']) {
     assert.equal(navigationObstaclePolicy(request).shouldUpdate, false, request)
   }
+})
+
+test('Jev shadow diagnostics survive the following planner request reset and remain separate from planner usage', () => {
+  const shadow = {
+    intent: 'new_goal',
+    intent_confidence: 0.91,
+    queue_conflict_probability: 0.17,
+    model: 'jev-latest',
+    provider: 'TypeSafe',
+    usage: { input_tokens: 120, output_tokens: 20, cost: 0.00000504 },
+  }
+
+  const routed = liveAgentDebugEvent('interaction.routed', {
+    intent: 'status_query',
+    decision_shadow: shadow,
+    decision_shadow_latency_ms: 84,
+  })
+
+  assert.equal(routed.decision_provider, 'TypeSafe')
+  assert.equal(routed.decision_model, 'jev-latest')
+  assert.equal(routed.decision_shadow_intent, 'new_goal')
+  assert.equal(routed.decision_active_intent, 'status_query')
+  assert.equal(routed.decision_confidence_percent, 91)
+  assert.equal(routed.decision_queue_conflict_percent, 17)
+  assert.equal(routed.decision_latency_ms, 84)
+  assert.equal(routed.decision_input_units, 120)
+  assert.equal(routed.decision_output_units, 20)
+  assert.equal(routed.decision_cost_micro_usd, 5)
+
+  const next = liveAgentDebugEvent('request.received', {
+    sender: 'tester',
+    text: 'build something',
+  }, routed, {
+    provider_model: 'deepseek-chat',
+  })
+
+  assert.equal(next.provider_model, 'deepseek-chat')
+  assert.equal(next.decision_model, 'jev-latest')
+  assert.equal(next.decision_shadow_intent, 'new_goal')
+  assert.equal(next.decision_active_intent, 'status_query')
+
+  const activity = liveAgentEvent('interaction.routed', {
+    intent: 'status_query',
+    decision_shadow: shadow,
+    decision_shadow_latency_ms: 84,
+  })
+  assert.equal(activity?.activity?.kind, 'decision')
+  assert.match(activity?.activity?.text ?? '', /Jev shadow: new_goal/)
+  assert.match(activity?.activity?.text ?? '', /active status_query/)
+  assert.match(activity?.activity?.text ?? '', /120 in/)
 })
 
 test('in-game task board snapshot is a projection of canonical durable state', () => {
@@ -97,6 +147,17 @@ test('in-game task board snapshot is a projection of canonical durable state', (
       latest_round_cached_input_units: 0,
       latest_round_output_units: 0,
       latest_round_total_units: 0,
+      decision_provider: '',
+      decision_model: '',
+      decision_shadow_intent: '',
+      decision_active_intent: '',
+      decision_confidence_percent: 0,
+      decision_queue_conflict_percent: 0,
+      decision_latency_ms: 0,
+      decision_input_units: 0,
+      decision_output_units: 0,
+      decision_cost_micro_usd: 0,
+      decision_error: '',
       last_tool: '',
       last_event: '',
       recovery_attempt: 0,
