@@ -873,6 +873,55 @@ export class Session {
     this.agentLive.conversation = [...this.agentLive.conversation, message].slice(-UI_CONVERSATION_LIMIT)
   }
 
+  async restoreTaskBoardUiConversation(state = this.currentPlanState()) {
+    if (!this.rcon || !state?.goal_id || !this.agentLive || typeof this.agentLive !== 'object') return false
+    if (Array.isArray(this.agentLive.conversation) && this.agentLive.conversation.length > 0) return false
+
+    try {
+      const raw = String(await this.rcon.command('/silent-command rcon.print(helpers.table_to_json(remote.call("autorio_task_board","status")))') ?? '').trim()
+      if (!raw || raw === 'nil' || raw === 'null') return false
+      let saved
+      try { saved = JSON.parse(raw) }
+      catch { return false }
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return false
+      if (uiText(saved.goal_id, 100) !== uiText(state.goal_id, 100)) return false
+
+      const sourceConversation = Array.isArray(saved.conversation) ? saved.conversation.slice(-UI_CONVERSATION_LIMIT) : []
+      const restored = []
+      for (let index = 0; index < sourceConversation.length; index++) {
+        const entry = sourceConversation[index]
+        const role = entry?.role === 'assistant' ? 'assistant' : entry?.role === 'user' ? 'user' : undefined
+        const text = uiText(entry?.text, 2000)
+        if (!role || !text) continue
+        restored.push({
+          id: uiText(entry?.id, 120) || `restored_${index + 1}`,
+          role,
+          sender: uiText(entry?.sender, 128) || (role === 'assistant' ? (this.npcName || 'AIRI') : 'Player'),
+          text,
+        })
+      }
+      if (restored.length === 0) return false
+
+      const savedConversationId = uiText(saved.conversation_id, 120)
+      if (savedConversationId) this.agentLive.conversation_id = savedConversationId
+      this.agentLive.conversation = restored
+      return true
+    }
+    catch (error) {
+      this.log(`Task Board UI conversation restore skipped: ${error instanceof Error ? error.message : error}`)
+      return false
+    }
+  }
+
+  ensureUiConversationForState(state) {
+    if (!state?.goal_id || !this.agentLive || typeof this.agentLive !== 'object') return false
+    if (Array.isArray(this.agentLive.conversation) && this.agentLive.conversation.length > 0) return false
+    const before = Array.isArray(this.agentLive.conversation) ? this.agentLive.conversation.length : 0
+    this.appendUiConversation('user', state.owner || 'Player', state.objective)
+    this.appendUiConversation('assistant', this.npcName || 'AIRI', state.last_chat_message)
+    return this.agentLive.conversation.length > before
+  }
+
   onAgentActivity(event, data) {
     if (event === 'request.received') this.appendUiConversation('user', data?.sender, data?.text)
     if ((event === 'plan.accepted' || event === 'request.completed') && data?.chat_message) {
@@ -1093,6 +1142,10 @@ export class Session {
 
   async syncTaskBoardUi(state = this.currentPlanState()) {
     if (!this.rcon) return false
+    if (state?.goal_id && (!Array.isArray(this.agentLive?.conversation) || this.agentLive.conversation.length === 0)) {
+      await this.restoreTaskBoardUiConversation(state)
+    }
+    this.ensureUiConversationForState(state)
     const snapshot = taskBoardUiSnapshot(state, this.liveAgentStatus())
     if (!snapshot) return this.clearTaskBoardUi()
     const json = taskBoardUiJson(snapshot)

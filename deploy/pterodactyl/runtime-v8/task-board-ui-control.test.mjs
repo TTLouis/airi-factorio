@@ -562,6 +562,152 @@ test('chat-only request boundaries retain one user/reply pair without duplicate 
   assert.deepEqual(session.agentLive.conversation.map(entry => entry.text), ['hello', 'visible answer'])
 })
 
+
+test('active multi-step task restores its current conversation before completion', async () => {
+  const state = {
+    goal_id: 'goal_active_2_of_6',
+    owner: 'TTLouis',
+    objective: 'Build a six-step starter factory',
+    status: 'active',
+    blocker: '',
+    pause_reason: '',
+    last_chat_message: 'I am executing step 3 while Autorio builds the power block.',
+    last_operations: ['place_entity {"entity_name":"boiler"}'],
+    task_board: {
+      kind: 'task_board_lite',
+      goal_id: 'goal_active_2_of_6',
+      status: 'active',
+      blocker: '',
+      pause_reason: '',
+      completed_count: 2,
+      total_steps: 6,
+      active_index: 2,
+      steps: [
+        { id: 'step_1', description: 'Gather stone', status: 'completed' },
+        { id: 'step_2', description: 'Craft boiler parts', status: 'completed' },
+        { id: 'step_3', description: 'Build steam power', status: 'active' },
+        { id: 'step_4', description: 'Build miners', status: 'pending' },
+        { id: 'step_5', description: 'Build smelting', status: 'pending' },
+        { id: 'step_6', description: 'Start research', status: 'pending' },
+      ],
+      evidence: [],
+    },
+  }
+  const persisted = {
+    goal_id: state.goal_id,
+    conversation_id: 'task_previous_runtime_4',
+    conversation: [
+      { id: 'old_1', role: 'user', sender: 'TTLouis', text: state.objective },
+      { id: 'old_2', role: 'assistant', sender: 'AIRI', text: state.last_chat_message },
+    ],
+  }
+  const writes = []
+  const session = Object.create(Session.prototype)
+  Object.assign(session, {
+    npcName: 'AIRI',
+    activityEpoch: 'restart',
+    conversationGeneration: 0,
+    conversationSequence: 0,
+    agent: { active: true },
+    agentLive: {
+      phase: 'waiting',
+      detail: 'Autorio is running 1 operation(s)',
+      objective: state.objective,
+      at: Date.now(),
+      activity: [],
+      conversation_id: 'task_restart_0',
+      conversation: [],
+      debug: { request_id: 'req_active', turn: 1, provider_model: 'test-provider' },
+    },
+    rcon: {
+      command: async (command) => {
+        assert.match(command, /autorio_task_board","status"/)
+        return JSON.stringify(persisted)
+      },
+    },
+    currentPlanState: () => state,
+    writeTaskBoardUi: async (command, label) => { writes.push({ command, label }); return true },
+    log: () => {},
+  })
+
+  await session.syncTaskBoardUi(state)
+
+  assert.equal(session.agentLive.phase, 'waiting')
+  assert.equal(session.agentLive.conversation_id, 'task_previous_runtime_4')
+  assert.deepEqual(
+    session.agentLive.conversation.map(entry => [entry.role, entry.text]),
+    [
+      ['user', 'Build a six-step starter factory'],
+      ['assistant', 'I am executing step 3 while Autorio builds the power block.'],
+    ],
+  )
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].label, 'sync')
+  assert.match(writes[0].command, /"status":"active"/)
+  assert.match(writes[0].command, /"completed_count":2/)
+  assert.match(writes[0].command, /"total_steps":6/)
+  assert.match(writes[0].command, /"conversation_id":"task_previous_runtime_4"/)
+  assert.match(writes[0].command, /"role":"user".*"text":"Build a six-step starter factory"/)
+  assert.match(writes[0].command, /"role":"assistant".*"text":"I am executing step 3 while Autorio builds the power block\."/)
+})
+
+test('active task conversation falls back to canonical task state when no saved transcript is available', async () => {
+  const state = {
+    goal_id: 'goal_active',
+    owner: 'TTLouis',
+    objective: 'Keep building the starter factory',
+    status: 'active',
+    blocker: '',
+    pause_reason: '',
+    last_chat_message: 'Continuing the current build step.',
+    last_operations: [],
+    task_board: {
+      kind: 'task_board_lite',
+      goal_id: 'goal_active',
+      status: 'active',
+      blocker: '',
+      pause_reason: '',
+      completed_count: 2,
+      total_steps: 6,
+      active_index: 2,
+      steps: Array.from({ length: 6 }, (_, index) => ({
+        id: `step_${index + 1}`,
+        description: `Step ${index + 1}`,
+        status: index < 2 ? 'completed' : index === 2 ? 'active' : 'pending',
+      })),
+      evidence: [],
+    },
+  }
+  const writes = []
+  const session = Object.create(Session.prototype)
+  Object.assign(session, {
+    npcName: 'AIRI',
+    activityEpoch: 'epoch',
+    conversationGeneration: 0,
+    conversationSequence: 0,
+    agent: { active: true },
+    agentLive: {
+      phase: 'executing', detail: 'Executing current step', objective: state.objective, at: Date.now(),
+      activity: [], conversation_id: 'task_epoch_0', conversation: [], debug: {},
+    },
+    rcon: { command: async () => 'null' },
+    writeTaskBoardUi: async (command, label) => { writes.push({ command, label }); return true },
+    log: () => {},
+  })
+
+  await session.syncTaskBoardUi(state)
+
+  assert.deepEqual(
+    session.agentLive.conversation.map(entry => [entry.role, entry.text]),
+    [
+      ['user', 'Keep building the starter factory'],
+      ['assistant', 'Continuing the current build step.'],
+    ],
+  )
+  assert.match(writes[0].command, /"conversation_id":"task_epoch_0"/)
+  assert.match(writes[0].command, /"role":"user".*"role":"assistant"/)
+})
+
 test('real provider lifecycle events reach the supervisor sync as the current request/reply conversation', async () => {
   const session = Object.create(Session.prototype)
   const queued = []
