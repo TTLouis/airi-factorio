@@ -92,6 +92,49 @@ test('malformed tool arguments are rejected before RCON and may be repaired', as
   assert.equal(actorReads.length, 1)
 })
 
+test('mutation operations called as tools are steered into the strict operations plan', async () => {
+  const rcon = new FakeRcon()
+  const seen = []
+  let call = 0
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async messages => {
+      seen.push(messages)
+      call++
+      if (call === 1) {
+        return {
+          content: null,
+          tool_calls: [{
+            id: 'wrong-surface',
+            type: 'function',
+            function: {
+              name: 'move_items_exact',
+              arguments: JSON.stringify({ item_name: 'iron-ore', unit_number: 582, max_count: 20, to_entity: true }),
+            },
+          }],
+        }
+      }
+      return {
+        content: JSON.stringify({
+          chatMessage: 'Loading the observed furnace.',
+          plan: ['Load furnace'],
+          currentStep: 0,
+          operations: [{ name: 'move_items_exact', args: { item_name: 'iron-ore', unit_number: 582, max_count: 20, to_entity: true } }],
+        }),
+      }
+    },
+    systemPrompt: 'NPC test prompt',
+  })
+
+  const result = await agent.request('load the furnace', { sender: 'TTLouis' })
+  assert.equal(call, 2)
+  assert.equal(result.operations[0].name, 'move_items_exact')
+  assert.equal(rcon.mutations.length, 1)
+  const repair = seen[1].map(message => String(message.content ?? '')).join('\n')
+  assert.match(repair, /approved world-mutation operation/i)
+  assert.match(repair, /strict-JSON operations array/i)
+})
+
 test('unapproved tools exhaust bounded tool-validation repair without disabling tools or mutating', async () => {
   const rcon = new FakeRcon()
   const contexts = []
