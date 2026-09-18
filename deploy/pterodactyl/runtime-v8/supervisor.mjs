@@ -478,6 +478,17 @@ function emptyAgentDebug(fallback = {}) {
     latest_round_cached_input_units: 0,
     latest_round_output_units: 0,
     latest_round_total_units: 0,
+    decision_provider: '',
+    decision_model: '',
+    decision_shadow_intent: '',
+    decision_active_intent: '',
+    decision_confidence_percent: 0,
+    decision_queue_conflict_percent: 0,
+    decision_latency_ms: 0,
+    decision_input_units: 0,
+    decision_output_units: 0,
+    decision_cost_micro_usd: 0,
+    decision_error: '',
     last_tool: '',
     last_event: '',
     recovery_attempt: 0,
@@ -485,6 +496,30 @@ function emptyAgentDebug(fallback = {}) {
     actor_id: debugInteger(fallback.actor_id),
     actor_epoch: debugInteger(fallback.actor_epoch),
   }
+}
+
+function decisionDebugFields(value = {}) {
+  return {
+    decision_provider: uiText(value.decision_provider, 80),
+    decision_model: uiText(value.decision_model, 160),
+    decision_shadow_intent: uiText(value.decision_shadow_intent, 80),
+    decision_active_intent: uiText(value.decision_active_intent, 80),
+    decision_confidence_percent: debugInteger(value.decision_confidence_percent),
+    decision_queue_conflict_percent: debugInteger(value.decision_queue_conflict_percent),
+    decision_latency_ms: debugInteger(value.decision_latency_ms),
+    decision_input_units: debugInteger(value.decision_input_units),
+    decision_output_units: debugInteger(value.decision_output_units),
+    decision_cost_micro_usd: debugInteger(value.decision_cost_micro_usd),
+    decision_error: uiText(value.decision_error, 300),
+  }
+}
+
+function decisionPercent(value) {
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? Math.round(value * 100) : 0
+}
+
+function decisionMicroUsd(value) {
+  return Number.isFinite(value) && value >= 0 ? Math.round(value * 1_000_000) : 0
 }
 
 function applyDebugUsage(debug, usage) {
@@ -513,7 +548,7 @@ function applyLatestRoundDebugUsage(debug, usage, round) {
 export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = {}) {
   const failure = data?.failure_snapshot && typeof data.failure_snapshot === 'object' ? data.failure_snapshot : undefined
   let debug = event === 'request.received'
-    ? emptyAgentDebug(fallback)
+    ? { ...emptyAgentDebug(fallback), ...decisionDebugFields(previous) }
     : { ...emptyAgentDebug(fallback), ...(previous && typeof previous === 'object' ? previous : {}) }
 
   debug.last_event = uiText(event, 120)
@@ -563,6 +598,25 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
     debug = applyLatestRoundDebugUsage(debug, data?.usage ?? providerEvent?.usage, providerEvent?.round ?? data?.round)
   }
 
+  if (event === 'interaction.routed') {
+    const shadow = data?.decision_shadow && typeof data.decision_shadow === 'object' ? data.decision_shadow : undefined
+    if (shadow) {
+      debug.decision_provider = uiText(shadow.provider, 80)
+      debug.decision_model = uiText(shadow.model, 160)
+      debug.decision_shadow_intent = uiText(shadow.intent, 80)
+      debug.decision_active_intent = uiText(data.intent, 80)
+      debug.decision_confidence_percent = decisionPercent(shadow.intent_confidence)
+      debug.decision_queue_conflict_percent = decisionPercent(shadow.queue_conflict_probability)
+      debug.decision_latency_ms = debugInteger(data.decision_shadow_latency_ms)
+      debug.decision_input_units = debugInteger(shadow.usage?.input_tokens)
+      debug.decision_output_units = debugInteger(shadow.usage?.output_tokens)
+      debug.decision_cost_micro_usd = decisionMicroUsd(shadow.usage?.cost)
+      debug.decision_error = ''
+    }
+    const decisionError = uiText(data.decision_shadow_error, 300)
+    if (decisionError) debug.decision_error = decisionError
+  }
+
   if (event === 'tool.call' || event === 'tool.result') debug.last_tool = uiText(data.name, 120)
   if (event === 'actor.bound') {
     debug.actor_id = debugInteger(data.actor_id)
@@ -591,6 +645,25 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
 export function liveAgentEvent(event, data = {}) {
   const count = value => Array.isArray(value) ? value.length : 0
   switch (event) {
+    case 'interaction.routed': {
+      const shadow = data?.decision_shadow && typeof data.decision_shadow === 'object' ? data.decision_shadow : undefined
+      if (shadow) {
+        const confidence = decisionPercent(shadow.intent_confidence)
+        const match = shadow.intent === data.intent ? 'match' : `active ${uiText(data.intent, 80) || 'unknown'}`
+        const input = debugInteger(shadow.usage?.input_tokens)
+        const cost = decisionMicroUsd(shadow.usage?.cost)
+        return {
+          activity: {
+            kind: 'decision',
+            text: `Jev shadow: ${uiText(shadow.intent, 80) || 'unknown'} · ${confidence}% · ${match} · ${debugInteger(data.decision_shadow_latency_ms)} ms${input > 0 ? ` · ${input} in` : ''}${cost > 0 ? ` · ${cost} µUSD` : ''}`,
+          },
+        }
+      }
+      const decisionError = uiText(data.decision_shadow_error, 200)
+      return decisionError
+        ? { activity: { kind: 'system', text: `Jev shadow unavailable: ${decisionError}` } }
+        : undefined
+    }
     case 'request.received':
       return {
         phase: 'thinking',
