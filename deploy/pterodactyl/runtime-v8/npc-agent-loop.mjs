@@ -21,6 +21,14 @@ const STATE_SCHEMA = 1
 const PLAN_HISTORY_LIMIT = 24
 const DUPLICATE_OBSERVATION_MESSAGE = '[HARNESS] Duplicate observation suppressed. The result is unchanged from the earlier identical tool call already present in this decision context; reuse it and act or report a blocker.'
 const OUTPUT_BUDGET_RECOVERY_MESSAGE = '[HARNESS] The immediately preceding provider response exhausted its output budget before emitting content or tool calls. Continue the same logical request and goal from this unchanged harness context. Tools remain available. Do not treat the empty response as an action, plan update, completion, or evidence. Do not replay any world mutation already proven complete by the supplied receipts or canonical Task Board. Return the next necessary tool call(s) or one valid strict-JSON plan.'
+const EXACT_ENTITY_TARGET_OPERATIONS = new Set([
+  'walk_to_entity_exact',
+  'mine_entity_exact',
+  'supply_entity',
+  'rotate_entity',
+  'move_items_exact',
+  'set_machine_recipe',
+])
 
 const DURABLE_PLAN_PROMPT = `
 ## Durable goal and plan state
@@ -841,6 +849,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
     this.liveEntityObservations = new Map()
+    this.staleExactPreflightRetries = 0
     this.onActivity = typeof options.onActivity === 'function' ? options.onActivity : null
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
@@ -907,6 +916,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       && Number.isFinite(actorPosition.x) && Number.isFinite(actorPosition.y)) {
       distance = Math.hypot(position.x - actorPosition.x, position.y - actorPosition.y)
     }
+    if (unitNumber !== undefined && position) {
+      for (const [existingKey, existing] of this.liveEntityObservations.entries()) {
+        if (existing?.unit_number === unitNumber || existing?.name !== entity.name || !existing?.position) continue
+        if (existing.position.x === position.x && existing.position.y === position.y) {
+          this.liveEntityObservations.delete(existingKey)
+        }
+      }
+    }
     const key = unitNumber !== undefined
       ? `unit:${unitNumber}`
       : `fallback:${entity.name}:${entity.type ?? 'unknown'}:${position?.x ?? '?'}:${position?.y ?? '?'}`
@@ -933,6 +950,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (parsed.entity && typeof parsed.entity === 'object') {
       this.recordLiveEntityObservation(parsed.entity, actorPosition, toolName)
     }
+  }
+
+  liveObservedExactTarget(unitNumber) {
+    return Number.isSafeInteger(unitNumber)
+      ? this.liveEntityObservations?.get?.(`unit:${unitNumber}`)
+      : undefined
   }
 
   observedMiningTargets(entityName) {
@@ -998,6 +1021,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   async request(text, options = {}) {
     await this.loadPersistentState()
     this.liveEntityObservations = new Map()
+    this.staleExactPreflightRetries = 0
     this.lastMemoryKey = `npc:${this.npcId}`
     this.planUpdateReason = 'request'
     this.lastTaskStatusView = null
@@ -1152,6 +1176,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.planCategoryRetries = 0
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
+    this.staleExactPreflightRetries = 0
     this.messages.push({ role: 'user', content: cleanMemoryText(modMessage, 18000) })
     await this.traceEvent(traceEventName)
     return this.runGuarded()
@@ -1349,6 +1374,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   parsePlanMessage(message) {
     const plan = super.parsePlanMessage(message)
+    for (const operation of plan.operations) {
+      if (!EXACT_ENTITY_TARGET_OPERATIONS.has(operation.name)) continue
+      const unitNumber = operation.args?.unit_number
+      if (this.liveObservedExactTarget(unitNumber)) continue
+      const error = new AgentLoopError(
+        `Exact entity target unit ${unitNumber} is not bound by a live observation in this active request. Do not execute unit_number values copied from durable plan/dialogue memory. For a known location, navigate by its absolute world coordinate with walk_to_position, then re-observe the current entity and use the newly observed unit_number for the exact operation.`,
+      )
+      error.failureClass = 'plan_category'
+      error.code = 'exact_entity_requires_live_observation'
+      error.details = { operation_name: operation.name, unit_number: unitNumber }
+      throw error
+    }
     for (const operation of plan.operations) {
       if (operation.name !== 'mine_entity') continue
       const targets = this.observedMiningTargets(operation.args.entity_name)
@@ -1626,11 +1663,46 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       let preflight
       try {
         preflight = await this.preflightOperations(plan.operations)
+        this.staleExactPreflightRetries = 0
         await this.traceEvent('operations.preflight_ok', {
           operations: operations.map((operation, index) => ({ ...operation, preflight: preflight[index] })),
         })
       }
       catch (error) {
+        if (error?.preflight?.code === 'stale_exact_target' && this.staleExactPreflightRetries < 1) {
+          this.staleExactPreflightRetries++
+          if (this.requestInfo) {
+            const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'preflight_rejected')
+            if (state) stateResult = { ...(stateResult ?? {}), state }
+            this.memory.recordBoardEvidence?.(this.requestInfo.memoryKey, {
+              kind: 'operation_preflight_rejection',
+              ref: `${this.traceRequest?.id ?? 'request'}/stale_exact_target`,
+              summary: JSON.stringify({
+                code: 'stale_exact_target',
+                operation_index: error.preflight.operation_index,
+                operation: error.preflight.operation,
+                identity: error.preflight.identity,
+                last_observed: error.preflight.last_observed,
+              }),
+            })
+            await this.persistState()
+          }
+          await this.traceEvent('operations.preflight_recoverable', {
+            failure_class: 'stale_exact_target',
+            preflight: error.preflight,
+            tools_enabled: true,
+            retry: this.staleExactPreflightRetries,
+          })
+          const previous = error.preflight.last_observed
+          const location = previous?.position && Number.isFinite(previous.position.x) && Number.isFinite(previous.position.y)
+            ? ` The old identity was last observed at absolute position (${previous.position.x}, ${previous.position.y}) as ${previous.name ?? 'an entity'}.`
+            : ''
+          this.messages.push({
+            role: 'user',
+            content: `[HARNESS] Exact target unit ${error.preflight.identity ?? 'unknown'} is stale; deterministic preflight rejected it before Autorio admission, so no mutation from that operation ran.${location} A replacement at the same coordinate is a new identity. If the active task semantically means the entity at that location, use walk_to_position for the known coordinate as needed, then make one targeted live observation near the location and bind the current entity's returned unit_number before issuing any exact mutation. Tools remain enabled; do not silently substitute by name or reuse the stale unit_number.`,
+          })
+          return this.runTurn()
+        }
         stateResult = await this.markAdmissionFailure(stateResult, operations, error, 'operation_preflight_rejection')
         await this.traceEvent('operations.preflight_rejected', {
           failure_class: 'deterministic_preflight',
