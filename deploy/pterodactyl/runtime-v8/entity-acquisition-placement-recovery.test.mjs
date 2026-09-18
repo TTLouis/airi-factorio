@@ -333,3 +333,76 @@ test('alternating distinct read-only observations trigger generic decision press
   assert.ok(calls < 12)
   assert.equal(result.operations[0].name, 'wait')
 })
+
+
+test('wood collection flow uses exact mining, verifies inventory twenty, and completes without human continuation', async () => {
+  const rcon = new E2eRcon()
+  rcon.nearby = {
+    actor_position: { x: 0, y: 0 },
+    entities: [901, 902, 903, 904, 905].map((unit_number, index) => ({
+      name: 'tree-05',
+      type: 'tree',
+      unit_number,
+      position: { x: 10 + index * 2, y: 0 },
+      distance: 10 + index * 2,
+    })),
+  }
+  rcon.inventory = { items: [] }
+  const memory = new CanonicalTaskBoardMemory()
+  const canonicalPlan = ['Collect enough wood', 'Verify inventory has at least 20 wood']
+  let calls = 0
+  const agent = new NpcAgentLoop({
+    rcon,
+    memory,
+    systemPrompt: 'wood collection end-to-end harness test',
+    provider: async (messages, context) => {
+      calls++
+      assert.equal(context.allowTools, true)
+      if (calls === 1) {
+        return { content: null, tool_calls: [toolCall('trees', 'getNearbyEntities', { radius: 64, name: 'tree-05', limit: 8 })] }
+      }
+      if (calls === 2) {
+        return planMessage(
+          [901, 902, 903, 904, 905].map(unit_number => ({ name: 'mine_entity_exact', args: { unit_number } })),
+          { plan: canonicalPlan, currentStep: 0 },
+        )
+      }
+      if (calls === 3) {
+        const text = messages.map(message => String(message.content ?? '')).join('\n')
+        assert.match(text, /"completed_count":1/)
+        return { content: null, tool_calls: [toolCall('wood-inventory', 'getInventoryItems')] }
+      }
+      const text = messages.map(message => String(message.content ?? '')).join('\n')
+      assert.match(text, /"name":"wood","count":20/)
+      return planMessage([], {
+        chatMessage: 'Collected and verified at least 20 wood.',
+        plan: [],
+        currentStep: 0,
+      })
+    },
+  })
+
+  const mining = await agent.request('go cut nearby trees and collect 20 wood', { sender: 'tester' })
+  assert.equal(mining.operations.length, 5)
+  assert.equal(mining.operations.every(operation => operation.name === 'mine_entity_exact'), true)
+  assert.equal(rcon.mutations.length, 1)
+  assert.doesNotMatch(rcon.mutations[0], /gather_resource/)
+  assert.doesNotMatch(rcon.mutations[0], /'mine_entity','tree-05'/)
+
+  rcon.inventory = { items: [{ name: 'wood', count: 20 }] }
+  rcon.completedStatus(2, ['mining', 'mining', 'mining', 'mining', 'mining'], {
+    type: 'mining',
+    accepted: true,
+    completed: true,
+    code: 'completed',
+    target_unit_number: 905,
+    requested_count: 1,
+  })
+  const completed = await agent.completed()
+
+  assert.equal(calls, 4)
+  assert.equal(completed.goalStatus, 'completed')
+  assert.equal(completed.operations.length, 0)
+  assert.equal(memory.currentPlan('npc:airi'), undefined)
+  assert.equal(rcon.commands.some(command => command.includes("gather_resource") && command.includes("tree")), false)
+})
