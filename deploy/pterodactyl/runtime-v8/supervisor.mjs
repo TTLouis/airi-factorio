@@ -29,7 +29,7 @@ import {
 import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 import { createSave, prepareGameConfig, prepareMods, prepareServerSettings, selectSave } from './game-files.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
-import { decisionProviderConfiguration, providerEndpoint, providerRequest } from './provider.mjs'
+import { decisionProviderConfiguration, decisionProviderRequest, providerEndpoint, providerRequest } from './provider.mjs'
 import { configureNpcSession } from './supervisor-adapter.mjs'
 import { luaString } from './structured-policy.mjs'
 
@@ -1361,6 +1361,20 @@ export class Session {
         model: this.config.model,
         timeoutMs: this.config.providerTimeoutMs,
       }, messages, context),
+      interactionDecisionProvider: this.config.decisionProvider
+        ? (state, questions, context = {}) => decisionProviderRequest(
+            this.config.decisionProvider,
+            state,
+            questions,
+            {
+              signal: context.signal,
+              reserve: () => reserveBudget(
+                path.join(this.root, '.airi', 'decision-provider-budget.json'),
+                this.config.decisionProvider.maxRequestsPerHour,
+              ),
+            },
+          )
+        : undefined,
       reserve: async () => reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget),
       log: message => this.log(`[SGLuna agent] ${redact(secrets, message)}`),
       onActivity: (event, data) => this.onAgentActivity(event, data),
