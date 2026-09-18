@@ -2789,14 +2789,26 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     const observationDecisionComplete = /single targeted observation allowed by decision pressure is complete/i.test(reasonText)
     const currentState = this.memory.currentPlan?.(this.activePlanKey())
-    if (observationDecisionComplete && canonicalWorkRemains(currentState)) {
+    if (observationDecisionComplete) {
       if (!this.actionOmissionRepairActive) {
-        await this.beginActionOmissionRepair({
-          chatMessage: '',
-          plan: currentState.plan,
-          currentStep: currentState.current_step,
-          operations: [],
-        }, 'observation_decision_pressure_complete')
+        if (canonicalWorkRemains(currentState)) {
+          await this.beginActionOmissionRepair({
+            chatMessage: '',
+            plan: currentState.plan,
+            currentStep: currentState.current_step,
+            operations: [],
+          }, 'observation_decision_pressure_complete')
+        }
+        else {
+          this.actionOmissionRepairActive = true
+          await this.traceEvent('recovery.action_omission_started', {
+            reason_code: 'observation_decision_pressure_without_plan',
+            goal_id: undefined,
+            active_step: undefined,
+            completed_count: 0,
+            provider_call_budget: 'one final no-tools act-or-block call',
+          })
+        }
       }
       this.actionOmissionObservationUsed = true
       this.actionOmissionForceNoTools = true
@@ -2819,10 +2831,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         plan = this.parsePlanMessage(message)
       }
       catch (error) {
+        const fallbackPlan = currentState?.plan?.length
+          ? currentState.plan
+          : [cleanMemoryText(this.requestInfo?.text ?? 'Unresolved user goal', 500)]
         const fallback = {
           chatMessage: 'Action-omission repair did not produce a valid executable plan.',
-          plan: currentState.plan,
-          currentStep: currentState.current_step,
+          plan: fallbackPlan,
+          currentStep: currentState?.current_step ?? 0,
           operations: [],
         }
         return this.finishNoOperationBlock(
@@ -2832,6 +2847,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           `The bounded act-or-block repair was invalid: ${error instanceof Error ? error.message : String(error)}`,
           'action_omission',
         )
+      }
+      if (plan.operations.length === 0 && plan.plan.length === 0) {
+        plan = {
+          ...plan,
+          chatMessage: plan.chatMessage || 'Action-omission repair ended without an executable action.',
+          plan: [cleanMemoryText(this.requestInfo?.text ?? 'Unresolved user goal', 500)],
+          currentStep: 0,
+        }
       }
       return this.commitPlan(plan)
     }
