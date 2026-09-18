@@ -39,7 +39,7 @@ export function stagingConfiguration(raw = {}, env = process.env) {
     hasEnv(env, 'SGLUNA_CHAT_PLAYERS') ? env.SGLUNA_CHAT_PLAYERS
       : hasEnv(env, 'AIRI_CHAT_PLAYERS') ? env.AIRI_CHAT_PLAYERS
         : hasEnv(env, 'AIRI_CHAT_PLAYER') ? env.AIRI_CHAT_PLAYER
-          : hasEnv(env, 'AIRI_PLAYER') ? env.AIRI_PLAYER
+          : (actorMode === 'npc' && hasEnv(env, 'AIRI_PLAYER')) ? env.AIRI_PLAYER
             : raw.chatPlayers ?? legacySingle,
     'SGLUNA_CHAT_PLAYERS',
     512,
