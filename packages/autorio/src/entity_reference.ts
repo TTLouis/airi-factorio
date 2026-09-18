@@ -39,9 +39,31 @@ export function entity_reference_hint(unit_number: number) {
   }
 }
 
-export function resolve_exact_entity(_actor: ControlledActor, unit_number: number) {
+export function resolve_exact_entity(actor: ControlledActor, unit_number: number) {
   const direct = game.get_entity_by_unit_number(unit_number as UnitNumber)
-  if (!direct || !direct.valid) return undefined
-  remember_entity_reference(direct)
-  return direct
+  if (direct && direct.valid) {
+    remember_entity_reference(direct)
+    return direct
+  }
+
+  // Some live entities observed through the actor surface are not returned by
+  // game.get_entity_by_unit_number() immediately. The observation hint is only
+  // a lookup aid for the *same* identity: never substitute a replacement that
+  // merely has the same name and position.
+  const hint = hints()[unit_number]
+  if (!hint) return undefined
+  if (hint.surface_index !== actor.surface.index || hint.force_index !== actor.force.index) return undefined
+
+  const candidates = actor.surface.find_entities_filtered({
+    position: hint.position,
+    radius: 0.25,
+    name: hint.name,
+    force: actor.force,
+  })
+  for (const candidate of candidates) {
+    if (!candidate.valid || candidate.unit_number !== unit_number) continue
+    remember_entity_reference(candidate)
+    return candidate
+  }
+  return undefined
 }
