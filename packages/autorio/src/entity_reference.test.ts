@@ -46,20 +46,28 @@ describe('exact entity references', () => {
     expect(a.surface.find_entities_filtered).not.toHaveBeenCalled()
   })
 
-  it('does not recover a missing unit number by old position and name', () => {
+  it('recovers the same live identity from its observed position when native lookup misses', () => {
     const a = actor()
-    remember_entity_reference(entity(104))
-    a.surface.find_entities_filtered.mockReturnValue([entity(104)])
+    const observed = entity(104)
+    remember_entity_reference(observed)
+    a.surface.find_entities_filtered.mockReturnValue([observed])
 
-    expect(resolve_exact_entity(a, 104)).toBeUndefined()
-    expect(a.surface.find_entities_filtered).not.toHaveBeenCalled()
+    expect(resolve_exact_entity(a, 104)).toBe(observed)
+    expect(a.surface.find_entities_filtered).toHaveBeenCalledWith({
+      position: { x: 2, y: 3 },
+      radius: 0.25,
+      name: 'stone-furnace',
+      force: a.force,
+    })
   })
 
   it('keeps a replacement at the same coordinate as a distinct identity', () => {
     const a = actor()
     remember_entity_reference(entity(104))
     ;(globalThis as any).game.tick = 120
-    remember_entity_reference(entity(105))
+    const replacement = entity(105)
+    remember_entity_reference(replacement)
+    a.surface.find_entities_filtered.mockReturnValue([replacement])
 
     expect(resolve_exact_entity(a, 104)).toBeUndefined()
     expect(entity_reference_hint(104)).toMatchObject({
