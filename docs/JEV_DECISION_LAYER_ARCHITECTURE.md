@@ -1,0 +1,598 @@
+# SGLuna Jev decision-layer architecture
+
+Status: experimental design
+Branch: `experiment/jev-agent-architecture`
+Base at branch creation: `feat/npc-transition-work@c42f4ca5109cd33839fe759dae834634c653f132`
+
+## Purpose
+
+This document records the intended architecture for integrating TypeSafe Jev into the standalone Factorio NPC without replacing the main reasoning model or losing SGLuna's conversational personality.
+
+The goal is not "replace the LLM with Jev". The goal is to split the current agent workload into layers so that:
+
+- Jev handles frequent, low-latency, typed decisions;
+- the main reasoning model keeps long-horizon planning and difficult replanning;
+- a conversational path can preserve natural human interaction without giving that path world-mutation authority;
+- the harness becomes less prescriptive about strategy and recovery policy;
+- deterministic Factorio/runtime code remains authoritative for safety, identity, lifecycle, admission, execution, and world truth.
+
+This is also an opportunity to move more semantic authority back toward the model stack. The harness should provide grounded capabilities, bounded observations, receipts, lifecycle guarantees, and hard safety invariants. It should avoid becoming the place where increasingly specific gameplay strategy and conversational routing policy are encoded.
+
+## Design principle
+
+The intended split is:
+
+```text
+                         player message
+                              |
+                              v
+                     +------------------+
+                     | Jev decision lane|
+                     | typed / low cost |
+                     +--------+---------+
+                              |
+             +----------------+----------------+
+             |                |                |
+             v                v                v
+       conversation        planning         control/recovery
+          lane              lane               lane
+             |                |                |
+             v                v                v
+      conversational      reasoning        deterministic
+           model            model             runtime
+             |                |                |
+             +----------------+----------------+
+                              |
+                              v
+                            SGLuna
+                              |
+                              v
+                        Factorio world
+```
+
+A more precise authority statement is:
+
+> Models decide intent, strategy, and when more reasoning is needed. The runtime decides what is valid, what actually happened, and what may mutate the world.
+
+"Less harness" therefore does **not** mean removing validation or letting model output become authoritative world state. It means reducing deterministic code that tries to make semantic decisions that a model can make better from grounded evidence.
+
+## Three model lanes
+
+### 1. Jev decision lane
+
+Jev is a structured decision provider, not the personality and not the primary planner.
+
+Initial responsibilities:
+
+- classify a player message into a small typed intent set;
+- decide whether an event should continue locally or wake the expensive planner;
+- select among bounded recovery/escalation choices;
+- decide whether current evidence is sufficient or another observation is needed;
+- eventually decide whether a deterministic completion can continue without a full reasoning turn.
+
+Representative outputs:
+
+```text
+message_route =
+  conversation
+  new_goal
+  amend_current_goal
+  continue_current_goal
+  planner_question
+
+post_operation =
+  continue
+  observe
+  retry
+  replan
+  escalate
+
+completion_assessment =
+  insufficient_evidence
+  local_continue
+  planner_required
+  candidate_complete
+```
+
+These should be typed decisions with bounded choices, not free-form action generation.
+
+Jev should not initially:
+
+- generate Factorio operation arguments;
+- choose arbitrary prototype names from memory;
+- directly mutate the Task Board;
+- write player-visible prose;
+- declare world facts without runtime evidence;
+- bypass operation admission;
+- own actor identity or lifecycle state.
+
+### 2. Main reasoning/planning lane
+
+The existing reasoning-capable provider remains responsible for tasks that actually require planning.
+
+Examples:
+
+- turning a high-level goal into an executable plan;
+- resolving production dependencies;
+- choosing among grounded prototype/capability candidates;
+- revising a plan after meaningful world changes;
+- handling ambiguous multi-step tasks;
+- deciding strategy when several valid approaches exist;
+- requesting the observations/tools required to ground those decisions.
+
+The planner should gain **more semantic authority**, not less.
+
+Where the runtime currently accumulates gameplay-specific policy because the planner is too expensive to call for every small decision, Jev can become the cheap gate that decides when to let the planner act. That lets the deterministic harness focus on capabilities and invariants instead of becoming a second planner.
+
+### 3. Conversation/personality lane
+
+Human-facing conversation must remain separate from control authority.
+
+This lane exists so SGLuna can answer naturally without waking the full planning loop for every casual question and without giving a lightweight chat response permission to mutate the world.
+
+Example:
+
+```text
+Player:
+"what are you doing?"
+
+Jev route:
+conversation
+
+conversation context:
+{
+  current_goal,
+  current_step,
+  runtime_phase,
+  last_verified_result,
+  blocker_or_wait_reason
+}
+
+Conversational model:
+"I'm waiting for the iron plates right now. Once they're ready I'll continue with the drills."
+```
+
+The conversation model is allowed to verbalize authoritative runtime/task state. It is not allowed to fabricate new state or execute operations.
+
+If a message that begins as conversation actually changes the goal, Jev should route it to the planner rather than letting the talker reinterpret it.
+
+## Authority boundaries
+
+### Factorio / deterministic runtime remains authoritative for
+
+- live world state;
+- exact entity identity and stale-identity rejection;
+- actor/session identity;
+- operation admission and argument validation;
+- execution of structured operations;
+- physical reach and engine semantics;
+- task cancellation and lifecycle serialization;
+- Pause / Terminate / New Task authority;
+- operation receipts and deterministic verification;
+- persistence boundaries;
+- provider cancellation/timeouts;
+- secret handling and provider transport constraints.
+
+These are not candidates for "give the LLM more authority".
+
+### Model stack becomes authoritative for
+
+- semantic interpretation of user intent;
+- strategic planning;
+- selecting among grounded alternatives;
+- deciding when a plan needs revision;
+- choosing whether an unexpected result is locally recoverable versus planner-worthy;
+- deciding when additional observation is useful;
+- conversational framing and personality.
+
+### Harness should progressively stop owning
+
+- large trees of semantic retry/replan heuristics;
+- gameplay strategy that is not required for safety or engine correctness;
+- model-specific assumptions that can be represented as provider capability/configuration;
+- conversational routing rules that can be expressed as a bounded learned decision;
+- scenario-specific tactical policy that belongs in skills/model reasoning rather than the general execution harness.
+
+The test for a harness rule should be:
+
+> Is this a correctness/safety invariant that must always hold, or is it a judgment about what the agent should do?
+
+If it is the first, keep it deterministic.
+If it is the second, prefer Jev, the planner, or a reusable skill unless deterministic behavior is required for a specific engine contract.
+
+## Current code mapping
+
+The current runtime already has a useful seam.
+
+### Existing main planner path
+
+`deploy/pterodactyl/runtime-v8/supervisor.mjs` wires the main `provider` into `NpcAgentLoop`.
+
+That provider should remain unchanged in the first Jev experiment.
+
+### Existing interaction-provider path
+
+`NpcAgentLoop` already receives a separate `interactionProvider`.
+
+The current interaction route sends a compact state payload containing data such as:
+
+- player message;
+- sender;
+- current goal;
+- current task/runtime state.
+
+That is the best first Jev integration point because it is already:
+
+- isolated from the main planner trace;
+- tool-free;
+- bounded;
+- intended to return a classification rather than a long plan.
+
+The first experiment should therefore replace only the **interaction classification decision**, not the planner and not player-visible response generation.
+
+### Existing deterministic runtime
+
+The structured operation parser, preflight/admission checks, task manager, task controllers, exact identity handling, lifecycle gates, and Factorio-side execution remain unchanged in the initial experiment.
+
+## Proposed provider abstraction
+
+Add a provider role distinct from the existing main provider:
+
+```text
+plannerProvider
+interactionDecisionProvider
+conversationProvider
+```
+
+The first implementation can map these roles as:
+
+```text
+plannerProvider             -> existing OpenAI-compatible reasoning provider
+interactionDecisionProvider -> TypeSafe Jev
+conversationProvider        -> existing provider initially, split later
+```
+
+Do not force Jev behind the OpenAI chat-completions contract if its native API is structurally different. Prefer a small internal decision-provider interface that expresses what SGLuna actually needs.
+
+Conceptually:
+
+```ts
+decisionProvider.evaluate({
+  state,
+  questions,
+  signal,
+  timeoutMs,
+  traceContext
+})
+```
+
+The runtime should normalize Jev's response into its own small internal decision schema.
+
+Provider-specific request/response encoding belongs in the provider adapter, not in `NpcAgentLoop`.
+
+## First Jev contract: interaction routing
+
+Input should be compact and grounded.
+
+Example conceptual state:
+
+```json
+{
+  "message": "bro why are you just standing there",
+  "sender": "Louis",
+  "current_goal": "build 20 electric mining drills",
+  "task_status": "waiting",
+  "current_step": "smelt iron plates",
+  "active_operation": null,
+  "has_blocker": false
+}
+```
+
+Decision:
+
+```text
+route =
+  new_goal
+  amend_current_goal
+  continue_current_goal
+  conversation
+  planner_question
+```
+
+Rules:
+
+- Jev returns a route, not prose.
+- The decision must be validated against the known enum.
+- Invalid/unavailable Jev output falls back safely to the existing routing path or the planner.
+- No Jev decision can directly execute an operation.
+- Cancellation must follow the same request/lifecycle authority as the existing interaction path.
+
+## Second Jev contract: post-operation routing
+
+After interaction routing proves stable, Jev can evaluate a bounded runtime outcome.
+
+Example state:
+
+```json
+{
+  "goal": "build a mining outpost",
+  "current_step": "place electric mining drill",
+  "operation": "place_candidate",
+  "result": "rejected",
+  "reason": "not_placeable",
+  "retry_count": 1,
+  "world_changed": true,
+  "plan_has_remaining_steps": true
+}
+```
+
+Decision:
+
+```text
+next =
+  retry_local
+  observe
+  continue_plan
+  replan
+  escalate_to_planner
+```
+
+This is where Jev can allow the harness to shrink over time.
+
+A deterministic failure should still be represented precisely by the runtime. Jev decides what reasoning path to take next; it does not redefine the failure.
+
+## Third Jev contract: planner wake/sleep
+
+Once the first two contracts are reliable, Jev may decide whether a full planner turn is necessary after a deterministic completion.
+
+Example:
+
+```text
+operation completed
+      |
+      v
+Jev:
+  current plan still grounded?
+  next action already fully parameterized?
+  new observation required?
+  planner reasoning required?
+      |
+      +--> local continuation
+      +--> bounded observation
+      +--> planner
+```
+
+This should target expensive "wake the planner just to say continue" turns.
+
+It should not silently advance semantic Task Board steps merely because an operation completed. Operation completion and semantic step completion remain separate evidence claims.
+
+## Conversation design
+
+The "human vibe" should be an explicit product surface rather than an accidental side effect of the planner.
+
+The conversation provider should receive a compact projection of authoritative state, for example:
+
+- SGLuna personality instructions;
+- recent player dialogue;
+- current goal;
+- current visible plan step;
+- current runtime phase;
+- recent verified receipts;
+- blocker/wait reason;
+- optionally a small current-world summary if needed.
+
+It should not receive the full Factorio tool surface by default.
+
+Its output should be player-visible text only.
+
+For messages that request or imply world changes, the conversation lane should hand back to the decision router/planner instead of acting.
+
+This separation lets the conversational model be optimized for responsiveness, style, and continuity while the planner is optimized for reasoning.
+
+## Reducing harness policy safely
+
+Jev should not be used as justification for deleting deterministic safeguards.
+
+A safe reduction order is:
+
+1. identify an existing heuristic that produces a semantic choice;
+2. preserve the exact observations and receipts that feed that heuristic;
+3. express the choice as a bounded decision schema;
+4. run Jev in shadow mode and compare decisions without changing behavior;
+5. enable Jev for that choice behind a feature flag;
+6. preserve a deterministic fallback/escalation path;
+7. only then remove duplicated heuristic policy if the model path is stable.
+
+Good candidates:
+
+- interaction intent classification;
+- retry versus observe versus planner escalation;
+- whether a deterministic completion requires another full planning round;
+- whether a world change is material enough to invalidate the current plan.
+
+Bad candidates:
+
+- whether an exact entity ID is stale;
+- whether a placement collides;
+- whether an operation is authorized;
+- whether a lifecycle command can race another lifecycle command;
+- whether the actor is still the same NPC;
+- whether an engine operation actually completed.
+
+## Fallback behavior
+
+Jev is an optimization and decision layer, not a single point of failure.
+
+If Jev is:
+
+- disabled;
+- unconfigured;
+- rate limited;
+- timed out;
+- unavailable;
+- returning malformed data;
+- returning an unknown choice;
+
+the runtime should take a conservative fallback path.
+
+For V1, the preferred fallback is the existing interaction/planner route rather than inventing a new deterministic policy.
+
+The experiment must remain usable with Jev completely disabled.
+
+## Configuration
+
+Jev credentials must remain environment-only and must never be persisted into `airi-config.json` or traces.
+
+Proposed experimental variables:
+
+```text
+JEV_ENABLED=false
+JEV_API_KEY=
+JEV_API_BASEURL=
+JEV_MODEL=jev
+JEV_TIMEOUT_MS=...
+```
+
+Exact names/API shape should follow the direct TypeSafe API once verified.
+
+Do not add these to the stable Main egg until the experimental branch has a working end-to-end path. The first implementation may add them only to the experimental deployment/testing surface.
+
+## Observability
+
+We need enough visibility to answer:
+
+- Was Jev invoked?
+- Which decision contract was used?
+- What bounded choice did it return?
+- How long did it take?
+- Did the decision wake the planner?
+- Did fallback occur?
+- How many planner turns were avoided?
+- Did downstream deterministic execution accept or reject the result?
+
+Do not log secrets.
+Do not log hidden chain-of-thought.
+Prefer compact state/decision metadata and redact user text where appropriate.
+
+Suggested trace events:
+
+```text
+decision.request
+decision.response
+decision.fallback
+decision.route_applied
+planner.wake
+planner.skipped
+conversation.request
+conversation.response
+```
+
+The existing provider trace should remain distinct from the Jev decision trace so request-cumulative planner usage is not confused with decision-layer usage.
+
+## Rollout plan
+
+### Phase 0 - documentation and seam
+
+- define decision-provider interface;
+- define typed decision schemas;
+- keep existing behavior unchanged;
+- add feature flags/config validation;
+- add tests for fallback and cancellation.
+
+### Phase 1 - shadow interaction routing
+
+- call Jev for interaction classification;
+- record its route;
+- continue using the existing route for behavior;
+- compare disagreements;
+- verify latency and failure behavior.
+
+### Phase 2 - active interaction routing
+
+- Jev becomes the primary classifier;
+- malformed/unavailable response falls back;
+- main planner remains unchanged;
+- player-visible conversation still uses the existing model path.
+
+### Phase 3 - explicit conversation lane
+
+- split natural-language response generation from planning;
+- give the talker authoritative compact state;
+- give it no Factorio mutation tools;
+- route goal-changing language back to planning.
+
+### Phase 4 - post-operation decision routing
+
+- introduce bounded `continue / observe / retry / replan / escalate` decisions;
+- start in shadow mode;
+- replace only semantic harness heuristics, never deterministic correctness checks.
+
+### Phase 5 - planner wake/sleep optimization
+
+- use Jev to avoid unnecessary full planner turns after deterministic receipts;
+- measure planner-turn reduction and task correctness;
+- keep semantic Task Board completion evidence strict.
+
+### Phase 6 - harness simplification
+
+Only after the model path is proven:
+
+- remove redundant semantic heuristics;
+- move scenario strategy into skills/model reasoning;
+- keep deterministic engine and lifecycle invariants;
+- document every removed ownership rule in architecture tests/docs.
+
+## Acceptance criteria for the first implementation
+
+The first real Jev change is successful when:
+
+- Jev can be fully disabled with no behavior change;
+- Jev credentials never enter persisted config or logs;
+- interaction classification can call Jev directly;
+- Jev output is schema/enum validated;
+- timeout/cancel follows current request lifecycle semantics;
+- Jev cannot execute Factorio operations;
+- a Jev failure falls back safely;
+- the main planner remains untouched;
+- existing task lifecycle and desync regressions stay green;
+- trace output can distinguish Jev decisions from planner provider rounds.
+
+## Non-goals
+
+The initial Jev experiment does not:
+
+- replace the main reasoning model;
+- replace Factorio-side deterministic execution;
+- weaken operation validation;
+- give Jev arbitrary tool access;
+- move Task Board authority into a provider;
+- redesign combat;
+- redesign bootstrap/production planning;
+- redesign swarm coordination;
+- require public benchmark publication;
+- require Jev for normal server startup.
+
+## Long-term target
+
+The desired architecture is not a "smarter harness".
+
+It is a **thinner, more trustworthy harness around a more capable model stack**:
+
+```text
+Factorio
+  = truth + physics + authoritative mutation
+
+runtime harness
+  = safety + identity + lifecycle + bounded capabilities + receipts
+
+Jev
+  = fast learned decisions about where reasoning should go
+
+planner LLM
+  = strategy + planning + grounded semantic decisions
+
+conversation LLM
+  = SGLuna's human-facing voice
+```
+
+If this split works, SGLuna should feel more autonomous and more natural at the same time: fewer brittle policy branches in the harness, fewer unnecessary expensive planner turns, and a cleaner separation between "thinking", "deciding where to think", "talking", and "doing".
