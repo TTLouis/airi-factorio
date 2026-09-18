@@ -91,27 +91,29 @@ function agentFor(intent, { running = true, withPlan = true, queueConflict = int
   if (withPlan) memory.planByNpc.set('npc:airi', activePlan())
   const rcon = new RouterRcon({ running })
   const calls = []
+  const mockProvider = async (_messages, context) => {
+    calls.push(context)
+    if (context.interactionRouter) {
+      assert.equal(context.allowTools, false)
+      assert.equal(context.triggerSource, 'interaction_router')
+      return { content: JSON.stringify({ intent, queue_conflict: intent === 'amend_current' ? queueConflict : false, reply: intent === 'chat_only' ? 'Hello from the side router.' : '' }) }
+    }
+    return {
+      content: JSON.stringify({
+        chatMessage: 'Replanned current work.',
+        plan: ['continue the updated production goal'],
+        currentStep: 0,
+        operations: [{ name: 'wait', args: { ticks: 1 } }],
+      }),
+    }
+  }
   const agent = new NpcAgentLoop({
     rcon,
     memory,
     systemPrompt: 'main planner',
     npcId: 'airi',
-    provider: async (_messages, context) => {
-      calls.push(context)
-      if (context.interactionRouter) {
-        assert.equal(context.allowTools, false)
-        assert.equal(context.triggerSource, 'interaction_router')
-        return { content: JSON.stringify({ intent, queue_conflict: intent === 'amend_current' ? queueConflict : false, reply: intent === 'chat_only' ? 'Hello from the side router.' : '' }) }
-      }
-      return {
-        content: JSON.stringify({
-          chatMessage: 'Replanned current work.',
-          plan: ['continue the updated production goal'],
-          currentStep: 0,
-          operations: [{ name: 'wait', args: { ticks: 1 } }],
-        }),
-      }
-    },
+    provider: mockProvider,
+    interactionProvider: mockProvider,
   })
   if (running && withPlan) {
     agent.active = true
