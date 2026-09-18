@@ -171,12 +171,12 @@ describe('sacrificial combat support frontline', () => {
   })
 
   it('uses each worm tier\'s own attack range and scans to at least twice that range', () => {
-    const nest = enemy(15, 'biter-spawner', 'unit-spawner', 30)
+    const nest = enemy(15, 'biter-spawner', 'unit-spawner', 15)
     const smallOutside = enemy(16, 'small-worm-turret', 'turret', 21, 10)
     const behemothInside = enemy(17, 'behemoth-worm-turret', 'turret', 59, 30)
     const c = world([nest, smallOutside, behemothInside], 1)
 
-    c.controller.submit_clear(40)
+    c.controller.submit_clear(20)
     c.controller.tick(c.actor)
 
     expect(c.controller.status()).toMatchObject({
