@@ -537,3 +537,28 @@ test('pause/terminate and resume acknowledge only after their queued runtime wor
   await resumeOptions.onSettled()
   assert.deepEqual(acknowledgements, [[7, 'pause'], [7, 'terminate'], [7, 'resume']])
 })
+
+test('chat-only final replies are retained once even when plan.accepted already exposed the same text', async () => {
+  const session = Object.create(Session.prototype)
+  const queued = []
+  Object.assign(session, {
+    npcName: 'AIRI',
+    activityEpoch: 'epoch',
+    conversationGeneration: 0,
+    conversationSequence: 0,
+    agentLive: { phase: 'idle', detail: '', objective: '', at: 0, activity: [], conversation_id: 'task_epoch_0', conversation: [], debug: {} },
+    agent: { active: true, request: async () => ({ chatMessage: 'visible answer' }) },
+    rcon: {},
+    stopping: false,
+    queueEvent: fn => { queued.push(fn); return true },
+    ensureAuthorization: async () => true,
+    applyNavigationObstaclePolicy: async () => {},
+    syncTaskBoardUi: async () => true,
+    printChat: async () => {},
+  })
+
+  session.appendUiConversation('assistant', 'AIRI', 'visible answer')
+  assert.equal(session.queuePlayerRequest('TTLouis', 'hello'), true)
+  await queued.shift()()
+  assert.deepEqual(session.agentLive.conversation.map(entry => entry.text), ['visible answer'])
+})

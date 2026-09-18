@@ -862,6 +862,8 @@ export class Session {
     const text = uiText(rawText, 2000)
     if (!text || (role !== 'user' && role !== 'assistant')) return
     if (!Array.isArray(this.agentLive.conversation)) this.agentLive.conversation = []
+    const previous = this.agentLive.conversation.at(-1)
+    if (previous?.role === role && previous?.text === text) return
     const message = {
       id: `message_${this.activityEpoch}_${this.conversationGeneration}_${++this.conversationSequence}`,
       role,
@@ -1287,6 +1289,7 @@ export class Session {
         await this.ensureAuthorization()
         await this.applyNavigationObstaclePolicy(text)
         const result = await this.agent.request(text, { sender })
+        if (result?.chatMessage) this.appendUiConversation('assistant', this.npcName || 'AIRI', result.chatMessage)
         await this.syncTaskBoardUi()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }
