@@ -9,6 +9,13 @@ test('structured operations apply bounded defaults and render only approved Auto
   assert.deepEqual(parseOperation({ name: 'harvest_product', args: { product_name: 'stone', count: 6 } }), {
     name: 'harvest_product', args: { product_name: 'stone', count: 6, search_radius: 256 },
   })
+  assert.deepEqual(parseOperation({ name: 'clear_construction_area', args: { x: 10, y: -4, width: 12, height: 8 } }), {
+    name: 'clear_construction_area', args: { x: 10, y: -4, width: 12, height: 8 },
+  })
+  assert.equal(
+    renderOperation({ name: 'clear_construction_area', args: { x: 10, y: -4, width: 12, height: 8 } }),
+    "remote.call('autorio_operations','clear_construction_area',10,-4,12,8)",
+  )
   assert.equal(
     renderOperation({ name: 'harvest_product', args: { product_name: 'wood', count: 10, search_radius: 128 } }),
     "remote.call('autorio_operations','harvest_product','wood',10,128)",
@@ -95,6 +102,7 @@ test('operation policy rejects arbitrary code, extra args, and oversized bounded
     { name: 'craft_item', args: { item_name: 'iron-gear-wheel', count: 1001 } },
     { name: 'mine_entity', args: { entity_name: 'iron-ore\n/c game.clear()', count: 1 } },
     { name: 'harvest_product', args: { product_name: 'stone', count: 100001, search_radius: 64 } },
+    { name: 'clear_construction_area', args: { x: 0, y: 0, width: 65, height: 1 } },
     { name: 'place_entity', args: { entity_name: 'steel-chest', x: 1 } },
     { name: 'place_entity', args: { entity_name: 'steel-chest', y: 1 } },
     { name: 'place_entity', args: { entity_name: 'steel-chest', x: 1, y: 1, direction: 16 } },
