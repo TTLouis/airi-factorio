@@ -36,8 +36,9 @@ def item_amount(parts: list[dict], name: str) -> float:
 
 
 def entity_item_count(status: dict, item_name: str) -> int:
+    entity = status.get('entity') if isinstance(status.get('entity'), dict) else status
     total = 0
-    for inventory in status.get('inventories') or []:
+    for inventory in entity.get('inventories') or []:
         for item in inventory.get('items') or []:
             if item.get('name') == item_name:
                 total += int(item.get('count') or 0)
@@ -179,7 +180,8 @@ def run(client: Rcon, results: Path) -> None:
 
     furnace = entity_status('placed stone furnace status')
     require(furnace.get('found') is True, furnace)
-    unit_number = furnace.get('unit_number')
+    furnace_entity = furnace.get('entity') or {}
+    unit_number = furnace_entity.get('unit_number')
     require(isinstance(unit_number, int) and unit_number > 0, furnace)
 
     supply = operation_admission(
