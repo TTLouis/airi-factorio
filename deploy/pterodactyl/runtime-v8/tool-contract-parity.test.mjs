@@ -31,6 +31,8 @@ const toolSamples = {
   getRecipeDetails: { item_or_recipe: 'iron-plate' },
   discoverPrototypes: { capability: 'mining', resource_name: 'iron-ore' },
   getPrototypeDetails: { name: 'transport-belt' },
+  findSkills: { query: 'early iron plate smelting', limit: 3 },
+  getSkillDetails: { id: 'starter-smelting-row' },
   getPlayerStatus: { player_name: 'Louis' },
   getNearbyEntities: {},
   getPlacementCandidates: { entity_name: 'stone-furnace' },
@@ -102,9 +104,11 @@ test('intentional runtime-only tools stay explicit without requiring symmetry ad
     .map(([name]) => name)
     .sort()
   assert.deepEqual(runtimeOnly, [
+    'findSkills',
     'getLocalSpatialObservation',
     'getResearchPath',
     'getResearchRequest',
+    'getSkillDetails',
     'measureTransportThroughput',
     'planPlacement',
     'validateConstructionPlan',
