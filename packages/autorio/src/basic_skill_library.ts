@@ -87,7 +87,7 @@ export const BASIC_SKILL_DEFINITIONS: any[] = [
     source: SOURCE,
     preconditions: [
       { kind: 'entity_available', subject: 'fuel-burning-miner', description: 'A placed or placeable mining machine can mine coal and consumes fuel.' },
-      { kind: 'resource', subject: 'coal-resource', description: 'A suitable fuel resource patch is available.' },
+      { kind: 'custom', subject: 'coal-resource', description: 'A suitable fuel resource patch is available.' },
       { kind: 'bootstrap', subject: 'starter-fuel', description: 'Enough initial fuel exists to start at least part of the loop.' },
     ],
     inputs: [{ item: 'starter-fuel', role: 'initial bootstrap fuel' }, { item: 'coal-resource', role: 'mined resource' }],
@@ -136,7 +136,7 @@ export const BASIC_SKILL_DEFINITIONS: any[] = [
     summary: 'For very early plate production, consider placing a mining drill so its output feeds a furnace directly, eliminating a belt and input inserter when live geometry permits. Fuel remains a separate dependency unless the selected machines do not require it.',
     source: SOURCE,
     preconditions: [
-      { kind: 'resource', subject: 'smeltable-resource', description: 'The target resource can be mined at the selected location.' },
+      { kind: 'custom', subject: 'smeltable-resource', description: 'The target resource can be mined at the selected location.' },
       { kind: 'entity_available', subject: 'mining-machine', description: 'A compatible mining machine is available or can be made.' },
       { kind: 'entity_available', subject: 'furnace', description: 'A compatible smelting machine is available or can be made.' },
     ],
@@ -422,7 +422,7 @@ export const BASIC_SKILL_DEFINITIONS: any[] = [
     summary: 'Build an early scalable mining row by placing drills that genuinely cover the resource patch and orienting their outputs onto a shared belt or other collection path. Keep power/fuel coverage and belt capacity explicit, and extend along the patch only after the first cells are verified.',
     source: SOURCE,
     preconditions: [
-      { kind: 'resource', subject: 'resource-patch', description: 'The target resource patch has observed entities in the intended build area.' },
+      { kind: 'custom', subject: 'resource-patch', description: 'The target resource patch has observed entities in the intended build area.' },
       { kind: 'entity_available', subject: 'mining-machine', description: 'A compatible mining machine is available or craftable.' },
       { kind: 'entity_available', subject: 'collection-path', description: 'A belt or other bounded output collection path is available.' },
     ],
