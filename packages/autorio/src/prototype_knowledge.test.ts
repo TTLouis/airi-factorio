@@ -6,6 +6,12 @@ function luaPairs(value: Record<string, unknown>) {
   return Object.entries(value)
 }
 
+function runtimeCollection<T>(values: T[]) {
+  const result: Record<number, T> = {}
+  for (let index = 0; index < values.length; index++) result[index + 1] = values[index]
+  return result
+}
+
 describe('prototype build knowledge', () => {
   const originalPairs = (globalThis as any).pairs
   const originalPrototypes = (globalThis as any).prototypes
@@ -159,6 +165,44 @@ describe('prototype build knowledge', () => {
         force_available: true,
       }],
     })
+  })
+
+  it('handles runtime-shaped place-item collections without JS array methods or length', () => {
+    const drill = (globalThis as any).prototypes.entity['burner-mining-drill']
+    drill.items_to_place_this = runtimeCollection([
+      { name: 'z-modded-drill-item', count: 1 },
+      { name: 'burner-mining-drill', count: 1 },
+      { name: 'a-modded-drill-item', count: 2 },
+    ])
+
+    const actor = {
+      is_valid: true,
+      force: {
+        recipes: {
+          'burner-mining-drill': {
+            name: 'burner-mining-drill', enabled: true, hidden: false,
+            products: runtimeCollection([{ type: 'item', name: 'burner-mining-drill', amount: 1 }]),
+          },
+        },
+      },
+      get_main_inventory: () => ({ get_contents: () => [] }),
+    } as unknown as ControlledActor
+
+    const discovery = discover_prototypes_for_actor(actor, { capability: 'mining', resource_name: 'iron-ore' }) as any
+    expect(discovery.candidates[0]).toMatchObject({
+      name: 'burner-mining-drill',
+      place_items: [
+        { name: 'a-modded-drill-item', count: 2 },
+        { name: 'burner-mining-drill', count: 1 },
+      ],
+      place_items_truncated: true,
+      enabled_recipe: 'burner-mining-drill',
+    })
+    expect((prototype_details('burner-mining-drill') as any).entity.place_items).toEqual([
+      { name: 'a-modded-drill-item', count: 2 },
+      { name: 'burner-mining-drill', count: 1 },
+      { name: 'z-modded-drill-item', count: 1 },
+    ])
   })
 
   it('returns explicit bounded narrowing evidence instead of dumping oversized candidate sets', () => {
