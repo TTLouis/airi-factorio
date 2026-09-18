@@ -1,5 +1,6 @@
 import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
+import { MAX_MINING_START_REJECTIONS, mining_navigation_reach, mining_navigation_requires_movement, select_exact_mining_target, within_mining_reach } from './mining_reach'
 import { harvest_source_prototype_names } from './prototype_knowledge'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersHarvestProduct, PlayerParametersWalkToEntity } from './types'
@@ -13,7 +14,6 @@ const DEFAULT_HARVEST_SEARCH_RADIUS = 256
 const MAX_HARVEST_SEARCH_RADIUS = 4096
 const INITIAL_SEARCH_RADIUS = 8
 const SEARCH_RESULT_LIMIT = 32
-const MINING_REACH_MARGIN = 0.25
 
 function valid_integer(value: number, min: number, max: number) {
   return typeof value === 'number' && value === math.floor(value) && value >= min && value <= max
@@ -44,13 +44,6 @@ function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
   return nearest
 }
 
-function mining_reach_distance(actor: ControlledActor) {
-  const character = actor.character
-  const raw = character?.reach_distance
-  const reach = typeof raw === 'number' && raw === raw && raw > 0 && raw < math.huge ? raw : 2.5
-  return math.max(0.5, reach - MINING_REACH_MARGIN)
-}
-
 function source_is_compatible(task: PlayerParametersHarvestProduct, entity: LuaEntity | null | undefined) {
   if (!entity || !entity.valid || entity.type === 'resource') return false
   for (const name of task.source_names) {
@@ -76,7 +69,7 @@ function find_source(actor: ControlledActor, task: PlayerParametersHarvestProduc
   return undefined
 }
 
-function navigation_to_target(actor: ControlledActor, task: PlayerParametersHarvestProduct, target: LuaEntity): PlayerParametersWalkToEntity | undefined {
+function navigation_to_target(actor: ControlledActor, task: PlayerParametersHarvestProduct, target: LuaEntity, rejected_starts: number = 0): PlayerParametersWalkToEntity | undefined {
   const identity = actor.status_snapshot()
   if (identity.actor_id === undefined) return undefined
   return {
@@ -85,7 +78,7 @@ function navigation_to_target(actor: ControlledActor, task: PlayerParametersHarv
     search_radius: 1,
     target_kind: 'position',
     requested_position: { x: target.position.x, y: target.position.y },
-    reach_distance: mining_reach_distance(actor),
+    reach_distance: mining_navigation_reach(actor, target, rejected_starts),
     path: null,
     path_drawn: false,
     path_index: 1,
@@ -170,6 +163,24 @@ export function new_harvest_controller(
     return [true, `Product harvest task started with ${source_names.length} compatible source prototype(s)`]
   }
 
+  function reposition_after_rejected_start(actor: ControlledActor, task: PlayerParametersHarvestProduct, target: LuaEntity) {
+    actor.set_mining_state({ mining: false })
+    task.mining_attempted = false
+    task.mining_rejects = (task.mining_rejects ?? 0) + 1
+    if (task.mining_rejects > MAX_MINING_START_REJECTIONS) {
+      fail(actor, task, 'mining_rejected')
+      return
+    }
+    const navigation = navigation_to_target(actor, task, target, task.mining_rejects)
+    const reach = navigation?.reach_distance ?? 0
+    if (!navigation || !mining_navigation_requires_movement(actor, target, reach)
+      || !manager.interrupt_current_with(navigation, task)) {
+      fail(actor, task, 'mining_rejected')
+      return
+    }
+    log(`[AUTORIO] Mining start rejected for harvest source ${target.name}; repositioning closer before retry ${task.mining_rejects}/${MAX_MINING_START_REJECTIONS}`)
+  }
+
   function tick(actor: ControlledActor) {
     const task = manager.player_state.parameters_harvest_product
     if (!task || manager.player_state.task_state !== TaskStates.HARVESTING) return
@@ -190,6 +201,8 @@ export function new_harvest_controller(
       task.target = null
       task.target_name = undefined
       task.target_position = undefined
+      task.mining_rejects = 0
+      task.mining_attempted = false
     }
 
     let target = task.target ?? undefined
@@ -202,10 +215,11 @@ export function new_harvest_controller(
       task.target = target
       task.target_name = target.name
       task.target_position = { x: target.position.x, y: target.position.y }
+      task.mining_rejects = 0
+      task.mining_attempted = false
     }
 
-    const reach = mining_reach_distance(actor)
-    if (squared_distance(actor.position, target.position) > reach ** 2) {
+    if (!within_mining_reach(actor, target)) {
       actor.set_mining_state({ mining: false })
       const navigation = navigation_to_target(actor, task, target)
       if (!navigation || !manager.interrupt_current_with(navigation, task)) {
@@ -215,8 +229,22 @@ export function new_harvest_controller(
     }
 
     if (actor.get_mining_state().mining) return
-    actor.update_selected_entity(target.position)
+    if (task.mining_attempted) {
+      reposition_after_rejected_start(actor, task, target)
+      return
+    }
+    if (!select_exact_mining_target(actor, target)) {
+      fail(actor, task, 'selection_mismatch')
+      return
+    }
+
     actor.set_mining_state({ mining: true, position: target.position })
+    task.mining_attempted = true
+    if (!actor.get_mining_state().mining) {
+      reposition_after_rejected_start(actor, task, target)
+      return
+    }
+
     log(`[AUTORIO] Harvesting exact ${target.name} for ${task.product_name}; verified_gain=${task.verified_gain}/${task.requested_count}`)
   }
 
@@ -228,6 +256,8 @@ export function new_harvest_controller(
     task.target = null
     task.target_name = undefined
     task.target_position = undefined
+    task.mining_rejects = 0
+    task.mining_attempted = false
   }
 
   return { submit, tick, on_player_mined_entity }

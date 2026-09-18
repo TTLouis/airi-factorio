@@ -84,6 +84,8 @@ export interface PlayerParametersMineEntity {
   position?: MapPositionStruct
   /** Resource amount seen on the previous tick for standalone-NPC polling. */
   last_target_amount?: number
+  /** Consecutive engine-rejected mining starts for bounded approach recovery. */
+  mining_rejects?: number
 }
 
 export interface PlayerParametersHarvestProduct {
@@ -97,6 +99,8 @@ export interface PlayerParametersHarvestProduct {
   target?: LuaEntity | null
   target_name?: string
   target_position?: MapPositionStruct
+  mining_rejects?: number
+  mining_attempted?: boolean
   owner_actor_id?: number
   owner_actor_kind?: string
   owner_force_index?: number
@@ -111,6 +115,8 @@ export interface PlayerParametersClearConstructionArea {
   target?: LuaEntity | null
   target_name?: string
   target_position?: MapPositionStruct
+  mining_rejects?: number
+  mining_attempted?: boolean
   owner_actor_id?: number
   owner_actor_kind?: string
   owner_force_index?: number

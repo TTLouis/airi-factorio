@@ -12,7 +12,9 @@ function mineable(name: string, type: string, product: string, amount: number, x
   const prototype = {
     name,
     type,
+    is_building: false,
     mineable_properties: {
+      minable: true,
       mining_time: 0.5,
       products: [{ type: 'item', name: product, amount }],
     },
@@ -22,6 +24,7 @@ function mineable(name: string, type: string, product: string, amount: number, x
     name,
     type,
     position: { x, y: 0 },
+    prototype,
   }
   return { prototype, entity }
 }
@@ -48,9 +51,10 @@ function fixture() {
     }),
   }
   const force = { index: 1 }
+  const character: any = { valid: true, reach_distance: 10, resource_reach_distance: 2.7, selected: undefined }
   const actor = {
     is_valid: true,
-    character: { valid: true, reach_distance: 10 },
+    character,
     position: { x: 0, y: 0 },
     surface,
     force,
@@ -60,7 +64,9 @@ function fixture() {
         ...(wood > 0 ? [{ name: 'wood', count: wood }] : []),
       ],
     }),
-    update_selected_entity: vi.fn(),
+    update_selected_entity: vi.fn((position: { x: number, y: number }) => {
+      character.selected = all.find(entity => entity.valid && entity.position.x === position.x && entity.position.y === position.y)
+    }),
     get_mining_state: vi.fn(() => ({ mining })),
     set_mining_state: vi.fn((state: { mining: boolean }) => { mining = state.mining }),
     set_walking_state: vi.fn(),
@@ -190,6 +196,29 @@ describe('product-oriented finite harvesting', () => {
     f.setStone(9)
     f.harvest.tick(f.actor)
     expect(f.manager.player_state.task_state).toBe(TaskStates.IDLE)
+  })
+
+  it('uses finite-mining reach for harvest sources and resumes the same source after approach', () => {
+    const f = fixture()
+    f.rockA.position.x = 8
+    f.rockB.valid = false
+    expect(f.harvest.submit('stone', 1, 64)[0]).toBe(true)
+
+    f.harvest.tick(f.actor)
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      target_kind: 'position',
+      requested_position: { x: 8, y: 0 },
+      reach_distance: 2.45,
+    })
+
+    ;(f.actor.position as any).x = 6.5
+    f.manager.reset_task_state()
+    f.manager.next_task()
+    f.harvest.tick(f.actor)
+
+    expect(f.manager.player_state.parameters_harvest_product?.target).toBe(f.rockA)
+    expect(f.actor.set_mining_state).toHaveBeenLastCalledWith({ mining: true, position: f.rockA.position })
   })
 
   it('excludes ordinary resource patches from the harvest source set', () => {

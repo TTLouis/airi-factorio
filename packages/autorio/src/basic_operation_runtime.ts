@@ -3,6 +3,7 @@ import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
 import { resolve_exact_entity } from './entity_reference'
 import { build_interaction_reach, entity_interaction_reach } from './interaction_range'
+import { mining_reach_distance, within_mining_reach } from './mining_reach'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersMineEntity, PlayerParametersWalkToEntity } from './types'
 import { TaskStates } from './types'
@@ -11,7 +12,6 @@ type Manager = ReturnType<typeof new_task_manager>
 type BasicController = ReturnType<typeof new_basic_operation_controller>
 
 const MINING_TARGET_SEARCH_RADIUS = 5
-const MINING_REACH_MARGIN = 0.25
 
 function nearest_entity(actor: ControlledActor, entities: LuaEntity[]) {
   let min_distance = math.huge
@@ -30,22 +30,7 @@ function squared_distance(a: { x: number, y: number }, b: { x: number, y: number
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
 
-function mining_reach_distance(actor: ControlledActor, entity: LuaEntity) {
-  const character = actor.character
-  if (!character) return 0.5
-  const raw = entity.type === 'resource'
-    ? character.resource_reach_distance
-    : character.reach_distance
-  const reach = typeof raw === 'number' && raw === raw && raw > 0 && raw < math.huge ? raw : 2.5
-  return math.max(0.5, reach - MINING_REACH_MARGIN)
-}
-
-function within_mining_reach(actor: ControlledActor, entity: LuaEntity) {
-  const reach = mining_reach_distance(actor, entity)
-  return squared_distance(actor.position, entity.position) <= reach ** 2
-}
-
-function mining_reposition_task(actor: ControlledActor, entity: LuaEntity): PlayerParametersWalkToEntity | undefined {
+reach funcsfunction mining_reposition_task(actor: ControlledActor, entity: LuaEntity): PlayerParametersWalkToEntity | undefined {
   const identity = actor.status_snapshot()
   if (identity.actor_id === undefined) return undefined
   return {

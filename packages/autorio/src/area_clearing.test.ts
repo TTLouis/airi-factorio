@@ -14,7 +14,7 @@ function entity(name: string, type: string, x: number, options: { building?: boo
       name,
       type,
       is_building: options.building ?? false,
-      mineable_properties: options.mineable === false ? undefined : { mining_time: 0.5, products: [] },
+      mineable_properties: options.mineable === false ? undefined : { minable: true, mining_time: 0.5, products: [] },
     },
   } as any
 }
@@ -43,13 +43,16 @@ function fixture() {
             && item.position.y <= rightBottom.y))
     }),
   }
+  const character: any = { valid: true, reach_distance: 10, resource_reach_distance: 2.7, selected: undefined }
   const actor = {
     is_valid: true,
-    character: { valid: true, reach_distance: 10 },
+    character,
     position: { x: 0, y: 0 },
     surface,
     force: { index: 1 },
-    update_selected_entity: vi.fn(),
+    update_selected_entity: vi.fn((position: { x: number, y: number }) => {
+      character.selected = entities.find(item => item.valid && item.position.x === position.x && item.position.y === position.y)
+    }),
     get_mining_state: vi.fn(() => ({ mining })),
     set_mining_state: vi.fn((state: { mining: boolean }) => { mining = state.mining }),
     set_walking_state: vi.fn(),
@@ -109,6 +112,69 @@ describe('construction-area finite blocker clearing', () => {
     expect(f.resource.valid).toBe(true)
     expect(f.machine.valid).toBe(true)
     expect(f.treeOutside.valid).toBe(true)
+  })
+
+  it('repositions into real finite-mining reach, then mines the same observed blocker', () => {
+    const f = fixture()
+    f.treeA.position.x = 8
+    f.treeB.valid = false
+    f.rock.valid = false
+
+    expect(f.controller.submit(8, 0, 4, 4)[0]).toBe(true)
+    f.controller.tick(f.actor)
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      target_kind: 'position',
+      requested_position: { x: 8, y: 0 },
+      reach_distance: 2.45,
+    })
+    expect(f.actor.set_mining_state).not.toHaveBeenCalledWith({ mining: true, position: f.treeA.position })
+
+    ;(f.actor.position as any).x = 6.5
+    f.manager.reset_task_state()
+    f.manager.next_task()
+    f.controller.tick(f.actor)
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.CLEARING_AREA)
+    expect(f.manager.player_state.parameters_clear_construction_area?.target).toBe(f.treeA)
+    expect(f.actor.set_mining_state).toHaveBeenLastCalledWith({ mining: true, position: f.treeA.position })
+  })
+
+  it('polls standalone blocker disappearance and live-rescans without a player mining event', () => {
+    const f = fixture()
+    ;(f.actor as any).owns_player_index = () => false
+    expect(f.controller.submit(2, 0, 8, 4)[0]).toBe(true)
+
+    f.controller.tick(f.actor)
+    f.treeA.valid = false
+    f.controller.tick(f.actor)
+
+    expect(f.manager.player_state.parameters_clear_construction_area).toMatchObject({
+      cleared_count: 1,
+      target: f.treeB,
+      target_name: 'mod-tree-b',
+    })
+  })
+
+  it('bounds repeated engine-rejected mining starts instead of retrying forever', () => {
+    const f = fixture()
+    f.treeB.valid = false
+    f.rock.valid = false
+    ;(f.actor as any).get_mining_state = vi.fn(() => ({ mining: false }))
+    ;(f.actor as any).set_mining_state = vi.fn()
+
+    expect(f.controller.submit(1, 0, 4, 4)[0]).toBe(true)
+    for (let attempt = 0; attempt < 4; attempt++) {
+      f.controller.tick(f.actor)
+      if (f.manager.player_state.task_state === TaskStates.IDLE) break
+      expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+      f.manager.reset_task_state()
+      f.manager.next_task()
+    }
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.IDLE)
+    expect(f.manager.get_status_snapshot().last_cancelled_batch?.reason).toBe('clear_construction_area:mining_rejected')
   })
 
   it('does not treat normal resource patches or placed buildings as finite natural clear targets', () => {

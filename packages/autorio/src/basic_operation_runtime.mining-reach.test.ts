@@ -86,6 +86,38 @@ describe('mining reach recovery', () => {
     expect(f.set_mining_state).toHaveBeenCalledWith({ mining: false })
   })
 
+  it('uses resource mining reach for an exact finite natural entity instead of generic interaction reach', () => {
+    const f = fixture(8)
+    const natural = {
+      valid: true,
+      name: 'mod-tree-a',
+      type: 'tree',
+      unit_number: 191,
+      position: { x: 8, y: 0 },
+      surface: f.surface,
+      force: { index: 1 },
+      prototype: {
+        is_building: false,
+        mineable_properties: { minable: true, mining_time: 0.5, products: [] },
+      },
+    } as any
+    ;(globalThis as any).prototypes.entity['mod-tree-a'] = natural.prototype
+    ;(globalThis as any).game.get_entity_by_unit_number = (unit: number) => unit === 191 ? natural : undefined
+
+    expect(f.controller.submit_mining_exact(191)).toBe(true)
+    f.runtime.state_mining(f.actor)
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.WALKING_TO_ENTITY)
+    expect(f.manager.player_state.parameters_walk_to_entity).toMatchObject({
+      entity_name: 'mod-tree-a',
+      target: natural,
+      target_unit_number: 191,
+      target_position: { x: 8, y: 0 },
+      reach_distance: 2.45,
+    })
+    expect(f.set_mining_state).toHaveBeenCalledWith({ mining: false })
+  })
+
   it('starts mining immediately when the target is already inside real resource reach', () => {
     const f = fixture(2)
     expect(f.controller.submit_mining('iron-ore', 20)).toBe(true)

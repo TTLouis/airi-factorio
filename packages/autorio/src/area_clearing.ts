@@ -1,5 +1,6 @@
 import type { LuaEntity } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
+import { MAX_MINING_START_REJECTIONS, mining_navigation_reach, mining_navigation_requires_movement, select_exact_mining_target, within_mining_reach } from './mining_reach'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersClearConstructionArea, PlayerParametersWalkToEntity } from './types'
 import { TaskStates } from './types'
@@ -8,7 +9,6 @@ type TaskManager = ReturnType<typeof new_task_manager>
 
 const MAX_DIMENSION = 64
 const MAX_AREA_TILES = 4096
-const MINING_REACH_MARGIN = 0.25
 
 function valid_coordinate(value: number) {
   return typeof value === 'number' && value === value && value >= -1000000 && value <= 1000000
@@ -20,12 +20,6 @@ function valid_integer(value: number, min: number, max: number) {
 
 function squared_distance(a: { x: number, y: number }, b: { x: number, y: number }) {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
-}
-
-function mining_reach_distance(actor: ControlledActor) {
-  const raw = actor.character?.reach_distance
-  const reach = typeof raw === 'number' && raw === raw && raw > 0 && raw < math.huge ? raw : 2.5
-  return math.max(0.5, reach - MINING_REACH_MARGIN)
 }
 
 function task_area(task: PlayerParametersClearConstructionArea) {
@@ -41,7 +35,7 @@ function clearable_blocker(entity: LuaEntity | undefined) {
   if (!entity || !entity.valid || entity.type === 'resource' || entity.type === 'character') return false
   const prototype = entity.prototype
   if (!prototype || prototype.is_building === true) return false
-  return prototype.mineable_properties !== undefined
+  return prototype.mineable_properties !== undefined && prototype.mineable_properties.minable !== false
 }
 
 function nearest_blocker(actor: ControlledActor, task: PlayerParametersClearConstructionArea) {
@@ -59,7 +53,7 @@ function nearest_blocker(actor: ControlledActor, task: PlayerParametersClearCons
   return nearest
 }
 
-function navigation_to_target(actor: ControlledActor, target: LuaEntity): PlayerParametersWalkToEntity | undefined {
+function navigation_to_target(actor: ControlledActor, target: LuaEntity, rejected_starts: number = 0): PlayerParametersWalkToEntity | undefined {
   const identity = actor.status_snapshot()
   if (identity.actor_id === undefined) return undefined
   return {
@@ -68,7 +62,7 @@ function navigation_to_target(actor: ControlledActor, target: LuaEntity): Player
     search_radius: 1,
     target_kind: 'position',
     requested_position: { x: target.position.x, y: target.position.y },
-    reach_distance: mining_reach_distance(actor),
+    reach_distance: mining_navigation_reach(actor, target, rejected_starts),
     path: null,
     path_drawn: false,
     path_index: 1,
@@ -100,6 +94,8 @@ export function new_area_clearing_controller(
     task.target = null
     task.target_name = undefined
     task.target_position = undefined
+    task.mining_rejects = 0
+    task.mining_attempted = false
   }
 
   function finish(actor: ControlledActor, task: PlayerParametersClearConstructionArea) {
@@ -140,6 +136,24 @@ export function new_area_clearing_controller(
     return [true, 'Construction-area clearing task started']
   }
 
+  function reposition_after_rejected_start(actor: ControlledActor, task: PlayerParametersClearConstructionArea, target: LuaEntity) {
+    actor.set_mining_state({ mining: false })
+    task.mining_attempted = false
+    task.mining_rejects = (task.mining_rejects ?? 0) + 1
+    if (task.mining_rejects > MAX_MINING_START_REJECTIONS) {
+      fail(actor, task, 'mining_rejected')
+      return
+    }
+    const navigation = navigation_to_target(actor, target, task.mining_rejects)
+    const reach = navigation?.reach_distance ?? 0
+    if (!navigation || !mining_navigation_requires_movement(actor, target, reach)
+      || !manager.interrupt_current_with(navigation, task)) {
+      fail(actor, task, 'mining_rejected')
+      return
+    }
+    log(`[AUTORIO] Mining start rejected for construction blocker ${target.name}; repositioning closer before retry ${task.mining_rejects}/${MAX_MINING_START_REJECTIONS}`)
+  }
+
   function tick(actor: ControlledActor) {
     const task = manager.player_state.parameters_clear_construction_area
     if (!task || manager.player_state.task_state !== TaskStates.CLEARING_AREA) return
@@ -148,7 +162,14 @@ export function new_area_clearing_controller(
       return
     }
 
-    if (!clearable_blocker(task.target ?? undefined)) clear_target(actor, task)
+    const previous_target = task.target ?? undefined
+    if (previous_target && !previous_target.valid) {
+      task.cleared_count++
+      clear_target(actor, task)
+    }
+    else if (previous_target && !clearable_blocker(previous_target)) {
+      clear_target(actor, task)
+    }
 
     let target = task.target ?? undefined
     if (!target) {
@@ -160,10 +181,11 @@ export function new_area_clearing_controller(
       task.target = target
       task.target_name = target.name
       task.target_position = { x: target.position.x, y: target.position.y }
+      task.mining_rejects = 0
+      task.mining_attempted = false
     }
 
-    const reach = mining_reach_distance(actor)
-    if (squared_distance(actor.position, target.position) > reach ** 2) {
+    if (!within_mining_reach(actor, target)) {
       actor.set_mining_state({ mining: false })
       const navigation = navigation_to_target(actor, target)
       if (!navigation || !manager.interrupt_current_with(navigation, task)) fail(actor, task, 'navigation_failed')
@@ -171,8 +193,22 @@ export function new_area_clearing_controller(
     }
 
     if (actor.get_mining_state().mining) return
-    actor.update_selected_entity(target.position)
+    if (task.mining_attempted) {
+      reposition_after_rejected_start(actor, task, target)
+      return
+    }
+    if (!select_exact_mining_target(actor, target)) {
+      fail(actor, task, 'selection_mismatch')
+      return
+    }
+
     actor.set_mining_state({ mining: true, position: target.position })
+    task.mining_attempted = true
+    if (!actor.get_mining_state().mining) {
+      reposition_after_rejected_start(actor, task, target)
+      return
+    }
+
     log(`[AUTORIO] Clearing exact construction blocker ${target.name} at ${serpent.line(target.position)}`)
   }
 

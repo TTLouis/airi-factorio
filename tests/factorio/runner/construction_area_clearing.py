@@ -36,19 +36,28 @@ def run(client: Rcon, results: Path) -> None:
         "/silent-command local s=game.surfaces[1]; local a=nil; "
         f"for _,e in pairs(s.find_entities_filtered{{name='character'}}) do if e.unit_number=={actor_id} then a=e end end; "
         "assert(a); remote.call('autorio_operations','cancel_all_tasks'); "
-        "local trees={}; for name,p in pairs(prototypes.entity) do "
-        "if p.type=='tree' and p.mineable_properties then trees[#trees+1]=name end end; "
-        "table.sort(trees); assert(#trees>=2); "
+        "local trees={}; local rocks={}; local resources={}; for name,p in pairs(prototypes.entity) do "
+        "if p.type=='tree' and p.mineable_properties and p.mineable_properties.minable then trees[#trees+1]=name end; "
+        "if p.type=='simple-entity' and p.mineable_properties and p.mineable_properties.minable and not p.is_building then rocks[#rocks+1]=name end; "
+        "if p.type=='resource' and p.mineable_properties and p.mineable_properties.minable then resources[#resources+1]=name end end; "
+        "table.sort(trees); table.sort(rocks); table.sort(resources); assert(#trees>=2 and #rocks>=1 and #resources>=1); "
         "local base=s.find_non_colliding_position('wooden-chest',{x=a.position.x+8,y=a.position.y},24,0.5); assert(base); "
         "for _,e in pairs(s.find_entities_filtered{position=base,radius=9,type='tree'}) do e.destroy() end; "
-        "local p1={x=base.x,y=base.y}; local p2={x=base.x+1.5,y=base.y+1.5}; local po={x=base.x+7,y=base.y}; "
-        "local t1=s.create_entity{name=trees[1],position=p1}; "
-        "local t2=s.create_entity{name=trees[2],position=p2}; "
+        "local p1={x=base.x,y=base.y}; local p2={x=base.x+1.5,y=base.y+1.5}; "
+        "local pr={x=base.x-1.5,y=base.y+1.5}; local pres={x=base.x+1.5,y=base.y-1.5}; "
+        "local pb={x=base.x-1.5,y=base.y-1.5}; local po={x=base.x+6,y=base.y}; "
+        "local t1=s.create_entity{name=trees[1],position=p1}; local t2=s.create_entity{name=trees[2],position=p2}; "
+        "local rock=nil; local rock_name=nil; for _,name in ipairs(rocks) do rock=s.create_entity{name=name,position=pr}; if rock then rock_name=name; break end end; "
+        "local res=nil; local resource_name=nil; for _,name in ipairs(resources) do res=s.create_entity{name=name,position=pres,amount=1000}; if res then resource_name=name; break end end; "
+        "local building=s.create_entity{name='wooden-chest',position=pb,force=a.force}; "
         "local outside=s.create_entity{name=trees[1],position=po}; "
-        "assert(t1 and t2 and outside); "
+        "assert(t1 and t2 and rock and res and building and outside); "
+        "local dx=base.x-a.position.x; local dy=base.y-a.position.y; local initial_distance=math.sqrt(dx*dx+dy*dy); "
+        "assert(initial_distance > a.resource_reach_distance + 1); "
         "local inv=a.get_main_inventory(); local inserted=inv.insert{name='wooden-chest',count=1}; assert(inserted==1); "
-        "rcon.print(helpers.table_to_json({actor_id=a.unit_number,tree1=trees[1],tree2=trees[2],"
-        "center=base,inside1=p1,inside2=p2,outside=po,chests=inv.get_item_count('wooden-chest')}))",
+        "rcon.print(helpers.table_to_json({actor_id=a.unit_number,tree1=trees[1],tree2=trees[2],rock=rock_name,resource=resource_name,"
+        "center=base,inside1=p1,inside2=p2,rock_position=pr,resource_position=pres,building_position=pb,outside=po,"
+        "initial_distance=initial_distance,resource_reach=a.resource_reach_distance,chests=inv.get_item_count('wooden-chest')}))",
         'construction area fixture',
     )
     require(fixture['actor_id'] == actor_id and fixture['tree1'] != fixture['tree2'], fixture)
@@ -57,7 +66,7 @@ def run(client: Rcon, results: Path) -> None:
     center = fixture['center']
     admission = json_command(
         "/silent-command "
-        f"local clear={remote_call('autorio_operations', 'clear_construction_area', str(center['x']), str(center['y']), '6', '6')}; "
+        f"local clear={remote_call('autorio_operations', 'clear_construction_area', str(center['x']), str(center['y']), '8', '8')}; "
         f"local place={remote_call('autorio_operations', 'place_entity', repr('wooden-chest'), str(center['x']), str(center['y']))}; "
         "rcon.print(helpers.table_to_json({clear=clear,place=place}))",
         'clear then place admission',
@@ -73,16 +82,25 @@ def run(client: Rcon, results: Path) -> None:
         "/silent-command local s=game.surfaces[1]; "
         f"local p1={{x={fixture['inside1']['x']},y={fixture['inside1']['y']}}}; "
         f"local p2={{x={fixture['inside2']['x']},y={fixture['inside2']['y']}}}; "
+        f"local pr={{x={fixture['rock_position']['x']},y={fixture['rock_position']['y']}}}; "
+        f"local pres={{x={fixture['resource_position']['x']},y={fixture['resource_position']['y']}}}; "
+        f"local pb={{x={fixture['building_position']['x']},y={fixture['building_position']['y']}}}; "
         f"local po={{x={fixture['outside']['x']},y={fixture['outside']['y']}}}; "
         f"local c={{x={center['x']},y={center['y']}}}; "
         f"local i1=#s.find_entities_filtered{{name={fixture['tree1']!r},position=p1,radius=0.3}}; "
         f"local i2=#s.find_entities_filtered{{name={fixture['tree2']!r},position=p2,radius=0.3}}; "
+        f"local rock=#s.find_entities_filtered{{name={fixture['rock']!r},position=pr,radius=0.3}}; "
+        f"local resource=#s.find_entities_filtered{{name={fixture['resource']!r},position=pres,radius=0.3}}; "
+        "local building=#s.find_entities_filtered{name='wooden-chest',position=pb,radius=0.3}; "
         f"local o=#s.find_entities_filtered{{name={fixture['tree1']!r},position=po,radius=0.3}}; "
         "local chest=#s.find_entities_filtered{name='wooden-chest',position=c,radius=0.3}; "
-        "rcon.print(helpers.table_to_json({inside1=i1,inside2=i2,outside=o,chest=chest}))",
+        "rcon.print(helpers.table_to_json({inside1=i1,inside2=i2,rock=rock,resource=resource,building=building,outside=o,chest=chest}))",
         'construction area verification',
     )
     require(verify.get('inside1') == 0 and verify.get('inside2') == 0, verify)
+    require(verify.get('rock') == 0, verify)
+    require(verify.get('resource') == 1, verify)
+    require(verify.get('building') == 1, verify)
     require(verify.get('outside') == 1, verify)
     require(verify.get('chest') == 1, verify)
 
@@ -95,8 +113,8 @@ def run(client: Rcon, results: Path) -> None:
     }
     (results / 'construction-area-clearing.json').write_text(json.dumps(payload, indent=2))
     print(
-        'PASS: mixed live tree variants were cleared only inside the bounded footprint, '
-        'the outside tree remained, and queued construction resumed automatically',
+        'PASS: heterogeneous finite blockers were cleared only inside the bounded footprint; '
+        'resource/building/outside entities remained and queued construction resumed automatically',
         flush=True,
     )
 

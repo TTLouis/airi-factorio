@@ -38,6 +38,10 @@ function fixture() {
     position: { x: 2, y: 0 },
     surface,
     force,
+    prototype: {
+      is_building: true,
+      mineable_properties: { minable: true, mining_time: 0.5, products: [] },
+    },
   }
 
   surface.find_entities_filtered.mockImplementation((query: any) => {
