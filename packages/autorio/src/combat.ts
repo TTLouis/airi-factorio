@@ -36,6 +36,8 @@ const TURRET_LOAD_COUNT = 20
 const SUPPORT_THREAT_PER_TURRET = 4
 const MAX_SUPPORT_TURRETS_PER_STAGE = 8
 const TURRET_AMMO_PRIORITY = ['uranium-rounds-magazine', 'piercing-rounds-magazine', 'firearm-magazine']
+const WORM_THREAT_SCAN_MULTIPLIER = 2
+const WORM_NAMES = ['small-worm-turret', 'medium-worm-turret', 'big-worm-turret', 'behemoth-worm-turret']
 const COMBAT_PATH_MAX_ATTEMPTS = 4
 const COMBAT_PATH_REQUEST_TIMEOUT_TICKS = 15 * 60
 const COMBAT_PATH_RETRY_DELAY_TICKS = 30
@@ -197,6 +199,32 @@ function is_alive(entity: LuaEntity | null | undefined) {
 
 function is_static_enemy(entity: LuaEntity) {
   return entity.type === 'unit-spawner' || entity.type === 'turret'
+}
+
+function is_worm_enemy(entity: LuaEntity) {
+  if (entity.type !== 'turret') return false
+  for (const name of WORM_NAMES) if (entity.name === name) return true
+  return false
+}
+
+function worm_attack_range(entity?: LuaEntity, prototype_name?: string) {
+  const live_range = entity ? (entity.prototype as any).attack_parameters?.range : undefined
+  if (typeof live_range === 'number' && live_range > 0) return live_range
+  const name = prototype_name ?? entity?.name
+  if (!name || typeof prototypes === 'undefined') return undefined
+  const prototype_range = (prototypes.entity[name] as any)?.attack_parameters?.range
+  return typeof prototype_range === 'number' && prototype_range > 0 ? prototype_range : undefined
+}
+
+function worm_threat_radius(entity?: LuaEntity, prototype_name?: string) {
+  const range = worm_attack_range(entity, prototype_name)
+  return range === undefined ? 0 : math.min(MAX_SEARCH_RADIUS, range * WORM_THREAT_SCAN_MULTIPLIER)
+}
+
+function max_worm_threat_scan_radius() {
+  let radius = 0
+  for (const name of WORM_NAMES) radius = math.max(radius, worm_threat_radius(undefined, name))
+  return radius
 }
 
 function is_ranged_mobile_enemy(entity: LuaEntity) {
@@ -569,6 +597,38 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     return threat
   }
 
+  function nearby_worm_threat(actor: ControlledActor) {
+    const scan_radius = max_worm_threat_scan_radius()
+    if (scan_radius <= 0) return undefined
+    let threat: LuaEntity | undefined
+    let best = math.huge
+    const local_turrets = actor.surface.find_entities_filtered({
+      position: actor.position,
+      radius: scan_radius,
+      force: 'enemy',
+      type: 'turret',
+    })
+    for (const entity of local_turrets) {
+      if (!is_alive(entity) || !is_worm_enemy(entity)) continue
+      const candidate = distance(actor.position, entity.position)
+      const awareness_radius = worm_threat_radius(entity)
+      if (awareness_radius <= 0 || candidate > awareness_radius) continue
+      if (candidate < best) {
+        threat = entity
+        best = candidate
+      }
+    }
+    return threat
+  }
+
+  function nearby_priority_threat(actor: ControlledActor) {
+    const mobile = nearby_mobile_threat(actor)
+    const worm = nearby_worm_threat(actor)
+    if (!mobile) return worm
+    if (!worm) return mobile
+    return distance(actor.position, mobile.position) <= distance(actor.position, worm.position) ? mobile : worm
+  }
+
   function enter_cleanup(actor: ControlledActor, task: CombatTask) {
     clear_combat_path(task, true)
     task.combat_phase = 'cleanup'
@@ -581,7 +641,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function tick_cleanup(actor: ControlledActor, task: CombatTask) {
-    const immediate_threat = nearby_mobile_threat(actor)
+    const immediate_threat = nearby_priority_threat(actor)
     if (immediate_threat) {
       stop_actor_cleanup(actor)
       actor.set_walking_state({ walking: false, direction: defines.direction.north })
@@ -634,7 +694,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
   }
 
   function tick_safety(actor: ControlledActor, task: CombatTask) {
-    const immediate_threat = nearby_mobile_threat(actor)
+    const immediate_threat = nearby_priority_threat(actor)
     if (immediate_threat) {
       bind_target(actor, task, immediate_threat, 'preempted')
       return
@@ -698,6 +758,17 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     if (!character || health_ratio(character) <= LOW_HEALTH_RATIO) return true
     if (distance(actor.position, threat.position) <= PANIC_DISTANCE) return true
     return !support_covers_target(task, threat)
+  }
+
+  function preempt_static_target_for_worm_threat(actor: ControlledActor, task: CombatTask) {
+    const target = task.target
+    if (task.combat_mode !== 'clear_area' || !target || !is_alive(target) || !is_static_enemy(target) || is_worm_enemy(target)) return false
+    const threat = nearby_worm_threat(actor)
+    if (!threat || threat === target || support_covers_target(task, threat)) return false
+    bind_target(actor, task, threat, 'preempted')
+    stop_actor_combat(actor)
+    log(`[AUTORIO] Combat worm threat preempted current target at distance=${distance(actor.position, threat.position)} scan_radius=${worm_threat_radius(threat)} attack_range=${worm_attack_range(threat) ?? 'unknown'}`)
+    return true
   }
 
   function preempt_static_target_for_panic_threat(actor: ControlledActor, task: CombatTask) {
@@ -1237,6 +1308,7 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     }
 
     if (preempt_static_target_for_panic_threat(actor, task)) return
+    if (preempt_static_target_for_worm_threat(actor, task)) return
 
     if (task.combat_mode === 'clear_area' && place_support_turret(actor, task, target)) {
       stop_actor_combat(actor)
