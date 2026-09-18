@@ -475,8 +475,10 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
   if (event === 'provider.request') {
     debug.provider_round = debugInteger(data.round)
     debug.recovery_attempt = debugInteger(data.recovery_attempt)
-    debug.reasoning_effort = ''
-    debug.reasoning_policy_reason = ''
+    // Keep diagnostics from the latest completed provider round visible while
+    // the next round is in flight. This matches latest-round token semantics
+    // and prevents tool/result driven UI refreshes from making policy fields
+    // flash briefly and then disappear.
   }
   if (providerEvent && typeof providerEvent === 'object') {
     debug.provider_round = debugInteger(providerEvent.round ?? debug.provider_round)

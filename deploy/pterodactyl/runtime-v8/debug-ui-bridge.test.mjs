@@ -67,11 +67,16 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
   assert.match(debug.last_error, /provider_output_truncated_empty_content/)
   assert.match(debug.last_error, /finish=length/)
 
+  // Starting the next provider round must keep the latest completed round's
+  // reasoning policy visible until a newer provider.response replaces it.
   debug = liveAgentDebugEvent('provider.request', { round: 5, recovery_attempt: 0 }, debug)
-  assert.equal(debug.reasoning_effort, '')
-  assert.equal(debug.reasoning_policy_reason, '')
+  assert.equal(debug.reasoning_effort, 'none')
+  assert.equal(debug.reasoning_policy_reason, 'strict_recovery')
 
+  // Tool-driven UI refreshes also preserve the same completed-round policy.
   debug = liveAgentDebugEvent('tool.result', { name: 'getActorStatus' }, debug)
+  assert.equal(debug.reasoning_effort, 'none')
+  assert.equal(debug.reasoning_policy_reason, 'strict_recovery')
   assert.equal(debug.last_tool, 'getActorStatus')
   assert.equal(debug.last_event, 'tool.result')
 })
@@ -175,6 +180,8 @@ test('starting a new request resets cumulative and latest-round debug usage', ()
     latest_round_cached_input_units: 90,
     latest_round_output_units: 20,
     latest_round_total_units: 140,
+    reasoning_effort: 'max',
+    reasoning_policy_reason: 'repeated_failure',
   }
 
   const debug = liveAgentDebugEvent('request.received', { sender: 'TTLouis', text: 'new request' }, previous, {
@@ -197,6 +204,8 @@ test('starting a new request resets cumulative and latest-round debug usage', ()
   assert.equal(debug.latest_round_cached_input_units, 0)
   assert.equal(debug.latest_round_output_units, 0)
   assert.equal(debug.latest_round_total_units, 0)
+  assert.equal(debug.reasoning_effort, '')
+  assert.equal(debug.reasoning_policy_reason, '')
 })
 
 test('request failure snapshot wins over transient debug state and remains displayable', () => {
