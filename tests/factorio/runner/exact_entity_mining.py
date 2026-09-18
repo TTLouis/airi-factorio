@@ -58,7 +58,7 @@ def run(client: Rcon, results: Path) -> None:
             'autorio_preflight',
             'operation',
             repr('mine_entity_exact'),
-            f"{unit_number={fixture['chest_id']}}",
+            f"{{unit_number={fixture['chest_id']}}}",
         )),
         'live exact target preflight',
     )
@@ -107,7 +107,7 @@ def run(client: Rcon, results: Path) -> None:
             'autorio_preflight',
             'operation',
             repr('mine_entity_exact'),
-            f"{unit_number={fixture['chest_id']}}",
+            f"{{unit_number={fixture['chest_id']}}}",
         )),
         'destroyed exact target preflight',
     )
@@ -132,7 +132,7 @@ def run(client: Rcon, results: Path) -> None:
             'autorio_preflight',
             'operation',
             repr('mine_entity_exact'),
-            f"{unit_number={replacement['replacement_id']}}",
+            f"{{unit_number={replacement['replacement_id']}}}",
         )),
         'replacement exact target preflight',
     )
