@@ -1173,21 +1173,30 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const memoryKey = this.activePlanKey()
     const planBefore = this.memory.currentPlan?.(memoryKey)
     const taskStatus = await this.readInteractionTaskStatus()
+    const healthyRuntime = interactionRuntimeHealthy(taskStatus)
     let routed
-    try {
-      routed = await this.classifyInteraction(text, sender, taskStatus, planBefore)
-    }
-    catch (error) {
-      const fallbackIntent = planBefore ? 'amend_current' : 'new_goal'
+    if (!planBefore && !healthyRuntime) {
       routed = {
-        route: { intent: fallbackIntent, reply: '' },
-        epoch: await super.captureEpoch(),
-        router_error: cleanMemoryText(error instanceof Error ? error.message : String(error), 300),
+        route: { intent: 'new_goal', reply: '' },
+        epoch: undefined,
+        classifier_skipped: 'no_current_goal_or_runtime_work',
+      }
+    }
+    else {
+      try {
+        routed = await this.classifyInteraction(text, sender, taskStatus, planBefore)
+      }
+      catch (error) {
+        const fallbackIntent = healthyRuntime ? 'continue_current' : (planBefore ? 'amend_current' : 'new_goal')
+        routed = {
+          route: { intent: fallbackIntent, reply: '' },
+          epoch: healthyRuntime ? await super.captureEpoch() : undefined,
+          router_error: cleanMemoryText(error instanceof Error ? error.message : String(error), 300),
+        }
       }
     }
 
     const intent = routed.route.intent
-    const healthyRuntime = interactionRuntimeHealthy(taskStatus)
     await this.traceEvent('interaction.routed', {
       sender,
       text,
@@ -1196,6 +1205,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       task_state: taskStatus.task_state,
       queue_length: taskStatus.queue_length,
       router_error: routed.router_error,
+      classifier_skipped: routed.classifier_skipped,
     })
 
     if (intent === 'continue_current' && healthyRuntime) {
