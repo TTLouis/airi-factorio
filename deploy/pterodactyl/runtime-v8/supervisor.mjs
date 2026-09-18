@@ -1297,6 +1297,12 @@ export class Session {
         model: this.config.model,
         timeoutMs: this.config.providerTimeoutMs,
       }, messages, context),
+      interactionProvider: (messages, context) => this.provider({
+        base: this.config.base,
+        key: this.config.key,
+        model: this.config.model,
+        timeoutMs: this.config.providerTimeoutMs,
+      }, messages, context),
       reserve: async () => reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget),
       log: message => this.log(`[AIRI agent] ${redact(secrets, message)}`),
       onActivity: (event, data) => this.onAgentActivity(event, data),
