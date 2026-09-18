@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
 
 function deployment() {
@@ -106,6 +107,7 @@ test('rejected transfer cannot advance or complete the canonical plan step', asy
       })
     },
     systemPrompt: 'NPC transfer truth test prompt',
+    memory: new CanonicalTaskBoardMemory(),
     stateFile: null,
     traceFile: null,
   })
