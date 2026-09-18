@@ -45,9 +45,53 @@ function dictionary_keys(value: Record<string, unknown> | undefined) {
   return sort_strings(result)
 }
 
+function bounded_runtime_values(value: any, limit: number) {
+  const values: any[] = []
+  let count = 0
+  if (!value) return { values, count, truncated: false }
+  for (const [, entry] of pairs(value)) {
+    count++
+    if (values.length < limit) values.push(entry)
+  }
+  return { values, count, truncated: count > limit }
+}
+
+function sorted_place_item_summaries(prototype: any, limit: number, observe?: (item: any) => void) {
+  const values: Array<{ name: string, count: number }> = []
+  let count = 0
+  const runtime_values = prototype?.items_to_place_this
+  if (!runtime_values) return { values, count, truncated: false }
+
+  for (const [, item] of pairs(runtime_values)) {
+    if (!item || typeof item.name !== 'string') continue
+    count++
+    if (observe) observe(item)
+
+    const candidate = { name: item.name, count: item.count }
+    if (values.length < limit) values.push(candidate)
+    else if (limit > 0) {
+      let largest = 0
+      for (let index = 1; index < values.length; index++) {
+        if (values[index].name > values[largest].name) largest = index
+      }
+      if (candidate.name < values[largest].name) values[largest] = candidate
+    }
+  }
+
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i + 1; j < values.length; j++) {
+      if (values[j].name < values[i].name) {
+        const swap = values[i]
+        values[i] = values[j]
+        values[j] = swap
+      }
+    }
+  }
+  return { values, count, truncated: count > limit }
+}
+
 function place_items(prototype: any) {
-  const values = prototype?.items_to_place_this ?? []
-  return values.slice(0, MAX_PLACE_ITEMS).map((item: any) => ({ name: item.name, count: item.count }))
+  return sorted_place_item_summaries(prototype, MAX_PLACE_ITEMS).values
 }
 
 function position_details(value: any) {
@@ -57,21 +101,19 @@ function position_details(value: any) {
 
 function connection_categories(value: any) {
   if (typeof value === 'string') return { categories: [value], truncated: false }
-  if (!value) return { categories: [], truncated: false }
+  const runtime_values = bounded_runtime_values(value, MAX_CONNECTION_CATEGORIES)
   const categories: string[] = []
-  const count = math.min(value.length ?? 0, MAX_CONNECTION_CATEGORIES)
-  for (let index = 0; index < count; index++) {
-    if (typeof value[index] === 'string') categories.push(value[index])
+  for (const category of runtime_values.values) {
+    if (typeof category === 'string') categories.push(category)
   }
-  return { categories, truncated: (value.length ?? 0) > MAX_CONNECTION_CATEGORIES }
+  return { categories, truncated: runtime_values.truncated }
 }
 
 function pipe_connection_details(connection: any) {
-  const raw_positions = connection?.positions ?? []
+  const runtime_positions = bounded_runtime_values(connection?.positions, MAX_PIPE_POSITIONS)
   const positions: Array<{ x: number, y: number }> = []
-  const position_count = math.min(raw_positions.length ?? 0, MAX_PIPE_POSITIONS)
-  for (let index = 0; index < position_count; index++) {
-    const position = position_details(raw_positions[index])
+  for (const raw_position of runtime_positions.values) {
+    const position = position_details(raw_position)
     if (position) positions.push(position)
   }
   const categories = connection_categories(connection?.connection_category)
@@ -80,7 +122,7 @@ function pipe_connection_details(connection: any) {
     flow_direction: connection?.flow_direction,
     direction: connection?.direction,
     positions,
-    positions_truncated: (raw_positions.length ?? 0) > MAX_PIPE_POSITIONS,
+    positions_truncated: runtime_positions.truncated,
     max_underground_distance: connection?.max_underground_distance,
     connection_categories: categories.categories,
     connection_categories_truncated: categories.truncated,
@@ -91,25 +133,28 @@ function pipe_connection_details(connection: any) {
 }
 
 function fluidbox_details(prototype: any) {
-  const values = prototype?.fluidbox_prototypes ?? []
+  const runtime_fluidboxes = bounded_runtime_values(prototype?.fluidbox_prototypes, MAX_FLUIDBOX_PROTOTYPES)
+  const fluidboxes: Array<Record<string, unknown>> = []
+
+  for (const fluidbox of runtime_fluidboxes.values) {
+    const runtime_connections = bounded_runtime_values(fluidbox?.pipe_connections, MAX_PIPE_CONNECTIONS)
+    const pipe_connections: Array<Record<string, unknown>> = []
+    for (const connection of runtime_connections.values) pipe_connections.push(pipe_connection_details(connection))
+    fluidboxes.push({
+      index: fluidbox.index,
+      production_type: fluidbox.production_type,
+      filter: fluidbox.filter?.name,
+      minimum_temperature: fluidbox.minimum_temperature,
+      maximum_temperature: fluidbox.maximum_temperature,
+      pipe_connection_count: runtime_connections.count,
+      pipe_connections_truncated: runtime_connections.truncated,
+      pipe_connections,
+    })
+  }
+
   return {
-    truncated: values.length > MAX_FLUIDBOX_PROTOTYPES,
-    fluidboxes: values.slice(0, MAX_FLUIDBOX_PROTOTYPES).map((fluidbox: any) => {
-      const raw_connections = fluidbox.pipe_connections ?? []
-      const pipe_connections: Array<Record<string, unknown>> = []
-      const connection_count = math.min(raw_connections.length ?? 0, MAX_PIPE_CONNECTIONS)
-      for (let index = 0; index < connection_count; index++) pipe_connections.push(pipe_connection_details(raw_connections[index]))
-      return {
-        index: fluidbox.index,
-        production_type: fluidbox.production_type,
-        filter: fluidbox.filter?.name,
-        minimum_temperature: fluidbox.minimum_temperature,
-        maximum_temperature: fluidbox.maximum_temperature,
-        pipe_connection_count: raw_connections.length ?? 0,
-        pipe_connections_truncated: (raw_connections.length ?? 0) > MAX_PIPE_CONNECTIONS,
-        pipe_connections,
-      }
-    }),
+    truncated: runtime_fluidboxes.truncated,
+    fluidboxes,
   }
 }
 
@@ -200,25 +245,11 @@ function energy_source_kind(prototype: any): PrototypeEnergySource {
   return 'none'
 }
 
-function sorted_place_items(prototype: any) {
-  const values = (prototype?.items_to_place_this ?? []).slice()
-  for (let i = 0; i < values.length; i++) {
-    for (let j = i + 1; j < values.length; j++) {
-      if (values[j].name < values[i].name) {
-        const swap = values[i]
-        values[i] = values[j]
-        values[j] = swap
-      }
-    }
-  }
-  return values
-}
-
 function enabled_item_recipes(actor: ControlledActor) {
   const result: Record<string, string> = {}
   for (const [recipe_name, recipe] of pairs(actor.force.recipes)) {
     if (!recipe || recipe.enabled !== true || recipe.hidden === true) continue
-    for (const product of recipe.products ?? []) {
+    for (const [, product] of pairs(recipe.products ?? {})) {
       if (product?.type !== 'item' || typeof product?.name !== 'string') continue
       const existing = result[product.name]
       if (!existing || recipe_name < existing) result[product.name] = recipe_name
@@ -325,15 +356,13 @@ export function discover_prototypes_for_actor(actor: ControlledActor, request: P
   for (const { name, prototype } of all) {
     const energy_source = energy_source_kind(prototype)
     energy_sources[energy_source] = true
-    const raw_place_items = sorted_place_items(prototype)
-    const place_items = raw_place_items.slice(0, MAX_DISCOVERY_PLACE_ITEMS)
     let held_count = 0
     let enabled_recipe: string | undefined
-    for (const item of raw_place_items) {
+    const place_item_result = sorted_place_item_summaries(prototype, MAX_DISCOVERY_PLACE_ITEMS, (item) => {
       held_count += inventory[item.name] ?? 0
       const recipe_name = enabled_recipes[item.name]
       if (recipe_name && (!enabled_recipe || recipe_name < enabled_recipe)) enabled_recipe = recipe_name
-    }
+    })
     const force_available = held_count > 0 || enabled_recipe !== undefined
     if (availability === 'force-available' && !force_available) continue
 
@@ -341,8 +370,8 @@ export function discover_prototypes_for_actor(actor: ControlledActor, request: P
       name,
       type: prototype.type,
       energy_source,
-      place_items: place_items.map((item: any) => ({ name: item.name, count: item.count })),
-      place_items_truncated: raw_place_items.length > MAX_DISCOVERY_PLACE_ITEMS,
+      place_items: place_item_result.values,
+      place_items_truncated: place_item_result.truncated,
       force_available,
     }
     if (held_count > 0) candidate.held_count = held_count
