@@ -654,7 +654,7 @@ export function liveAgentEvent(event, data = {}) {
         const cost = decisionMicroUsd(shadow.usage?.cost)
         return {
           activity: {
-            kind: 'decision',
+            kind: 'system',
             text: `Jev shadow: ${uiText(shadow.intent, 80) || 'unknown'} · ${confidence}% · ${match} · ${debugInteger(data.decision_shadow_latency_ms)} ms${input > 0 ? ` · ${input} in` : ''}${cost > 0 ? ` · ${cost} µUSD` : ''}`,
           },
         }
