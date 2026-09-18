@@ -270,6 +270,23 @@
       ],
       "pterodactyl_layer": "staging-base"
     },
+    "clear_construction_area": {
+      "args": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "remote": [
+        "autorio_operations",
+        "clear_construction_area"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
     "supply_entity": {
       "args": [
         "unit_number",
