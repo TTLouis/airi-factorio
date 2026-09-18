@@ -59,11 +59,19 @@ function planMessage({ chatMessage = 'Working.', plan = [], currentStep = 0, ope
 }
 
 class RejectingTransferRcon extends FakeRcon {
+  constructor() {
+    super()
+    this.transferAdmissionAttempts = 0
+  }
+
   async command(text) {
     if (text.includes('local ok,result=pcall') && text.includes("remote.call('autorio_operations','move_items_exact'")) {
-      const marker = text.match(/AIRI_RESULT_[a-f0-9]{24}:/)?.[0]
-      assert.ok(marker)
-      return `${marker}${JSON.stringify({ ok: false, result: 'autorio rejected operation 1: [false,"transfer target rejected"]' })}`
+      this.transferAdmissionAttempts++
+      if (this.transferAdmissionAttempts === 1) {
+        const marker = text.match(/AIRI_RESULT_[a-f0-9]{24}:/)?.[0]
+        assert.ok(marker)
+        return `${marker}${JSON.stringify({ ok: false, result: 'autorio rejected operation 1: [false,"transfer target rejected"]' })}`
+      }
     }
     return super.command(text)
   }
@@ -88,10 +96,13 @@ test('rejected transfer cannot advance or complete the canonical plan step', asy
         })
       }
       return planMessage({
-        chatMessage: 'Trying to continue despite the rejected transfer.',
+        chatMessage: 'Trying to retrieve plates despite the rejected supply.',
         plan,
         currentStep: 1,
-        operations: [],
+        operations: [{
+          name: 'move_items_exact',
+          args: { item_name: 'iron-plate', unit_number: 582, max_count: 20, to_entity: false },
+        }],
       })
     },
     systemPrompt: 'NPC transfer truth test prompt',
@@ -116,6 +127,8 @@ test('rejected transfer cannot advance or complete the canonical plan step', asy
   assert.equal(attemptedSkip.taskBoard.completed_count, 0)
   assert.equal(attemptedSkip.taskBoard.steps[0].status, 'blocked')
   assert.equal(attemptedSkip.taskBoard.blocker, 'operation_admission_failed')
+  assert.equal(attemptedSkip.operations.length, 0)
+  assert.equal(agent.rcon.transferAdmissionAttempts, 1)
   assert.equal(agent.memory.currentPlan('npc:airi').current_step, 0)
 })
 
