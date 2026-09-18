@@ -96,7 +96,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     const stop_walking = state === TaskStates.WALKING_TO_ENTITY
       || state === TaskStates.WALKING_DIRECT
       || state === TaskStates.ATTACKING
-    const stop_mining = state === TaskStates.MINING || state === TaskStates.HARVESTING
+    const stop_mining = state === TaskStates.MINING || state === TaskStates.HARVESTING || state === TaskStates.CLEARING_AREA
     const stop_shooting = state === TaskStates.ATTACKING
     if (!stop_walking && !stop_mining && !stop_shooting) return
 
@@ -114,6 +114,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     player_state.parameters_walking_direct = undefined
     player_state.parameters_mine_entity = undefined
     player_state.parameters_harvest_product = undefined
+    player_state.parameters_clear_construction_area = undefined
     player_state.parameters_place_entity = undefined
     player_state.parameters_rotate_entity = undefined
     player_state.parameters_move_items = undefined
@@ -162,6 +163,9 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
         break
       case TaskStates.HARVESTING:
         player_state.parameters_harvest_product = task
+        break
+      case TaskStates.CLEARING_AREA:
+        player_state.parameters_clear_construction_area = task
         break
       case TaskStates.PLACING:
         player_state.parameters_place_entity = task
@@ -256,6 +260,20 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
               verified_gain: task.verified_gain,
               search_radius: task.search_radius,
               source_names: task.source_names,
+              target_name: task.target_name,
+              target_position: task.target_position,
+            }
+          : { type: player_state.task_state }
+      }
+      case TaskStates.CLEARING_AREA: {
+        const task = player_state.parameters_clear_construction_area
+        return task
+          ? {
+              type: task.type,
+              center: task.center,
+              width: task.width,
+              height: task.height,
+              cleared_count: task.cleared_count,
               target_name: task.target_name,
               target_position: task.target_position,
             }
