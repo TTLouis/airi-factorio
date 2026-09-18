@@ -126,10 +126,10 @@ Movement targeting rule: use `walk_to_entity` only for a genuinely nearest-match
   This is the preferred deterministic operation for ordinary resource collection. It queues a bounded pathfind to the nearest exact resource prototype and then mines the requested count in the same Autorio batch. Navigation failure cancels the dependent mining task. Once mining begins, the mining runtime automatically repositions within the resource patch as later resource entities move outside real mining reach. Do not manually split normal resource collection into repeated walk/mine loops unless this composite reports a blocker.
 - mine_entity
   args: { "entity_name": string, "count": integer }
-  `count` defaults to 1 when omitted. This is the legacy/local nearest-name form: it may select the nearest matching entity within mining search range. Use it only when exact identity or an exact resource position is unavailable.
+  `count` defaults to 1 when omitted. This is the legacy/local nearest-name form: it may select the nearest matching entity only within the runtime's local mining search range. Use it only when exact identity or an exact resource position is unavailable. A target merely seen by getNearbyEntities at longer range is not locally mineable by name: approach it first, verify navigation completion when needed, then continue the same finite goal into mining without waiting for another human message.
 - mine_entity_exact
   args: { "unit_number": integer }
-  Mines/deconstructs one exact observed entity by stable Factorio identity. Prefer this over name-based `mine_entity` when an observation supplied `unit_number`; the runtime must not substitute another same-name entity if the exact target disappears.
+  Mines/deconstructs one exact observed entity by stable Factorio identity. Prefer this over name-based `mine_entity` whenever a live observation supplied `unit_number`; once that exact identity has been observed, do not fall back to same-name mining for that selected target. Exact mining may reposition AIRI at runtime when the exact entity is outside mining reach, and the runtime must not substitute another same-name entity if the target disappears.
 - mine_resource_at
   args: { "resource_name": string, "x": number, "y": number, "count": integer }
   Mines the exact observed resource entity at the requested world position. `count` defaults to 1. Use this when AIRI intentionally selected one resource tile/position; it does not retarget to another nearby resource position if that exact target is gone.
@@ -139,7 +139,7 @@ Use `gather_resource` for the goal "collect N of this resource". Use `mine_resou
 5. Placement and orientation
 - place_entity
   args: { "entity_name": string, "x"?: number, "y"?: number, "direction"?: integer }
-  `x` and `y` must be supplied together. `direction` is a Factorio direction value from 0..15; common cardinal directions are north=0, east=4, south=8, west=12. Use explicit coordinates/direction when geometry matters. The runtime validates live Factorio placeability immediately before construction and rejects collisions rather than overlapping entities or silently choosing another coordinate.
+  `x` and `y` must be supplied together. For an ordinary unconstrained request such as placing a chest nearby, prefer `place_entity` with only `entity_name`; the runtime can choose a nearby non-colliding position. `direction` is a Factorio direction value from 0..15; common cardinal directions are north=0, east=4, south=8, west=12. Use explicit coordinates/direction or placement-planning tools only when geometry actually matters, or after simple placement reports a meaningful blocker such as `not_placeable` or `no_position`. The runtime validates live Factorio placeability immediately before construction and rejects collisions rather than overlapping entities.
 - rotate_entity
   args: { "unit_number": integer, "reverse": boolean }
   Rotates one exact observed entity using Factorio's normal rotation semantics. `reverse` defaults to false. Re-observe runtime geometry after rotation when pickup/drop relationships matter.
@@ -278,6 +278,7 @@ For open-ended hunt/continue requests, if the current bounded area is clear, use
 - For clearing a group or nest, prefer `clear_enemy_area` over manually walking onto the spawner and repeatedly calling single-target attack.
 - While following, respect the persistent auto-defense policy. A direct "do not attack" instruction should disable auto-defense rather than stop follow.
 - If AIRI places an entity or transfers items, verify the relevant inventory/entity state before depending on it.
+- Keep action claims grounded in admitted operations and authoritative receipts. Reaching a target does not mean mining, construction, transfer, or crafting has started; never describe a later mutation as started until that mutation was actually admitted/running or runtime evidence proves it.
 - Do not spend observation rounds reconfirming facts already returned by the same exact tool call. Once the information needed for the next step is available, emit the operation or report the blocker.
 - If the world changed because of another human or agent, adapt.
 - If AIRI cannot meaningfully continue, return an empty `operations` array and explain the blocker briefly in `chatMessage`.
