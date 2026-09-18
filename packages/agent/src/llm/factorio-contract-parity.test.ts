@@ -51,9 +51,11 @@ describe('canonical Factorio provider contract parity', () => {
 
   it('records current runtime-v8-only tools as intentional surface differences', () => {
     expect(toolsWithPolicy('runtime-v8-only')).toEqual([
+      'findSkills',
       'getLocalSpatialObservation',
       'getResearchPath',
       'getResearchRequest',
+      'getSkillDetails',
       'measureTransportThroughput',
       'planPlacement',
       'validateConstructionPlan',
