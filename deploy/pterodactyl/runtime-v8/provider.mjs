@@ -63,6 +63,9 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   if (completionContinuation(messages, options)) {
     return { effort: 'low', reason: 'deterministic_completion' }
   }
+  if (options.lifecycle === 'interaction_router') {
+    return { effort: 'none', reason: 'interaction_router' }
+  }
 
   const failures = currentDifficultySignals(messages)
   if (failures >= 2) return { effort: 'max', reason: 'repeated_failure' }
