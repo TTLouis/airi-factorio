@@ -23,9 +23,9 @@ const CHANNELS = Object.freeze({
     release: 'main',
   },
   npcE2e: {
-    name: 'SGLuna Factorio Server (NPC E2E)',
-    description: 'Development SGLuna Factorio channel for standalone-NPC E2E testing. Reinstall resolves the latest feat/npc-transition-work commit to an exact SHA. Use the Main egg for stable servers.',
-    sourceRef: 'feat/npc-transition-work',
+    name: 'SGLuna Factorio Server (NPC E2E / Jev Experiment)',
+    description: 'Experimental SGLuna standalone-NPC channel for Jev decision-layer testing. Reinstall resolves the latest experiment/jev-agent-architecture commit to an exact SHA. Use the Main egg for stable servers.',
+    sourceRef: 'experiment/jev-agent-architecture',
     release: 'npc-e2e',
   },
 })
