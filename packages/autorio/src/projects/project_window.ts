@@ -3,12 +3,11 @@ import type { TaskBoardUiActivity } from '../task_board_ui'
 
 import * as activity_state from '../task_board_activity'
 
-// The main Task Board already owns on_gui_click. PROJECTS intentionally reuses
-// its existing debug-close click route for the sixth 3x2 control slot; project
-// selection itself uses a list-box and on_gui_selection_state_changed, which is
-// otherwise unused by the console.
-export const PROJECTS_BUTTON_NAME = 'airi_task_board_debug_close'
-export const PROJECTS_CLOSE_BUTTON_NAME = PROJECTS_BUTTON_NAME
+// Projects owns stable, independent button ids. It must never borrow Debug's
+// close route: doing so made the old-task entry disappear or toggle unexpectedly
+// whenever the main console/debug window was rebuilt.
+export const PROJECTS_BUTTON_NAME = 'airi_task_board_projects'
+export const PROJECTS_CLOSE_BUTTON_NAME = 'airi_task_board_projects_close'
 export const PROJECT_LIST_NAME = 'airi_task_board_project_list'
 
 const ROOT_NAME = 'airi_task_board_projects_panel'

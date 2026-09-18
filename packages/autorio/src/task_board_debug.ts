@@ -1,7 +1,6 @@
 import type { FrameGuiElement, LuaGuiElement, LuaPlayer, ScrollPaneGuiElement } from 'factorio:runtime'
 
 import * as activity_state from './task_board_activity'
-import * as project_ui from './projects/project_window'
 
 export const DEBUG_BUTTON_NAME = 'airi_task_board_debug'
 export const DEBUG_CLOSE_BUTTON_NAME = 'airi_task_board_debug_close'
@@ -11,8 +10,6 @@ const DEBUG_WIDTH = 720
 const DEBUG_KEY_WIDTH = 118
 const DEBUG_VALUE_WIDTH = DEBUG_WIDTH - DEBUG_KEY_WIDTH - 54
 const CONVERSATION_HEIGHT = 300
-const COMPACT_BUTTON_WIDTH = 119
-const COMPACT_BUTTON_HEIGHT = 32
 const CONVERSATION = {
   section: 'airi_task_board_conversation_section',
   header: 'airi_task_board_conversation_header',
@@ -45,6 +42,7 @@ declare const storage: {
   airi_task_board_activity_history?: any[]
   airi_task_board_conversation_goal_id?: string
   airi_task_board_conversation_start_key?: string
+  airi_task_board_conversation_id?: string
   airi_task_board_debug_activity_view?: Record<number, { follow: boolean, hover: boolean, behind: boolean, seen_key?: string }>
 }
 
@@ -145,9 +143,9 @@ export function snapshot_is_suppressed(value: any) {
   return goal_id.length === 0 || goal_id === suppressed.goal_id
 }
 
-function terminate_is_queued() {
+function destructive_clear_is_queued() {
   for (const input of storage.airi_task_board_ui_inputs ?? []) {
-    if (input?.kind === 'control' && input?.action === 'terminate') return true
+    if (input?.kind === 'control' && (input?.action === 'terminate' || input?.action === 'new_task')) return true
   }
   return false
 }
@@ -164,7 +162,7 @@ function terminate_is_queued() {
  */
 export function reconcile_task_board_freshness() {
   const current = storage.airi_task_board_ui
-  if (terminate_is_queued() && current !== undefined) {
+  if (destructive_clear_is_queued() && current !== undefined) {
     suppress_snapshot(current)
     storage.airi_task_board_ui_last_seen = snapshot_identity(current)
     return false
@@ -197,12 +195,7 @@ export function debug_ui_is_open(player_index: number) { return storage.airi_tas
 // so the poll schema stays unchanged and remains compatible with older eggs.
 export function any_debug_ui_open(): any { return undefined }
 export function toggle_debug_ui(player_index: number) { const next = !debug_ui_is_open(player_index); ensure_debug_open_state()[player_index] = next; return next }
-/**
- * Compatibility route used by task_board_ui's existing sixth control slot.
- * The actual debug titlebar now closes through DEBUG_BUTTON_NAME, while this
- * pre-existing DEBUG_CLOSE_BUTTON_NAME route toggles the Projects popout.
- */
-export function close_debug_ui(player_index: number) { return project_ui.toggle_projects_ui(player_index) }
+export function close_debug_ui(player_index: number) { ensure_debug_open_state()[player_index] = false }
 export function debug_button_caption(player_index: number) { return debug_ui_is_open(player_index) ? 'DEBUG ON' : 'DEBUG' }
 export function follow_button_caption(active: boolean) { return active ? 'FOLLOWING' : 'FOLLOW' }
 
@@ -266,8 +259,39 @@ function objective_matches_message(objective: string, message: string) {
  * history, not hidden model reasoning. A new durable goal establishes a new
  * start cursor, while pause/follow/continue keep using the same goal and cursor.
  */
+export function reset_task_conversation() {
+  storage.airi_task_board_conversation_goal_id = undefined
+  storage.airi_task_board_conversation_start_key = undefined
+  storage.airi_task_board_conversation_id = undefined
+}
+
 export function task_conversation_messages(board: any): TaskConversationMessage[] {
   if (board === undefined || board === null) return []
+  const explicit = Array.isArray(board.conversation) ? board.conversation as any[] : []
+  const conversation_id = clean_text(board.conversation_id, 120)
+  if (conversation_id.length > 0) {
+    if (storage.airi_task_board_conversation_id !== conversation_id) {
+      storage.airi_task_board_conversation_id = conversation_id
+      storage.airi_task_board_conversation_goal_id = clean_text(board.goal_id, 100)
+      storage.airi_task_board_conversation_start_key = undefined
+    }
+    const visible: TaskConversationMessage[] = []
+    for (let index = 0; index < explicit.length; index++) {
+      const entry = explicit[index]
+      const role = entry?.role === 'assistant' ? 'assistant' : entry?.role === 'user' ? 'user' : undefined
+      const line = clean_text(entry?.text, 2000)
+      if (role === undefined || line.length === 0) continue
+      visible.push({
+        key: `conversation:${clean_text(entry?.id || `message_${index + 1}`, 120)}`,
+        role,
+        sender: clean_text(entry?.sender || (role === 'assistant' ? 'AIRI' : 'Player'), 128),
+        text: line,
+        timestamp: '',
+      })
+    }
+    return visible
+  }
+
   const raw_history = Array.isArray(storage.airi_task_board_activity_history)
     ? storage.airi_task_board_activity_history as any[]
     : Array.isArray(board.activity) ? board.activity as any[] : []
@@ -347,48 +371,7 @@ export function latest_ai_reply(board: any) {
   return ''
 }
 
-function find_descendant(parent: LuaGuiElement, name: string): LuaGuiElement | undefined {
-  for (const child of parent.children) {
-    if (child.name === name) return child
-    const found = find_descendant(child, name)
-    if (found !== undefined) return found
-  }
-  return undefined
-}
-
-/** Replace the reserved sixth 3x2 control cell without touching Task Board layout. */
-function ensure_projects_button(parent: LuaGuiElement) {
-  const debug_button = find_descendant(parent, DEBUG_BUTTON_NAME)
-  const controls = debug_button?.parent
-  if (!controls?.valid) return
-  for (const child of controls.children) if (child.name === project_ui.PROJECTS_BUTTON_NAME) return
-  const children = controls.children
-  const last = children.length > 0 ? children[children.length - 1] : undefined
-  if (last?.valid && last.type === 'empty-widget') last.destroy()
-  const player_index = (parent as any).player_index
-  const active = typeof player_index === 'number' && project_ui.projects_ui_is_open(player_index)
-  const button = controls.add({
-    type: 'button',
-    name: project_ui.PROJECTS_BUTTON_NAME,
-    caption: 'PROJECTS',
-    style: active ? 'confirm_button' : 'dialog_button',
-    tooltip: active ? 'Close the Projects history window.' : 'Open Projects. Choose a project on the left and inspect its task details, activity, and evidence on the right.',
-  })
-  button.style.width = COMPACT_BUTTON_WIDTH
-  button.style.height = COMPACT_BUTTON_HEIGHT
-  button.style.minimal_width = COMPACT_BUTTON_WIDTH
-  button.style.maximal_width = COMPACT_BUTTON_WIDTH
-  button.style.minimal_height = COMPACT_BUTTON_HEIGHT
-  button.style.maximal_height = COMPACT_BUTTON_HEIGHT
-}
-
 export function render_ai_reply(parent: LuaGuiElement, response: string, width: number) {
-  // This runs immediately after the Controls table is complete, so the existing
-  // reserved blank sixth cell can become PROJECTS while all other main-console
-  // geometry remains unchanged.
-  ensure_projects_button(parent)
-  if (storage.airi_task_board_ui !== undefined) project_ui.record_project_snapshot(storage.airi_task_board_ui, game.tick)
-
   // Status/Controls live in a dynamic flow that is cleared once a second. The
   // conversation must not live inside that flow: rebuilding a scroll-pane loses
   // the player's scroll position. Place it beside the dynamic flow in the left
@@ -676,14 +659,9 @@ function build_debug_popout(player: LuaPlayer, board: any, runtime: any, synced_
 export function render_debug_popout(player: LuaPlayer, console_open: boolean, board: any, runtime: any, synced_tick: number | undefined) {
   if (!console_open) {
     ensure_debug_open_state()[player.index] = false
-    project_ui.close_projects_ui(player.index)
-    project_ui.render_projects_popout(player, false)
     destroy_debug_popout(player)
     return
   }
-
-  if (board !== undefined) project_ui.record_project_snapshot(board, game.tick)
-  project_ui.render_projects_popout(player, true, clean_text(board?.goal_id, 100))
 
   if (!debug_ui_is_open(player.index)) { destroy_debug_popout(player); return }
   const root = player.gui.screen[DEBUG_ROOT_NAME]; const body = root?.valid ? root[DEBUG_BODY_NAME] : undefined

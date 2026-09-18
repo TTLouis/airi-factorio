@@ -10,6 +10,7 @@ import {
   task_conversation_messages,
   toggle_debug_activity_follow,
   set_debug_activity_hover,
+  reset_task_conversation,
 } from './task_board_debug'
 
 const store = () => (globalThis as any).storage as Record<string, any>
@@ -105,5 +106,51 @@ describe('task board debug and UI freshness helpers', () => {
     expect(snapshot_is_suppressed({ goal_id: '', objective: 'Build red circuits' })).toBe(false)
     clear_snapshot_suppression()
     expect(snapshot_is_suppressed({ goal_id: '', objective: 'Build green circuits' })).toBe(false)
+  })
+})
+
+describe('current task conversation regression', () => {
+  it('shows more than four visible user/assistant messages from the explicit task conversation', () => {
+    const conversation = [
+      { id: '1', role: 'user', sender: 'TTLouis', text: 'one' },
+      { id: '2', role: 'assistant', sender: 'AIRI', text: 'two' },
+      { id: '3', role: 'user', sender: 'TTLouis', text: 'three' },
+      { id: '4', role: 'assistant', sender: 'AIRI', text: 'four' },
+      { id: '5', role: 'user', sender: 'TTLouis', text: 'five' },
+      { id: '6', role: 'assistant', sender: 'AIRI', text: 'six' },
+      { id: '7', role: 'user', sender: 'TTLouis', text: 'seven' },
+      { id: '8', role: 'assistant', sender: 'AIRI', text: 'eight' },
+    ]
+    expect(task_conversation_messages({ goal_id: 'goal-a', conversation_id: 'task-a', conversation }).map(message => message.text)).toEqual(
+      ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'],
+    )
+  })
+
+  it('New Task reset rebinds the view to a fresh conversation generation', () => {
+    const old = { goal_id: 'goal-a', conversation_id: 'task-a', conversation: [
+      { id: '1', role: 'user', sender: 'TTLouis', text: 'old request' },
+      { id: '2', role: 'assistant', sender: 'AIRI', text: 'old answer' },
+    ] }
+    expect(task_conversation_messages(old)).toHaveLength(2)
+    reset_task_conversation()
+    const fresh = { goal_id: 'goal-b', conversation_id: 'task-b', conversation: [
+      { id: '1', role: 'user', sender: 'TTLouis', text: 'fresh request' },
+    ] }
+    expect(task_conversation_messages(fresh).map(message => message.text)).toEqual(['fresh request'])
+    expect(store().airi_task_board_conversation_id).toBe('task-b')
+  })
+
+  it('does not resurrect old activity-history messages after a fresh conversation sync', () => {
+    store().airi_task_board_activity_history = [
+      { id: 'live_old_1', kind: 'observation', text: 'TTLouis: old request', timestamp: '00:00:01' },
+      { kind: 'decision', text: 'old answer', timestamp: '00:00:02' },
+    ]
+    reset_task_conversation()
+    const fresh = { goal_id: 'goal-b', conversation_id: 'task-b', conversation: [
+      { id: 'new-1', role: 'user', sender: 'TTLouis', text: 'fresh request' },
+      { id: 'new-2', role: 'assistant', sender: 'AIRI', text: 'fresh answer' },
+    ] }
+    expect(task_conversation_messages(fresh).map(message => message.text)).toEqual(['fresh request', 'fresh answer'])
+    expect(task_conversation_messages(fresh).map(message => message.text)).toEqual(['fresh request', 'fresh answer'])
   })
 })

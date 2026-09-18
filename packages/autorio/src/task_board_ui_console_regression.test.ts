@@ -87,8 +87,11 @@ describe('AIRI NPC console layout regressions', () => {
   })
 
   it('turns pause into a resumable unpause control without discarding the prompt draft', () => {
-    expect(source).toContain("caption: paused ? 'UNPAUSE' : 'PAUSE'")
-    expect(source).toContain("if (storage.airi_task_board_ui?.status === 'paused') emit_resume(player)")
+    expect(source).toContain("pending?.action === 'resume' ? 'RESUMING...' : paused ? 'UNPAUSE' : 'PAUSE'")
+    expect(source).toContain("const action: TaskBoardUiLifecycleAction = storage.airi_task_board_ui?.status === 'paused' ? 'resume' : 'pause'")
+    expect(source).toContain("if (action === 'resume') emit_resume(player)")
+    expect(source).toContain('pause.enabled = pending === undefined')
+    expect(source).toContain('terminate.enabled = pending === undefined')
     expect(source).toContain("text: 'continue'")
     const resumeBody = source.split('function emit_resume(')[1]?.split('function emit_prompt(')[0] ?? ''
     expect(resumeBody).not.toContain('set_prompt_draft')
@@ -154,5 +157,17 @@ describe('AIRI NPC console layout regressions', () => {
     expect(source).toContain('activity_state.resume_activity_follow(player.index, last_shown_activity_key(scroll))')
     // A brand-new console starts out following.
     expect(source).toContain('activity_state.reset_activity_view(player.index)')
+  })
+})
+describe('old tasks and New Task conversation integration', () => {
+  it('renders an independent old-task history button and explicit lifecycle acknowledgement route', () => {
+    expect(source).toContain("name: project_ui.PROJECTS_BUTTON_NAME, caption: 'OLD TASKS'")
+    expect(source).toContain("PROJECTS_BUTTON_NAME = 'airi_task_board_projects'")
+    expect(source).toContain("ack_lifecycle: (player_index: unknown, action: unknown)")
+  })
+
+  it('clears the current conversation binding before queueing New Task', () => {
+    const handler = source.split('function handle_control_click(')[1]?.split('\n}\n\nexport function create_task_board_ui_remote_interface')[0] ?? ''
+    expect(handler).toContain("debug_ui.reset_task_conversation(); emit_control(player, 'new_task')")
   })
 })

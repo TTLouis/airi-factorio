@@ -7,6 +7,7 @@ import { create_skill_remote_interface, handle_skill_export_click, render_learn_
 // Namespace import on purpose: one Lua local instead of one per helper.
 import * as activity_state from './task_board_activity'
 import * as debug_ui from './task_board_debug'
+import * as project_ui from './projects/project_window'
 import * as provider_ui from './task_board_provider'
 import { get_actor_inventory_items } from './utils/inventory'
 
@@ -173,6 +174,7 @@ const PROMPT_FIELD_WIDTH = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - 8 - PROMPT_
 const SKILLS_POPOUT_WIDTH = 720
 
 type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow' | 'new_task'
+type TaskBoardUiLifecycleAction = 'pause' | 'resume' | 'terminate'
 type TaskBoardUiActivityKind = 'observation' | 'decision' | 'action' | 'result' | 'blocker' | 'system' | 'note'
 type TaskBoardUiAgentPhase = 'idle' | 'thinking' | 'observing' | 'executing' | 'waiting' | 'error'
 type Tone = 'good' | 'info' | 'warn' | 'bad' | 'muted'
@@ -197,6 +199,7 @@ const TONE_SPRITES: Record<Tone, SpritePath> = {
 export interface TaskBoardUiStep { id: string, description: string, status: 'pending' | 'active' | 'completed' | 'blocked' | 'paused' }
 export interface TaskBoardUiActivity { id?: string, kind: TaskBoardUiActivityKind, text: string, timestamp?: string }
 export interface TaskBoardUiWantedItem { name: string, count: number, reason: string }
+export interface TaskBoardUiConversationMessage { id: string, role: 'user' | 'assistant', sender: string, text: string }
 export interface TaskBoardUiAgentStatus { phase: TaskBoardUiAgentPhase, detail: string }
 export interface TaskBoardUiSnapshot {
   goal_id: string
@@ -211,11 +214,14 @@ export interface TaskBoardUiSnapshot {
   steps: TaskBoardUiStep[]
   activity: TaskBoardUiActivity[]
   wanted_items: TaskBoardUiWantedItem[]
+  conversation_id: string
+  conversation: TaskBoardUiConversationMessage[]
   agent: TaskBoardUiAgentStatus
   debug?: debug_ui.TaskBoardUiDebugSnapshot
 }
 
 interface TaskBoardUiFollowStatus { active: boolean, state: string, target_player: string, current_distance?: number, desired_distance?: number, last_failure: string }
+interface TaskBoardUiLifecyclePending { action: TaskBoardUiLifecycleAction, goal_id: string }
 interface TaskBoardUiControlInput { kind: 'control', version: 1, action: TaskBoardUiControlAction, player_index: number, player_name: string, tick: number }
 interface TaskBoardUiPromptInput { kind: 'prompt', version: 1, player_index: number, player_name: string, text: string, tick: number }
 interface TaskBoardUiPollInput { kind: 'poll', version: 1, tick: number, debug: boolean }
@@ -245,6 +251,7 @@ declare const storage: {
   airi_task_board_prompt_draft?: Record<number, string>
   airi_task_board_ui_inputs?: TaskBoardUiInput[]
   airi_task_board_preview_zoom?: Record<number, number>
+  airi_task_board_lifecycle_pending?: Record<number, TaskBoardUiLifecyclePending>
 }
 
 let world_task_provider: ((this: void) => unknown) | undefined
@@ -304,12 +311,28 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
     wanted_items.push({ name, count: positive_integer(item?.count, 1), reason: text(item?.reason, 300) })
   }
 
+  const raw_conversation = (Array.isArray(value.conversation) ? value.conversation : []) as any[]
+  const conversation: TaskBoardUiConversationMessage[] = []
+  for (let index = 0; index < raw_conversation.length && index < 96; index++) {
+    const entry = raw_conversation[index]
+    const role = entry?.role === 'assistant' ? 'assistant' : entry?.role === 'user' ? 'user' : undefined
+    const line = text(entry?.text, 2000)
+    if (role === undefined || line.length === 0) continue
+    conversation.push({
+      id: text(entry?.id || `message_${index + 1}`, 120),
+      role,
+      sender: text(entry?.sender || (role === 'assistant' ? 'AIRI' : 'Player'), 128),
+      text: line,
+    })
+  }
+
   const total = integer(value.total_steps, steps.length)
   const agent = value.agent !== null && typeof value.agent === 'object' ? value.agent : undefined
   const debug = value.debug !== undefined ? debug_ui.sanitize_debug_snapshot(value.debug) : undefined
   return {
     goal_id: text(value.goal_id, 100), objective: text(value.objective, 500), response: text(value.response, 2000), status: status(value.status), blocker: text(value.blocker, 500), pause_reason: text(value.pause_reason, 300),
     completed_count: math.min(integer(value.completed_count), total), total_steps: total, active_index: math.min(integer(value.active_index), math.max(0, total - 1)), steps, activity, wanted_items,
+    conversation_id: text(value.conversation_id, 120), conversation,
     agent: { phase: agent_phase(agent?.phase), detail: text(agent?.detail, 300) }, debug,
   }
 }
@@ -353,6 +376,33 @@ export function stamp_activity_times(next: TaskBoardUiSnapshot, previous: TaskBo
 }
 
 function ensure_open_state() { if (storage.airi_task_board_ui_open === undefined) storage.airi_task_board_ui_open = {}; return storage.airi_task_board_ui_open }
+const LIFECYCLE = {
+  ensure: () => { if (storage.airi_task_board_lifecycle_pending === undefined) storage.airi_task_board_lifecycle_pending = {}; return storage.airi_task_board_lifecycle_pending },
+  current: (player_index: number) => {
+    const pending = storage.airi_task_board_lifecycle_pending?.[player_index]
+    if (pending === undefined) return undefined
+    const board = storage.airi_task_board_ui
+    const goal_changed = pending.goal_id.length > 0 && board?.goal_id !== pending.goal_id
+    const done = goal_changed
+      || (pending.action === 'pause' && board?.status === 'paused')
+      || (pending.action === 'resume' && board !== undefined && board.status !== 'paused')
+      || (pending.action === 'terminate' && board === undefined)
+    if (!done) return pending
+    delete LIFECYCLE.ensure()[player_index]
+    return undefined
+  },
+  begin: (player_index: number, action: TaskBoardUiLifecycleAction) => {
+    if (LIFECYCLE.current(player_index) !== undefined) return false
+    LIFECYCLE.ensure()[player_index] = { action, goal_id: storage.airi_task_board_ui?.goal_id ?? '' }
+    return true
+  },
+  ack: (player_index: number, action: TaskBoardUiLifecycleAction) => {
+    const pending = storage.airi_task_board_lifecycle_pending?.[player_index]
+    if (pending === undefined || pending.action !== action) return false
+    delete LIFECYCLE.ensure()[player_index]
+    return true
+  },
+}
 function ensure_terminate_confirm_state() { if (storage.airi_task_board_terminate_confirm_until === undefined) storage.airi_task_board_terminate_confirm_until = {}; return storage.airi_task_board_terminate_confirm_until }
 function ensure_prompt_draft_state() { if (storage.airi_task_board_prompt_draft === undefined) storage.airi_task_board_prompt_draft = {}; return storage.airi_task_board_prompt_draft }
 function ensure_ui_input_queue() { if (storage.airi_task_board_ui_inputs === undefined) storage.airi_task_board_ui_inputs = []; return storage.airi_task_board_ui_inputs }
@@ -594,18 +644,23 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   const controls = body.add({ type: 'table', column_count: 2 })
   controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING
   controls.style.vertical_spacing = COMPACT_BUTTON_SPACING
-  // The button becomes UNPAUSE for a durable paused goal. Resuming deliberately
-  // rides the same "continue" request path as chat so the model re-observes
-  // mutable world state instead of blindly replaying the last operation.
-  compact_button(controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: paused ? 'UNPAUSE' : 'PAUSE', style: 'dialog_button', tooltip: paused ? 'Resume this durable AIRI goal. AIRI will re-observe mutable state before acting.' : has_open_goal ? 'Pause the durable AIRI goal and stop current world work' : 'Stop the current world work. There is no durable AIRI goal to pause.' }))
+  const pending = LIFECYCLE.current(player.index)
+  const pending_tip = pending === undefined ? '' : `Waiting for AIRI runtime to confirm ${pending.action}.`
+  const pause_caption = pending?.action === 'pause' ? 'PAUSING...' : pending?.action === 'resume' ? 'RESUMING...' : paused ? 'UNPAUSE' : 'PAUSE'
+  const pause = compact_button(controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: pause_caption, style: 'dialog_button', tooltip: pending_tip.length > 0 ? pending_tip : paused ? 'Resume this durable AIRI goal. AIRI will re-observe mutable state before acting.' : has_open_goal ? 'Pause the durable AIRI goal and stop current world work' : 'Stop the current world work. There is no durable AIRI goal to pause.' })) as ButtonGuiElement
+  pause.enabled = pending === undefined
   const armed = task_board_ui_terminate_is_armed(player.index, game.tick)
-  compact_button(controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: armed ? 'CONFIRM' : 'TERMINATE', style: 'red_button', tooltip: armed ? 'Click again within 5 seconds to discard the goal permanently' : has_open_goal ? 'Discard the current durable AIRI goal permanently' : 'Stop the current world work. There is no durable AIRI goal to discard.' }))
+  const terminate_caption = pending?.action === 'terminate' ? 'TERMINATING...' : armed ? 'CONFIRM' : 'TERMINATE'
+  const terminate = compact_button(controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: terminate_caption, style: 'red_button', tooltip: pending_tip.length > 0 ? pending_tip : armed ? 'Click again within 5 seconds to discard the goal permanently' : has_open_goal ? 'Discard the current durable AIRI goal permanently' : 'Stop the current world work. There is no durable AIRI goal to discard.' })) as ButtonGuiElement
+  terminate.enabled = pending === undefined
   compact_button(controls.add({ type: 'button', name: FOLLOW_BUTTON_NAME, caption: debug_ui.follow_button_caption(follow?.active === true), style: follow?.active ? 'confirm_button' : 'dialog_button', tooltip: follow_button_tooltip(follow) }))
   const skills_open = task_board_skills_ui_is_open(player.index)
   compact_button(controls.add({ type: 'button', name: SKILLS_BUTTON_NAME, caption: skills_open ? 'CLOSE' : 'LEARN', style: 'dialog_button', tooltip: skills_open ? 'Close the area learning window.' : 'Open area learning and saved skill candidates in a separate movable window.' }))
   const debug_open = debug_ui.debug_ui_is_open(player.index)
   compact_button(controls.add({ type: 'button', name: debug_ui.DEBUG_BUTTON_NAME, caption: debug_ui.debug_button_caption(player.index), style: debug_open ? 'confirm_button' : 'dialog_button', tooltip: debug_open ? 'Close the AIRI runtime diagnostics window.' : 'Open structured AIRI runtime diagnostics, provider usage, actor state, and UI sync information.' }))
   compact_button(controls.add({ type: 'button', name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK', style: 'dialog_button', tooltip: "Stop current work and clear this NPC's conversation and durable plan. Learned skills and Factorio world state are kept." }))
+  const projects_open = project_ui.projects_ui_is_open(player.index)
+  compact_button(controls.add({ type: 'button', name: project_ui.PROJECTS_BUTTON_NAME, caption: 'OLD TASKS', style: projects_open ? 'confirm_button' : 'dialog_button', tooltip: projects_open ? 'Close old task history.' : 'Open old task history, conversations, and evidence.' }))
   // A blank last_failure is still truthy, which drew a lone warning triangle with
   // no message next to it. Render the row only when there is something to read.
   const issue_text = text(follow?.last_failure ?? '', 100)
@@ -979,15 +1034,33 @@ function build_skills_popout(player: LuaPlayer) {
 }
 function render_skills_popout(player: LuaPlayer) { if (!task_board_ui_is_open(player.index) || !task_board_skills_ui_is_open(player.index)) { destroy_skills_popout(player); return }; const root = player.gui.screen[SKILLS_ROOT_NAME]; const body = root?.valid ? root[SKILLS_BODY_NAME] : undefined; if (body?.valid) { body.clear(); build_skills_body(body); return }; build_skills_popout(player) }
 function render_debug_popout(player: LuaPlayer) { debug_ui.render_debug_popout(player, task_board_ui_is_open(player.index), storage.airi_task_board_ui, runtime_snapshot(), storage.airi_task_board_ui_synced_tick) }
-function render(player: LuaPlayer) { ensure_button(player); render_panel(player); render_skills_popout(player); render_debug_popout(player) }
-function render_all() { for (const player of game.connected_players) { ensure_button(player); render_panel(player); render_skills_popout(player); render_debug_popout(player) } }
+function render(player: LuaPlayer) { ensure_button(player); render_panel(player); render_skills_popout(player); project_ui.render_projects_popout(player, task_board_ui_is_open(player.index), storage.airi_task_board_ui?.goal_id ?? ''); render_debug_popout(player) }
+function render_all() { for (const player of game.connected_players) { ensure_button(player); render_panel(player); render_skills_popout(player); project_ui.render_projects_popout(player, task_board_ui_is_open(player.index), storage.airi_task_board_ui?.goal_id ?? ''); render_debug_popout(player) } }
 function prompt_field(player: LuaPlayer) { const root = player.gui.screen[ROOT_NAME]; const columns = root?.valid ? root[COLUMNS_NAME] : undefined; const left = columns?.valid ? columns[LEFT_COLUMN_NAME] : undefined; const section = left?.valid ? left[PROMPT_SECTION_NAME] : undefined; const row = section?.valid ? section[PROMPT_FLOW_NAME] : undefined; const field = row?.valid ? row[PROMPT_FIELD_NAME] : undefined; return field?.valid ? field as TextFieldGuiElement : undefined }
 function submit_prompt(player: LuaPlayer, raw: unknown) { if (!emit_prompt(player, raw)) return false; const field = prompt_field(player); if (field !== undefined) field.text = ''; render_panel(player); return true }
 function handle_control_click(player: LuaPlayer, element_name: string) {
-  if (element_name === PAUSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); if (storage.airi_task_board_ui?.status === 'paused') emit_resume(player); else emit_control(player, 'pause'); return true }
-  if (element_name === TERMINATE_BUTTON_NAME) { if (task_board_ui_terminate_is_armed(player.index, game.tick)) { clear_terminate_confirmation(player.index); emit_control(player, 'terminate') } else { arm_terminate(player.index); render_panel(player) }; return true }
+  if (element_name === PAUSE_BUTTON_NAME) {
+    if (LIFECYCLE.current(player.index) !== undefined) return true
+    clear_terminate_confirmation(player.index)
+    const action: TaskBoardUiLifecycleAction = storage.airi_task_board_ui?.status === 'paused' ? 'resume' : 'pause'
+    if (LIFECYCLE.begin(player.index, action)) {
+      if (action === 'resume') emit_resume(player)
+      else emit_control(player, 'pause')
+    }
+    render_panel(player)
+    return true
+  }
+  if (element_name === TERMINATE_BUTTON_NAME) {
+    if (LIFECYCLE.current(player.index) !== undefined) return true
+    if (task_board_ui_terminate_is_armed(player.index, game.tick)) {
+      clear_terminate_confirmation(player.index)
+      if (LIFECYCLE.begin(player.index, 'terminate')) emit_control(player, 'terminate')
+    } else arm_terminate(player.index)
+    render_panel(player)
+    return true
+  }
   if (element_name === FOLLOW_BUTTON_NAME) { clear_terminate_confirmation(player.index); const follow = read_follow_status(); emit_control(player, follow?.active ? 'stop_follow' : 'follow'); return true }
-  if (element_name === NEW_TASK_BUTTON_NAME) { clear_terminate_confirmation(player.index); emit_control(player, 'new_task'); return true }
+  if (element_name === NEW_TASK_BUTTON_NAME) { clear_terminate_confirmation(player.index); debug_ui.reset_task_conversation(); emit_control(player, 'new_task'); render_panel(player); return true }
   if (element_name === PROMPT_SEND_BUTTON_NAME) { submit_prompt(player, task_board_ui_prompt_draft(player.index)); return true }
   return false
 }
@@ -995,8 +1068,9 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
 export function create_task_board_ui_remote_interface() {
   create_skill_remote_interface(); create_learning_remote_interface()
   remote.add_interface('autorio_task_board', {
-    set_snapshot: (value: unknown, generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); activity_state.merge_activity_history(stamped.activity); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; provider_ui.remember_provider_model(stamped.debug?.provider_model); try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
+    set_snapshot: (value: unknown, generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); activity_state.merge_activity_history(stamped.activity); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; provider_ui.remember_provider_model(stamped.debug?.provider_model); project_ui.record_project_snapshot(stamped, game.tick); try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
     clear: (generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; storage.airi_task_board_ui = undefined; storage.airi_task_board_ui_synced_tick = game.tick; render_all(); return true },
+    ack_lifecycle: (player_index: unknown, action: unknown) => { const index = integer(player_index); const kind: TaskBoardUiLifecycleAction | undefined = action === 'pause' || action === 'resume' || action === 'terminate' ? action : undefined; if (index < 1 || kind === undefined) return false; LIFECYCLE.ack(index, kind); render_all(); return true },
     status: () => storage.airi_task_board_ui,
     sync_version: () => debug_ui.current_sync_version(),
     drain_inputs: () => drain_ui_inputs(),
@@ -1009,7 +1083,9 @@ export function create_task_board_ui_remote_interface() {
   script.on_event(defines.events.on_gui_click, (event: any) => {
     const element = event.element; if (!element?.valid) return; const player = game.get_player(event.player_index); if (!player?.valid) return
     if (element.name === BUTTON_NAME) { toggle_task_board_ui_open(player.index); render(player); return }
-    if (element.name === CLOSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); close_task_board_ui(player.index); close_task_board_skills_ui(player.index); debug_ui.close_debug_ui(player.index); destroy_skills_popout(player); render_debug_popout(player); destroy_panel(player); ensure_button(player); return }
+    if (element.name === CLOSE_BUTTON_NAME) { clear_terminate_confirmation(player.index); close_task_board_ui(player.index); close_task_board_skills_ui(player.index); project_ui.close_projects_ui(player.index); debug_ui.close_debug_ui(player.index); destroy_skills_popout(player); project_ui.render_projects_popout(player, false); render_debug_popout(player); destroy_panel(player); ensure_button(player); return }
+    if (element.name === project_ui.PROJECTS_BUTTON_NAME) { project_ui.toggle_projects_ui(player.index); render_panel(player); project_ui.render_projects_popout(player, true, storage.airi_task_board_ui?.goal_id ?? ''); return }
+    if (element.name === project_ui.PROJECTS_CLOSE_BUTTON_NAME) { project_ui.close_projects_ui(player.index); project_ui.render_projects_popout(player, true, storage.airi_task_board_ui?.goal_id ?? ''); render_panel(player); return }
     if (element.name === SKILLS_BUTTON_NAME) { toggle_task_board_skills_ui_open(player.index); render_panel(player); render_skills_popout(player); return }
     if (element.name === SKILLS_CLOSE_BUTTON_NAME) { close_task_board_skills_ui(player.index); destroy_skills_popout(player); render_panel(player); return }
     if (element.name === debug_ui.DEBUG_BUTTON_NAME) { debug_ui.toggle_debug_ui(player.index); render_panel(player); render_debug_popout(player); return }
@@ -1022,7 +1098,7 @@ export function create_task_board_ui_remote_interface() {
       render_panel(player); return
     }
     const filter_flag = element.tags?.airi_activity_filter
-    if (typeof filter_flag === 'number' && element.tags?.airi_activity_surface === 'projects') { activity_state.toggle_activity_filter(player.index, filter_flag, 'projects'); render_debug_popout(player); return }
+    if (typeof filter_flag === 'number' && element.tags?.airi_activity_surface === 'projects') { activity_state.toggle_activity_filter(player.index, filter_flag, 'projects'); project_ui.render_projects_popout(player, true, storage.airi_task_board_ui?.goal_id ?? ''); return }
     if (typeof filter_flag === 'number') { activity_state.toggle_activity_filter(player.index, filter_flag); activity_state.reset_activity_view(player.index); render_panel(player); return }
     if (handle_learning_ui_click(player, element.name)) { render_skills_popout(player); return }
     if (handle_skill_export_click(player, element.name)) { render_skills_popout(player); return }

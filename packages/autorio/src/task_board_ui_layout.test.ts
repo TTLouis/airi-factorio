@@ -93,8 +93,8 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(source).toContain('controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING')
     expect(source).toContain('controls.style.vertical_spacing = COMPACT_BUTTON_SPACING')
 
-    expect(source).not.toContain('pause.enabled')
-    expect(source).not.toContain('terminate.enabled')
+    expect(source).toContain('pause.enabled = pending === undefined')
+    expect(source).toContain('terminate.enabled = pending === undefined')
 
     expect(source).toContain('caption: debug_ui.follow_button_caption(follow?.active === true)')
     expect(source).toContain('Distance: ${math.floor(follow.current_distance * 10) / 10} tiles')
