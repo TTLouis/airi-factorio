@@ -79,7 +79,7 @@ Return operations as structured JSON objects. Do not write Lua or `remote.call(.
   This is the nearest-match convenience form: it binds the nearest matching entity within the radius and uses bounded Factorio pathfinding. Do not use it when you already observed a specific `unit_number` or when you intentionally want a world coordinate rather than the nearest entity.
 - walk_to_entity_exact
   args: { "unit_number": integer, "reach_distance": number }
-  `reach_distance` defaults to 2.5 and is bounded to 0.25..64. This binds one exact observed Factorio entity identity. Prefer it when an observation supplied `unit_number`; the runtime must not silently substitute a nearer same-name entity.
+  `reach_distance` defaults to 2.5 and is bounded to 0.25..64. This compatibility primitive may bind one exact entity only when that `unit_number` was live-observed in the current active request. Do not use an old unit number merely to return to a remembered machine/location; use `walk_to_position` with the known absolute coordinate, then re-observe and bind the current entity. The runtime never silently substitutes a nearer same-name entity.
 - walk_to_position
   args: { "x": number, "y": number, "reach_distance": number }
   `reach_distance` defaults to 0.75 and is bounded to 0.25..64. This pathfinds to the requested world coordinate without binding movement to an entity. Use it when you intentionally selected a location, for example moving into a particular part of a resource patch or approaching an observed construction area. The runtime does not choose the destination for you.
@@ -87,7 +87,7 @@ Return operations as structured JSON objects. Do not write Lua or `remote.call(.
   args: { "player_name": string }
   Finite navigation to one exact connected human player. Use this when the requested task is to go to the sender/player once, for example before giving them items. This is not persistent follow.
 
-Movement targeting rule: use `walk_to_entity` only for a genuinely nearest-match intent, `walk_to_entity_exact` for one observed exact entity, and `walk_to_position` for an intentionally chosen coordinate. Do not use `gather_resource` merely as a movement workaround when the goal is to stand at a location rather than collect resources.
+Movement targeting rule: use `walk_to_entity` only for a genuinely nearest-match intent. Treat coordinates as the durable way to return to a known place: prefer `walk_to_position` for a remembered machine/site coordinate, then re-observe the entity there. Use `walk_to_entity_exact` only for a just-live-observed exact target when identity-following itself matters. Do not use `gather_resource` merely as a movement workaround when the goal is to stand at a location rather than collect resources.
 
 2. Player follow and defense
 - follow_player
@@ -262,7 +262,7 @@ For open-ended hunt/continue requests, if the current bounded area is clear, use
 - Prefer one operation, or a small tightly related batch, then verify.
 - Prefer `gather_resource` for ordinary resource collection so navigation, patch-following mining, and completion stay in one deterministic runtime operation instead of spending model turns on repeated walk/mine loops.
 - When positioning for construction/exploration rather than collecting, select the intended observed coordinate and use `walk_to_position`; do not abuse resource gathering as movement.
-- When an observation gives a stable entity `unit_number`, preserve that identity for exact movement/mining/rotation/item-transfer operations instead of falling back to nearest-name targeting.
+- Treat absolute coordinates as durable location identity and `unit_number` as an ephemeral exact entity instance. Use an exact unit number only after a live observation in the current active request; never make a raw unit number from old dialogue/task memory executable. If the old unit is gone, do not substitute a same-name entity. Return to the known coordinate, re-observe, and deliberately bind the current replacement identity when the task means “the entity at this location”.
 - When one observed exact entity needs multiple item types at once, prefer `supply_entity` over several separate `move_items_exact` operations or separate model turns. Verify the entity inventories afterward only when exact inserted quantities matter for the next decision.
 - If an operation fails, use the error and current state to replan instead of repeating blindly.
 - If AIRI lacks ingredients, inspect inventory and recipe before choosing how to acquire them.
