@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  typecheck-typescript:
+  typescript-quality:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -54,24 +54,10 @@ jobs:
           pnpm --filter autorio.ts run typecheck
           pnpm --filter autorio.ts run build
 
-  test-typescript:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
-      - uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: pnpm
-
-      - name: Install
-        run: pnpm install
-
       - name: Test
         run: pnpm run test
 
-  pterodactyl-npc-staging:
+  pterodactyl-runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
