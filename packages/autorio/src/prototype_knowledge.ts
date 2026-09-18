@@ -9,8 +9,9 @@ const MAX_CONNECTION_CATEGORIES = 4
 const DEFAULT_DISCOVERY_LIMIT = 6
 const MAX_DISCOVERY_LIMIT = 12
 const MAX_DISCOVERY_PLACE_ITEMS = 2
+const MAX_MINEABLE_PRODUCTS = 8
 
-type PrototypeDiscoveryCapability = 'mining' | 'crafting' | 'entity-type'
+type PrototypeDiscoveryCapability = 'mining' | 'crafting' | 'entity-type' | 'harvest'
 type PrototypeDiscoveryAvailability = 'force-available' | 'all'
 type PrototypeEnergySource = 'burner' | 'electric' | 'heat' | 'fluid' | 'void' | 'none'
 
@@ -20,6 +21,7 @@ export interface PrototypeDiscoveryRequest {
   resource_category?: string
   crafting_category?: string
   entity_type?: string
+  product_name?: string
   energy_source?: PrototypeEnergySource
   availability?: PrototypeDiscoveryAvailability
   limit?: number
@@ -158,6 +160,61 @@ function fluidbox_details(prototype: any) {
   }
 }
 
+function mineable_product_summaries(prototype: any, limit: number = MAX_MINEABLE_PRODUCTS) {
+  const values: Array<Record<string, unknown>> = []
+  let count = 0
+  const products = prototype?.mineable_properties?.products
+  if (!products) return { values, count, truncated: false }
+
+  for (const [, product] of pairs(products as Record<number, any>)) {
+    if (!product || typeof product.name !== 'string') continue
+    count++
+    if (values.length >= limit) continue
+    values.push({
+      type: product.type,
+      name: product.name,
+      amount: product.amount,
+      amount_min: product.amount_min,
+      amount_max: product.amount_max,
+      probability: product.probability,
+    })
+  }
+
+  return { values, count, truncated: count > limit }
+}
+
+function mineable_details(prototype: any) {
+  const properties = prototype?.mineable_properties
+  if (!properties) return undefined
+  const products = mineable_product_summaries(prototype)
+  return {
+    mining_time: properties.mining_time,
+    required_fluid: properties.required_fluid,
+    fluid_amount: properties.fluid_amount,
+    products: products.values,
+    products_truncated: products.truncated,
+  }
+}
+
+function yields_item_product(prototype: any, product_name: string) {
+  const products = prototype?.mineable_properties?.products
+  if (!products) return false
+  for (const [, product] of pairs(products as Record<number, any>)) {
+    if (product?.type === 'item' && product.name === product_name) return true
+  }
+  return false
+}
+
+export function harvest_source_prototype_names(product_name: string) {
+  const names: string[] = []
+  if (!prototypes.item[product_name]) return names
+  for (const [name, prototype] of pairs(prototypes.entity)) {
+    if (!prototype || prototype.type === 'resource') continue
+    if (yields_item_product(prototype, product_name)) names.push(name)
+  }
+  return sort_strings(names)
+}
+
 function entity_details(prototype: any) {
   if (!prototype) return undefined
   const fluidboxes = fluidbox_details(prototype)
@@ -173,6 +230,9 @@ function entity_details(prototype: any) {
     fluidboxes: fluidboxes.fluidboxes,
     fluidboxes_truncated: fluidboxes.truncated,
   }
+
+  const mineable = mineable_details(prototype)
+  if (mineable) result.mineable = mineable
 
   if (prototype.crafting_categories) {
     result.crafting = {
@@ -313,6 +373,12 @@ function discovery_candidates(request: PrototypeDiscoveryRequest) {
     if (!request.entity_type) return { error: 'entity-type discovery requires entity_type' }
     matches = prototypes.get_entity_filtered([{ filter: 'type', type: request.entity_type }])
   }
+  else if (request.capability === 'harvest') {
+    if (!request.product_name || !prototypes.item[request.product_name]) {
+      return { error: 'harvest discovery requires a current-game item product_name' }
+    }
+    for (const name of harvest_source_prototype_names(request.product_name)) matches[name] = prototypes.entity[name]
+  }
   else {
     return { error: 'unsupported discovery capability' }
   }
@@ -356,6 +422,18 @@ export function discover_prototypes_for_actor(actor: ControlledActor, request: P
   for (const { name, prototype } of all) {
     const energy_source = energy_source_kind(prototype)
     energy_sources[energy_source] = true
+
+    if (request.capability === 'harvest') {
+      const products = mineable_product_summaries(prototype)
+      available.push({
+        name,
+        type: prototype.type,
+        mineable_products: products.values,
+        mineable_products_truncated: products.truncated,
+      })
+      continue
+    }
+
     let held_count = 0
     let enabled_recipe: string | undefined
     const place_item_result = sorted_place_item_summaries(prototype, MAX_DISCOVERY_PLACE_ITEMS, (item) => {
@@ -386,7 +464,7 @@ export function discover_prototypes_for_actor(actor: ControlledActor, request: P
     available.push(candidate)
   }
 
-  if (available.length > limit) {
+  if (available.length > limit && request.capability !== 'harvest') {
     const sources: string[] = []
     for (const [source] of pairs(energy_sources)) sources.push(source)
     sort_strings(sources)
@@ -399,14 +477,18 @@ export function discover_prototypes_for_actor(actor: ControlledActor, request: P
     })
   }
 
+  const candidates = request.capability === 'harvest' && available.length > limit
+    ? available.slice(0, limit)
+    : available
   return {
     ok: true,
     query: request,
     inferred_resource_category: discovered.inferred_resource_category,
     matched_count: all.length,
     available_count: available.length,
-    returned_count: available.length,
-    candidates: available,
+    returned_count: candidates.length,
+    truncated: candidates.length < available.length,
+    candidates,
   }
 }
 
