@@ -227,7 +227,12 @@ describe('sacrificial combat support frontline', () => {
     expect(c.controller.status()).toMatchObject({ target: { unit_number: 51, name: 'small-biter' } })
 
     tick(c)
-    expect(c.actor.set_walking_state).toHaveBeenLastCalledWith(expect.objectContaining({ walking: true }))
+    expect(c.surface.request_path).toHaveBeenLastCalledWith(expect.objectContaining({
+      start: { x: 0, y: 0 },
+      goal: { x: -6, y: 0 },
+      radius: 1.5,
+    }))
+    expect(c.controller.status()).toMatchObject({ path: { mode: 'retreat', target_position: { x: -6, y: 0 } } })
   })
 
   it('still recovers surviving encounter-owned support during cleanup', () => {
