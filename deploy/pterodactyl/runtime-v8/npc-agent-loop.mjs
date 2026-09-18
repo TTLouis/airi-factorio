@@ -2010,6 +2010,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         recoveryKind,
         triggerSource: this.planUpdateReason,
         lifecycle: this.requestLifecycle,
+        actionOmissionRepair: omissionRepair,
         requestBodyPatch: omissionRepair ? { max_tokens: ACTION_OMISSION_MAX_TOKENS } : undefined,
         signal: controller.signal,
       })
