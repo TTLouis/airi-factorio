@@ -3,8 +3,10 @@ import { setTaskBoardStatus } from './common.mjs'
 
 const STRICT_TASKS_BY_OPERATION = new Map([
   ['walk_to_entity', ['walking_to_entity']],
+  ['walk_to_entity_exact', ['walking_to_entity']],
   ['walk_to_player', ['walking_to_entity']],
   ['mine_entity', ['mining']],
+  ['mine_entity_exact', ['mining']],
   ['gather_resource', ['walking_to_entity', 'mining']],
   ['place_entity', ['placing']],
   ['move_items', ['moving_items']],
