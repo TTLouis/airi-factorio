@@ -6,6 +6,7 @@ export enum TaskStates {
   WALKING_TO_ENTITY = 'walking_to_entity',
   MINING = 'mining',
   HARVESTING = 'harvesting',
+  CLEARING_AREA = 'clearing_area',
   PLACING = 'placing',
   ROTATING = 'rotating',
   PLACING_IN_CHEST = 'placing_in_chest',
@@ -93,6 +94,20 @@ export interface PlayerParametersHarvestProduct {
   source_names: string[]
   inventory_count_before: number
   verified_gain: number
+  target?: LuaEntity | null
+  target_name?: string
+  target_position?: MapPositionStruct
+  owner_actor_id?: number
+  owner_actor_kind?: string
+  owner_force_index?: number
+}
+
+export interface PlayerParametersClearConstructionArea {
+  type: TaskStates.CLEARING_AREA
+  center: MapPositionStruct
+  width: number
+  height: number
+  cleared_count: number
   target?: LuaEntity | null
   target_name?: string
   target_position?: MapPositionStruct
@@ -252,6 +267,7 @@ export type PlayerParameters
     | PlayerParametersWalkingDirect
     | PlayerParametersMineEntity
     | PlayerParametersHarvestProduct
+    | PlayerParametersClearConstructionArea
     | PlayerParametersPlaceEntity
     | PlayerParametersRotateEntity
     | PlayerParametersMoveItems
@@ -267,6 +283,7 @@ export interface PlayerState {
   parameters_walking_direct?: PlayerParametersWalkingDirect
   parameters_mine_entity?: PlayerParametersMineEntity
   parameters_harvest_product?: PlayerParametersHarvestProduct
+  parameters_clear_construction_area?: PlayerParametersClearConstructionArea
   parameters_place_entity?: PlayerParametersPlaceEntity
   parameters_rotate_entity?: PlayerParametersRotateEntity
   parameters_move_items?: PlayerParametersMoveItems
