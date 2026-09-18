@@ -212,10 +212,11 @@ export function new_area_clearing_controller(
     log(`[AUTORIO] Clearing exact construction blocker ${target.name} at ${serpent.line(target.position)}`)
   }
 
-  function on_player_mined_entity(actor: ControlledActor, player_index: number) {
+  function on_player_mined_entity(actor: ControlledActor, player_index: number, mined_entity?: LuaEntity) {
     if (!actor.owns_player_index(player_index) || manager.player_state.task_state !== TaskStates.CLEARING_AREA) return
     const task = manager.player_state.parameters_clear_construction_area
-    if (!task || !identity_matches(actor, task)) return
+    if (!task || !identity_matches(actor, task) || !task.target) return
+    if (mined_entity && mined_entity !== task.target) return
     task.cleared_count++
     clear_target(actor, task)
   }

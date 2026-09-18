@@ -91,17 +91,17 @@ describe('construction-area finite blocker clearing', () => {
     expect(f.actor.set_mining_state).toHaveBeenCalledWith({ mining: true, position: f.treeA.position })
 
     f.treeA.valid = false
-    f.controller.on_player_mined_entity(f.actor, 1)
+    f.controller.on_player_mined_entity(f.actor, 1, f.treeA)
     f.controller.tick(f.actor)
     expect(f.manager.player_state.parameters_clear_construction_area?.target_name).toBe('mod-tree-b')
 
     f.treeB.valid = false
-    f.controller.on_player_mined_entity(f.actor, 1)
+    f.controller.on_player_mined_entity(f.actor, 1, f.treeB)
     f.controller.tick(f.actor)
     expect(f.manager.player_state.parameters_clear_construction_area?.target_name).toBe('mod-rock-z')
 
     f.rock.valid = false
-    f.controller.on_player_mined_entity(f.actor, 1)
+    f.controller.on_player_mined_entity(f.actor, 1, f.rock)
     f.controller.tick(f.actor)
 
     expect(f.manager.player_state.task_state).toBe(TaskStates.PLACING)
@@ -112,6 +112,25 @@ describe('construction-area finite blocker clearing', () => {
     expect(f.resource.valid).toBe(true)
     expect(f.machine.valid).toBe(true)
     expect(f.treeOutside.valid).toBe(true)
+  })
+
+  it('ignores a connected-player mining event for a different blocker identity', () => {
+    const f = fixture()
+    expect(f.controller.submit(2, 0, 8, 4)[0]).toBe(true)
+    f.controller.tick(f.actor)
+
+    expect(f.manager.player_state.parameters_clear_construction_area?.target).toBe(f.treeA)
+    f.controller.on_player_mined_entity(f.actor, 1, f.treeB)
+    expect(f.manager.player_state.parameters_clear_construction_area).toMatchObject({
+      target: f.treeA,
+      cleared_count: 0,
+    })
+
+    f.controller.on_player_mined_entity(f.actor, 1, f.treeA)
+    expect(f.manager.player_state.parameters_clear_construction_area).toMatchObject({
+      target: null,
+      cleared_count: 1,
+    })
   })
 
   it('repositions into real finite-mining reach, then mines the same observed blocker', () => {

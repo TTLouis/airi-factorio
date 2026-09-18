@@ -182,6 +182,20 @@ describe('product-oriented finite harvesting', () => {
     })
   })
 
+  it('ignores a connected-player mining event for a different harvest source identity', () => {
+    const f = fixture()
+    ;(f.actor as any).owns_player_index = () => true
+    expect(f.harvest.submit('stone', 6, 64)[0]).toBe(true)
+    f.harvest.tick(f.actor)
+
+    expect(f.manager.player_state.parameters_harvest_product?.target).toBe(f.rockA)
+    f.harvest.on_player_mined_entity(f.actor, 1, f.rockB)
+    expect(f.manager.player_state.parameters_harvest_product?.target).toBe(f.rockA)
+
+    f.harvest.on_player_mined_entity(f.actor, 1, f.rockA)
+    expect(f.manager.player_state.parameters_harvest_product?.target).toBeNull()
+  })
+
   it('uses verified inventory delta rather than destroyed entity count for completion', () => {
     const f = fixture()
     f.setStone(5)

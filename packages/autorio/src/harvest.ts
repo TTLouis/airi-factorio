@@ -248,10 +248,11 @@ export function new_harvest_controller(
     log(`[AUTORIO] Harvesting exact ${target.name} for ${task.product_name}; verified_gain=${task.verified_gain}/${task.requested_count}`)
   }
 
-  function on_player_mined_entity(actor: ControlledActor, player_index: number) {
+  function on_player_mined_entity(actor: ControlledActor, player_index: number, mined_entity?: LuaEntity) {
     if (!actor.owns_player_index(player_index) || manager.player_state.task_state !== TaskStates.HARVESTING) return
     const task = manager.player_state.parameters_harvest_product
-    if (!task || !identity_matches(actor, task)) return
+    if (!task || !identity_matches(actor, task) || !task.target) return
+    if (mined_entity && mined_entity !== task.target) return
     actor.set_mining_state({ mining: false })
     task.target = null
     task.target_name = undefined

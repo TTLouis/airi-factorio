@@ -524,13 +524,13 @@ script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEnti
   const actor = get_controlled_actor()
   if (!actor) return
   if (task_manager.player_state.task_state === TaskStates.HARVESTING) {
-    harvest_controller.on_player_mined_entity(actor, event.player_index)
+    harvest_controller.on_player_mined_entity(actor, event.player_index, event.entity)
   }
   else if (task_manager.player_state.task_state === TaskStates.CLEARING_AREA) {
-    area_clearing_controller.on_player_mined_entity(actor, event.player_index)
+    area_clearing_controller.on_player_mined_entity(actor, event.player_index, event.entity)
   }
   else {
-    basic_operation_runtime.on_player_mined_entity(actor, event.player_index)
+    basic_operation_runtime.on_player_mined_entity(actor, event.player_index, event.entity)
   }
 })
 

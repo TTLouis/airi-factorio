@@ -246,13 +246,23 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
     start_mining(actor, target)
   }
 
-  function on_player_mined_entity(actor: ControlledActor, player_index: number) {
+  function on_player_mined_entity(actor: ControlledActor, player_index: number, mined_entity?: LuaEntity) {
     if (!actor.owns_player_index(player_index) || manager.player_state.task_state !== TaskStates.MINING) return
     const task = manager.player_state.parameters_mine_entity
     if (!task) return
     if (!controller.identity_matches(actor, task)) {
       controller.fail(actor, task, 'actor_changed')
       return
+    }
+    if (mined_entity) {
+      if (task.target_unit_number !== undefined) {
+        if (mined_entity.unit_number !== task.target_unit_number) return
+      }
+      else {
+        if (!task.position || !task.entity_name
+          || mined_entity.name !== task.entity_name
+          || squared_distance(mined_entity.position, task.position) > 0.25 ** 2) return
+      }
     }
     task.count -= 1
     task.position = undefined
