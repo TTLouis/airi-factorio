@@ -118,7 +118,7 @@ test('uncraftable downstream craft is replanned to first bootstrap dependency be
       }
 
       const text = messages.map(message => String(message.content ?? '')).join('\n')
-      assert.match(text, /bootstrap_dependency_unresolved/)
+      assert.match(text, /Deterministic craft preflight rejected the requested craft before Autorio admission/)
       assert.match(text, /"name":"plate-x"/)
       assert.match(text, /"kind":"processing"/)
       assert.match(text, /"held":4/)
