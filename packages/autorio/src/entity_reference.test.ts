@@ -1,7 +1,7 @@
 import type { ControlledActor } from './actors/types'
 import type { LuaEntity } from 'factorio:runtime'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { remember_entity_reference, resolve_exact_entity } from './entity_reference'
+import { entity_reference_hint, remember_entity_reference, resolve_exact_entity } from './entity_reference'
 
 function actor() {
   const find = vi.fn(() => [])
@@ -31,39 +31,46 @@ beforeEach(() => {
   ;(globalThis as any).game.get_entity_by_unit_number = vi.fn(() => undefined)
 })
 
-describe('exact entity reference recovery', () => {
-  it('prefers the native unit-number lookup when it succeeds', () => {
+describe('exact entity references', () => {
+  it('uses the native unit-number lookup for a live exact entity', () => {
     const a = actor()
     const target = entity(104)
     ;(globalThis as any).game.get_entity_by_unit_number = vi.fn(() => target)
 
     expect(resolve_exact_entity(a, 104)).toBe(target)
+    expect(entity_reference_hint(104)).toMatchObject({
+      name: 'stone-furnace',
+      position: { x: 2, y: 3 },
+      observed_tick: 100,
+    })
     expect(a.surface.find_entities_filtered).not.toHaveBeenCalled()
   })
 
-  it('recovers an observed exact entity by position without substituting another unit', () => {
-    const a = actor()
-    const observed = entity(104)
-    remember_entity_reference(observed)
-
-    const wrong = entity(105)
-    const same = entity(104)
-    a.surface.find_entities_filtered.mockReturnValue([wrong, same])
-
-    expect(resolve_exact_entity(a, 104)).toBe(same)
-    expect(a.surface.find_entities_filtered).toHaveBeenCalledWith({
-      position: { x: 2, y: 3 },
-      radius: 0.25,
-      name: 'stone-furnace',
-      force: a.force,
-    })
-  })
-
-  it('fails closed when the observed unit number is gone', () => {
+  it('does not recover a missing unit number by old position and name', () => {
     const a = actor()
     remember_entity_reference(entity(104))
-    a.surface.find_entities_filtered.mockReturnValue([entity(105)])
+    a.surface.find_entities_filtered.mockReturnValue([entity(104)])
 
     expect(resolve_exact_entity(a, 104)).toBeUndefined()
+    expect(a.surface.find_entities_filtered).not.toHaveBeenCalled()
+  })
+
+  it('keeps a replacement at the same coordinate as a distinct identity', () => {
+    const a = actor()
+    remember_entity_reference(entity(104))
+    ;(globalThis as any).game.tick = 120
+    remember_entity_reference(entity(105))
+
+    expect(resolve_exact_entity(a, 104)).toBeUndefined()
+    expect(entity_reference_hint(104)).toMatchObject({
+      name: 'stone-furnace',
+      position: { x: 2, y: 3 },
+      observed_tick: 100,
+    })
+    expect(entity_reference_hint(105)).toMatchObject({
+      name: 'stone-furnace',
+      position: { x: 2, y: 3 },
+      observed_tick: 120,
+    })
   })
 })
