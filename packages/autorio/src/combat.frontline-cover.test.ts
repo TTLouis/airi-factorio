@@ -330,6 +330,27 @@ describe('sacrificial combat support frontline', () => {
     expect(c.controller.status()).toMatchObject({ path: { mode: 'retreat', target_position: { x: -6, y: 0 } } })
   })
 
+  it('kills a remaining worm in the clear area before collecting support even outside immediate worm threat range', () => {
+    const nest = enemy(56, 'biter-spawner', 'unit-spawner', 30)
+    const worm = enemy(57, 'small-worm-turret', 'turret', 50, 10)
+    const c = world([nest, worm], 1)
+
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+    c.actor.position = { x: 6, y: 0 }
+    tick(c)
+    expect(c.createdTurrets).toHaveLength(1)
+
+    nest.valid = false
+    tick(c)
+
+    expect(c.controller.status()).toMatchObject({
+      combat_phase: 'engage',
+      target: { unit_number: 57, name: 'small-worm-turret' },
+    })
+    expect(c.actor.set_mining_state).not.toHaveBeenCalledWith(expect.objectContaining({ mining: true }))
+  })
+
   it('does not start support cleanup while a worm remains inside its doubled threat radius', () => {
     const nest = enemy(58, 'biter-spawner', 'unit-spawner', 30)
     const worm = enemy(59, 'medium-worm-turret', 'turret', 29, 15)
