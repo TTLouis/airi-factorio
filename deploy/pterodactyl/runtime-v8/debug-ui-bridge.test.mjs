@@ -35,6 +35,8 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
       model: 'deepseek-flash',
       finish_reason: 'length',
       diagnostic_code: 'provider_output_truncated_empty_content',
+      reasoning_effort: 'none',
+      reasoning_policy_reason: 'strict_recovery',
       content_chars: 0,
       reasoning_content_chars: 8241,
     },
@@ -49,6 +51,8 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
   assert.equal(debug.provider_latency_ms, 10954)
   assert.equal(debug.provider_diagnostic_code, 'provider_output_truncated_empty_content')
   assert.equal(debug.provider_finish_reason, 'length')
+  assert.equal(debug.reasoning_effort, 'none')
+  assert.equal(debug.reasoning_policy_reason, 'strict_recovery')
   assert.equal(debug.content_chars, 0)
   assert.equal(debug.reasoning_content_chars, 8241)
   assert.equal(debug.input_units, 13982)
@@ -62,6 +66,10 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
   assert.equal(debug.latest_round_total_units, 5682)
   assert.match(debug.last_error, /provider_output_truncated_empty_content/)
   assert.match(debug.last_error, /finish=length/)
+
+  debug = liveAgentDebugEvent('provider.request', { round: 5, recovery_attempt: 0 }, debug)
+  assert.equal(debug.reasoning_effort, '')
+  assert.equal(debug.reasoning_policy_reason, '')
 
   debug = liveAgentDebugEvent('tool.result', { name: 'getActorStatus' }, debug)
   assert.equal(debug.last_tool, 'getActorStatus')
@@ -279,6 +287,8 @@ test('task board UI snapshot includes live debug diagnostics', () => {
       provider_latency_ms: 10000,
       provider_diagnostic_code: 'provider_output_truncated_empty_content',
       provider_finish_reason: 'length',
+      reasoning_effort: 'max',
+      reasoning_policy_reason: 'repeated_failure',
       content_chars: 0,
       reasoning_content_chars: 8123,
       input_units: 100,
@@ -304,6 +314,8 @@ test('task board UI snapshot includes live debug diagnostics', () => {
   assert.equal(snapshot.debug.provider_round, 6)
   assert.equal(snapshot.debug.provider_diagnostic_code, 'provider_output_truncated_empty_content')
   assert.equal(snapshot.debug.provider_finish_reason, 'length')
+  assert.equal(snapshot.debug.reasoning_effort, 'max')
+  assert.equal(snapshot.debug.reasoning_policy_reason, 'repeated_failure')
   assert.equal(snapshot.debug.content_chars, 0)
   assert.equal(snapshot.debug.reasoning_content_chars, 8123)
   assert.equal(snapshot.debug.input_units, 100)

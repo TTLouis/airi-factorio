@@ -54,6 +54,8 @@ export interface TaskBoardUiDebugSnapshot {
   provider_latency_ms: number
   provider_diagnostic_code: string
   provider_finish_reason: string
+  reasoning_effort: string
+  reasoning_policy_reason: string
   content_chars: number
   reasoning_content_chars: number
   input_units: number
@@ -99,6 +101,8 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     provider_latency_ms: integer(debug.provider_latency_ms),
     provider_diagnostic_code: clean_text(debug.provider_diagnostic_code, 160),
     provider_finish_reason: clean_text(debug.provider_finish_reason, 80),
+    reasoning_effort: clean_text(debug.reasoning_effort, 32),
+    reasoning_policy_reason: clean_text(debug.reasoning_policy_reason, 80),
     content_chars: integer(debug.content_chars),
     reasoning_content_chars: integer(debug.reasoning_content_chars),
     input_units: integer(debug.input_units),
@@ -534,6 +538,8 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Request', clean_text(debug.request_id, 120) || '—')
   add_row(table, 'Turn', integer(debug.turn) > 0 ? `${integer(debug.turn)}` : '—')
   add_row(table, 'Provider', provider.length > 0 ? `${provider} · round ${integer(debug.provider_round) + 1}` : '—')
+  add_row(table, 'Reasoning effort', clean_text(debug.reasoning_effort, 32) || '—')
+  add_row(table, 'Policy reason', clean_text(debug.reasoning_policy_reason, 80) || '—')
   add_row(table, 'Latency', latency > 0 ? `${latency} ms` : '—')
   add_row(table, 'Tokens · request cumulative', tokens)
   add_row(table, 'Latest completed round', latest_round_tokens)

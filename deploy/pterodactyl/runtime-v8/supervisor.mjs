@@ -413,6 +413,8 @@ function emptyAgentDebug(fallback = {}) {
     provider_latency_ms: 0,
     provider_diagnostic_code: '',
     provider_finish_reason: '',
+    reasoning_effort: '',
+    reasoning_policy_reason: '',
     content_chars: 0,
     reasoning_content_chars: 0,
     input_units: 0,
@@ -473,6 +475,8 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
   if (event === 'provider.request') {
     debug.provider_round = debugInteger(data.round)
     debug.recovery_attempt = debugInteger(data.recovery_attempt)
+    debug.reasoning_effort = ''
+    debug.reasoning_policy_reason = ''
   }
   if (providerEvent && typeof providerEvent === 'object') {
     debug.provider_round = debugInteger(providerEvent.round ?? debug.provider_round)
@@ -481,6 +485,8 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
     debug.provider_model = uiText(provider?.model ?? fallback.provider_model ?? debug.provider_model, 160)
     debug.provider_diagnostic_code = uiText(provider?.diagnostic_code ?? debug.provider_diagnostic_code, 160)
     debug.provider_finish_reason = uiText(provider?.finish_reason ?? debug.provider_finish_reason, 80)
+    debug.reasoning_effort = uiText(provider?.reasoning_effort ?? debug.reasoning_effort, 32)
+    debug.reasoning_policy_reason = uiText(provider?.reasoning_policy_reason ?? debug.reasoning_policy_reason, 80)
     debug.content_chars = debugInteger(provider?.content_chars ?? debug.content_chars)
     debug.reasoning_content_chars = debugInteger(provider?.reasoning_content_chars ?? debug.reasoning_content_chars)
     const diagnostic = uiText(provider?.diagnostic_code, 160)

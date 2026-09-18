@@ -664,6 +664,8 @@ function compactProviderMetadata(metadata) {
     content_replacement_chars: finiteNonNegative(metadata.content_replacement_chars),
     normalized_content_chars: finiteNonNegative(metadata.normalized_content_chars),
     reasoning_content_chars: finiteNonNegative(metadata.reasoning_content_chars),
+    reasoning_effort: cleanMemoryText(metadata.reasoning_effort, 32),
+    reasoning_policy_reason: cleanMemoryText(metadata.reasoning_policy_reason, 80),
     tool_call_count: finiteNonNegative(metadata.tool_call_count),
     structured_content: structured,
     content_preview: typeof metadata.content_preview === 'string' ? metadata.content_preview.slice(0, 1200) : undefined,
@@ -1156,6 +1158,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         allowTools,
         recoveryAttempt,
         recoveryKind,
+        triggerSource: this.planUpdateReason,
         signal: controller.signal,
       })
       const usage = normalizedProviderUsage(message?._airiProvider?.usage)

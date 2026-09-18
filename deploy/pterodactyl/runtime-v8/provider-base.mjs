@@ -139,6 +139,9 @@ function promptTraceMessageChars(message) {
 }
 
 function promptTraceIdentity(options = {}) {
+  const providerPolicy = options.providerPolicy && typeof options.providerPolicy === 'object'
+    ? options.providerPolicy
+    : undefined
   return {
     request_id: typeof options.requestId === 'string' ? options.requestId : undefined,
     round: Number.isSafeInteger(options.round) ? options.round : undefined,
@@ -146,6 +149,8 @@ function promptTraceIdentity(options = {}) {
     epoch: Number.isSafeInteger(options.epoch) ? options.epoch : undefined,
     recovery_attempt: Number.isSafeInteger(options.recoveryAttempt) ? options.recoveryAttempt : 0,
     allow_tools: options.allowTools !== false,
+    reasoning_effort: typeof providerPolicy?.effort === 'string' ? providerPolicy.effort : undefined,
+    reasoning_policy_reason: typeof providerPolicy?.reason === 'string' ? providerPolicy.reason : undefined,
   }
 }
 
@@ -688,6 +693,8 @@ export async function providerRequest(config, messages, {
   actorId,
   requestId,
   promptTraceFile: traceFile,
+  requestBodyPatch,
+  providerPolicy,
 } = {}) {
   check(typeof config.key === 'string' && config.key.trim().length > 0, 'OPENAI_API_KEY is missing')
   check(typeof config.model === 'string' && /^[a-zA-Z0-9._:/-]{1,200}$/.test(config.model), 'Invalid model identifier')
@@ -716,6 +723,9 @@ export async function providerRequest(config, messages, {
     body.tools = compactContinuation ? compactCompletionTools(toolDefinitions) : toolDefinitions
     body.tool_choice = 'auto'
   }
+  if (requestBodyPatch && typeof requestBodyPatch === 'object' && !Array.isArray(requestBodyPatch)) {
+    Object.assign(body, requestBodyPatch)
+  }
 
   const traceOptions = {
     round,
@@ -725,6 +735,7 @@ export async function providerRequest(config, messages, {
     recoveryAttempt,
     allowTools,
     promptTraceFile: traceFile,
+    providerPolicy,
   }
   await traceProviderPayload(body, traceOptions)
 
@@ -822,6 +833,8 @@ export async function providerRequest(config, messages, {
       ...rawShape,
       normalized_content_chars: normalizedContent.length,
       structured_content: structured,
+      reasoning_effort: typeof providerPolicy?.effort === 'string' ? providerPolicy.effort : undefined,
+      reasoning_policy_reason: typeof providerPolicy?.reason === 'string' ? providerPolicy.reason : undefined,
     }
 
     await traceProviderResult('provider.response', providerDiagnostics, traceOptions)
