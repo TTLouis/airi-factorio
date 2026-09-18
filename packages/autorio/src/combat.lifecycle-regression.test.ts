@@ -256,7 +256,7 @@ describe('combat lifecycle regressions', () => {
     expect(c.controller.status()).toMatchObject({ combat_phase: 'safety', combat_safety_goal: 'cleanup', target: undefined })
   })
 
-  it('lets a healthy ready support placement beat a panic-range reinforcement instead of starving the stage', () => {
+  it('keeps panic-range mobile preemption ahead of a ready support placement', () => {
     const first = enemy(90, 'unit-spawner', 30)
     const c = world([first])
     c.main.push(itemStack('gun-turret', 1), itemStack('firearm-magazine', 40))
@@ -267,11 +267,11 @@ describe('combat lifecycle regressions', () => {
     c.enemies.push(enemy(91, 'unit', 12))
     advance(c, 1)
 
-    expect(c.createdTurrets).toHaveLength(1)
+    expect(c.createdTurrets).toHaveLength(0)
     expect(c.controller.status()).toMatchObject({
       combat_phase: 'engage',
-      target: { unit_number: 90 },
-      encounter_owned_turret_count: 1,
+      target: { unit_number: 91 },
+      encounter_owned_turret_count: 0,
     })
   })
 
