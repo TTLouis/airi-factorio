@@ -169,6 +169,34 @@ test('decision provider batches questions into one TypeSafe System One request a
   assert.deepEqual(result.usage, { input_tokens: 187, output_tokens: 19 })
 })
 
+test('decision provider refuses to spend credit without an explicit budget reservation', async () => {
+  const config = decisionProviderConfiguration({ TYPESAFE_API_KEY: KEY })
+  let fetchCalls = 0
+
+  await assert.rejects(
+    decisionProviderRequest(
+      config,
+      { message: 'hello' },
+      {
+        route: {
+          type: 'choice',
+          instructions: 'Choose a route.',
+          criteria: { conversation: 'Talk.', planning: 'Plan.' },
+        },
+      },
+      {
+        fetchImpl: async () => {
+          fetchCalls++
+          throw new Error('must not be reached')
+        },
+      },
+    ),
+    /requires a budget reservation callback/,
+  )
+
+  assert.equal(fetchCalls, 0)
+})
+
 test('decision provider rejects an answer outside the declared choice contract', async () => {
   const config = decisionProviderConfiguration({ TYPESAFE_API_KEY: KEY })
   await assert.rejects(
@@ -183,6 +211,7 @@ test('decision provider rejects an answer outside the declared choice contract',
         },
       },
       {
+        reserve: async () => {},
         fetchImpl: async () => new Response(JSON.stringify({
           answers: {
             route: {
