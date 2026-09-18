@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { actorChanged, deploymentStatus, executeAuthorizedBatch } from './supervisor-adapter.mjs'
-import { parsePlan, renderOperation, toolCommand } from './structured-policy.mjs'
+import { isApprovedOperationName, parsePlan, renderOperation, toolCommand } from './structured-policy.mjs'
 
 export class AgentLoopError extends Error {}
 
@@ -573,6 +573,13 @@ export class NpcAgentLoop {
       check(tool && tool.type === 'function' && typeof tool.id === 'string' && tool.id.length >= 1 && tool.id.length <= 200, 'Invalid tool call')
       check(tool.function && typeof tool.function.name === 'string' && typeof tool.function.arguments === 'string', 'Invalid tool function')
       const args = strictJson(tool.function.arguments, 'tool arguments')
+      if (isApprovedOperationName(tool.function.name)) {
+        throw new ToolValidationError(
+          `${tool.function.name} is an approved world-mutation operation, not an observation tool. Return it in the strict-JSON operations array instead of calling it as a tool.`,
+          'operation_called_as_tool',
+          { operation_name: tool.function.name },
+        )
+      }
       const command = toolCommand(tool.function.name, args)
       return {
         tool,
