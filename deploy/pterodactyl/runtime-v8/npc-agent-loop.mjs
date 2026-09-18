@@ -43,6 +43,8 @@ The task_board field is the canonical single-NPC Task Board Lite. Its stable ste
 
 For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
 
+Plan entries must represent goal-bearing Factorio work or verification. Do not add terminal lifecycle/meta steps such as "Stop", "Done", "Finish", or "Report completion"; stopping after the verified goal is represented by returning plan: [], currentStep: 0, operations: [].
+
 An empty operations array normally means no new Autorio world action will happen after your reply. Never claim that a finite action is continuing when neither a new operation nor a live persistent runtime mode exists. Persistent controllers such as follow are different: if a read-only status tool proves the controller is active, healthy, and live, operations: [] may accurately describe that background mode without submitting a duplicate operation. When the whole requested goal is actually verified complete, return plan: [], currentStep: 0, operations: [], and say it is complete.
 
 When finite canonical work remains but execution is truthfully impossible, keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or blocker. This is the explicit no-mutation blocker contract. Future-tense prose such as "I will take the items" is not a blocker and does not authorize the harness to invent an operation.
@@ -1283,12 +1285,25 @@ function finalStepCanCloseFromFreshObservation(state) {
   return stored.every(value => /^wait(?:\s|$)/i.test(String(value ?? '').trim()))
 }
 
+function terminalControlOnlyPlanStep(value) {
+  const text = cleanMemoryText(value, 120).toLowerCase().replace(/[.!]+$/g, '').trim()
+  return text === 'stop'
+    || text === 'done'
+    || text === 'finish'
+    || text === 'finished'
+    || text === 'complete'
+    || text === 'completed'
+}
+
 function verifiedFinalCompletion(plan, state, triggerSource, { freshObservation = false } = {}) {
   if (triggerSource !== 'completion' || plan?.operations?.length !== 0 || plan?.plan?.length !== 0) return false
   const board = state?.task_board
   if (state?.status !== 'active') return false
   if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps) || board.steps.length === 0) return false
-  if (board.active_index !== board.steps.length - 1) return false
+  const activeIndex = Number.isSafeInteger(board.active_index) ? board.active_index : -1
+  if (activeIndex < 0 || activeIndex >= board.steps.length) return false
+  const trailingSteps = board.steps.slice(activeIndex + 1)
+  if (trailingSteps.some(step => !terminalControlOnlyPlanStep(step?.description))) return false
   const ref = Number.isSafeInteger(state.last_verified_batch_id) ? `batch_${state.last_verified_batch_id}` : ''
   const deterministicCurrentStep = [...(board.evidence ?? [])].reverse().some(item => item?.kind === 'deterministic_verification'
     && item?.step_id === board.active_step_id

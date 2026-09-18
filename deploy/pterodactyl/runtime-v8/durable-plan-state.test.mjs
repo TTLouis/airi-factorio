@@ -749,6 +749,61 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
 })
 
 
+test('verified completion can close before a trailing control-only Stop step', async () => {
+  let calls = 0
+  const rcon = new ActionOmissionRcon()
+  const plan = ['Perform the requested work', 'Verify the result', 'Stop']
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      calls++
+      if (calls === 1) {
+        return planMessage({
+          chatMessage: 'Performing the requested work.',
+          plan,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        })
+      }
+      if (calls === 2) {
+        return planMessage({
+          chatMessage: 'The work is done; moving to verification.',
+          plan,
+          currentStep: 1,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        })
+      }
+      if (calls === 3) return toolMessage('final-verification')
+      return planMessage({
+        chatMessage: 'The requested result is verified. Nothing further needs execution.',
+        plan: [],
+        currentStep: 0,
+        operations: [],
+      })
+    },
+    systemPrompt: 'Trailing control-only completion regression test',
+    memory: new CanonicalTaskBoardMemory(),
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const started = await agent.request('do the work, verify it, then stop', { sender: 'TTLouis' })
+  assert.equal(started.operations.length, 1)
+  assert.equal(started.taskBoard.active_index, 0)
+
+  const verifying = await agent.completed()
+  assert.equal(verifying.operations.length, 1)
+  assert.equal(verifying.taskBoard.active_index, 1)
+  assert.equal(verifying.taskBoard.steps[2].description, 'Stop')
+
+  const finished = await agent.completed()
+  assert.equal(calls, 4)
+  assert.equal(finished.goalStatus, 'completed')
+  assert.equal(finished.operations.length, 0)
+  assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
+  assert.equal(rcon.mutations.length, 2)
+})
+
 test('verified final completion is not mistaken for an action omission', async () => {
   let calls = 0
   const rcon = new ActionOmissionRcon()
