@@ -309,7 +309,7 @@ export function render_learning_status(parent: LuaGuiElement) {
   body.style.horizontally_stretchable = true
   const opportunities = list_learning_opportunities(MAX_UI_OPPORTUNITIES)
   if (opportunities.length === 0) {
-    body.add({ type: 'label', caption: 'AIRI can learn from meaningful completed goals, task-relevant observations, experiments, or explicit Learn Area study. No opportunity recorded yet.' })
+    body.add({ type: 'label', caption: 'SGLuna can learn from meaningful completed goals, task-relevant observations, experiments, or explicit Learn Area study. No opportunity recorded yet.' })
     return
   }
   for (const opportunity of opportunities) {
@@ -325,7 +325,7 @@ export function handle_learning_ui_click(player: LuaPlayer, element_name: string
   const raw = element_name.slice(FACTORY_SAVE_BUTTON_PREFIX.length)
   const parts = raw.split('__')
   if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
-    player.print('[AIRI] Learning failed: malformed factory block selection.')
+    player.print('[SGLuna] Learning failed: malformed factory block selection.')
     return true
   }
   try {
@@ -333,12 +333,12 @@ export function handle_learning_ui_click(player: LuaPlayer, element_name: string
       evidence_refs: ['manual:learn-area'],
       reason: 'Player explicitly requested study of this factory block.',
     })
-    if (result.novelty === 'known') player.print(`[AIRI] Known reusable skill: ${result.skill?.name ?? result.skill?.id}. Added new evidence/example instead of duplicating it.`)
-    else if (result.skill !== undefined) player.print(`[AIRI] Learned candidate: ${result.skill.name}. Verification is queued; observation alone did not verify it.`)
-    else player.print(`[AIRI] Learning opportunity rejected: ${result.opportunity.reason}`)
+    if (result.novelty === 'known') player.print(`[SGLuna] Known reusable skill: ${result.skill?.name ?? result.skill?.id}. Added new evidence/example instead of duplicating it.`)
+    else if (result.skill !== undefined) player.print(`[SGLuna] Learned candidate: ${result.skill.name}. Verification is queued; observation alone did not verify it.`)
+    else player.print(`[SGLuna] Learning opportunity rejected: ${result.opportunity.reason}`)
   }
   catch (error) {
-    player.print(`[AIRI] Learning failed: ${error instanceof Error ? error.message : 'invalid learning opportunity'}`)
+    player.print(`[SGLuna] Learning failed: ${error instanceof Error ? error.message : 'invalid learning opportunity'}`)
   }
   return true
 }

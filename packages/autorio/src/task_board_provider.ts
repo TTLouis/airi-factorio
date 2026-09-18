@@ -1,7 +1,7 @@
 import type { SpritePath } from 'factorio:runtime'
 
 /**
- * Which provider AIRI is currently talking to, and the avatar the console's
+ * Which provider SGLuna is currently talking to, and the avatar the console's
  * mod-GUI button wears for it.
  *
  * This lives apart from task_board_ui because TSTL emits each module-scope
@@ -12,7 +12,7 @@ import type { SpritePath } from 'factorio:runtime'
 interface TaskBoardProvider { id: string, label: string }
 
 declare const storage: {
-  // The last model identifier AIRI reported. A cleared board drops its debug
+  // The last model identifier SGLuna reported. A cleared board drops its debug
   // block, and the button must not lose the avatar it earned just because the
   // current goal finished.
   airi_task_board_provider_model?: string
@@ -22,7 +22,7 @@ declare const storage: {
 
 const AVATAR_PREFIX = 'airi-provider-'
 // An empty id means no vendor avatar exists for this model, and the button
-// keeps whatever sprite it was created with. There is deliberately no AIRI
+// keeps whatever sprite it was created with. There is deliberately no SGLuna
 // house avatar: the button answers "which vendor is answering", and inventing a
 // fourth face for "none of them" would answer a different question.
 const UNKNOWN: TaskBoardProvider = { id: '', label: 'Unrecognized provider' }

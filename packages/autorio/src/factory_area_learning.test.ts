@@ -182,10 +182,10 @@ describe('Factory Area Learning V1', () => {
     expect(saved.status).toBe('candidate')
     expect(get_skill_definition(saved.id)?.source.kind).toBe('observed_factory')
     const exported = export_skill(saved.id)
-    expect(exported.relative_path).toContain(`script-output/airi-skills/${saved.id}/r1`)
+    expect(exported.relative_path).toContain(`script-output/sgluna-skills/${saved.id}/r1`)
     expect(writes.map(write => write.filename)).toEqual([
-      `airi-skills/${saved.id}/r1/skill.json`,
-      `airi-skills/${saved.id}/r1/SKILL.md`,
+      `sgluna-skills/${saved.id}/r1/skill.json`,
+      `sgluna-skills/${saved.id}/r1/SKILL.md`,
     ])
   })
 
@@ -201,8 +201,8 @@ describe('Factory Area Learning V1', () => {
     expect(saved.status).toBe('candidate')
     expect(handle_skill_export_click(player, `airi_skill_export__${saved.id}`)).toBe(true)
     expect(writes.map(write => write.filename)).toEqual([
-      `airi-skills/${saved.id}/r1/skill.json`,
-      `airi-skills/${saved.id}/r1/SKILL.md`,
+      `sgluna-skills/${saved.id}/r1/skill.json`,
+      `sgluna-skills/${saved.id}/r1/SKILL.md`,
     ])
     expect(messages.some(message => message.includes('Saved Transport Belt Production'))).toBe(true)
     expect(messages.some(message => message.includes('Exported Transport Belt Production'))).toBe(true)

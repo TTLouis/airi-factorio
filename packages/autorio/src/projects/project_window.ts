@@ -374,7 +374,7 @@ function project_export_markdown(project: ProjectHistoryRecord) {
   const lines: string[] = [
     `# ${project.name}`,
     '',
-    '> AIRI Old Task export. This contains player-facing task history only; it does not include hidden model reasoning or private model memory.',
+    '> SGLuna Old Task export. This contains player-facing task history only; it does not include hidden model reasoning or private model memory.',
     '',
     '## Task',
     '',
@@ -389,7 +389,7 @@ function project_export_markdown(project: ProjectHistoryRecord) {
     '',
     project.objective || 'No objective retained.',
   ]
-  if (project.response.length > 0) lines.push('', '## Latest AIRI Response', '', project.response)
+  if (project.response.length > 0) lines.push('', '## Latest SGLuna Response', '', project.response)
   if (project.blocker.length > 0) lines.push('', '## Blocker', '', project.blocker)
   if (project.pause_reason.length > 0) lines.push('', '## Pause Reason', '', project.pause_reason)
 
@@ -403,7 +403,7 @@ function project_export_markdown(project: ProjectHistoryRecord) {
   }
 
   lines.push('', '## Conversation', '')
-  if ((project.conversation ?? []).length === 0) lines.push('- No explicit player/AIRI conversation retained.')
+  if ((project.conversation ?? []).length === 0) lines.push('- No explicit player/agent conversation retained.')
   else {
     for (const message of project.conversation) {
       lines.push(`- **${message.sender} (${message.role})**: ${message.text}`)
@@ -423,7 +423,7 @@ function project_export_markdown(project: ProjectHistoryRecord) {
 }
 
 export function project_export_relative_directory(project: Pick<ProjectHistoryRecord, 'id'>) {
-  return `airi-old-tasks/${project_export_path_component(project.id)}`
+  return `sgluna-old-tasks/${project_export_path_component(project.id)}`
 }
 
 export function export_project(project_id: string): ProjectExportResult {
@@ -439,15 +439,15 @@ export function handle_project_export_click(player: LuaPlayer, element_name: str
   if (element_name !== PROJECT_EXPORT_BUTTON_NAME) return false
   const project_id = selected_project_id(player.index, current_goal_id)
   if (project_id.length === 0) {
-    player.print('[AIRI] Old Task export failed: no task is selected.')
+    player.print('[SGLuna] Old Task export failed: no task is selected.')
     return true
   }
   try {
     const result = export_project(project_id)
-    player.print(`[AIRI] Exported old task ${project_id}: ${result.relative_path}/task.json and TASK.md`)
+    player.print(`[SGLuna] Exported old task ${project_id}: ${result.relative_path}/task.json and TASK.md`)
   }
   catch (error) {
-    player.print(`[AIRI] Old Task export failed: ${error instanceof Error ? error.message : 'invalid task'}`)
+    player.print(`[SGLuna] Old Task export failed: ${error instanceof Error ? error.message : 'invalid task'}`)
   }
   return true
 }
@@ -495,7 +495,7 @@ function render_project_list(parent: LuaGuiElement, selected_id: string) {
   header.add({ type: 'label', caption: 'PROJECTS', style: 'subheader_caption_label' })
   const values = project_list_values(selected_id)
   if (values.history.length === 0) {
-    const empty = frame.add({ type: 'label', caption: 'No durable AIRI projects recorded yet.' })
+    const empty = frame.add({ type: 'label', caption: 'No durable SGLuna projects recorded yet.' })
     empty.style.single_line = false
     empty.style.maximal_width = PROJECT_LIST_WIDTH - 16
     return
@@ -579,7 +579,7 @@ function render_project_detail_skeleton(parent: LuaGuiElement, project: ProjectH
     name: PROJECT_EXPORT_BUTTON_NAME,
     caption: 'EXPORT TASK',
     style: 'confirm_button',
-    tooltip: 'Export this archived task as task.json plus a readable TASK.md under script-output/airi-old-tasks for analysis by another agent.',
+    tooltip: 'Export this archived task as task.json plus a readable TASK.md under script-output/sgluna-old-tasks for analysis by another agent.',
   })
   export_button.enabled = project !== undefined
   const body = frame.add({ type: 'flow', name: DETAIL_BODY_NAME, direction: 'vertical' })
@@ -703,7 +703,7 @@ function refresh_project_detail(frame: LuaGuiElement, project: ProjectHistoryRec
       if (!duplicate) { const line = gui_text.literal_gui_text(conversation_flow.add({ type: 'label', caption: `AIRI · ${project.response}` })); line.style.single_line = false; line.style.maximal_width = PROJECT_DETAIL_WIDTH - 60; conversation_count++ }
     }
   }
-  if (conversation_count === 0) conversation_flow.add({ type: 'label', caption: 'No player/AIRI conversation retained for this project.' })
+  if (conversation_count === 0) conversation_flow.add({ type: 'label', caption: 'No player/agent conversation retained for this project.' })
 
   const signature = step_signature(project)
   if (step_flow.tags.signature !== signature) {

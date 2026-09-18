@@ -61,14 +61,44 @@ When a task resembles a common gameplay, bootstrap, production, or logistics pat
 Natural navigation obstacle clearing is controlled deterministically by the runtime. It is enabled by default for trees and natural rocks only, and is disabled for a request when the human explicitly asks AIRI not to cut trees, mine rocks, or auto-clear obstacles. Never reinterpret this as permission to remove player-built structures.
 `.trim()
 
-export function configuration(raw = {}, env = process.env) {
-  check(raw && typeof raw === 'object' && !Array.isArray(raw), 'airi-config.json must be an object')
-  const actorMode = env.AIRI_ACTOR_MODE ?? raw.actorMode ?? 'npc'
-  check(actorMode === 'npc', 'This v8 egg currently supports AIRI_ACTOR_MODE=npc only')
+function hasEnv(env, key) {
+  return Object.prototype.hasOwnProperty.call(env, key)
+}
 
-  const legacyChat = env.AIRI_PLAYER ?? raw.player ?? ''
-  const legacySingleChatPlayer = env.AIRI_CHAT_PLAYER ?? raw.chatPlayer ?? legacyChat
-  const chatPlayersSource = env.AIRI_CHAT_PLAYERS ?? raw.chatPlayers ?? legacySingleChatPlayer
+function preferredEnv(env, primary, compatibility, fallback) {
+  if (hasEnv(env, primary)) return env[primary]
+  if (hasEnv(env, compatibility)) return env[compatibility]
+  return fallback
+}
+
+function chatPlayersValue(env, raw = {}, fallback = '') {
+  if (hasEnv(env, 'SGLUNA_CHAT_PLAYERS')) return env.SGLUNA_CHAT_PLAYERS
+  if (hasEnv(env, 'AIRI_CHAT_PLAYERS')) return env.AIRI_CHAT_PLAYERS
+  if (hasEnv(env, 'AIRI_CHAT_PLAYER')) return env.AIRI_CHAT_PLAYER
+  if (hasEnv(env, 'AIRI_PLAYER')) return env.AIRI_PLAYER
+  return raw.chatPlayers ?? raw.chatPlayer ?? raw.player ?? fallback
+}
+
+export function deploymentCompatibilityWarnings(env = process.env) {
+  const warnings = []
+  for (const [primary, compatibility] of [
+    ['SGLUNA_ACTOR_MODE', 'AIRI_ACTOR_MODE'],
+    ['SGLUNA_CHAT_PLAYERS', 'AIRI_CHAT_PLAYERS'],
+  ]) {
+    if (!hasEnv(env, primary) || !hasEnv(env, compatibility)) continue
+    const preferred = String(env[primary] ?? '')
+    const legacy = String(env[compatibility] ?? '')
+    if (preferred && legacy && preferred !== legacy) warnings.push(`${primary} overrides conflicting compatibility value ${compatibility}.`)
+  }
+  return warnings
+}
+
+export function configuration(raw = {}, env = process.env) {
+  check(raw && typeof raw === 'object' && !Array.isArray(raw), 'sgluna-config.json must be an object')
+  const actorMode = preferredEnv(env, 'SGLUNA_ACTOR_MODE', 'AIRI_ACTOR_MODE', raw.actorMode ?? 'npc')
+  check(actorMode === 'npc', 'This v8 egg currently supports SGLUNA_ACTOR_MODE=npc only')
+
+  const chatPlayersSource = chatPlayersValue(env, raw, '')
 
   const factorioUsername = cleanString(env.FACTORIO_USERNAME ?? '', 'FACTORIO_USERNAME', 128)
   const factorioToken = cleanString(env.FACTORIO_TOKEN ?? '', 'FACTORIO_TOKEN', 128)
@@ -76,7 +106,7 @@ export function configuration(raw = {}, env = process.env) {
 
   const config = {
     actorMode,
-    chatPlayers: parseChatPlayers(cleanString(chatPlayersSource, 'AIRI_CHAT_PLAYERS', 512)),
+    chatPlayers: parseChatPlayers(cleanString(chatPlayersSource, 'SGLUNA_CHAT_PLAYERS', 512)),
     save: cleanString(env.SAVE_NAME ?? raw.save ?? '', 'SAVE_NAME', 160),
     model: cleanString(env.OPENAI_MODEL ?? raw.model ?? 'replace-me', 'OPENAI_MODEL', 200),
     base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? 'https://provider.invalid/v1',
@@ -101,7 +131,7 @@ export function factorioVisibilityDiagnostics(factorio = { username: '', token: 
   return ['Factorio visibility: PRIVATE/HIDDEN', 'No Factorio listing credentials supplied']
 }
 
-export const AIRI_CONFIG_DEFAULTS = {
+export const SGLUNA_CONFIG_DEFAULTS = {
   actorMode: 'npc',
   chatPlayers: '',
   providerUrl: 'https://provider.invalid/v1',
@@ -113,42 +143,38 @@ export const AIRI_CONFIG_DEFAULTS = {
   shutdownTimeoutMs: 60000,
 }
 
+export const AIRI_CONFIG_DEFAULTS = SGLUNA_CONFIG_DEFAULTS
+
 export function migrateConfig(raw = {}, env = process.env) {
-  check(raw && typeof raw === 'object' && !Array.isArray(raw), 'airi-config.json must be an object')
-  const actorMode = cleanString(env.AIRI_ACTOR_MODE ?? raw.actorMode ?? AIRI_CONFIG_DEFAULTS.actorMode, 'AIRI_ACTOR_MODE', 32)
-  check(actorMode === 'npc', 'This v8 egg currently supports AIRI_ACTOR_MODE=npc only')
-  const chatPlayers = cleanString(
-    env.AIRI_CHAT_PLAYERS
-      ?? env.AIRI_CHAT_PLAYER
-      ?? env.AIRI_PLAYER
-      ?? raw.chatPlayers
-      ?? raw.chatPlayer
-      ?? raw.player
-      ?? AIRI_CONFIG_DEFAULTS.chatPlayers,
-    'AIRI_CHAT_PLAYERS',
-    512,
+  check(raw && typeof raw === 'object' && !Array.isArray(raw), 'sgluna-config.json must be an object')
+  const actorMode = cleanString(
+    preferredEnv(env, 'SGLUNA_ACTOR_MODE', 'AIRI_ACTOR_MODE', raw.actorMode ?? SGLUNA_CONFIG_DEFAULTS.actorMode),
+    'SGLUNA_ACTOR_MODE',
+    32,
   )
+  check(actorMode === 'npc', 'This v8 egg currently supports SGLUNA_ACTOR_MODE=npc only')
+  const chatPlayers = cleanString(chatPlayersValue(env, raw, SGLUNA_CONFIG_DEFAULTS.chatPlayers), 'SGLUNA_CHAT_PLAYERS', 512)
   const next = {
     actorMode,
     chatPlayers,
-    providerUrl: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? AIRI_CONFIG_DEFAULTS.providerUrl,
-    model: cleanString(env.OPENAI_MODEL ?? raw.model ?? AIRI_CONFIG_DEFAULTS.model, 'OPENAI_MODEL', 200),
-    save: cleanString(env.SAVE_NAME ?? raw.save ?? AIRI_CONFIG_DEFAULTS.save, 'SAVE_NAME', 160),
+    providerUrl: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? SGLUNA_CONFIG_DEFAULTS.providerUrl,
+    model: cleanString(env.OPENAI_MODEL ?? raw.model ?? SGLUNA_CONFIG_DEFAULTS.model, 'OPENAI_MODEL', 200),
+    save: cleanString(env.SAVE_NAME ?? raw.save ?? SGLUNA_CONFIG_DEFAULTS.save, 'SAVE_NAME', 160),
     providerTimeoutMs: safeInteger(
-      env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? AIRI_CONFIG_DEFAULTS.providerTimeoutMs,
+      env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? SGLUNA_CONFIG_DEFAULTS.providerTimeoutMs,
       'PROVIDER_TIMEOUT_MS',
       1000,
       600000,
     ),
-    gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? AIRI_CONFIG_DEFAULTS.gamePort, 'SERVER_PORT', 1024, 65535),
+    gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? SGLUNA_CONFIG_DEFAULTS.gamePort, 'SERVER_PORT', 1024, 65535),
     maxProviderRequestsPerHour: safeInteger(
-      env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? AIRI_CONFIG_DEFAULTS.maxProviderRequestsPerHour,
+      env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? SGLUNA_CONFIG_DEFAULTS.maxProviderRequestsPerHour,
       'MAX_PROVIDER_REQUESTS_PER_HOUR',
       1,
       1200,
     ),
     shutdownTimeoutMs: safeInteger(
-      env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? AIRI_CONFIG_DEFAULTS.shutdownTimeoutMs,
+      env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? SGLUNA_CONFIG_DEFAULTS.shutdownTimeoutMs,
       'SHUTDOWN_TIMEOUT_MS',
       1000,
       300000,
@@ -163,6 +189,29 @@ export async function migrateConfigFile(filename, env = process.env) {
   const next = migrateConfig(raw, env)
   if (JSON.stringify(next) !== JSON.stringify(raw)) await atomicWrite(filename, `${JSON.stringify(next, null, 2)}\n`)
   return next
+}
+
+async function pathExists(filename) {
+  try { await fsp.access(filename); return true }
+  catch (error) {
+    if (error?.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+export async function migrateCanonicalConfig(root, env = process.env) {
+  const canonical = path.join(root, 'sgluna-config.json')
+  const legacy = path.join(root, 'airi-config.json')
+  const canonicalExists = await pathExists(canonical)
+  const legacyExists = await pathExists(legacy)
+  const raw = canonicalExists ? await readJson(canonical, {}) : legacyExists ? await readJson(legacy, {}) : {}
+  const config = migrateConfig(raw, env)
+  const expected = `${JSON.stringify(config, null, 2)}\n`
+  let current = null
+  try { current = await fsp.readFile(canonical, 'utf8') }
+  catch (error) { if (error?.code !== 'ENOENT') throw error }
+  if (current !== expected) await atomicWrite(canonical, expected)
+  return { config, filename: canonical, migratedFromLegacy: !canonicalExists && legacyExists, legacy }
 }
 
 export function installedAppRoot(moduleUrl = import.meta.url) {
@@ -1499,7 +1548,7 @@ export class Session {
       return
     }
 
-    const chat = line.match(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[CHAT\] ([^:\r\n]+): !airi (.{1,4000})$/)
+    const chat = line.match(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[CHAT\] ([^:\r\n]+): !(?:luna|airi) (.{1,4000})$/)
     if (chat && chatAuthorized(this.config.chatPlayers, chat[1])) {
       this.queuePlayerRequest(chat[1], chat[2])
       return
@@ -1632,8 +1681,8 @@ async function main() {
   const manifest = await verifyManifest(app)
   await directory(path.join(root, '.airi'))
   await directory(path.join(root, '.airi', 'tmp'))
-  const raw = await migrateConfigFile(path.join(root, 'airi-config.json'))
-  const config = configuration(raw)
+  const migratedConfig = await migrateCanonicalConfig(root)
+  const config = configuration(migratedConfig.config)
   const game = path.join(app, 'factorio')
   await regularFile(path.join(game, 'bin', 'x64', 'factorio'))
   const work = await fsp.mkdtemp(path.join(root, '.airi', 'run-'))
@@ -1641,6 +1690,8 @@ async function main() {
   let requestedStop = false
   const log = message => console.log(`[${new Date().toISOString()}] [SGLuna] ${message}`)
   log(describeRelease(manifest))
+  if (migratedConfig.migratedFromLegacy) log('Migrated legacy airi-config.json into canonical sgluna-config.json; the legacy file is no longer authoritative.')
+  for (const message of deploymentCompatibilityWarnings(process.env)) log(`Compatibility warning: ${message}`)
   for (const message of factorioVisibilityDiagnostics(config.factorio)) log(message)
   log(`Client mod download: ${path.join(root, 'client-mods', 'autorio_0.1.0.zip')}`)
   log(`User Factorio mod directory: ${path.join(root, 'mods')}`)

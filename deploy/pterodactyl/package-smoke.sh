@@ -4,9 +4,9 @@ set -Eeuo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="${PTERODACTYL_IMAGE:-ghcr.io/ptero-eggs/yolks:debian_bookworm}"
 FACTORIO_SMOKE_VERSION="${FACTORIO_SMOKE_VERSION:-2.0.77}"
-SMOKE_SOURCE_REF="${AIRI_SMOKE_SOURCE_REF:-}"
+SMOKE_SOURCE_REF="${SGLUNA_SMOKE_SOURCE_REF:-${AIRI_SMOKE_SOURCE_REF:-}}"
 ROOT="$(mktemp -d)"
-NAME="airi-ptero-smoke-$RANDOM-$$"
+NAME="sgluna-ptero-smoke-$RANDOM-$$"
 LOG="$ROOT/runtime.log"
 EGG_INSTALL="$ROOT/egg-install.sh"
 
@@ -33,8 +33,8 @@ command -v node >/dev/null || { echo '[pterodactyl-smoke] node is required to pa
 
 SOURCE_ENV_ARGS=()
 if [[ -n "$SMOKE_SOURCE_REF" ]]; then
-  [[ "$SMOKE_SOURCE_REF" =~ ^[a-f0-9]{40}$ ]] || { echo '[pterodactyl-smoke] AIRI_SMOKE_SOURCE_REF must be an exact 40-character commit SHA' >&2; exit 1; }
-  SOURCE_ENV_ARGS=(-e "AIRI_SOURCE_REF=$SMOKE_SOURCE_REF")
+  [[ "$SMOKE_SOURCE_REF" =~ ^[a-f0-9]{40}$ ]] || { echo '[pterodactyl-smoke] SGLUNA_SMOKE_SOURCE_REF must be an exact 40-character commit SHA' >&2; exit 1; }
+  SOURCE_ENV_ARGS=(-e "SGLUNA_SOURCE_REF=$SMOKE_SOURCE_REF")
 fi
 
 chmod 0777 "$ROOT"
@@ -56,7 +56,7 @@ echo '[pterodactyl-smoke] Verifying standalone generated bootstrap payload.'
 docker run --rm \
   -v "$HERE/install.sh:/tmp/install.sh:ro" \
   -v "$ROOT:/mnt/server" \
-  -e AIRI_INSTALL_ROOT=/mnt/server \
+  -e SGLUNA_INSTALL_ROOT=/mnt/server \
   "$IMAGE" \
   bash /tmp/install.sh --verify-only
 
@@ -64,9 +64,9 @@ echo '[pterodactyl-smoke] Performing clean installation through the egg loader.'
 docker run --rm \
   -v "$EGG_INSTALL:/tmp/egg-install.sh:ro" \
   -v "$ROOT:/mnt/server" \
-  -e AIRI_INSTALL_ROOT=/mnt/server \
-  -e AIRI_ACTOR_MODE=npc \
-  -e AIRI_CHAT_PLAYERS=SmokeOperator \
+  -e SGLUNA_INSTALL_ROOT=/mnt/server \
+  -e SGLUNA_ACTOR_MODE=npc \
+  -e SGLUNA_CHAT_PLAYERS=SmokeOperator \
   -e FACTORIO_VERSION="$FACTORIO_SMOKE_VERSION" \
   "${SOURCE_ENV_ARGS[@]}" \
   "$IMAGE" \
@@ -77,31 +77,33 @@ docker run --rm \
   -v "$ROOT:/mnt/server" \
   "$IMAGE" \
   bash -ceu '
-    [[ -L /mnt/server/start-airi.sh ]] || { echo "[pterodactyl-smoke] installer did not activate start-airi.sh" >&2; exit 1; }
-    [[ -x /mnt/server/rollback-airi.sh ]] || { echo "[pterodactyl-smoke] rollback helper is missing" >&2; exit 1; }
+    [[ -L /mnt/server/start-sgluna.sh ]] || { echo "[pterodactyl-smoke] installer did not activate start-sgluna.sh" >&2; exit 1; }
+    [[ "$(readlink -- /mnt/server/start-airi.sh)" == start-sgluna.sh ]] || { echo "[pterodactyl-smoke] legacy startup alias is missing" >&2; exit 1; }
+    [[ -x /mnt/server/rollback-sgluna.sh ]] || { echo "[pterodactyl-smoke] rollback helper is missing" >&2; exit 1; }
+    [[ "$(readlink -- /mnt/server/rollback-airi.sh)" == rollback-sgluna.sh ]] || { echo "[pterodactyl-smoke] legacy rollback alias is missing" >&2; exit 1; }
     [[ -s /mnt/server/client-mods/autorio_0.1.0.zip ]] || { echo "[pterodactyl-smoke] managed client mod is missing from client-mods/" >&2; exit 1; }
     [[ -s /mnt/server/client-mods/SHA256SUMS ]] || { echo "[pterodactyl-smoke] managed client mod checksum is missing" >&2; exit 1; }
     [[ ! -e /mnt/server/autorio_0.1.0.zip ]] || { echo "[pterodactyl-smoke] legacy root client mod should have been removed" >&2; exit 1; }
-    [[ -s /mnt/server/airi-config.json ]] || { echo "[pterodactyl-smoke] airi-config.json is missing" >&2; exit 1; }
+    [[ -s /mnt/server/sgluna-config.json ]] || { echo "[pterodactyl-smoke] airi-config.json is missing" >&2; exit 1; }
     [[ -s /mnt/server/README-SGLUNA.txt ]] || { echo "[pterodactyl-smoke] README-SGLUNA.txt is missing" >&2; exit 1; }
     [[ -d /mnt/server/mods && -d /mnt/server/saves ]] || { echo "[pterodactyl-smoke] operator mod/save directories are missing" >&2; exit 1; }
-    ! grep -q "smoke-secret" /mnt/server/airi-config.json || { echo "[pterodactyl-smoke] provider secret leaked to airi-config.json" >&2; exit 1; }
-    target="$(readlink -- /mnt/server/start-airi.sh)"
-    [[ "$target" == .airi/releases/*/start-airi.sh ]] || { echo "[pterodactyl-smoke] unexpected startup target: $target" >&2; exit 1; }
-    [[ -s "/mnt/server/${target%/start-airi.sh}/manifest.json" ]] || { echo "[pterodactyl-smoke] release manifest is missing" >&2; exit 1; }
+    ! grep -q "smoke-secret" /mnt/server/sgluna-config.json || { echo "[pterodactyl-smoke] provider secret leaked to airi-config.json" >&2; exit 1; }
+    target="$(readlink -- /mnt/server/start-sgluna.sh)"
+    [[ "$target" == .airi/releases/*/start-sgluna.sh ]] || { echo "[pterodactyl-smoke] unexpected startup target: $target" >&2; exit 1; }
+    [[ -s "/mnt/server/${target%/start-sgluna.sh}/manifest.json" ]] || { echo "[pterodactyl-smoke] release manifest is missing" >&2; exit 1; }
   '
 
 echo '[pterodactyl-smoke] Starting packaged runtime with zero connected players.'
 docker run -d --name "$NAME" \
   -v "$ROOT:/home/container" \
   -e CONTAINER_ROOT=/home/container \
-  -e AIRI_ACTOR_MODE=npc \
+  -e SGLUNA_ACTOR_MODE=npc \
   -e OPENAI_API_KEY=smoke-secret \
   -e OPENAI_MODEL=smoke-model \
   -e OPENAI_API_BASEURL=https://api.example.invalid/v1 \
   -e SERVER_PORT=34197 \
   "$IMAGE" \
-  bash ./start-airi.sh >/dev/null
+  bash ./start-sgluna.sh >/dev/null
 
 ready=0
 for _ in $(seq 1 180); do

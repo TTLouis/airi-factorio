@@ -1,6 +1,6 @@
 local source = data.raw["radar"] and data.raw["radar"]["radar"]
 if not source then
-  error("AIRI awareness radar requires the base radar prototype")
+  error("SGLuna awareness radar requires the base radar prototype")
 end
 
 local radar = table.deepcopy(source)
@@ -57,7 +57,7 @@ data:extend({
   {
     type = "custom-input",
     name = "airi-task-board-activity-scroll-up",
-    localised_name = "AIRI console: scroll activity up",
+    localised_name = "SGLuna console: scroll activity up",
     key_sequence = "mouse-wheel-up",
     consuming = "none",
     action = "lua",
@@ -66,7 +66,7 @@ data:extend({
   {
     type = "custom-input",
     name = "airi-task-board-activity-scroll-down",
-    localised_name = "AIRI console: scroll activity down",
+    localised_name = "SGLuna console: scroll activity down",
     key_sequence = "mouse-wheel-down",
     consuming = "none",
     action = "lua",
@@ -74,7 +74,7 @@ data:extend({
   },
 })
 
--- The console's top-left button shows which vendor is behind the model AIRI is
+-- The console's top-left button shows which vendor is behind the model SGLuna is
 -- currently calling. Each vendor has several avatars and a player is rolled one
 -- when they join, so the console does not look identical every session; the
 -- file is graphics/icons/provider/<id>-<n>.png and the sprite is named to

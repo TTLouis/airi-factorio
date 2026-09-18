@@ -2,14 +2,14 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { step_caption, task_board_game_time, task_board_gui_height, task_board_preview_min_height, task_board_tracker_heights } from './task_board_ui'
 
-describe('AIRI NPC console compact tracker layout', () => {
+describe('SGLuna NPC console compact tracker layout', () => {
   it('formats deterministic Factorio game time for tracker activity', () => {
     expect(task_board_game_time(0)).toBe('00:00:00')
     expect(task_board_game_time(60)).toBe('00:00:01')
     expect(task_board_game_time(3661 * 60)).toBe('01:01:01')
   })
 
-  it('keeps prompt AIRI on the left half and gives the world preview a zoomable camera', () => {
+  it('keeps prompt SGLuna on the left half and gives the world preview a zoomable camera', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain('section.style.width = LEFT_COLUMN_WIDTH')
     expect(source).toContain('field.style.width = PROMPT_FIELD_WIDTH')
@@ -189,7 +189,7 @@ describe('AIRI NPC console compact tracker layout', () => {
   it('dresses the mod-GUI button with the current provider avatar', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain('button.sprite = provider_ui.provider_button_sprite(player.index, BUTTON_SPRITE)')
-    expect(source).toContain("button.tooltip = provider_ui.provider_button_tooltip('AIRI NPC Console')")
+    expect(source).toContain("button.tooltip = provider_ui.provider_button_tooltip('SGLuna NPC Console')")
     expect(source).toContain('provider_ui.remember_provider_model(stamped.debug?.provider_model)')
 
     expect(source).toContain('provider_ui.roll_provider_avatar(player.index, game.tick)')

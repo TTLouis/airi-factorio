@@ -7,15 +7,17 @@ import { fileURLToPath } from 'node:url'
 import { buildArtifacts, channelInstaller, installerLoader, verifyGeneratedArtifacts } from './build-payload.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const PAYLOAD_REF = 'e60621a937cec31c035f2d0345c08d57bd27a119'
-const PAYLOAD_SHA256 = '69d9b56481bab113d6005eea921f33d8697a96054e0a284e976f7a7f516a2d33'
+const PAYLOAD_REF = '0644179762b2d1fbb7de8ca4ca3a261ee248ae99'
+const PAYLOAD_SHA256 = 'bd7f293f2e6ab81b303dc1905c623ea27b75e60b1b1e9552241e62043ffbe211'
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
 REVISION="test"
 DEPLOYMENT_REVISION="airi-deploy-v8-test"
-AIRI_ACTOR_MODE="\${AIRI_ACTOR_MODE:-npc}"
+SGLUNA_ACTOR_MODE="\${SGLUNA_ACTOR_MODE:-npc}"
+SGLUNA_CHAT_PLAYERS="\${SGLUNA_CHAT_PLAYERS:-}"
+AIRI_ACTOR_MODE="\${AIRI_ACTOR_MODE:-$SGLUNA_ACTOR_MODE}"
 AIRI_CHAT_PLAYER="\${AIRI_CHAT_PLAYER:-}"
-echo "$DEPLOYMENT_REVISION $AIRI_ACTOR_MODE $AIRI_CHAT_PLAYER"
+echo "$DEPLOYMENT_REVISION $SGLUNA_ACTOR_MODE $SGLUNA_CHAT_PLAYERS $AIRI_ACTOR_MODE $AIRI_CHAT_PLAYER"
 `)
 
 test('immutable bootstrap loader remains checksummed and pinned', () => {
@@ -34,11 +36,11 @@ test('main and NPC E2E eggs resolve different default source refs on reinstall',
   assert.equal(mainEgg.name, 'SGLuna Factorio Server (Main)')
   assert.equal(e2eEgg.name, 'SGLuna Factorio Server (NPC E2E)')
   assert.equal(mainEgg.config.startup, '{"done": "SGLuna Factorio ready"}')
-  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.name, 'SGLuna Source Ref')
-  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_ACTOR_MODE')?.name, 'SGLuna Actor Mode')
-  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS')?.name, 'SGLuna Chat Players')
-  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.default_value, 'main')
-  assert.equal(e2eEgg.variables.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')?.default_value, 'feat/npc-transition-work')
+  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'SGLUNA_SOURCE_REF')?.name, 'SGLuna Source Ref')
+  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'SGLUNA_ACTOR_MODE')?.name, 'SGLuna Actor Mode')
+  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'SGLUNA_CHAT_PLAYERS')?.name, 'SGLuna Chat Players')
+  assert.equal(mainEgg.variables.find(entry => entry.env_variable === 'SGLUNA_SOURCE_REF')?.default_value, 'main')
+  assert.equal(e2eEgg.variables.find(entry => entry.env_variable === 'SGLUNA_SOURCE_REF')?.default_value, 'feat/npc-transition-work')
   assert.notEqual(mainEgg.scripts.installation.script, e2eEgg.scripts.installation.script)
   assert.match(mainEgg.scripts.installation.script, /CHANNEL="main"/)
   assert.match(e2eEgg.scripts.installation.script, /CHANNEL="npc-e2e"/)
@@ -64,11 +66,12 @@ test('generated egg variable contract keeps safe provider defaults and 300 reque
     assert.equal(egg.variables.find(entry => entry.env_variable === 'OPENAI_API_BASEURL')?.default_value, 'https://provider.invalid/v1')
     assert.equal(egg.variables.find(entry => entry.env_variable === 'PROVIDER_TIMEOUT_MS')?.default_value, '120000')
     assert.equal(egg.variables.find(entry => entry.env_variable === 'MAX_PROVIDER_REQUESTS_PER_HOUR')?.default_value, '300')
-    assert.equal(egg.variables.find(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS')?.default_value, '')
-    assert.ok(egg.variables.some(entry => entry.env_variable === 'AIRI_SOURCE_REF'))
-    assert.ok(egg.variables.some(entry => entry.env_variable === 'AIRI_ACTOR_MODE'))
-    assert.ok(egg.variables.some(entry => entry.env_variable === 'AIRI_CHAT_PLAYERS'))
+    assert.equal(egg.variables.find(entry => entry.env_variable === 'SGLUNA_CHAT_PLAYERS')?.default_value, '')
+    assert.ok(egg.variables.some(entry => entry.env_variable === 'SGLUNA_SOURCE_REF'))
+    assert.ok(egg.variables.some(entry => entry.env_variable === 'SGLUNA_ACTOR_MODE'))
+    assert.ok(egg.variables.some(entry => entry.env_variable === 'SGLUNA_CHAT_PLAYERS'))
     assert.ok(!egg.variables.some(entry => entry.env_variable === 'PRIVATE_SERVER'))
+    assert.ok(!egg.variables.some(entry => entry.env_variable.startsWith('AIRI_'))
     assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_PLAYER'))
     assert.ok(!egg.variables.some(entry => entry.env_variable === 'AIRI_CHAT_PLAYER'))
   }
@@ -116,6 +119,10 @@ test('committed Pterodactyl artifacts are internally valid and reinstall stays d
   assert.match(sourceText, /src\/runtime-v8\/canonical-task-board-memory\.mjs/)
   assert.match(sourceText, /src\/runtime-v8\/provider-base\.mjs/)
   assert.match(sourceText, /README-SGLUNA\.txt/)
+  assert.match(sourceText, /SGLUNA_ACTOR_MODE/)
+  assert.match(sourceText, /SGLUNA_CHAT_PLAYERS/)
+  assert.match(sourceText, /AIRI_ACTOR_MODE/)
+  assert.match(sourceText, /AIRI_CHAT_PLAYERS/)
   assert.doesNotMatch(sourceText, /TTLouis\/airi-factorio/)
   assert.doesNotMatch(committedInstall, /TTLouis\/airi-factorio/)
   assert.doesNotMatch(committedMainEgg, /TTLouis\/airi-factorio/)

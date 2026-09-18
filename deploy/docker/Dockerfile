@@ -1,7 +1,9 @@
 FROM --platform=linux/amd64 debian:bookworm-slim
 
-ARG AIRI_REPO=TTLouis/factorio-npc
-ARG AIRI_SOURCE_REF=main
+ARG SGLUNA_REPO=
+ARG SGLUNA_SOURCE_REF=
+ARG AIRI_REPO=
+ARG AIRI_SOURCE_REF=
 ARG FACTORIO_VERSION=latest
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -25,13 +27,15 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
-  if printf '%s' "$AIRI_SOURCE_REF" | grep -Eq '^[a-f0-9]{40}$'; then \
-    resolved="$AIRI_SOURCE_REF"; \
+  repo="${SGLUNA_REPO:-${AIRI_REPO:-TTLouis/factorio-npc}}"; \
+  ref="${SGLUNA_SOURCE_REF:-${AIRI_SOURCE_REF:-main}}"; \
+  if [ -n "${SGLUNA_SOURCE_REF:-}" ] && [ -n "${AIRI_SOURCE_REF:-}" ] && [ "$SGLUNA_SOURCE_REF" != "$AIRI_SOURCE_REF" ]; then echo '[SGLuna docker] SGLUNA_SOURCE_REF overrides conflicting AIRI_SOURCE_REF.' >&2; fi; \
+  if printf '%s' "$ref" | grep -Eq '^[a-f0-9]{40}
   else \
     curl --fail --location --retry 3 --connect-timeout 20 --max-time 60 \
       --proto '=https' --proto-redir '=https' \
-      --get --data-urlencode "sha=$AIRI_SOURCE_REF" --data-urlencode 'per_page=1' \
-      "https://api.github.com/repos/$AIRI_REPO/commits" \
+      --get --data-urlencode "sha=$ref" --data-urlencode 'per_page=1' \
+      "https://api.github.com/repos/$repo/commits" \
       --output /tmp/airi-resolution.json; \
     resolved="$(grep -m1 -oE '\"sha\"[[:space:]]*:[[:space:]]*\"[a-f0-9]{40}\"' /tmp/airi-resolution.json | grep -oE '[a-f0-9]{40}' || true)"; \
   fi; \
@@ -39,7 +43,7 @@ RUN set -eux; \
   short="$(printf '%s' "$resolved" | cut -c1-12)"; \
   curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 \
     --proto '=https' --proto-redir '=https' \
-    "https://raw.githubusercontent.com/$AIRI_REPO/$resolved/deploy/pterodactyl/payload-src/installer.sh" \
+    "https://raw.githubusercontent.com/$repo/$resolved/deploy/pterodactyl/payload-src/installer.sh" \
     --output /tmp/airi-installer.sh; \
   test "$(grep -Ec '^AIRI_REF=\"[a-f0-9]{40}\"$' /tmp/airi-installer.sh)" = 1; \
   test "$(grep -c '^AIRI_REF=' /tmp/airi-installer.sh)" = 1; \
@@ -50,14 +54,14 @@ RUN set -eux; \
     /^REVISION=/ { print "REVISION=\"" revision "\""; next } \
     { print } \
   ' /tmp/airi-installer.sh > /tmp/airi-installer-patched.sh; \
-  AIRI_INSTALL_ROOT=/opt/airi FACTORIO_VERSION="$FACTORIO_VERSION" bash /tmp/airi-installer-patched.sh; \
+  SGLUNA_INSTALL_ROOT=/opt/airi FACTORIO_VERSION="$FACTORIO_VERSION" bash /tmp/airi-installer-patched.sh; \
   printf '%s\n' "$resolved" > /opt/airi/SOURCE_SHA; \
-  printf '%s\n' "$AIRI_SOURCE_REF" > /opt/airi/SOURCE_REF; \
+  printf '%s\n' "$ref" > /opt/airi/SOURCE_REF; \
   printf '%s\n' "$FACTORIO_VERSION" > /opt/airi/FACTORIO_VERSION_REQUEST; \
-  rm -f /tmp/airi-resolution.json /tmp/airi-installer.sh /tmp/airi-installer-patched.sh /opt/airi/airi-config.json
+  rm -f /tmp/airi-resolution.json /tmp/airi-installer.sh /tmp/airi-installer-patched.sh /opt/airi/sgluna-config.json
 
-COPY deploy/docker/entrypoint.sh /usr/local/bin/airi-docker-entrypoint
-RUN chmod 755 /usr/local/bin/airi-docker-entrypoint
+COPY deploy/docker/entrypoint.sh /usr/local/bin/sgluna-docker-entrypoint
+RUN chmod 755 /usr/local/bin/sgluna-docker-entrypoint
 
 ENV CONTAINER_ROOT=/data
 WORKDIR /data
@@ -65,4 +69,45 @@ VOLUME ["/data"]
 EXPOSE 34197/udp
 STOPSIGNAL SIGTERM
 
-ENTRYPOINT ["/usr/local/bin/airi-docker-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/sgluna-docker-entrypoint"]
+; then \
+    resolved="$ref"; \
+  else \
+    curl --fail --location --retry 3 --connect-timeout 20 --max-time 60 \
+      --proto '=https' --proto-redir '=https' \
+      --get --data-urlencode "sha=$ref" --data-urlencode 'per_page=1' \
+      "https://api.github.com/repos/$repo/commits" \
+      --output /tmp/airi-resolution.json; \
+    resolved="$(grep -m1 -oE '\"sha\"[[:space:]]*:[[:space:]]*\"[a-f0-9]{40}\"' /tmp/airi-resolution.json | grep -oE '[a-f0-9]{40}' || true)"; \
+  fi; \
+  printf '%s' "$resolved" | grep -Eq '^[a-f0-9]{40}$'; \
+  short="$(printf '%s' "$resolved" | cut -c1-12)"; \
+  curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 \
+    --proto '=https' --proto-redir '=https' \
+    "https://raw.githubusercontent.com/$repo/$resolved/deploy/pterodactyl/payload-src/installer.sh" \
+    --output /tmp/airi-installer.sh; \
+  test "$(grep -Ec '^AIRI_REF=\"[a-f0-9]{40}\"$' /tmp/airi-installer.sh)" = 1; \
+  test "$(grep -c '^AIRI_REF=' /tmp/airi-installer.sh)" = 1; \
+  test "$(grep -Ec '^REVISION=\"[A-Za-z0-9._-]+\"$' /tmp/airi-installer.sh)" = 1; \
+  test "$(grep -c '^REVISION=' /tmp/airi-installer.sh)" = 1; \
+  awk -v ref="$resolved" -v revision="docker-$short" ' \
+    /^AIRI_REF=/ { print "AIRI_REF=\"" ref "\""; next } \
+    /^REVISION=/ { print "REVISION=\"" revision "\""; next } \
+    { print } \
+  ' /tmp/airi-installer.sh > /tmp/airi-installer-patched.sh; \
+  SGLUNA_INSTALL_ROOT=/opt/airi FACTORIO_VERSION="$FACTORIO_VERSION" bash /tmp/airi-installer-patched.sh; \
+  printf '%s\n' "$resolved" > /opt/airi/SOURCE_SHA; \
+  printf '%s\n' "$ref" > /opt/airi/SOURCE_REF; \
+  printf '%s\n' "$FACTORIO_VERSION" > /opt/airi/FACTORIO_VERSION_REQUEST; \
+  rm -f /tmp/airi-resolution.json /tmp/airi-installer.sh /tmp/airi-installer-patched.sh /opt/airi/sgluna-config.json
+
+COPY deploy/docker/entrypoint.sh /usr/local/bin/sgluna-docker-entrypoint
+RUN chmod 755 /usr/local/bin/sgluna-docker-entrypoint
+
+ENV CONTAINER_ROOT=/data
+WORKDIR /data
+VOLUME ["/data"]
+EXPOSE 34197/udp
+STOPSIGNAL SIGTERM
+
+ENTRYPOINT ["/usr/local/bin/sgluna-docker-entrypoint"]

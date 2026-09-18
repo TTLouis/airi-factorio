@@ -1,7 +1,7 @@
 # Provider avatars
 
 The console's top-left button wears the avatar of whichever vendor is behind the
-model AIRI is currently calling. `src/task_board_provider.ts` resolves the
+model SGLuna is currently calling. `src/task_board_provider.ts` resolves the
 provider id from the configured model identifier, and `data.lua` declares one
 `sprite` prototype per file.
 

@@ -478,9 +478,9 @@ function ensure_button(player: LuaPlayer) {
   if (legacy?.valid) legacy.destroy()
   const flow = mod_gui_button_flow(player)
   const existing = flow[BUTTON_NAME]
-  const button = (existing?.valid ? existing : flow.add({ type: 'sprite-button', name: BUTTON_NAME, sprite: BUTTON_SPRITE, style: 'slot_button', tooltip: 'AIRI NPC Console' })) as SpriteButtonGuiElement
+  const button = (existing?.valid ? existing : flow.add({ type: 'sprite-button', name: BUTTON_NAME, sprite: BUTTON_SPRITE, style: 'slot_button', tooltip: 'SGLuna NPC Console' })) as SpriteButtonGuiElement
   button.sprite = provider_ui.provider_button_sprite(player.index, BUTTON_SPRITE)
-  button.tooltip = provider_ui.provider_button_tooltip('AIRI NPC Console')
+  button.tooltip = provider_ui.provider_button_tooltip('SGLuna NPC Console')
   button.toggled = task_board_ui_is_open(player.index)
   // Factorio's stock mod-GUI slot is easy to miss at 1080p. A conservative
   // 48px square keeps the standard slot-button styling while making AIRI's
@@ -587,7 +587,7 @@ function add_status_badge(parent: LuaGuiElement, tone: Tone, caption: string) { 
 function create_key_value_table(parent: LuaGuiElement) { const table = parent.add({ type: 'table', column_count: 2 }); table.style.horizontal_spacing = 12; table.style.vertical_spacing = 4; return table }
 function add_key_value(table: LuaGuiElement, key: string, value: string, options: { tone?: Tone, static_tooltip?: string, width?: number } = {}) { const key_label = table.add({ type: 'label', caption: key, style: 'semibold_label' }); key_label.style.minimal_width = KEY_COLUMN_WIDTH; const value_label = gui_text.literal_gui_text(table.add({ type: 'label', caption: value, tooltip: options.static_tooltip })); value_label.style.single_line = false; if (options.width !== undefined) value_label.style.maximal_width = options.width; if (options.tone !== undefined) value_label.style.font_color = TONE_COLORS[options.tone]; return value_label }
 function add_empty_state(parent: LuaGuiElement, caption: string) { const label = gui_text.literal_gui_text(parent.add({ type: 'label', caption })); label.style.font_color = TONE_COLORS.muted; return label }
-function board_goal(board: TaskBoardUiSnapshot) { if (board.objective.length > 0) return board.objective; if (board.goal_id.length > 0) return board.goal_id; return board.status === 'idle' ? 'No active AIRI task.' : 'Current task' }
+function board_goal(board: TaskBoardUiSnapshot) { if (board.objective.length > 0) return board.objective; if (board.goal_id.length > 0) return board.goal_id; return board.status === 'idle' ? 'No active SGLuna task.' : 'Current task' }
 /**
  * How much the last snapshot is still worth believing.
  *
@@ -600,7 +600,7 @@ export function task_board_sync_freshness(synced_tick: number | undefined, tick:
   return math.max(0, tick - synced_tick) > SYNC_STALE_TICKS ? 'stale' : 'live'
 }
 
-function sync_summary(synced_tick: number | undefined) { if (synced_tick === undefined) return 'Never — AIRI runtime not connected'; const seconds = math.floor(math.max(0, game.tick - synced_tick) / 60); const age = seconds < 60 ? `${seconds}s ago` : `${math.floor(seconds / 60)}m ago`; return task_board_sync_freshness(synced_tick, game.tick) === 'stale' ? `${age} — polls unanswered` : age }
+function sync_summary(synced_tick: number | undefined) { if (synced_tick === undefined) return 'Never — SGLuna runtime not connected'; const seconds = math.floor(math.max(0, game.tick - synced_tick) / 60); const age = seconds < 60 ? `${seconds}s ago` : `${math.floor(seconds / 60)}m ago`; return task_board_sync_freshness(synced_tick, game.tick) === 'stale' ? `${age} — polls unanswered` : age }
 function world_task_summary(task: TaskBoardUiWorldTask | undefined) { if (task === undefined) return 'UNKNOWN'; const state = task.task_state.length > 0 ? task.task_state.split('_').join(' ').toUpperCase() : 'IDLE'; return task.queue_length > 0 ? `${state} · ${task.queue_length} queued` : state }
 function overall_state(board: TaskBoardUiSnapshot | undefined, synced_tick: number | undefined): { tone: Tone, caption: string } {
   const freshness = task_board_sync_freshness(synced_tick, game.tick)
@@ -626,9 +626,9 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   const phase = board?.agent.phase ?? 'idle'; const detail = board?.agent.detail ?? ''
   const live_caption = detail.length > 0 ? `${agent_caption(phase)} · ${text(detail, 90)}` : agent_caption(phase)
   const stale_caption = freshness === 'offline' ? 'NOT CONNECTED' : `NO ANSWER — last seen ${agent_caption(phase)}`
-  add_key_value(table, 'AIRI', freshness === 'live' ? live_caption : stale_caption, { tone: freshness === 'live' ? agent_tone(phase) : 'bad', static_tooltip: 'The console polls the AIRI runtime; this row reports the answer, not a guess.', width: STATUS_VALUE_WIDTH })
+  add_key_value(table, 'SGLuna', freshness === 'live' ? live_caption : stale_caption, { tone: freshness === 'live' ? agent_tone(phase) : 'bad', static_tooltip: 'The console polls the SGLuna runtime; this row reports the answer, not a guess.', width: STATUS_VALUE_WIDTH })
   add_key_value(table, 'WORLD', world_task_summary(runtime.world_task), { width: STATUS_VALUE_WIDTH })
-  const goal = board === undefined ? 'No active AIRI task.' : board_goal(board)
+  const goal = board === undefined ? 'No active SGLuna task.' : board_goal(board)
   add_key_value(table, 'GOAL', text(goal, 110), { width: STATUS_VALUE_WIDTH })
   if (board !== undefined && board.steps.length > 0) {
     const index = math.min(board.active_index, board.steps.length - 1)
@@ -637,7 +637,7 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   }
   const retained = activity_state.activity_history()
   const recent = retained.length > 0 ? retained : (board?.activity ?? [])
-  const board_blocker_text = board === undefined ? '' : task_condition_text(board.blocker_summary, board.blocker, 'AIRI is blocked by an internal task condition.')
+  const board_blocker_text = board === undefined ? '' : task_condition_text(board.blocker_summary, board.blocker, 'SGLuna is blocked by an internal task condition.')
   let last = ''
   let last_tone: Tone = 'muted'
   let action_fallback = ''
@@ -667,19 +667,19 @@ function render_controls_panel(parent: LuaGuiElement, player: LuaPlayer, board: 
   controls.style.horizontal_spacing = COMPACT_BUTTON_SPACING
   controls.style.vertical_spacing = COMPACT_BUTTON_SPACING
   const pending = LIFECYCLE.current(player.index)
-  const pending_tip = pending === undefined ? '' : `Waiting for AIRI runtime to confirm ${pending.action}.`
+  const pending_tip = pending === undefined ? '' : `Waiting for SGLuna runtime to confirm ${pending.action}.`
   const pause_caption = pending?.action === 'pause' ? 'PAUSING...' : pending?.action === 'resume' ? 'RESUMING...' : paused ? 'UNPAUSE' : 'PAUSE'
-  const pause = compact_button(controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: pause_caption, style: 'dialog_button', tooltip: pending_tip.length > 0 ? pending_tip : paused ? 'Resume this durable AIRI goal. AIRI will re-observe mutable state before acting.' : has_open_goal ? 'Pause the durable AIRI goal and stop current world work' : 'Stop the current world work. There is no durable AIRI goal to pause.' })) as ButtonGuiElement
+  const pause = compact_button(controls.add({ type: 'button', name: PAUSE_BUTTON_NAME, caption: pause_caption, style: 'dialog_button', tooltip: pending_tip.length > 0 ? pending_tip : paused ? 'Resume this durable SGLuna goal. SGLuna will re-observe mutable state before acting.' : has_open_goal ? 'Pause the durable SGLuna goal and stop current world work' : 'Stop the current world work. There is no durable SGLuna goal to pause.' })) as ButtonGuiElement
   pause.enabled = pending === undefined
   const armed = task_board_ui_terminate_is_armed(player.index, game.tick)
   const terminate_caption = pending?.action === 'terminate' ? 'TERMINATING...' : armed ? 'CONFIRM' : 'TERMINATE'
-  const terminate = compact_button(controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: terminate_caption, style: 'red_button', tooltip: pending_tip.length > 0 ? pending_tip : armed ? 'Click again within 5 seconds to discard the goal permanently' : has_open_goal ? 'Discard the current durable AIRI goal permanently' : 'Stop the current world work. There is no durable AIRI goal to discard.' })) as ButtonGuiElement
+  const terminate = compact_button(controls.add({ type: 'button', name: TERMINATE_BUTTON_NAME, caption: terminate_caption, style: 'red_button', tooltip: pending_tip.length > 0 ? pending_tip : armed ? 'Click again within 5 seconds to discard the goal permanently' : has_open_goal ? 'Discard the current durable SGLuna goal permanently' : 'Stop the current world work. There is no durable SGLuna goal to discard.' })) as ButtonGuiElement
   terminate.enabled = pending === undefined
   compact_button(controls.add({ type: 'button', name: FOLLOW_BUTTON_NAME, caption: debug_ui.follow_button_caption(follow?.active === true), style: follow?.active ? 'confirm_button' : 'dialog_button', tooltip: follow_button_tooltip(follow) }))
   const skills_open = task_board_skills_ui_is_open(player.index)
   compact_button(controls.add({ type: 'button', name: SKILLS_BUTTON_NAME, caption: skills_open ? 'CLOSE' : 'LEARN', style: 'dialog_button', tooltip: skills_open ? 'Close the area learning window.' : 'Open area learning and saved skill candidates in a separate movable window.' }))
   const debug_open = debug_ui.debug_ui_is_open(player.index)
-  compact_button(controls.add({ type: 'button', name: debug_ui.DEBUG_BUTTON_NAME, caption: debug_ui.debug_button_caption(player.index), style: debug_open ? 'confirm_button' : 'dialog_button', tooltip: debug_open ? 'Close the AIRI runtime diagnostics window.' : 'Open structured AIRI runtime diagnostics, provider usage, actor state, and UI sync information.' }))
+  compact_button(controls.add({ type: 'button', name: debug_ui.DEBUG_BUTTON_NAME, caption: debug_ui.debug_button_caption(player.index), style: debug_open ? 'confirm_button' : 'dialog_button', tooltip: debug_open ? 'Close the SGLuna runtime diagnostics window.' : 'Open structured SGLuna runtime diagnostics, provider usage, actor state, and UI sync information.' }))
   const projects_open = project_ui.projects_ui_is_open(player.index)
   compact_button(controls.add({ type: 'button', name: project_ui.PROJECTS_BUTTON_NAME, caption: 'OLD TASKS', style: projects_open ? 'confirm_button' : 'dialog_button', tooltip: projects_open ? 'Close old task history.' : 'Open old task history, conversations, and evidence.' }))
   // A blank last_failure is still truthy, which drew a lone warning triangle with
@@ -902,8 +902,8 @@ function refresh_steps(plan: LuaGuiElement, board: TaskBoardUiSnapshot, max_heig
   attention.clear()
   if (board.blocker.length > 0 || board.pause_reason.length > 0) {
     const table = create_key_value_table(attention); const width = LEFT_COLUMN_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12
-    if (board.blocker.length > 0) add_key_value(table, 'BLOCKED', task_condition_text(board.blocker_summary, board.blocker, 'AIRI is blocked by an internal task condition.'), { tone: 'bad', width })
-    if (board.pause_reason.length > 0) add_key_value(table, 'PAUSED', task_condition_text(board.pause_summary, board.pause_reason, 'AIRI is paused by an internal task condition.'), { tone: 'warn', width })
+    if (board.blocker.length > 0) add_key_value(table, 'BLOCKED', task_condition_text(board.blocker_summary, board.blocker, 'SGLuna is blocked by an internal task condition.'), { tone: 'bad', width })
+    if (board.pause_reason.length > 0) add_key_value(table, 'PAUSED', task_condition_text(board.pause_summary, board.pause_reason, 'SGLuna is paused by an internal task condition.'), { tone: 'warn', width })
   }
   return true
 }
@@ -1001,16 +1001,16 @@ function render_resource_sidebar(parent: LuaGuiElement, board: TaskBoardUiSnapsh
 function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
   const section = parent.add({ type: 'frame', name: PROMPT_SECTION_NAME, direction: 'vertical', style: 'inside_shallow_frame' }); section.style.width = LEFT_COLUMN_WIDTH; section.style.horizontally_stretchable = false
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'
-  header.add({ type: 'label', caption: 'Prompt AIRI', style: 'subheader_caption_label' })
+  header.add({ type: 'label', caption: 'Prompt SGLuna', style: 'subheader_caption_label' })
   const header_spacer = header.add({ type: 'empty-widget' }); header_spacer.style.horizontally_stretchable = true
   const pending = LIFECYCLE.current(player.index)
-  const new_task = compact_button(header.add({ type: 'button', name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK', style: 'dialog_button', tooltip: pending === undefined ? "Stop current work and clear this NPC's conversation and durable plan. Learned skills and Factorio world state are kept." : `Waiting for AIRI runtime to confirm ${pending.action}.` })) as ButtonGuiElement
+  const new_task = compact_button(header.add({ type: 'button', name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK', style: 'dialog_button', tooltip: pending === undefined ? "Stop current work and clear this NPC's conversation and durable plan. Learned skills and Factorio world state are kept." : `Waiting for SGLuna runtime to confirm ${pending.action}.` })) as ButtonGuiElement
   new_task.enabled = pending === undefined
   const row = section.add({ type: 'flow', name: PROMPT_FLOW_NAME, direction: 'horizontal' }); row.style.padding = SECTION_PADDING; row.style.horizontally_stretchable = true; row.style.vertical_align = 'center'; row.style.horizontal_spacing = 8
-  const field = row.add({ type: 'textfield', name: PROMPT_FIELD_NAME, text: task_board_ui_prompt_draft(player.index), tooltip: 'Send a prompt directly to AIRI without typing !airi in chat. Press Enter to send.' }); field.style.width = PROMPT_FIELD_WIDTH; field.style.minimal_width = PROMPT_FIELD_WIDTH; field.style.maximal_width = PROMPT_FIELD_WIDTH
-  const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: 'Send this prompt directly to AIRI' }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.maximal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
+  const field = row.add({ type: 'textfield', name: PROMPT_FIELD_NAME, text: task_board_ui_prompt_draft(player.index), tooltip: 'Send a prompt directly to SGLuna without typing !luna in chat. Press Enter to send.' }); field.style.width = PROMPT_FIELD_WIDTH; field.style.minimal_width = PROMPT_FIELD_WIDTH; field.style.maximal_width = PROMPT_FIELD_WIDTH
+  const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: 'Send this prompt directly to SGLuna' }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.maximal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
 }
-function render_titlebar(root: FrameGuiElement, caption = 'AIRI NPC Console', close_name = CLOSE_BUTTON_NAME) {
+function render_titlebar(root: FrameGuiElement, caption = 'SGLuna NPC Console', close_name = CLOSE_BUTTON_NAME) {
   const titlebar = root.add({ type: 'flow', direction: 'horizontal' }); titlebar.style.horizontally_stretchable = true; titlebar.style.horizontal_spacing = 8; titlebar.drag_target = root
   titlebar.add({ type: 'label', caption, style: 'frame_title', ignored_by_interaction: true }); const dragger = titlebar.add({ type: 'empty-widget', style: 'draggable_space_header', ignored_by_interaction: true }); dragger.style.horizontally_stretchable = true; dragger.style.height = 24
   titlebar.add({ type: 'sprite-button', name: close_name, sprite: 'utility/close', style: 'frame_action_button', tooltip: `Close ${caption}` })
@@ -1104,7 +1104,7 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
 export function create_task_board_ui_remote_interface() {
   create_skill_remote_interface(); create_learning_remote_interface()
   remote.add_interface('autorio_task_board', {
-    set_snapshot: (value: unknown, generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); activity_state.merge_activity_history(stamped.activity); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; provider_ui.remember_provider_model(stamped.debug?.provider_model); project_ui.record_project_snapshot(stamped, game.tick); try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[AIRI learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
+    set_snapshot: (value: unknown, generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; const next = sanitize_task_board_ui_snapshot(value); if (next === undefined) return false; const previous = storage.airi_task_board_ui; const stamped = stamp_activity_times(next, previous, game.tick); activity_state.merge_activity_history(stamped.activity); storage.airi_task_board_ui = stamped; storage.airi_task_board_ui_synced_tick = game.tick; provider_ui.remember_provider_model(stamped.debug?.provider_model); project_ui.record_project_snapshot(stamped, game.tick); try { handle_task_board_learning_transition(previous, stamped) } catch (error) { log(`[SGLuna learning] completion learning skipped: ${error instanceof Error ? error.message : 'unknown error'}`) }; render_all(); return true },
     clear: (generation?: unknown, revision?: unknown) => { if (!debug_ui.accept_sync_version(generation, revision)) return true; storage.airi_task_board_ui = undefined; storage.airi_task_board_ui_synced_tick = game.tick; render_all(); return true },
     ack_lifecycle: (player_index: unknown, action: unknown) => { const index = integer(player_index); const kind: TaskBoardUiLifecycleAction | undefined = action === 'pause' || action === 'resume' || action === 'terminate' ? action : undefined; if (index < 1 || kind === undefined) return false; LIFECYCLE.ack(index, kind); render_all(); return true },
     status: () => storage.airi_task_board_ui,

@@ -99,13 +99,13 @@ The runtime now has request-level usage tracking for provider calls and tool act
 Behavior trace default path on Pterodactyl:
 
 ```text
-/home/container/logs/airi-behavior.jsonl
+/home/container/logs/sgluna-behavior.jsonl
 ```
 
 Pterodactyl File Manager path:
 
 ```text
-logs/airi-behavior.jsonl
+logs/sgluna-behavior.jsonl
 ```
 
 A full final-payload prompt trace was also added. It records the actual final provider payload after compact continuation/steering is applied, not a pre-compression approximation.
@@ -113,13 +113,13 @@ A full final-payload prompt trace was also added. It records the actual final pr
 Prompt trace default path:
 
 ```text
-/home/container/logs/airi-prompts.jsonl
+/home/container/logs/sgluna-prompts.jsonl
 ```
 
 File Manager path:
 
 ```text
-logs/airi-prompts.jsonl
+logs/sgluna-prompts.jsonl
 ```
 
 The prompt trace is bounded/rotated and secret-sanitized. Use it to answer questions like:
@@ -608,8 +608,8 @@ During long work, provide frequent progress updates. The user explicitly needs v
 
 When a Factorio E2E request appears stuck in `THINKING` with many `OBS` events and no `ACT`:
 
-1. inspect `airi-prompts.jsonl` for the exact provider rounds;
-2. inspect `airi-behavior.jsonl` for tool sequence/usage;
+1. inspect `sgluna-prompts.jsonl` for the exact provider rounds;
+2. inspect `sgluna-behavior.jsonl` for tool sequence/usage;
 3. distinguish different-prototype/entity reads from true duplicate reads;
 4. convert the bad trace into a regression case;
 5. prefer harness/runtime/tool fixes over adding large prompt text.

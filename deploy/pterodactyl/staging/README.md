@@ -61,13 +61,13 @@ The validated runtime baseline is now on `main`, while `feat/npc-transition-work
 3. use `source-preparer.mjs` to build the native actor-aware Autorio source — do **not** reapply the v7 connected-player control patch set;
 4. compile/inject the v8 `airi_deployment` guard alongside the native NPC interfaces;
 5. configure `npc` mode at startup and capture the standalone actor ID/kind/epoch;
-6. keep `AIRI_CHAT_PLAYERS` (who may issue `!airi`) separate from NPC ownership;
+6. keep `SGLUNA_CHAT_PLAYERS` (who may issue `!luna`) separate from NPC ownership; legacy `AIRI_CHAT_PLAYERS` / `!airi` remain compatibility aliases;
 7. replace `operationCommands` with the structured `operations` contract;
 8. use atomic dependency-batch admission for model mutations;
 9. expose the current actor-aware observation tools, including exact correlated research request lookup;
 10. replace the old installer smoke assumption `zero players => denied` with `zero players => standalone NPC authorized`;
 11. run clean-install, existing-save upgrade, graceful restart/save, rollback, and one real provider-to-NPC goal;
-12. only after those gates pass, regenerate `install.sh` and `egg-airi-factorio-server.json` from the v8 payload source and let `main` catch up again.
+12. only after those gates pass, regenerate `install.sh` and `egg-sgluna-factorio-server.json` from the v8 payload source and let `main` catch up again.
 
 `build-payload.mjs` currently refuses to regenerate the canonical egg while `payload-src/installer.sh` still contains v7 markers. This is intentional: a newly checksummed artifact must not make the legacy connected-player package look like the v8 NPC package.
 
