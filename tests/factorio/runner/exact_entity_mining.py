@@ -53,6 +53,17 @@ def run(client: Rcon, results: Path) -> None:
     distance = matches[0].get('distance')
     require(isinstance(distance, (int, float)) and distance > 5, observed)
 
+    live_preflight = json_command(
+        lua_json(remote_call(
+            'autorio_preflight',
+            'operation',
+            repr('mine_entity_exact'),
+            f"{unit_number={fixture['chest_id']}}",
+        )),
+        'live exact target preflight',
+    )
+    require(live_preflight.get('ok') is True and live_preflight.get('identity') == fixture['chest_id'], live_preflight)
+
     legacy = json_command(
         lua_json(remote_call('autorio_operations', 'mine_entity', repr('wooden-chest'), '1')),
         'legacy remote name mine admission',
@@ -80,17 +91,73 @@ def run(client: Rcon, results: Path) -> None:
     )
     require(inventory.get('wooden_chest', 0) >= 1, inventory)
 
+    replacement = json_command(
+        "/silent-command local s=game.surfaces[1]; local a=nil; "
+        f"for _,e in pairs(s.find_entities_filtered{{name='character'}}) do if e.unit_number=={actor_id} then a=e end end; "
+        f"local old={fixture['chest_id']}; local p={{x={fixture['chest_position']['x']},y={fixture['chest_position']['y']}}}; "
+        "assert(a); a.teleport({x=p.x-6,y=p.y},s); "
+        "local c=s.create_entity{name='wooden-chest',position=p,force=a.force}; "
+        "assert(c and c.unit_number and c.unit_number~=old); "
+        "rcon.print(helpers.table_to_json({replacement_id=c.unit_number,position=c.position}))",
+        'replacement at old coordinate',
+    )
+
+    stale_preflight = json_command(
+        lua_json(remote_call(
+            'autorio_preflight',
+            'operation',
+            repr('mine_entity_exact'),
+            f"{unit_number={fixture['chest_id']}}",
+        )),
+        'destroyed exact target preflight',
+    )
+    require(stale_preflight.get('ok') is False and stale_preflight.get('code') == 'stale_exact_target', stale_preflight)
+    last_observed = stale_preflight.get('last_observed') or {}
+    require(last_observed.get('unit_number') == fixture['chest_id'], stale_preflight)
+    require(last_observed.get('position') == fixture['chest_position'], stale_preflight)
+
+    replacement_observed = json_command(
+        lua_json(remote_call('autorio_tools', 'get_nearby_entities', '16', repr('wooden-chest'), 'nil', '10')),
+        'observe replacement chest',
+    )
+    replacement_matches = [
+        entity for entity in replacement_observed.get('entities', [])
+        if entity.get('unit_number') == replacement['replacement_id']
+    ]
+    require(len(replacement_matches) == 1, replacement_observed)
+    require(replacement['replacement_id'] != fixture['chest_id'], replacement)
+
+    replacement_preflight = json_command(
+        lua_json(remote_call(
+            'autorio_preflight',
+            'operation',
+            repr('mine_entity_exact'),
+            f"{unit_number={replacement['replacement_id']}}",
+        )),
+        'replacement exact target preflight',
+    )
+    require(
+        replacement_preflight.get('ok') is True
+        and replacement_preflight.get('identity') == replacement['replacement_id'],
+        replacement_preflight,
+    )
+
     payload = {
         'status': 'pass',
         'fixture': fixture,
         'observation': observed,
+        'live_preflight': live_preflight,
         'legacy_failure': legacy_after,
         'exact_success': exact_after,
         'inventory': inventory,
+        'replacement': replacement,
+        'stale_preflight': stale_preflight,
+        'replacement_observation': replacement_observed,
+        'replacement_preflight': replacement_preflight,
     }
     (results / 'exact-entity-mining.json').write_text(json.dumps(payload, indent=2))
     print(
-        f"PASS: exact mining auto-approached unit={fixture['chest_id']} beyond legacy radius after name mining returned no_target",
+        f"PASS: exact mining auto-approached unit={fixture['chest_id']}; stale identity was rejected before admission and replacement unit={replacement['replacement_id']} was rebound explicitly",
         flush=True,
     )
 
