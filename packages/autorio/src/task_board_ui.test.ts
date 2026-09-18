@@ -452,6 +452,7 @@ describe('in-game task board UI projection', () => {
 
 
 it('uses SGLuna for normal console branding while retaining AIRI actor identity internally', () => {
+  const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
   expect(source).toContain("caption: 'Prompt SGLuna'")
   expect(source).toContain("'SGLuna NPC Console'")
   expect(source).toContain("add_key_value(table, 'SGLuna'")
