@@ -288,18 +288,24 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     if (!previous) return { state: undefined, blockedByHarness: false, changed: false }
 
     if (incomingPlan.length > 0) {
+      const preserveBlockedMutation = previous.status === 'blocked'
+        && previous.last_mutation_verified !== true
+        && Array.isArray(previous.last_operations)
+        && previous.last_operations.length > 0
       const state = {
         ...previous,
         status: 'blocked',
-        admission_status: undefined,
-        blocker: 'no_autorio_operation_for_remaining_plan',
+        admission_status: preserveBlockedMutation ? previous.admission_status : undefined,
+        blocker: preserveBlockedMutation && previous.blocker
+          ? previous.blocker
+          : 'no_autorio_operation_for_remaining_plan',
         pause_reason: '',
         persistent_runtime: runtime,
         plan: incomingPlan,
         current_step: incomingStep,
         revision: previous.revision + 1,
         last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
-        last_operations: [],
+        last_operations: preserveBlockedMutation ? previous.last_operations : [],
         updated_at: now,
         history,
       }
