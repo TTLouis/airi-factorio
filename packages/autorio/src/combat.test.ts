@@ -511,7 +511,7 @@ describe('bounded area-clearing combat', () => {
     expect(c2.controller.status()).toMatchObject({ initial_threat_score: 64, support_turret_budget: 8 })
   })
 
-  it('deploys a threat-sized support batch and restages only when target coverage is lost', () => {
+  it('deploys a threat-sized support batch without restaging merely because AIRI advances', () => {
     const c = world()
     c.enemies.length = 0
     for (let i = 0; i < 5; i++) {
@@ -554,14 +554,7 @@ describe('bounded area-clearing combat', () => {
     c.controller.tick(c.actor)
     expect(c.surface.create_entity).toHaveBeenCalledTimes(3)
 
-    const active_unit_number = c.controller.status().target?.unit_number
-    const active_target = c.enemies.find(entity => entity.unit_number === active_unit_number)
-    expect(active_target).toBeDefined()
-    active_target.position = { x: 36, y: 0 }
-    ;(globalThis as any).game.tick += 1
-    c.controller.tick(c.actor)
-    expect(c.surface.create_entity).toHaveBeenCalledTimes(4)
-    expect(c.controller.status()).toMatchObject({ support_turret_budget: 4, turrets_placed: 4, encounter_owned_turret_count: 4 })
+    expect(c.controller.status()).toMatchObject({ support_turret_budget: 4, turrets_placed: 3, encounter_owned_turret_count: 3 })
   })
 
   it('places and loads a paid gun turret only after support staging is established', () => {
