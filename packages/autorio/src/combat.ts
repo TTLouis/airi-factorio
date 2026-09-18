@@ -831,6 +831,17 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     clear_bound_target(task)
     stop_actor_combat(actor)
 
+    // A mobile preemption belongs to the current static encounter. Once that
+    // mobile target is gone, resume the locked nest/worm before considering
+    // unrelated targets elsewhere in the clear area.
+    if (encounter_static && is_alive(encounter_static)) {
+      bind_target(actor, task, encounter_static, 'acquired')
+      return
+    }
+
+    // The static encounter is actually over. Before recovering temporary support,
+    // finish every remaining clear-area hostile, plus any worm/mobile threat
+    // already inside the extended danger scan.
     const remaining_target = remaining_clear_target(actor, task)
     if (remaining_target) {
       bind_target(actor, task, remaining_target, 'acquired')
@@ -840,10 +851,6 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
     const owned_turrets = live_owned_turrets(task)
     if (task.combat_safety_goal === 'cleanup' || (owned_turrets.length > 0 && encounter_static_destroyed)) {
       enter_safety(actor, task, 'cleanup')
-      return
-    }
-    if (encounter_static && is_alive(encounter_static)) {
-      bind_target(actor, task, encounter_static, 'acquired')
       return
     }
     acquire(actor, task)
