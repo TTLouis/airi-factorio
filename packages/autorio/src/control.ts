@@ -1,7 +1,6 @@
 import type { MapPositionStruct } from 'factorio:prototype'
 import type {
   LuaEntity,
-  UnitNumber,
   OnPlayerCraftedItemEvent,
   OnPlayerMinedEntityEvent,
   OnScriptPathRequestFinishedEvent,
@@ -20,7 +19,7 @@ import { new_crafting_controller } from './crafting'
 import { new_defense_controller } from './defense'
 import { create_discovery_remote_interface } from './discovery'
 import { new_equipment_controller } from './equipment'
-import { entity_reference_hint } from './entity_reference'
+import { entity_reference_hint, resolve_exact_entity } from './entity_reference'
 import { new_follow_controller } from './follow'
 import { new_interaction_recovery } from './interaction_recovery'
 import { create_knowledge_remote_interface } from './knowledge'
@@ -188,7 +187,7 @@ function operation_preflight(name: string, args: Record<string, any>) {
       || unit_number > 9007199254740991) {
       return reject('invalid_unit_number', { field: 'unit_number', identity: unit_number })
     }
-    const target = game.get_entity_by_unit_number(unit_number as UnitNumber)
+    const target = resolve_exact_entity(actor, unit_number)
     if (!target || !target.valid) {
       const hint = entity_reference_hint(unit_number)
       return reject('stale_exact_target', {
