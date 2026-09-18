@@ -443,6 +443,7 @@ test('healthy persistent runtime and explicit truthful blocker do not trigger om
   assert.equal(blockerCalls, 1)
   assert.equal(blocked.goalStatus, 'blocked')
   assert.equal(blocked.taskBoard.blocker, 'provider_reported_blocker')
+  assert.match(blocked.chatMessage, /required capability is unavailable/)
   assert.equal(blockedAgent.rcon.mutations.length, 0)
 })
 
@@ -515,6 +516,7 @@ test('repeated prose-only omission blocks once with a specific reason and never 
   assert.equal(calls, 2)
   assert.equal(result.goalStatus, 'blocked')
   assert.equal(result.taskBoard.blocker, 'action_omission_after_repair')
+  assert.match(result.chatMessage, /bounded act-or-block repair returned no executable operation/i)
   assert.equal(rcon.mutations.length, 0)
   const state = agent.memory.currentPlan('npc:airi')
   assert.equal(state.plan[0], 'Take items')
@@ -677,6 +679,12 @@ test('interrupted omission recovery uses a compact capsule instead of replaying 
   assert.equal(interrupted.status, 'active')
   assert.equal(interrupted.admission_status, 'action_omission_repair')
   const goalId = interrupted.goal_id
+  interrupted.exact_target_audit = [{
+    unit_number: 999,
+    operation_name: 'move_items_exact',
+    locator: { name: 'steel-chest', position: { x: 3, y: 0 }, role: 'Perform current action' },
+    recorded_at: Date.now(),
+  }]
 
   let resumedMessages
   agent.provider = async (messages) => {
@@ -694,8 +702,12 @@ test('interrupted omission recovery uses a compact capsule instead of replaying 
   assert.match(context, /"reason":"action_omission_recovery"/)
   assert.doesNotMatch(context, /unrelated ancient chatter/)
   assert.doesNotMatch(context, /Recent dialogue:/)
+  assert.doesNotMatch(context, /999/)
+  assert.doesNotMatch(context, /unit_number/)
+  assert.match(context, /remaining_steps/)
   assert.equal(resumed.goalId, goalId)
   assert.equal(resumed.goalStatus, 'blocked')
+  assert.match(resumed.chatMessage, /required live capability is still unavailable/)
   assert.equal(rcon.mutations.length, 0)
 })
 
