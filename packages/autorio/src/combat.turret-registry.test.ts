@@ -2,6 +2,7 @@ import type { ControlledActor } from './actors/types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { new_combat_controller } from './combat'
 import { new_task_manager } from './task_manager'
+import { TaskStates } from './types'
 
 beforeEach(() => {
   ;(globalThis as any).storage = {}
@@ -131,7 +132,7 @@ describe('combat encounter-owned turret registry', () => {
     })
 
     manager.cancel_all_tasks()
-    expect(manager.player_state.task_state).toBe((globalThis as any).TaskStates?.IDLE ?? manager.player_state.task_state)
+    expect(manager.player_state.task_state).toBe(TaskStates.IDLE)
 
     for (const hostile of enemies) hostile.valid = false
     controller.submit_clear(80)
