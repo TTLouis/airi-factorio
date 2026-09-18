@@ -1,7 +1,7 @@
 import type { FrameGuiElement, LuaGuiElement, LuaPlayer, ScrollPaneGuiElement } from 'factorio:runtime'
 
 import * as activity_state from './task_board_activity'
-import { literal_gui_text, trusted_rich_text } from './task_board_gui_text'
+import * as gui_text from './task_board_gui_text'
 
 export const DEBUG_BUTTON_NAME = 'airi_task_board_debug'
 export const DEBUG_CLOSE_BUTTON_NAME = 'airi_task_board_debug_close'
@@ -397,7 +397,7 @@ export function render_ai_reply(parent: LuaGuiElement, response: string, width: 
     header.style.vertical_align = 'center'
     header.add({ type: 'label', caption: 'Current Task Conversation', style: 'subheader_caption_label' })
     const filler = header.add({ type: 'empty-widget' }); filler.style.horizontally_stretchable = true
-    activity_state.style_feed_button(header.add({ type: 'button', name: CONVERSATION.state, caption: trusted_rich_text('[img=utility/status_working] LIVE'), tooltip: 'Conversation follows the same LIVE/PAUSED reading mode as Activity. Click to pause or resume both feeds.' }), activity_state.FEED_STATE_BUTTON_WIDTH)
+    activity_state.style_feed_button(header.add({ type: 'button', name: CONVERSATION.state, caption: gui_text.trusted_rich_text('[img=utility/status_working] LIVE'), tooltip: 'Conversation follows the same LIVE/PAUSED reading mode as Activity. Click to pause or resume both feeds.' }), activity_state.FEED_STATE_BUTTON_WIDTH)
     const count = header.add({ type: 'label', name: CONVERSATION.count, caption: '0 messages', style: 'semibold_label' }); count.style.left_padding = 6; count.style.right_padding = 4
     const body = section.add({ type: 'flow', name: CONVERSATION.body, direction: 'vertical' })
     body.style.padding = 10
@@ -433,9 +433,9 @@ export function render_ai_reply(parent: LuaGuiElement, response: string, width: 
     const timestamp = table.add({ type: 'label', caption: message.timestamp || '--:--:--', ignored_by_interaction: true })
     timestamp.style.minimal_width = 66
     timestamp.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }
-    const speaker = literal_gui_text(table.add({ type: 'label', caption: message.role === 'assistant' ? 'AIRI' : message.sender, style: 'semibold_label', ignored_by_interaction: true }))
+    const speaker = gui_text.literal_gui_text(table.add({ type: 'label', caption: message.role === 'assistant' ? 'AIRI' : message.sender, style: 'semibold_label', ignored_by_interaction: true }))
     speaker.style.minimal_width = 72
-    const line = literal_gui_text(table.add({ type: 'label', caption: message.text, ignored_by_interaction: true }))
+    const line = gui_text.literal_gui_text(table.add({ type: 'label', caption: message.text, ignored_by_interaction: true }))
     line.style.single_line = false
     line.style.maximal_width = width - 190
   }
@@ -478,13 +478,13 @@ export function render_ai_reply(parent: LuaGuiElement, response: string, width: 
   const state = header[CONVERSATION.state]
   if (state?.valid) {
     if (view.follow && unseen_count === 0) {
-      state.caption = trusted_rich_text('[img=utility/status_working] LIVE')
+      state.caption = gui_text.trusted_rich_text('[img=utility/status_working] LIVE')
       state.tooltip = 'Following the newest conversation. Click to pause both Conversation and Activity at their current positions.'
     } else if (unseen_count > 0) {
-      state.caption = trusted_rich_text(`[img=utility/status_yellow] ${unseen_count}${overflow ? '+' : ''} NEW`)
+      state.caption = gui_text.trusted_rich_text(`[img=utility/status_yellow] ${unseen_count}${overflow ? '+' : ''} NEW`)
       state.tooltip = 'New conversation messages arrived without moving your reading position. Click to jump both feeds back to live.'
     } else {
-      state.caption = trusted_rich_text('[img=utility/status_inactive] PAUSED')
+      state.caption = gui_text.trusted_rich_text('[img=utility/status_inactive] PAUSED')
       state.tooltip = 'Conversation and Activity are paused at your reading position. Click to jump back to live.'
     }
   }
@@ -500,7 +500,7 @@ function destroy_debug_popout(player: LuaPlayer) {
 }
 function add_row(table: LuaGuiElement, key: string, value: string) {
   const left = table.add({ type: 'label', caption: key, style: 'semibold_label' }); left.style.minimal_width = DEBUG_KEY_WIDTH
-  const right = literal_gui_text(table.add({ type: 'label', caption: value.length > 0 ? value : '—' })); right.style.single_line = false; right.style.maximal_width = DEBUG_VALUE_WIDTH
+  const right = gui_text.literal_gui_text(table.add({ type: 'label', caption: value.length > 0 ? value : '—' })); right.style.single_line = false; right.style.maximal_width = DEBUG_VALUE_WIDTH
 }
 function sync_age(synced_tick: number | undefined) {
   if (synced_tick === undefined) return 'never'
@@ -593,7 +593,7 @@ function refresh_debug_activity(root: LuaGuiElement, player: LuaPlayer, force = 
   const add_entry = (entry: any) => {
     const timestamp = clean_text(entry.timestamp, 16) || '--:--:--'
     const kind = clean_text(entry.kind, 32).toUpperCase()
-    const line = literal_gui_text(feed.add({ type: 'label', caption: `${timestamp} · ${kind} · ${clean_text(entry.text, 1200)}`, ignored_by_interaction: true }))
+    const line = gui_text.literal_gui_text(feed.add({ type: 'label', caption: `${timestamp} · ${kind} · ${clean_text(entry.text, 1200)}`, ignored_by_interaction: true }))
     line.style.single_line = false
     line.style.maximal_width = DEBUG_WIDTH - 50
   }
@@ -631,15 +631,15 @@ function refresh_debug_activity(root: LuaGuiElement, player: LuaPlayer, force = 
   const state = header[DEBUG_ACTIVITY_STATE_NAME]
   if (state?.valid) {
     if (view.follow && unseen.count === 0) {
-      state.caption = trusted_rich_text('[img=utility/status_working] LIVE')
+      state.caption = gui_text.trusted_rich_text('[img=utility/status_working] LIVE')
       state.tooltip = 'Following the newest execution activity. Click to pause it.'
     }
     else if (unseen.count > 0) {
-      state.caption = trusted_rich_text(`[img=utility/status_yellow] ${unseen.count}${unseen.overflow ? '+' : ''} NEW`)
+      state.caption = gui_text.trusted_rich_text(`[img=utility/status_yellow] ${unseen.count}${unseen.overflow ? '+' : ''} NEW`)
       state.tooltip = 'New execution activity arrived without moving your reading position. Click to catch up and resume live follow.'
     }
     else {
-      state.caption = trusted_rich_text('[img=utility/status_inactive] PAUSED')
+      state.caption = gui_text.trusted_rich_text('[img=utility/status_inactive] PAUSED')
       state.tooltip = 'Execution activity is paused at your reading position. Click to jump to the newest event and follow again.'
     }
   }
