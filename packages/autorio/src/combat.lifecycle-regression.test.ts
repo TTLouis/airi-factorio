@@ -194,7 +194,7 @@ describe('combat lifecycle regressions', () => {
     })
   })
 
-  it('cleans every encounter-owned turret before acquiring the next static target and never touches a player turret', () => {
+  it('keeps encounter-owned turrets while remaining static targets exist, then cleans them without touching a player turret', () => {
     const first = enemy(90, 'unit-spawner', 30)
     const second = enemy(91, 'unit-spawner', 40)
     const c = world([first, second])
@@ -204,12 +204,20 @@ describe('combat lifecycle regressions', () => {
     expect(c.controller.status()).toMatchObject({ encounter_owned_turret_count: 2 })
     first.valid = false
     advance(c, 1)
-    expect(c.controller.status()).toMatchObject({ combat_phase: 'safety', target: undefined })
+    expect(c.controller.status()).toMatchObject({
+      combat_phase: 'engage',
+      target: { unit_number: 91 },
+      encounter_owned_turret_count: 2,
+    })
+    expect(c.actor.get_mining_state().mining).toBe(false)
+
+    second.valid = false
+    advance(c, 1)
+    expect(c.controller.status()).toMatchObject({ combat_phase: 'safety', combat_safety_goal: 'cleanup', target: undefined })
 
     advance(c, LOCAL_SAFETY_WINDOW_TICKS)
     expect(c.controller.status()).toMatchObject({ combat_phase: 'cleanup', target: undefined })
     expect(c.actor.set_mining_state).toHaveBeenCalledWith(expect.objectContaining({ mining: true }))
-    expect(c.controller.status().target).toBeUndefined()
 
     c.createdTurrets[0].valid = false
     advance(c, 1)
@@ -222,9 +230,6 @@ describe('combat lifecycle regressions', () => {
     })
     expect(playerTurret.destroy).not.toHaveBeenCalled()
     for (const owned of c.createdTurrets) expect(owned.destroy).not.toHaveBeenCalled()
-
-    advance(c, LOCAL_SAFETY_WINDOW_TICKS)
-    expect(c.controller.status()).toMatchObject({ target: { unit_number: 91 } })
   })
 
   it('keeps fighting the current static encounter after a mobile preemption instead of cleaning support turrets early', () => {
@@ -252,6 +257,14 @@ describe('combat lifecycle regressions', () => {
     expect(c.actor.get_mining_state().mining).toBe(false)
 
     first.valid = false
+    advance(c, 1)
+    expect(c.controller.status()).toMatchObject({
+      combat_phase: 'engage',
+      target: { unit_number: 91 },
+      encounter_owned_turret_count: 2,
+    })
+
+    second.valid = false
     advance(c, 1)
     expect(c.controller.status()).toMatchObject({ combat_phase: 'safety', combat_safety_goal: 'cleanup', target: undefined })
   })
