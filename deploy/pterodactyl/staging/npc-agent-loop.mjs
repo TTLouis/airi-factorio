@@ -875,7 +875,7 @@ export class NpcAgentLoop {
         plan = this.parsePlanMessage(message)
       }
       catch (error) {
-        if (error?.failureClass === 'plan_category' && error?.code === 'observation_tool_as_operation') {
+        if (error?.failureClass === 'plan_category') {
           this.planCategoryRetries++
           const reason = error instanceof Error ? error.message : String(error)
           await this.recoveryDiagnostic({
@@ -893,7 +893,7 @@ export class NpcAgentLoop {
           this.messages.push({ role: 'assistant', content: cleanMemoryText(message.content, 4000) })
           this.messages.push({
             role: 'user',
-            content: `[HARNESS] Tool/operation category error (${this.planCategoryRetries}/${this.maxToolValidationRetries}; ${error.code}): ${reason} Tools remain enabled. Preserve the observations and canonical Task Board already collected. If that observation is still required, call the named tool correctly now; if it is not required, return a strict-JSON plan containing only approved world-mutation operations. Do not convert or execute an observation tool as a mutation.`,
+            content: `[HARNESS] Plan/tool category or targeting error (${this.planCategoryRetries}/${this.maxToolValidationRetries}; ${error.code}): ${reason} Tools remain enabled. Preserve the observations and canonical Task Board already collected. Use the supplied correction exactly: issue one required observation tool call when a fact is missing, otherwise return a strict-JSON plan containing only safe approved world-mutation operations. Do not bypass an observed exact identity with an ambiguous name-based mutation.`,
           })
           continue
         }
