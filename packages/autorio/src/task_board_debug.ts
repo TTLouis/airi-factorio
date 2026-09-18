@@ -689,11 +689,11 @@ function build_debug_popout(player: LuaPlayer, board: any, runtime: any, synced_
   if (previous_location !== undefined) root.location = previous_location
   else root.auto_center = true
   const titlebar = root.add({ type: 'flow', direction: 'horizontal' }); titlebar.style.horizontally_stretchable = true; titlebar.style.horizontal_spacing = 8; titlebar.drag_target = root
-  titlebar.add({ type: 'label', caption: 'AIRI Debug', style: 'frame_title', ignored_by_interaction: true })
+  titlebar.add({ type: 'label', caption: 'SGLuna Debug', style: 'frame_title', ignored_by_interaction: true })
   const dragger = titlebar.add({ type: 'empty-widget', style: 'draggable_space_header', ignored_by_interaction: true }); dragger.style.horizontally_stretchable = true; dragger.style.height = 24
   // Reuse the ordinary DEBUG button route so the sixth control route remains
   // available to Projects without adding another Task Board click handler.
-  titlebar.add({ type: 'sprite-button', name: DEBUG_BUTTON_NAME, sprite: 'utility/close', style: 'frame_action_button', tooltip: 'Close AIRI Debug' })
+  titlebar.add({ type: 'sprite-button', name: DEBUG_BUTTON_NAME, sprite: 'utility/close', style: 'frame_action_button', tooltip: 'Close SGLuna Debug' })
   const body = root.add({ type: 'flow', name: DEBUG_BODY_NAME, direction: 'vertical' }); body.style.width = DEBUG_WIDTH; body.style.padding = 10; body.style.vertical_spacing = 8
   fill_debug_body(body, board, runtime, synced_tick)
   build_debug_activity(root)

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { task_board_resource_rows, task_board_wanted_rows } from './task_board_ui'
 
-describe('AIRI NPC console layout regressions', () => {
+describe('SGLuna NPC console layout regressions', () => {
   const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
   const debug_source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
 
@@ -70,7 +70,7 @@ describe('AIRI NPC console layout regressions', () => {
     expect(debug_source).toContain("name: CONVERSATION.scroll")
   })
 
-  it('makes the top-left AIRI mod-GUI button easier to see without changing its standard slot style', () => {
+  it('makes the top-left SGLuna mod-GUI button easier to see without changing its standard slot style', () => {
     const ensure_button = source.split('function ensure_button(')[1]?.split('function destroy_panel(')[0] ?? ''
     expect(ensure_button).toContain("style: 'slot_button'")
     expect(ensure_button).toContain('button.style.width = 48')

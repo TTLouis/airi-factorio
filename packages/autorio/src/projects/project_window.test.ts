@@ -180,15 +180,15 @@ describe('old task export', () => {
       'I will build power first.',
     ])
     expect(payload.activity[0].text).toBe('Autorio batch 1 completed')
-    expect(project_export_relative_directory(project)).toBe('airi-old-tasks/goal-export')
+    expect(project_export_relative_directory(project)).toBe('sgluna-old-tasks/goal-export')
 
     const writes: Array<{ path: string, content: string, append: boolean }> = []
     globalThis.helpers.write_file = (path: string, content: string, append: boolean) => writes.push({ path, content, append })
     const result = export_project('goal-export')
-    expect(result.relative_path).toBe('script-output/airi-old-tasks/goal-export')
+    expect(result.relative_path).toBe('script-output/sgluna-old-tasks/goal-export')
     expect(writes.map(write => write.path)).toEqual([
-      'airi-old-tasks/goal-export/task.json',
-      'airi-old-tasks/goal-export/TASK.md',
+      'sgluna-old-tasks/goal-export/task.json',
+      'sgluna-old-tasks/goal-export/TASK.md',
     ])
     expect(JSON.parse(writes[0].content).conversation).toHaveLength(2)
     expect(writes[1].content).toContain('## Conversation')
@@ -207,10 +207,10 @@ describe('old task export', () => {
     expect(handle_project_export_click(player, 'not-export')).toBe(false)
     expect(handle_project_export_click(player, 'airi_task_board_project_export')).toBe(true)
     expect(writes).toEqual([
-      'airi-old-tasks/goal-a/task.json',
-      'airi-old-tasks/goal-a/TASK.md',
+      'sgluna-old-tasks/goal-a/task.json',
+      'sgluna-old-tasks/goal-a/TASK.md',
     ])
-    expect(messages[0]).toContain('script-output/airi-old-tasks/goal-a/task.json and TASK.md')
+    expect(messages[0]).toContain('script-output/sgluna-old-tasks/goal-a/task.json and TASK.md')
 
     const { readFileSync } = await import('node:fs')
     const window_source = readFileSync(new URL('./project_window.ts', import.meta.url), 'utf8')

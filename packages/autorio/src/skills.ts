@@ -732,7 +732,7 @@ export function serialize_skill_json(skill: SkillDefinition) {
 }
 
 export function skill_export_relative_directory(skill: Pick<SkillDefinition, 'id' | 'revision'>) {
-  return `airi-skills/${assert_safe_skill_id(skill.id)}/r${positive_integer(skill.revision, 'revision')}`
+  return `sgluna-skills/${assert_safe_skill_id(skill.id)}/r${positive_integer(skill.revision, 'revision')}`
 }
 
 export interface SkillExportResult {
@@ -927,7 +927,7 @@ export function render_skill_export_section(parent: LuaGuiElement) {
       name: `${SKILL_EXPORT_BUTTON_PREFIX}${skill.id}`,
       caption: 'EXPORT SKILL',
       style: 'confirm_button',
-      tooltip: 'Export the structured skill.json and generated SKILL.md companion into the managed script-output/airi-skills directory.',
+      tooltip: 'Export the structured skill.json and generated SKILL.md companion into the managed script-output/sgluna-skills directory.',
     })
     export_button.style.minimal_width = 130
     scroll.add({ type: 'label', caption: `Source: ${skill.source} · Stage: ${skill.stage} · Inputs: ${skill.inputs.join(', ') || 'none'} · Outputs: ${skill.outputs.join(', ') || 'none'}` })
@@ -941,11 +941,11 @@ export function handle_skill_export_click(player: LuaPlayer, element_name: strin
   if (element_name === FACTORY_ANALYZE_BUTTON_NAME) {
     const actor = get_controlled_actor()
     if (!actor || !actor.is_valid) {
-      player.print('[AIRI] Factory learning failed: controlled actor is unavailable.')
+      player.print('[SGLuna] Factory learning failed: controlled actor is unavailable.')
       return true
     }
     if (actor.surface.index !== player.surface.index) {
-      player.print('[AIRI] Factory learning failed: player and AIRI actor are on different surfaces.')
+      player.print('[SGLuna] Factory learning failed: player and AIRI actor are on different surfaces.')
       return true
     }
     const result = analyze_factory_area(actor, {
@@ -953,8 +953,8 @@ export function handle_skill_export_click(player: LuaPlayer, element_name: strin
       position: player.position,
       radius: FACTORY_DEFAULT_RADIUS,
     })
-    if (!result.ok) player.print(`[AIRI] Factory learning failed: ${result.error}`)
-    else player.print(`[AIRI] Analyzed ${result.analysis_id}: ${result.entity_count} relevant entities, ${result.blocks.length} candidate production block(s). Choose a block to save as a SkillCandidate.`)
+    if (!result.ok) player.print(`[SGLuna] Factory learning failed: ${result.error}`)
+    else player.print(`[SGLuna] Analyzed ${result.analysis_id}: ${result.entity_count} relevant entities, ${result.blocks.length} candidate production block(s). Choose a block to save as a SkillCandidate.`)
     return true
   }
 
@@ -962,15 +962,15 @@ export function handle_skill_export_click(player: LuaPlayer, element_name: strin
     const raw = element_name.slice(FACTORY_SAVE_BUTTON_PREFIX.length)
     const parts = raw.split('__')
     if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
-      player.print('[AIRI] Factory learning failed: malformed block selection.')
+      player.print('[SGLuna] Factory learning failed: malformed block selection.')
       return true
     }
     try {
       const skill = create_skill_candidate_from_factory_block(parts[0], parts[1])
-      player.print(`[AIRI] Saved ${skill.name} r${skill.revision} as a candidate. Review validation warnings, then use EXPORT SKILL if desired.`)
+      player.print(`[SGLuna] Saved ${skill.name} r${skill.revision} as a candidate. Review validation warnings, then use EXPORT SKILL if desired.`)
     }
     catch (error) {
-      player.print(`[AIRI] Factory learning failed: ${error_message(error)}`)
+      player.print(`[SGLuna] Factory learning failed: ${error_message(error)}`)
     }
     return true
   }
@@ -982,10 +982,10 @@ export function handle_skill_export_click(player: LuaPlayer, element_name: strin
     if (skill === undefined) throw new Error(`unknown skill: ${skill_id}`)
     const result = export_skill(skill_id)
     const verb = result.duplicate ? 'Already exported' : 'Exported'
-    player.print(`[AIRI] ${verb} ${skill.name} r${skill.revision}: ${result.relative_path}`)
+    player.print(`[SGLuna] ${verb} ${skill.name} r${skill.revision}: ${result.relative_path}`)
   }
   catch (error) {
-    player.print(`[AIRI] Skill export failed: ${error_message(error)}`)
+    player.print(`[SGLuna] Skill export failed: ${error_message(error)}`)
   }
   return true
 }

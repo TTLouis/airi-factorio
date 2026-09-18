@@ -224,11 +224,11 @@ describe('learned skill record and export', () => {
     const result = export_skill('automated-transport-belt-line')
     expect(result).toEqual({
       id: 'automated-transport-belt-line', revision: 1, duplicate: false,
-      relative_path: 'script-output/airi-skills/automated-transport-belt-line/r1',
+      relative_path: 'script-output/sgluna-skills/automated-transport-belt-line/r1',
     })
     expect(writes.map(write => write.filename)).toEqual([
-      'airi-skills/automated-transport-belt-line/r1/skill.json',
-      'airi-skills/automated-transport-belt-line/r1/SKILL.md',
+      'sgluna-skills/automated-transport-belt-line/r1/skill.json',
+      'sgluna-skills/automated-transport-belt-line/r1/SKILL.md',
     ])
     expect(writes[0].data).toContain('"schema_version":1')
     expect(writes[0].data).toContain('"inserter_sustained_throughput":"unvalidated"')
@@ -240,7 +240,7 @@ describe('learned skill record and export', () => {
     for (const id of ['../escape', '/absolute', 'skill/name', 'skill\\name', 'skill;rm', 'Skill Name', '-skill', 'skill-']) {
       expect(() => assert_safe_skill_id(id)).toThrow()
     }
-    expect(skill_export_relative_directory({ id: 'safe-skill-1', revision: 2 })).toBe('airi-skills/safe-skill-1/r2')
+    expect(skill_export_relative_directory({ id: 'safe-skill-1', revision: 2 })).toBe('sgluna-skills/safe-skill-1/r2')
   })
 
   it('treats an identical duplicate export as idempotent and refuses conflicting same-revision overwrites', () => {
@@ -270,10 +270,10 @@ describe('learned skill record and export', () => {
     const player = { print: (message: string) => messages.push(message) } as any
     expect(handle_skill_export_click(player, 'airi_skill_export__automated-transport-belt-line')).toBe(true)
     expect(writes.map(write => write.filename)).toEqual([
-      'airi-skills/automated-transport-belt-line/r1/skill.json',
-      'airi-skills/automated-transport-belt-line/r1/SKILL.md',
+      'sgluna-skills/automated-transport-belt-line/r1/skill.json',
+      'sgluna-skills/automated-transport-belt-line/r1/SKILL.md',
     ])
     expect(messages[0]).toContain('Exported Automated Transport Belt Line r1')
-    expect(messages[0]).toContain('script-output/airi-skills/automated-transport-belt-line/r1')
+    expect(messages[0]).toContain('script-output/sgluna-skills/automated-transport-belt-line/r1')
   })
 })

@@ -40,7 +40,7 @@ The standalone-NPC baseline includes:
 - loopback-only supervisor-owned RCON;
 - Pterodactyl console input forwarded to the real Factorio child process;
 - startup reconciliation of `data/server-settings.json` without overwriting unrelated Factorio settings;
-- environment-only provider secrets, with effective non-secret provider settings synchronized into `airi-config.json`;
+- environment-only provider secrets, with effective non-secret provider settings synchronized into `sgluna-config.json`;
 - provider timeout/recovery handling so one failed request does not permanently stall the NPC;
 - configurable provider request budgeting;
 - bounded behavior tracing for E2E/debugging;
@@ -80,13 +80,13 @@ Two PTDL_v2 eggs keep stable deployments separate from active E2E work:
 | [`deploy/pterodactyl/egg-sgluna-factorio-server.json`](./deploy/pterodactyl/egg-sgluna-factorio-server.json) | `main` | Stable/main deployment |
 | [`deploy/pterodactyl/egg-sgluna-factorio-npc-e2e.json`](./deploy/pterodactyl/egg-sgluna-factorio-npc-e2e.json) | `feat/npc-transition-work` | Active NPC/E2E testing |
 
-The user-facing egg filenames and display names now use **SGLuna**. Existing `AIRI_*` environment keys plus `.airi/`, `airi-config.json`, `start-airi.sh`, `!airi`, Autorio IDs, and runtime protocol identifiers remain compatibility surfaces and are intentionally not bulk-renamed.
+Fresh deployments use **SGLuna** end to end: `SGLUNA_*` deployment variables, `sgluna-config.json`, `start-sgluna.sh`, `rollback-sgluna.sh`, and `!luna`. Legacy `AIRI_*` variables, `airi-config.json`, `start-airi.sh`, `rollback-sgluna.sh`, and `!airi` remain compatibility aliases. The internal `.airi/` state directory plus actor/protocol/save identifiers remain intentionally unchanged.
 
 **Restart does not update application code.** A normal server restart keeps the already installed managed release.
 
-**Reinstall resolves the egg's `AIRI_SOURCE_REF` again.** The installer resolves the configured branch/tag/ref to one exact Git commit SHA, validates and builds that exact snapshot transactionally, records the SHA in the installed manifest, and only then activates it. A failed install leaves the previous completed release active.
+**Reinstall resolves the egg's `SGLUNA_SOURCE_REF` again.** The installer resolves the configured branch/tag/ref to one exact Git commit SHA, validates and builds that exact snapshot transactionally, records the SHA in the installed manifest, and only then activates it. A failed install leaves the previous completed release active.
 
-Set `AIRI_SOURCE_REF` to a full 40-character commit SHA when reproducing a specific E2E failure. Managed installs also provide `rollback-airi.sh` to return to the previous completed release without rewriting saves, user mods, or `airi-config.json`.
+Set `SGLUNA_SOURCE_REF` to a full 40-character commit SHA when reproducing a specific E2E failure. Managed installs also provide `rollback-sgluna.sh` to return to the previous completed release without rewriting saves, user mods, or `sgluna-config.json`.
 
 See [`deploy/pterodactyl/README.md`](./deploy/pterodactyl/README.md) for import, configuration, testing, runtime, and rollback details.
 

@@ -91,10 +91,10 @@ function diagnosisHints(provider, failureMessage) {
     hints.push('UTF-8 replacement characters were observed; investigate byte slicing/decoding before blaming the model language.')
   }
   if (provider?.structured_content?.json_valid === false && provider?.content_chars > 0) {
-    hints.push('Visible provider content was not valid JSON; inspect the bounded provider content preview in airi-prompts.jsonl for the exact malformed region.')
+    hints.push('Visible provider content was not valid JSON; inspect the bounded provider content preview in sgluna-prompts.jsonl for the exact malformed region.')
   }
   if (provider?.structured_content?.json_valid === true && provider?.structured_content?.plan_valid === false) {
-    hints.push('Provider content was valid JSON but failed the AIRI structured-plan schema.')
+    hints.push('Provider content was valid JSON but failed the SGLuna structured-plan schema.')
   }
   if (/recovery exhausted/i.test(String(failureMessage ?? ''))) {
     hints.push('Structured-response recovery was exhausted; compare provider diagnostics across all recovery attempts for this request id.')
@@ -177,7 +177,7 @@ export function formatFailureReport(report) {
   const provider = report.provider ?? {}
   const structured = provider.structured_content ?? {}
   const lines = [
-    'AIRI failure report',
+    'SGLuna failure report',
     `request: ${printable(report.request?.request_id)} · turn ${printable(report.request?.turn)} · stage ${printable(report.request?.stage)}`,
     `failure: ${printable(report.request?.message)}`,
     `actor: ${printable(report.request?.actor_id)} · epoch ${printable(report.request?.epoch)}`,
@@ -203,10 +203,20 @@ async function readJsonlFile(filename) {
   }
 }
 
+async function preferredTracePath(root, preferredName, legacyName) {
+  const preferred = path.resolve(root, 'logs', preferredName)
+  try { await fsp.access(preferred); return preferred }
+  catch (error) { if (error?.code !== 'ENOENT') throw error }
+  const legacy = path.resolve(root, 'logs', legacyName)
+  try { await fsp.access(legacy); return legacy }
+  catch (error) { if (error?.code !== 'ENOENT') throw error }
+  return preferred
+}
+
 export async function generateFailureReport({ behaviorFile, promptFile } = {}) {
   const root = process.cwd()
-  const behaviorPath = path.resolve(behaviorFile ?? path.join(root, 'logs', 'airi-behavior.jsonl'))
-  const promptPath = path.resolve(promptFile ?? path.join(root, 'logs', 'airi-prompts.jsonl'))
+  const behaviorPath = behaviorFile ? path.resolve(behaviorFile) : await preferredTracePath(root, 'sgluna-behavior.jsonl', 'airi-behavior.jsonl')
+  const promptPath = promptFile ? path.resolve(promptFile) : await preferredTracePath(root, 'sgluna-prompts.jsonl', 'airi-prompts.jsonl')
   const [behavior, prompts] = await Promise.all([readJsonlFile(behaviorPath), readJsonlFile(promptPath)])
   return {
     report: buildFailureReport(behavior.rows, prompts.rows),
@@ -239,6 +249,6 @@ async function main() {
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) main().catch(error => {
-  console.error(`AIRI debug report failed: ${error instanceof Error ? error.message : String(error)}`)
+  console.error(`SGLuna debug report failed: ${error instanceof Error ? error.message : String(error)}`)
   process.exitCode = 1
 })

@@ -296,7 +296,7 @@ describe('in-game task board UI projection', () => {
     expect(refresh).toContain('camera.zoom = task_board_preview_zoom(player.index)')
     expect(refresh).not.toContain('.clear()')
   })
-  it('shows live mod task state and when AIRI last synced', () => {
+  it('shows live mod task state and when SGLuna last synced', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     const control = readFileSync(new URL('./control.ts', import.meta.url), 'utf8')
     expect(source).toContain('storage.airi_task_board_ui_synced_tick = game.tick')
@@ -304,7 +304,7 @@ describe('in-game task board UI projection', () => {
     expect(control).toContain('set_task_board_world_task_provider(() => task_manager.get_status_snapshot())')
   })
 
-  it('provides a direct AIRI prompt field that preserves drafts and queues structured input', () => {
+  it('provides a direct SGLuna prompt field that preserves drafts and queues structured input', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain("type: 'textfield'")
     expect(source).toContain("name: PROMPT_FIELD_NAME")
@@ -394,7 +394,7 @@ describe('in-game task board UI projection', () => {
     expect(task_board_sync_freshness(9000, 4000)).toBe('live')
   })
 
-  it('stops presenting a stale snapshot as the current AIRI state', () => {
+  it('stops presenting a stale snapshot as the current SGLuna state', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     expect(source).toContain("if (freshness === 'offline') return { tone: 'muted', caption: 'OFFLINE' }")
     expect(source).toContain("if (freshness === 'stale') return { tone: 'bad', caption: 'STALE' }")
@@ -448,4 +448,14 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('drain_inputs: () => drain_ui_inputs()')
     expect(source).not.toContain('rcon.print')
   })
+})
+
+
+it('uses SGLuna for normal console branding while retaining AIRI actor identity internally', () => {
+  const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  expect(source).toContain("caption: 'Prompt SGLuna'")
+  expect(source).toContain("'SGLuna NPC Console'")
+  expect(source).toContain("add_key_value(table, 'SGLuna'")
+  expect(source).toContain("runtime.actor_name || 'AIRI'")
+  expect(source).not.toContain("tooltip: 'Send a prompt directly to AIRI")
 })

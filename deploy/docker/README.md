@@ -1,19 +1,19 @@
 # Docker deployment
 
-The Docker wrapper packages the same standalone-NPC runtime used by the Pterodactyl deployment. Local builds resolve `AIRI_SOURCE_REF` to an exact Git commit during the image build, so restarting a container never silently updates AIRI code.
+The Docker wrapper packages the same standalone-NPC runtime used by the Pterodactyl deployment. Local builds resolve `SGLUNA_SOURCE_REF` to an exact Git commit during the image build, so restarting a container never silently updates SGLuna code.
 
 ## Published prerelease image
 
 Tagged prerelease images are published to GitHub Container Registry as:
 
 ```text
-ghcr.io/ttlouis/airi-factorio:<release-tag>
+ghcr.io/ttlouis/factorio-npc:<release-tag>
 ```
 
 For the first prerelease, the intended tag is:
 
 ```text
-ghcr.io/ttlouis/airi-factorio:v0.1.0-pre.1
+ghcr.io/ttlouis/factorio-npc:v0.1.0-pre.1
 ```
 
 Published release images are built from the exact GitHub release commit. The prerelease workflow does not publish or move a `latest` image tag.
@@ -26,18 +26,18 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Persistent server state is stored in `${AIRI_DATA_DIR:-./data}`. This includes saves, `airi-config.json`, `data/server-settings.json`, mods, and AIRI runtime state.
+Persistent server state is stored in `${SGLUNA_DATA_DIR:-./data}`. This includes saves, `sgluna-config.json`, `data/server-settings.json`, mods, and SGLuna runtime state.
 
 Follow logs with:
 
 ```bash
-docker compose logs -f airi-factorio
+docker compose logs -f sgluna-factorio
 ```
 
-To attach the terminal directly to Factorio stdin through the AIRI supervisor:
+To attach the terminal directly to Factorio stdin through the SGLuna supervisor:
 
 ```bash
-docker attach "$(docker compose ps -q airi-factorio)"
+docker attach "$(docker compose ps -q sgluna-factorio)"
 ```
 
 Use Docker's normal detach sequence (`Ctrl-p`, `Ctrl-q`) instead of `Ctrl-c` if you want the server to keep running.
@@ -47,18 +47,18 @@ Use Docker's normal detach sequence (`Ctrl-p`, `Ctrl-q`) instead of `Ctrl-c` if 
 Stable local builds default to:
 
 ```text
-AIRI_SOURCE_REF=main
+SGLUNA_SOURCE_REF=main
 ```
 
 The Docker build resolves that ref to an exact SHA and bakes that exact AIRI runtime into the image. Restarting the container does not update code. Rebuilding resolves the configured ref again.
 
-To test ongoing NPC development instead, set `AIRI_SOURCE_REF=feat/npc-transition-work` explicitly. An exact 40-character commit SHA can be used for fully reproducible builds.
+To test ongoing NPC development instead, set `SGLUNA_SOURCE_REF=feat/npc-transition-work` explicitly. An exact 40-character commit SHA can be used for fully reproducible builds.
 
 The local Compose path intentionally disables the Docker build cache while the project is still moving quickly, so `docker compose up -d --build` resolves the selected source again. Published prerelease images are already pinned and do not need this rebuild behavior.
 
 ## Configuration boundary
 
-The Compose environment mirrors the Pterodactyl egg's runtime parameters. Provider and Factorio credentials stay in `.env`/container environment; `OPENAI_API_KEY` is not persisted to `airi-config.json`. `FACTORIO_USERNAME` and `FACTORIO_TOKEN` are written only where Factorio requires them in `data/server-settings.json`.
+The Compose environment mirrors the Pterodactyl egg's runtime parameters. Provider and Factorio credentials stay in `.env`/container environment; `OPENAI_API_KEY` is not persisted to `sgluna-config.json`. `FACTORIO_USERNAME` and `FACTORIO_TOKEN` are written only where Factorio requires them in `data/server-settings.json`.
 
 Leave both Factorio account fields blank for a private/unlisted server. Set both to enable public listing.
 
@@ -70,7 +70,7 @@ Changing `FACTORIO_VERSION` requires rebuilding the image. A published release i
 
 ## Shutdown
 
-`docker stop` sends `SIGTERM` to the AIRI supervisor. The supervisor shutdown path cancels AIRI work, saves Factorio, and stops the child process. Compose gives it a 90-second grace period by default.
+`docker stop` sends `SIGTERM` to the SGLuna supervisor. The supervisor shutdown path cancels AIRI work, saves Factorio, and stops the child process. Compose gives it a 90-second grace period by default.
 
 ## Notes
 
@@ -78,3 +78,8 @@ Changing `FACTORIO_VERSION` requires rebuilding the image. A published release i
 - RCON remains internal to the container and is not exposed on the host.
 - The legacy top-level `docker/` directory is not used by this deployment.
 - `main` is the release baseline; `feat/npc-transition-work` remains the ongoing single-NPC development branch.
+
+
+### Legacy deployment aliases
+
+Fresh Compose examples use `SGLUNA_*`. The Dockerfile still accepts `AIRI_SOURCE_REF` and `AIRI_REPO` as compatibility build-arg fallbacks; when both old and new source refs are supplied, `SGLUNA_SOURCE_REF` wins.

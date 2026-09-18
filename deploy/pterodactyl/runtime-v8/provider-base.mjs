@@ -105,11 +105,14 @@ class PromptTraceWriter {
 function promptTraceFile(options = {}) {
   if (options.promptTraceFile === null) return null
   if (typeof options.promptTraceFile === 'string' && options.promptTraceFile.trim()) return path.resolve(options.promptTraceFile)
+  if (typeof process.env.SGLUNA_PROMPT_TRACE_FILE === 'string' && process.env.SGLUNA_PROMPT_TRACE_FILE.trim()) {
+    return path.resolve(process.env.SGLUNA_PROMPT_TRACE_FILE)
+  }
   if (typeof process.env.AIRI_PROMPT_TRACE_FILE === 'string' && process.env.AIRI_PROMPT_TRACE_FILE.trim()) {
     return path.resolve(process.env.AIRI_PROMPT_TRACE_FILE)
   }
   if (process.env.NODE_TEST_CONTEXT) return null
-  return path.resolve(process.cwd(), 'logs', 'airi-prompts.jsonl')
+  return path.resolve(process.cwd(), 'logs', 'sgluna-prompts.jsonl')
 }
 
 function promptTraceWriter(filename) {

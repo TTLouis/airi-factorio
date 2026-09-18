@@ -66,7 +66,7 @@ try {
         'run', '--rm',
         '-v', "${InstallScript}:/tmp/install.sh:ro",
         '-v', "${Volume}:/mnt/server",
-        '-e', 'AIRI_INSTALL_ROOT=/mnt/server',
+        '-e', 'SGLUNA_INSTALL_ROOT=/mnt/server',
         $Image,
         'bash', '/tmp/install.sh', '--verify-only'
     )
@@ -76,9 +76,9 @@ try {
         'run', '--rm',
         '-v', "${EggInstallScript}:/tmp/egg-install.sh:ro",
         '-v', "${Volume}:/mnt/server",
-        '-e', 'AIRI_INSTALL_ROOT=/mnt/server',
-        '-e', 'AIRI_ACTOR_MODE=npc',
-        '-e', 'AIRI_CHAT_PLAYERS=SmokeOperator',
+        '-e', 'SGLUNA_INSTALL_ROOT=/mnt/server',
+        '-e', 'SGLUNA_ACTOR_MODE=npc',
+        '-e', 'SGLUNA_CHAT_PLAYERS=SmokeOperator',
         '-e', "FACTORIO_VERSION=$FactorioSmokeVersion",
         $Image,
         'bash', '/tmp/egg-install.sh'
@@ -90,7 +90,7 @@ try {
         '-v', "${Volume}:/mnt/server",
         $Image,
         'bash', '-lc',
-        'set -Eeuo pipefail; test -L /mnt/server/start-airi.sh; test -x /mnt/server/rollback-airi.sh; test -s /mnt/server/client-mods/autorio_0.1.0.zip; test -s /mnt/server/client-mods/SHA256SUMS; test ! -e /mnt/server/autorio_0.1.0.zip; test -s /mnt/server/airi-config.json; test -s /mnt/server/README-SGLUNA.txt; test -d /mnt/server/mods; test -d /mnt/server/saves; ! grep -q smoke-secret /mnt/server/airi-config.json; target=$(readlink /mnt/server/start-airi.sh); case "$target" in .airi/releases/*/start-airi.sh) ;; *) echo "unexpected startup target: $target" >&2; exit 1;; esac; test -s "/mnt/server/${target%/start-airi.sh}/manifest.json"'
+        'set -Eeuo pipefail; test -L /mnt/server/start-sgluna.sh; test "$(readlink /mnt/server/start-airi.sh)" = start-sgluna.sh; test -x /mnt/server/rollback-sgluna.sh; test "$(readlink /mnt/server/rollback-airi.sh)" = rollback-sgluna.sh; test -s /mnt/server/client-mods/autorio_0.1.0.zip; test -s /mnt/server/client-mods/SHA256SUMS; test ! -e /mnt/server/autorio_0.1.0.zip; test -s /mnt/server/sgluna-config.json; test -s /mnt/server/README-SGLUNA.txt; test -d /mnt/server/mods; test -d /mnt/server/saves; ! grep -q smoke-secret /mnt/server/sgluna-config.json; target=$(readlink /mnt/server/start-sgluna.sh); case "$target" in .airi/releases/*/start-sgluna.sh) ;; *) echo "unexpected startup target: $target" >&2; exit 1;; esac; test -s "/mnt/server/${target%/start-sgluna.sh}/manifest.json"'
     )
 
     Write-Host '[pterodactyl-smoke] Starting packaged runtime with zero connected players.'
@@ -99,13 +99,13 @@ try {
         '-v', "${Volume}:/home/container",
         '-w', '/home/container',
         '-e', 'CONTAINER_ROOT=/home/container',
-        '-e', 'AIRI_ACTOR_MODE=npc',
+        '-e', 'SGLUNA_ACTOR_MODE=npc',
         '-e', 'OPENAI_API_KEY=smoke-secret',
         '-e', 'OPENAI_MODEL=smoke-model',
         '-e', 'OPENAI_API_BASEURL=https://api.example.invalid/v1',
         '-e', 'SERVER_PORT=34197',
         $Image,
-        'bash', './start-airi.sh'
+        'bash', './start-sgluna.sh'
     )
     if ([string]::IsNullOrWhiteSpace($startedId)) {
         throw 'Runtime container did not return a container ID.'

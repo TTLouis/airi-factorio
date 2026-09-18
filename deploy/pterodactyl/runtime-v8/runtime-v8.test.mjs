@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 
 import { chatAuthorized, describeChatPlayers } from './common.mjs'
 import { providerEndpoint } from './provider.mjs'
-import { configuration, factorioVisibilityDiagnostics, installedAppRoot, Session } from './supervisor.mjs'
+import { configuration, deploymentCompatibilityWarnings, factorioVisibilityDiagnostics, installedAppRoot, Session } from './supervisor.mjs'
 
 async function temp(t) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-v8-'))
@@ -16,7 +16,7 @@ async function temp(t) {
 }
 
 const baseEnv = {
-  AIRI_ACTOR_MODE: 'npc',
+  SGLUNA_ACTOR_MODE: 'npc',
   AIRI_CHAT_PLAYER: 'Louis',
   OPENAI_API_KEY: 'test-key-1234',
   OPENAI_MODEL: 'test-model',
@@ -35,41 +35,73 @@ test('configuration defaults to standalone NPC and keeps chat authorization sepa
   delete aliasEnv.AIRI_CHAT_PLAYER
   const alias = configuration({}, aliasEnv)
   assert.deepEqual(alias.chatPlayers, { mode: 'allowlist', names: ['LegacyName'] })
-  assert.throws(() => configuration({}, { ...baseEnv, AIRI_ACTOR_MODE: 'player' }))
+  assert.throws(() => configuration({}, { ...baseEnv, SGLUNA_ACTOR_MODE: 'player' }))
 })
 
-test('AIRI_CHAT_PLAYERS blank or "*" allows every player', () => {
-  const blank = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: '' })
+test('SGLUNA deployment variables override AIRI compatibility values deterministically', () => {
+  const env = {
+    ...baseEnv,
+    SGLUNA_ACTOR_MODE: 'npc',
+    AIRI_ACTOR_MODE: 'player',
+    SGLUNA_CHAT_PLAYERS: 'TTLouis',
+    AIRI_CHAT_PLAYERS: 'Legacy',
+  }
+  const config = configuration({}, env)
+  assert.equal(config.actorMode, 'npc')
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['TTLouis'] })
+  assert.deepEqual(deploymentCompatibilityWarnings(env), [
+    'SGLUNA_ACTOR_MODE overrides conflicting compatibility value AIRI_ACTOR_MODE.',
+    'SGLUNA_CHAT_PLAYERS overrides conflicting compatibility value AIRI_CHAT_PLAYERS.',
+  ])
+})
+
+test('legacy AIRI deployment variables remain accepted when SGLUNA variables are absent', () => {
+  const env = { ...baseEnv }
+  delete env.SGLUNA_ACTOR_MODE
+  env.AIRI_ACTOR_MODE = 'npc'
+  env.AIRI_CHAT_PLAYERS = 'Legacy'
+  const config = configuration({}, env)
+  assert.equal(config.actorMode, 'npc')
+  assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['Legacy'] })
+})
+
+test('explicit blank SGLUNA_CHAT_PLAYERS overrides non-blank AIRI compatibility values', () => {
+  const config = configuration({}, { ...baseEnv, SGLUNA_CHAT_PLAYERS: '', AIRI_CHAT_PLAYERS: 'Legacy' })
+  assert.deepEqual(config.chatPlayers, { mode: 'all', names: [] })
+})
+
+test('SGLUNA_CHAT_PLAYERS blank or "*" allows every player', () => {
+  const blank = configuration({}, { ...baseEnv, SGLUNA_CHAT_PLAYERS: '' })
   assert.deepEqual(blank.chatPlayers, { mode: 'all', names: [] })
   assert.equal(chatAuthorized(blank.chatPlayers, 'AnyoneAtAll'), true)
-  const wildcard = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: '*' })
+  const wildcard = configuration({}, { ...baseEnv, SGLUNA_CHAT_PLAYERS: '*' })
   assert.deepEqual(wildcard.chatPlayers, { mode: 'all', names: [] })
   assert.equal(chatAuthorized(wildcard.chatPlayers, 'AnyoneAtAll'), true)
 })
 
-test('AIRI_CHAT_PLAYERS "none" disables every player', () => {
-  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: 'none' })
+test('SGLUNA_CHAT_PLAYERS "none" disables every player', () => {
+  const config = configuration({}, { ...baseEnv, SGLUNA_CHAT_PLAYERS: 'none' })
   assert.deepEqual(config.chatPlayers, { mode: 'disabled', names: [] })
   assert.equal(chatAuthorized(config.chatPlayers, 'Louis'), false)
 })
 
-test('AIRI_CHAT_PLAYERS supports a single-name allowlist', () => {
-  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: 'TTLouis' })
+test('SGLUNA_CHAT_PLAYERS supports a single-name allowlist', () => {
+  const config = configuration({}, { ...baseEnv, SGLUNA_CHAT_PLAYERS: 'TTLouis' })
   assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['TTLouis'] })
   assert.equal(chatAuthorized(config.chatPlayers, 'TTLouis'), true)
   assert.equal(chatAuthorized(config.chatPlayers, 'Alice'), false)
 })
 
-test('AIRI_CHAT_PLAYERS supports a multi-name allowlist and trims/dedupes whitespace', () => {
-  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: ' TTLouis , Alice ,,Bob, Alice ' })
+test('SGLUNA_CHAT_PLAYERS supports a multi-name allowlist and trims/dedupes whitespace', () => {
+  const config = configuration({}, { ...baseEnv, SGLUNA_CHAT_PLAYERS: ' TTLouis , Alice ,,Bob, Alice ' })
   assert.deepEqual(config.chatPlayers, { mode: 'allowlist', names: ['TTLouis', 'Alice', 'Bob'] })
   assert.equal(chatAuthorized(config.chatPlayers, 'TTLouis'), true)
   assert.equal(chatAuthorized(config.chatPlayers, 'Alice'), true)
   assert.equal(chatAuthorized(config.chatPlayers, 'Bob'), true)
 })
 
-test('AIRI_CHAT_PLAYERS rejects a player not on the allowlist', () => {
-  const config = configuration({}, { ...baseEnv, AIRI_CHAT_PLAYERS: 'TTLouis,Alice' })
+test('SGLUNA_CHAT_PLAYERS rejects a player not on the allowlist', () => {
+  const config = configuration({}, { ...baseEnv, SGLUNA_CHAT_PLAYERS: 'TTLouis,Alice' })
   assert.equal(chatAuthorized(config.chatPlayers, 'Eve'), false)
 })
 

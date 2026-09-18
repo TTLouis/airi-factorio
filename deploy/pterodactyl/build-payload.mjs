@@ -12,9 +12,9 @@ const e2eEggPath = join(here, 'egg-sgluna-factorio-npc-e2e.json')
 const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
 
 // Immutable commit containing the audited installer payload. Channel eggs keep
-// this bootstrap immutable, then resolve AIRI_SOURCE_REF to an exact commit at
+// this bootstrap immutable, then resolve SGLUNA_SOURCE_REF to an exact commit at
 // reinstall time and patch only the payload's AIRI_REF/revision assignments.
-const PAYLOAD_REF = 'e60621a937cec31c035f2d0345c08d57bd27a119'
+const PAYLOAD_REF = '0644179762b2d1fbb7de8ca4ca3a261ee248ae99'
 const CHANNELS = Object.freeze({
   main: {
     name: 'SGLuna Factorio Server (Main)',
@@ -38,8 +38,8 @@ function assertNpcV8Source(source) {
   const text = source.toString('utf8')
   const failures = []
   if (!text.includes('airi-deploy-v8')) failures.push('missing v8 deployment revision')
-  if (!text.includes('AIRI_ACTOR_MODE')) failures.push('missing AIRI_ACTOR_MODE')
-  if (!text.includes('AIRI_CHAT_PLAYER')) failures.push('missing AIRI_CHAT_PLAYER')
+  if (!text.includes('SGLUNA_ACTOR_MODE')) failures.push('missing SGLUNA_ACTOR_MODE')
+  if (!text.includes('SGLUNA_CHAT_PLAYERS')) failures.push('missing SGLUNA_CHAT_PLAYERS')
   if (!/AIRI_REF="[a-f0-9]{40}"/.test(text)) failures.push('missing immutable AIRI_REF pin')
   if (text.includes('airi-deploy-v7')) failures.push('contains v7 deployment guard')
   if (text.includes('explicit-authorized-single-connected-player')) failures.push('contains connected-player patch contract')
@@ -69,7 +69,7 @@ trap 'exit 143' TERM HUP
 for tool in bash curl sha256sum awk mktemp rm; do command -v "$tool" >/dev/null || fail "Missing installer loader tool: $tool"; done
 curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$TMP" || fail 'Unable to download pinned SGLuna installer source'
 ACTUAL_SOURCE_SHA256="$(sha256sum "$TMP" | awk '{print $1}')"
-[[ "$ACTUAL_SOURCE_SHA256" == "$EXPECTED_SOURCE_SHA256" ]] || fail 'Pinned AIRI installer source checksum mismatch'
+[[ "$ACTUAL_SOURCE_SHA256" == "$EXPECTED_SOURCE_SHA256" ]] || fail 'Pinned SGLuna installer source checksum mismatch'
 if [[ "\${1:-}" == '--verify-only' ]]; then log "Pinned payload verified at $REF; installation was not run."; exit 0; fi
 [[ $# == 0 ]] || fail 'Only --verify-only is supported as a loader argument.'
 log "Using immutable installer payload $REF"
@@ -91,32 +91,44 @@ PAYLOAD_REF="${PAYLOAD_REF}"
 EXPECTED_PAYLOAD_SHA256="${sourceHash}"
 DEFAULT_SOURCE_REF="${config.sourceRef}"
 CHANNEL="${config.release}"
-SOURCE_REF="\${AIRI_SOURCE_REF:-$DEFAULT_SOURCE_REF}"
+SOURCE_REF="$DEFAULT_SOURCE_REF"
+SOURCE_REF_ORIGIN="default"
+if [[ -n "\${SGLUNA_SOURCE_REF:-}" ]]; then
+  SOURCE_REF="$SGLUNA_SOURCE_REF"
+  SOURCE_REF_ORIGIN="sgluna"
+elif [[ -n "\${AIRI_SOURCE_REF:-}" ]]; then
+  SOURCE_REF="$AIRI_SOURCE_REF"
+  SOURCE_REF_ORIGIN="airi"
+fi
 BASE="$(mktemp)"
 PATCHED="$(mktemp)"
 RESOLUTION="$(mktemp)"
 log() { printf '[SGLuna channel:%s] %s\\n' "$CHANNEL" "$*"; }
 fail() { log "ERROR: $*" >&2; exit 78; }
+if [[ "$SOURCE_REF_ORIGIN" == "airi" ]]; then log 'Using legacy AIRI_SOURCE_REF compatibility fallback; prefer SGLUNA_SOURCE_REF.'; fi
+if [[ -n "\${SGLUNA_SOURCE_REF:-}" && -n "\${AIRI_SOURCE_REF:-}" && "$SGLUNA_SOURCE_REF" != "$AIRI_SOURCE_REF" ]]; then
+  log 'Compatibility warning: SGLUNA_SOURCE_REF overrides conflicting AIRI_SOURCE_REF.'
+fi
 cleanup() { local code=$?; trap - EXIT; rm -f -- "$BASE" "$PATCHED" "$RESOLUTION"; exit "$code"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 for tool in bash curl sha256sum awk grep mktemp rm tr; do command -v "$tool" >/dev/null || fail "Missing channel installer tool: $tool"; done
-[[ -n "$SOURCE_REF" && "$SOURCE_REF" != -* && "$SOURCE_REF" != */../* && "$SOURCE_REF" != ../* && "$SOURCE_REF" != */.. && "$SOURCE_REF" != *' '* ]] || fail 'Invalid AIRI_SOURCE_REF'
+[[ -n "$SOURCE_REF" && "$SOURCE_REF" != -* && "$SOURCE_REF" != */../* && "$SOURCE_REF" != ../* && "$SOURCE_REF" != */.. && "$SOURCE_REF" != *' '* ]] || fail 'Invalid SGLUNA_SOURCE_REF'
 if [[ "$SOURCE_REF" =~ ^[a-f0-9]{40}$ ]]; then
   RESOLVED_SHA="$SOURCE_REF"
 else
   curl --fail --location --retry 3 --connect-timeout 20 --max-time 60 --proto '=https' --proto-redir '=https' \\
     --get --data-urlencode "sha=$SOURCE_REF" --data-urlencode 'per_page=1' \\
     'https://api.github.com/repos/TTLouis/factorio-npc/commits' --output "$RESOLUTION" \\
-    || fail "Unable to resolve AIRI_SOURCE_REF=$SOURCE_REF"
+    || fail "Unable to resolve SGLUNA_SOURCE_REF=$SOURCE_REF"
   RESOLVED_SHA="$(grep -m1 -oE '\"sha\"[[:space:]]*:[[:space:]]*\"[a-f0-9]{40}\"' "$RESOLUTION" | grep -oE '[a-f0-9]{40}' || true)"
-  [[ "$RESOLVED_SHA" =~ ^[a-f0-9]{40}$ ]] || fail "AIRI_SOURCE_REF did not resolve to a commit: $SOURCE_REF"
+  [[ "$RESOLVED_SHA" =~ ^[a-f0-9]{40}$ ]] || fail "SGLUNA_SOURCE_REF did not resolve to a commit: $SOURCE_REF"
 fi
 log "Resolved $SOURCE_REF -> $RESOLVED_SHA"
 URL="https://raw.githubusercontent.com/TTLouis/factorio-npc/$PAYLOAD_REF/deploy/pterodactyl/payload-src/installer.sh"
 curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$BASE" \\
-  || fail 'Unable to download immutable AIRI installer payload'
+  || fail 'Unable to download immutable SGLuna installer payload'
 ACTUAL_PAYLOAD_SHA256="$(sha256sum "$BASE" | awk '{print $1}')"
 [[ "$ACTUAL_PAYLOAD_SHA256" == "$EXPECTED_PAYLOAD_SHA256" ]] || fail 'Immutable SGLuna installer payload checksum mismatch'
 [[ "$(grep -Ec '^AIRI_REF="[a-f0-9]{40}"$' "$BASE")" == 1 && "$(grep -c '^AIRI_REF=' "$BASE")" == 1 ]] || fail 'Unexpected AIRI_REF assignment contract in immutable payload'
@@ -151,7 +163,7 @@ function egg(installScript, channel) {
   const config = CHANNELS[channel]
   const decisionProviderVariables = channel === 'npcE2e'
     ? [
-        variable('TypeSafe API Key', 'Optional Jev/System One decision-provider credential. Leave blank to disable the decision lane. Kept environment-only and never written to airi-config.json.', 'TYPESAFE_API_KEY', '', 'nullable|string|max:512', { viewable: false }),
+        variable('TypeSafe API Key', 'Optional Jev/System One decision-provider credential. Leave blank to disable the decision lane. Kept environment-only and never written to sgluna-config.json.', 'TYPESAFE_API_KEY', '', 'nullable|string|max:512', { viewable: false }),
         variable('Jev Decision Model', 'TypeSafe System One model used for bounded decision routing when a TypeSafe API key is present.', 'DECISION_PROVIDER_MODEL', 'jev-latest', 'required|string|max:200'),
         variable('Max Jev Requests Per Hour', 'Persisted hourly cap for Jev decision-provider calls. Separate from the main planner provider budget.', 'MAX_DECISION_PROVIDER_REQUESTS_PER_HOUR', '60', 'required|numeric|between:1,1200'),
       ]
@@ -168,7 +180,7 @@ function egg(installScript, channel) {
       'ghcr.io/ptero-eggs/yolks:debian_bookworm': 'ghcr.io/ptero-eggs/yolks:debian_bookworm',
     },
     file_denylist: [],
-    startup: 'bash ./start-airi.sh',
+    startup: 'bash ./start-sgluna.sh',
     config: {
       files: '{}',
       startup: '{"done": "SGLuna Factorio ready"}',
@@ -183,10 +195,10 @@ function egg(installScript, channel) {
       },
     },
     variables: [
-      variable('SGLuna Source Ref', `Git branch, tag, or exact 40-character commit SHA followed when this ${config.release} egg is reinstalled. Restart does not resolve or update this ref.`, 'AIRI_SOURCE_REF', config.sourceRef, 'required|string|max:200'),
-      variable('SGLuna Actor Mode', 'Controlled actor mode. The v8 egg intentionally supports standalone NPC ownership only.', 'AIRI_ACTOR_MODE', 'npc', 'required|string|in:npc'),
-      variable('SGLuna Chat Players', 'Players allowed to issue !airi commands. Leave blank or use * to allow everyone. Enter comma-separated exact player names for an allowlist. Use none to disable in-game !airi compatibility commands.', 'AIRI_CHAT_PLAYERS', '', 'nullable|string|max:512'),
-      variable('OpenAI API Key', 'Provider credential. Kept environment-only and never written to airi-config.json.', 'OPENAI_API_KEY', '', 'required|string|max:512', { viewable: false }),
+      variable('SGLuna Source Ref', `Git branch, tag, or exact 40-character commit SHA followed when this ${config.release} egg is reinstalled. Restart does not resolve or update this ref.`, 'SGLUNA_SOURCE_REF', config.sourceRef, 'required|string|max:200'),
+      variable('SGLuna Actor Mode', 'Controlled actor mode. The v8 egg intentionally supports standalone NPC ownership only.', 'SGLUNA_ACTOR_MODE', 'npc', 'required|string|in:npc'),
+      variable('SGLuna Chat Players', 'Players allowed to issue !luna commands. Leave blank or use * to allow everyone. Enter comma-separated exact player names for an allowlist. Use none to disable in-game commands. Legacy !airi remains accepted as a compatibility alias.', 'SGLUNA_CHAT_PLAYERS', '', 'nullable|string|max:512'),
+      variable('OpenAI API Key', 'Provider credential. Kept environment-only and never written to sgluna-config.json.', 'OPENAI_API_KEY', '', 'required|string|max:512', { viewable: false }),
       variable('AI Model', 'OpenAI-compatible model identifier used by SGLuna. Replace the placeholder with a model supported by your provider.', 'OPENAI_MODEL', 'replace-me', 'required|string|max:200'),
       variable('Provider Base URL', 'OpenAI-compatible API base URL. Replace the non-routable placeholder; remote endpoints must use HTTPS.', 'OPENAI_API_BASEURL', 'https://provider.invalid/v1', 'required|string|url|max:255'),
       variable('Provider Timeout (ms)', 'Maximum time for one provider response before the SGLuna turn is cancelled and reported in game.', 'PROVIDER_TIMEOUT_MS', '120000', 'required|numeric|between:1000,600000'),
@@ -218,7 +230,7 @@ function verifyEgg(text, expectedText, expectedChannel) {
   try { parsed = JSON.parse(normalized) }
   catch (error) { throw new Error(`Generated ${expectedChannel} egg JSON is invalid: ${error.message}`) }
   if (normalized !== expectedText) throw new Error(`Generated ${expectedChannel} egg schema is stale`)
-  const sourceRef = parsed.variables?.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')
+  const sourceRef = parsed.variables?.find(entry => entry.env_variable === 'SGLUNA_SOURCE_REF')
   if (sourceRef?.default_value !== CHANNELS[expectedChannel].sourceRef) throw new Error(`Generated ${expectedChannel} egg has the wrong source ref`)
   if (!parsed.scripts?.installation?.script?.includes(`CHANNEL="${CHANNELS[expectedChannel].release}"`)) throw new Error(`Generated ${expectedChannel} egg has the wrong channel loader`)
   return parsed

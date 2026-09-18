@@ -1,4 +1,4 @@
-# AIRI Factorio — NPC Console / Project Context Handoff
+# SGLuna — NPC Console / Project Context Handoff
 
 **Status:** Conversation checkpoint is handoff-ready and safe to archive. The repository/project itself is still active.
 
@@ -79,12 +79,12 @@ The current implementation has advanced substantially beyond the early screensho
 
 The console is now a two-column layout:
 
-- the left side contains compact status/controls, AI response/debug projection, the plan/activity tracker, and `Prompt AIRI`;
+- the left side contains compact status/controls, AI response/debug projection, the plan/activity tracker, and `Prompt SGLuna`;
 - the right side contains the NPC world preview and resource/equipment information.
 
 Important layout decisions from this discussion:
 
-- `Prompt AIRI` must stay constrained to the left-side control area rather than stretching under the preview;
+- `Prompt SGLuna` must stay constrained to the left-side control area rather than stretching under the preview;
 - left-side first-level section gaps should use one consistent spacing value;
 - Status and Controls should use their natural compact height rather than being vertically stretched;
 - the two sides should feel vertically balanced instead of leaving a large dead area under the preview;
@@ -92,9 +92,9 @@ Important layout decisions from this discussion:
 
 ### Prompt and UI control bridge
 
-The UI prompt is a dedicated AIRI entry point. Users should type the request directly into `Prompt AIRI`; they should **not** have to prefix it with `!airi`.
+The UI prompt is the dedicated SGLuna entry point. Users should type requests directly into `Prompt SGLuna`; they do not need a chat prefix.
 
-The chat `!airi ...` command remains a separate compatibility/input path.
+The preferred chat command is `!luna ...`; legacy `!airi ...` remains a compatibility alias routed through the same input path.
 
 Prompt, Pause, Terminate, Follow, and related UI actions must not depend on stdout log markers being scraped by the Node runtime. The current direction is the deterministic mod-side input queue exposed through `autorio_task_board.drain_inputs`, consumed through the RCON/runtime lane.
 
@@ -308,7 +308,7 @@ The deployment configuration rule remains:
 
 > **Pterodactyl Egg/environment variables are the source of truth.**
 
-`airi-config.json` may persist non-secret/default/runtime-visible values, but it must not override an environment value.
+`sgluna-config.json` may persist non-secret/default/runtime-visible values, but it must not override an environment value.
 
 Important environment-controlled values discussed during this work include:
 
@@ -335,3 +335,5 @@ For a new chat/agent continuing from this checkpoint:
 ## Archive note
 
 This conversation can be archived after this checkpoint is committed. Its durable project decisions are preserved here, while current implementation truth remains in the branch source, tests, CI, and the authority documents listed at the top of this file.
+
+> Compatibility note: the underlying runtime actor identity remains `AIRI` / `airi`; console branding and deployment controls are SGLuna.

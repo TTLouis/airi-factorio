@@ -13,7 +13,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: airi-factorio-release
+  group: factorio-npc-release
   cancel-in-progress: false
 
 jobs:
@@ -48,13 +48,13 @@ jobs:
 
       - name: Smoke exact release SHA through Pterodactyl egg
         env:
-          AIRI_SMOKE_SOURCE_REF: ${{ github.sha }}
+          SGLUNA_SMOKE_SOURCE_REF: ${{ github.sha }}
         run: bash deploy/pterodactyl/package-smoke.sh
 
       - name: Run zero-player Factorio integration harness
         run: |
-          docker build -f tests/factorio/Dockerfile -t airi-factorio-release-test .
-          docker run --rm airi-factorio-release-test
+          docker build -f tests/factorio/Dockerfile -t factorio-npc-release-test .
+          docker run --rm factorio-npc-release-test
 
   publish:
     needs: verify
@@ -83,8 +83,8 @@ jobs:
           const input = 'deploy/pterodactyl/egg-sgluna-factorio-server.json'
           const output = `release-out/egg-sgluna-factorio-${version}.json`
           const egg = JSON.parse(fs.readFileSync(input, 'utf8'))
-          const sourceVariable = egg.variables?.find(entry => entry.env_variable === 'AIRI_SOURCE_REF')
-          if (!sourceVariable) throw new Error('AIRI_SOURCE_REF variable is missing from the generated egg')
+          const sourceVariable = egg.variables?.find(entry => entry.env_variable === 'SGLUNA_SOURCE_REF')
+          if (!sourceVariable) throw new Error('SGLUNA_SOURCE_REF variable is missing from the generated egg')
           sourceVariable.default_value = sha
           sourceVariable.description = `Exact source commit for ${version}. Change only if you intentionally want to leave this prerelease.`
 
@@ -94,7 +94,7 @@ jobs:
           if (!script.includes(expected)) throw new Error('main source fallback contract changed')
           egg.scripts.installation.script = script.replace(expected, `DEFAULT_SOURCE_REF="${sha}"`)
           egg.name = `SGLuna Factorio Server (${version})`
-          egg.description = `Immutable SGLuna Factorio prerelease ${version}, pinned to ${sha}. Restart and reinstall stay on this release unless AIRI_SOURCE_REF is explicitly changed.`
+          egg.description = `Immutable SGLuna Factorio prerelease ${version}, pinned to ${sha}. Restart and reinstall stay on this release unless SGLUNA_SOURCE_REF is explicitly changed.`
           fs.writeFileSync(output, `${JSON.stringify(egg, null, 4)}\n`)
           NODE
           sha256sum "release-out/egg-sgluna-factorio-${VERSION}.json" > release-out/SHA256SUMS
@@ -109,19 +109,19 @@ jobs:
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker build --pull \
             -f deploy/docker/Dockerfile \
-            --build-arg AIRI_SOURCE_REF="$GITHUB_SHA" \
+            --build-arg SGLUNA_SOURCE_REF="$GITHUB_SHA" \
             --build-arg FACTORIO_VERSION=latest \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.version=$VERSION" \
             -t "$image:$VERSION" .
 
-          name="airi-release-smoke-${GITHUB_RUN_ID}"
+          name="sgluna-release-smoke-${GITHUB_RUN_ID}"
           cleanup() { docker rm -f -v "$name" >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           docker run -d --name "$name" \
             -e CONTAINER_ROOT=/data \
-            -e AIRI_ACTOR_MODE=npc \
+            -e SGLUNA_ACTOR_MODE=npc \
             -e OPENAI_API_KEY=release-smoke-secret \
             -e OPENAI_API_BASEURL=https://api.example.invalid/v1 \
             -e OPENAI_MODEL=release-smoke-model \

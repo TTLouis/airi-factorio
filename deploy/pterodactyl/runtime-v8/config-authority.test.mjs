@@ -5,7 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { prepareServerSettings } from './game-files.mjs'
-import { configuration, migrateConfigFile, Session } from './supervisor.mjs'
+import { configuration, migrateCanonicalConfig, Session } from './supervisor.mjs'
 
 async function temp(t) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-config-authority-'))
@@ -35,8 +35,8 @@ function fixtureSecret(label) {
 
 function eggEnv(overrides = {}) {
   return {
-    AIRI_ACTOR_MODE: 'npc',
-    AIRI_CHAT_PLAYERS: 'Alice,Bob',
+    SGLUNA_ACTOR_MODE: 'npc',
+    SGLUNA_CHAT_PLAYERS: 'Alice,Bob',
     OPENAI_API_KEY: fixtureSecret('provider-key'),
     OPENAI_MODEL: 'egg-model-a',
     OPENAI_API_BASEURL: 'https://provider-a.example.test/v1',
@@ -51,9 +51,9 @@ function eggEnv(overrides = {}) {
   }
 }
 
-test('Egg environment overrides stored runtime config and is synchronized into airi-config.json on every restart', async t => {
+test('SGLuna Egg environment overrides stored runtime config and is synchronized into sgluna-config.json on every restart', async t => {
   const root = await temp(t)
-  const filename = path.join(root, 'airi-config.json')
+  const filename = path.join(root, 'sgluna-config.json')
   const legacyProviderKey = fixtureSecret('legacy-provider-key')
   const legacyFactorioToken = fixtureSecret('legacy-factorio-token')
   const stored = {
@@ -92,7 +92,7 @@ test('Egg environment overrides stored runtime config and is synchronized into a
     public: true,
   })
 
-  const firstPersisted = await migrateConfigFile(filename, firstEnv)
+  const firstPersisted = (await migrateCanonicalConfig(root, firstEnv)).config
   assert.deepEqual(firstPersisted, {
     actorMode: 'npc',
     chatPlayers: 'Alice,Bob',
@@ -113,7 +113,7 @@ test('Egg environment overrides stored runtime config and is synchronized into a
   assert.equal(fileText.includes('unknownLegacyField'), false)
 
   const secondEnv = eggEnv({
-    AIRI_CHAT_PLAYERS: 'none',
+    SGLUNA_CHAT_PLAYERS: 'none',
     OPENAI_API_KEY: fixtureSecret('provider-key-b'),
     OPENAI_MODEL: 'egg-model-b',
     OPENAI_API_BASEURL: 'https://provider-b.example.test/v1',
@@ -125,7 +125,7 @@ test('Egg environment overrides stored runtime config and is synchronized into a
     FACTORIO_USERNAME: '',
     FACTORIO_TOKEN: '',
   })
-  const secondPersisted = await migrateConfigFile(filename, secondEnv)
+  const secondPersisted = (await migrateCanonicalConfig(root, secondEnv)).config
   const secondEffective = configuration(secondPersisted, secondEnv)
 
   assert.deepEqual(secondPersisted, {
@@ -155,10 +155,9 @@ test('Egg environment overrides stored runtime config and is synchronized into a
   assert.equal(fileText.includes('FACTORIO_TOKEN'), false)
 })
 
-
 test('decision provider auto-configures from TypeSafe credentials without persisting secrets or an enabled flag', async t => {
   const root = await temp(t)
-  const filename = path.join(root, 'airi-config.json')
+  const filename = path.join(root, 'sgluna-config.json')
   const decisionKey = fixtureSecret('typesafe-key')
   const env = eggEnv({
     TYPESAFE_API_KEY: decisionKey,

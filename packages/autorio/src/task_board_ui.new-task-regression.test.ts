@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('task board New Task control regression', () => {
-  it('renders New Task in the Prompt AIRI heading and queues the server-authoritative action', () => {
+  it('renders New Task in the Prompt SGLuna heading and queues the server-authoritative action', () => {
     const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
     const controls = source.split('function render_controls_panel(')[1]?.split('export function task_board_gui_height(')[0] ?? ''
     const prompt = source.split('function render_prompt(')[1]?.split('function render_titlebar(')[0] ?? ''
@@ -11,7 +11,7 @@ describe('task board New Task control regression', () => {
     expect(source).toContain("const NEW_TASK_BUTTON_NAME = 'airi_task_board_new_task'")
     expect(source).toContain("type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow' | 'new_task'")
     expect(controls).not.toContain("name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK'")
-    expect(prompt).toContain("caption: 'Prompt AIRI'")
+    expect(prompt).toContain("caption: 'Prompt SGLuna'")
     expect(prompt).toContain("name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK'")
     expect(prompt).toContain('header_spacer.style.horizontally_stretchable = true')
     expect(prompt).not.toContain('header.style.horizontal_spacing')
