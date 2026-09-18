@@ -51,6 +51,9 @@ function currentDifficultySignals(messages) {
 
 export function selectReasoningPolicy(config, messages, options = {}) {
   if (!deepSeekModel(config)) return undefined
+  if (options.interactionRouter === true) {
+    return { effort: 'none', reason: 'interaction_router' }
+  }
   if (options.recoveryKind === 'output_budget_exhaustion') {
     return { effort: 'none', reason: 'output_budget_recovery' }
   }
@@ -67,8 +70,10 @@ export function selectReasoningPolicy(config, messages, options = {}) {
     return { effort: 'high', reason: 'ordinary_replan' }
   }
 
-  const currentUser = lastUserContent(messages)
-  if (currentUser.startsWith(CHAT_MARKER)) return { effort: 'high', reason: 'new_goal' }
+  if (options.triggerSource === 'new_goal') return { effort: 'high', reason: 'new_goal' }
+  if (options.triggerSource === 'amend_current' || options.triggerSource === 'continue_current') {
+    return { effort: 'high', reason: 'ordinary_replan' }
+  }
   return { effort: 'high', reason: 'ordinary_planning' }
 }
 
@@ -95,7 +100,12 @@ export async function providerRequest(config, messages, options = {}) {
   const actualEndpoint = providerEndpoint(config.base)
   const requestOptions = {
     ...options,
-    requestBodyPatch: reasoningBodyPatch(policy),
+    requestBodyPatch: {
+      ...(options.requestBodyPatch && typeof options.requestBodyPatch === 'object' && !Array.isArray(options.requestBodyPatch)
+        ? options.requestBodyPatch
+        : {}),
+      ...reasoningBodyPatch(policy),
+    },
     providerPolicy: policy,
   }
   const compactPath = options.recoveryKind === 'output_budget_exhaustion' || completionContinuation(messages, options)
