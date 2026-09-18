@@ -10,6 +10,7 @@ import {
   task_conversation_messages,
   toggle_debug_activity_follow,
   reset_task_conversation,
+  sanitize_debug_snapshot,
 } from './task_board_debug'
 
 const store = () => (globalThis as any).storage as Record<string, any>
@@ -19,6 +20,37 @@ beforeEach(() => {
 })
 
 describe('task board debug and UI freshness helpers', () => {
+  it('sanitizes Jev decision diagnostics independently from planner diagnostics', () => {
+    const debug = sanitize_debug_snapshot({
+      provider_model: 'deepseek-chat',
+      input_units: 100000,
+      decision_provider: 'TypeSafe',
+      decision_model: 'jev-latest',
+      decision_shadow_intent: 'status_query',
+      decision_active_intent: 'status_query',
+      decision_confidence_percent: 109,
+      decision_queue_conflict_percent: 17,
+      decision_latency_ms: 84,
+      decision_input_units: 120,
+      decision_output_units: 20,
+      decision_cost_micro_usd: 5,
+      decision_error: '',
+    })
+
+    expect(debug.provider_model).toBe('deepseek-chat')
+    expect(debug.input_units).toBe(100000)
+    expect(debug.decision_provider).toBe('TypeSafe')
+    expect(debug.decision_model).toBe('jev-latest')
+    expect(debug.decision_shadow_intent).toBe('status_query')
+    expect(debug.decision_active_intent).toBe('status_query')
+    expect(debug.decision_confidence_percent).toBe(100)
+    expect(debug.decision_queue_conflict_percent).toBe(17)
+    expect(debug.decision_latency_ms).toBe(84)
+    expect(debug.decision_input_units).toBe(120)
+    expect(debug.decision_output_units).toBe(20)
+    expect(debug.decision_cost_micro_usd).toBe(5)
+  })
+
   it('uses concise follow captions', () => {
     expect(follow_button_caption(false)).toBe('FOLLOW')
     expect(follow_button_caption(true)).toBe('FOLLOWING')
