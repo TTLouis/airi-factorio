@@ -921,6 +921,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.traceRequest = null
     this.traceRequestSequence = 0
     this.planUpdateReason = 'request'
+    this.requestLifecycle = 'new_goal'
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
@@ -1509,6 +1510,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         recoveryAttempt,
         recoveryKind,
         triggerSource: this.planUpdateReason,
+        lifecycle: this.requestLifecycle,
         signal: controller.signal,
       })
       const usage = normalizedProviderUsage(message?._airiProvider?.usage)
