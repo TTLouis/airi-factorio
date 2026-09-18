@@ -52,7 +52,7 @@ function planState(overrides = {}) {
   }
 }
 
-function completedReceipt({ batchId = 7, taskTypes = ['crafting'], taskCount = taskTypes.length } = {}) {
+function completedReceipt({ batchId = 7, taskTypes = ['crafting'], taskCount = taskTypes.length, basicOperation } = {}) {
   return {
     kind: 'operation_receipt',
     ref: `batch_${batchId}`,
@@ -64,6 +64,7 @@ function completedReceipt({ batchId = 7, taskTypes = ['crafting'], taskCount = t
       task_count: taskCount,
       task_types: taskTypes,
       tick: 200,
+      basic_operation: basicOperation,
     }),
   }
 }
@@ -98,6 +99,21 @@ test('explicit failure replan is still allowed to replace the remaining suffix',
   assert.equal(canonicalContinuationPlan(board(), proposal, { allowReplan: true }), proposal)
 })
 
+test('provider currentStep cannot skip an unverified transfer mutation', () => {
+  const transferState = planState({
+    last_operations: ['move_items_exact {"item_name":"iron-ore","unit_number":582,"max_count":20,"to_entity":true}'],
+    last_mutation_verified: false,
+  })
+  const guarded = canonicalContinuationPlan(board(), {
+    plan: board().steps.map(step => step.description),
+    currentStep: 3,
+    operations: [],
+  }, { previousState: transferState })
+
+  assert.equal(guarded.currentStep, 2)
+  assert.deepEqual(guarded.plan, board().steps.map(step => step.description))
+})
+
 test('strict completed operation receipts are eligible for deterministic verification', () => {
   const verified = verifyDeterministicReceipt(planState(), completedReceipt())
   assert.deepEqual(verified, {
@@ -108,9 +124,59 @@ test('strict completed operation receipts are eligible for deterministic verific
   })
 })
 
-test('partial-capable transfers, research and wait require additional verification', () => {
+test('successful entity transfers require a real positive-effect moving-items receipt', () => {
+  const state = planState({
+    last_operations: ['move_items_exact {"item_name":"coal","unit_number":99,"max_count":10,"to_entity":true}'],
+  })
+  const verified = verifyDeterministicReceipt(state, completedReceipt({
+    taskTypes: ['moving_items'],
+    basicOperation: {
+      type: 'moving_items',
+      accepted: true,
+      completed: true,
+      code: 'completed',
+      item_name: 'coal',
+      requested_count: 10,
+      moved_count: 10,
+      target_unit_number: 99,
+      to_entity: true,
+    },
+  }))
+  assert.equal(verified.verified, true)
+
+  for (const basicOperation of [
+    { type: 'moving_items', accepted: true, completed: true, code: 'completed', moved_count: 0, target_unit_number: 99, to_entity: true },
+    { type: 'moving_items', accepted: false, completed: false, code: 'nothing_moved', moved_count: 0, target_unit_number: 99, to_entity: true },
+  ]) {
+    const rejected = verifyDeterministicReceipt(state, completedReceipt({ taskTypes: ['moving_items'], basicOperation }))
+    assert.deepEqual(rejected, { verified: false, reason: 'transfer_effect_not_verified' })
+  }
+})
+
+test('multi-item supply_entity verifies only when the whole moving-items batch completes with positive effect', () => {
+  const state = planState({
+    last_operations: ['supply_entity {"unit_number":582,"items":[{"item_name":"iron-ore","count":20},{"item_name":"coal","count":5}]}'],
+  })
+  const result = verifyDeterministicReceipt(state, completedReceipt({
+    taskTypes: ['moving_items', 'moving_items'],
+    taskCount: 2,
+    basicOperation: {
+      type: 'moving_items',
+      accepted: true,
+      completed: true,
+      code: 'completed',
+      item_name: 'coal',
+      requested_count: 5,
+      moved_count: 5,
+      target_unit_number: 582,
+      to_entity: true,
+    },
+  }))
+  assert.equal(result.verified, true)
+})
+
+test('research and wait still require additional verification', () => {
   for (const [operation, taskType] of [
-    ['move_items_exact {"item_name":"coal","unit_number":99,"max_count":10,"to_entity":true}', 'moving_items'],
     ['research_technology {"technology_name":"automation"}', 'researching'],
     ['wait {"ticks":120}', 'waiting'],
   ]) {
@@ -142,6 +208,82 @@ test('verified intermediate step advances canonical board before the model conti
   const proof = nextBoard.evidence.find(item => item.kind === 'deterministic_verification')
   assert.equal(proof.ref, 'batch_7')
   assert.equal(proof.step_id, 'step_3')
+})
+
+test('positive transfer receipt advances once and marks the last mutation verified', () => {
+  const transferBoard = board()
+  transferBoard.steps[2] = { ...transferBoard.steps[2], description: 'Load furnace' }
+  const state = planState({
+    task_board: transferBoard,
+    plan: transferBoard.steps.map(step => step.description),
+    last_operations: ['move_items_exact {"item_name":"iron-ore","unit_number":582,"max_count":20,"to_entity":true}'],
+    last_mutation_verified: false,
+  })
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', state)
+
+  const nextBoard = memory.recordBoardEvidence('npc:airi', completedReceipt({
+    taskTypes: ['moving_items'],
+    basicOperation: {
+      type: 'moving_items',
+      accepted: true,
+      completed: true,
+      code: 'completed',
+      item_name: 'iron-ore',
+      requested_count: 20,
+      moved_count: 20,
+      target_unit_number: 582,
+      to_entity: true,
+    },
+  }))
+  const nextState = memory.currentPlan('npc:airi')
+
+  assert.equal(nextBoard.active_index, 3)
+  assert.equal(nextBoard.completed_count, 3)
+  assert.equal(nextState.last_mutation_verified, true)
+  assert.equal(nextState.last_verified_batch_id, 7)
+})
+
+test('failed or zero-effect transfer receipt blocks the active step without completing it', () => {
+  const transferBoard = board()
+  transferBoard.steps[2] = { ...transferBoard.steps[2], description: 'Load furnace' }
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', planState({
+    task_board: transferBoard,
+    plan: transferBoard.steps.map(step => step.description),
+    last_operations: ['move_items_exact {"item_name":"iron-ore","unit_number":582,"max_count":20,"to_entity":true}'],
+    last_mutation_verified: false,
+  }))
+
+  const blocked = memory.recordBoardEvidence('npc:airi', {
+    kind: 'operation_error_receipt',
+    ref: 'batch_7',
+    summary: JSON.stringify({
+      outcome: 'failed',
+      task_state: 'idle',
+      queue_length: 0,
+      batch_id: 7,
+      task_count: 1,
+      task_types: ['moving_items'],
+      basic_operation: {
+        type: 'moving_items',
+        accepted: false,
+        completed: false,
+        code: 'nothing_moved',
+        moved_count: 0,
+        target_unit_number: 582,
+        to_entity: true,
+      },
+    }),
+  })
+  const state = memory.currentPlan('npc:airi')
+
+  assert.equal(blocked.active_index, 2)
+  assert.equal(blocked.completed_count, 2)
+  assert.equal(blocked.steps[2].status, 'blocked')
+  assert.equal(state.status, 'blocked')
+  assert.equal(state.blocker, 'transfer_failed:nothing_moved')
+  assert.equal(state.last_mutation_verified, false)
 })
 
 test('duplicate completed receipt cannot advance a second canonical step', () => {
