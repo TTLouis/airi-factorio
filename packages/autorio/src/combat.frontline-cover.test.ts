@@ -201,7 +201,7 @@ describe('sacrificial combat support frontline', () => {
     expect(c.controller.status()).toMatchObject({
       combat_phase: 'engage',
       target: { unit_number: 18, name: 'big-worm-turret' },
-      support_turret_budget: 1,
+      support_turret_budget: 2,
     })
   })
 
