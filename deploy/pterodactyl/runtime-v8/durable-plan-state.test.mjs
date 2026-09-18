@@ -698,3 +698,38 @@ test('interrupted omission recovery uses a compact capsule instead of replaying 
   assert.equal(resumed.goalStatus, 'blocked')
   assert.equal(rcon.mutations.length, 0)
 })
+
+
+test('pre-plan observation decision pressure ends in one bounded act-or-block decision', async () => {
+  let calls = 0
+  const optionsSeen = []
+  const rcon = new ActionOmissionRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async (_messages, options) => {
+      calls++
+      optionsSeen.push(options)
+      if (calls <= 5) return toolMessage(`preplan-observe-${calls}`)
+      return planMessage({
+        chatMessage: '',
+        plan: [],
+        currentStep: 0,
+        operations: [],
+      })
+    },
+    systemPrompt: 'Pre-plan observation pressure test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const result = await agent.request('inspect the chest and take the needed plates', { sender: 'TTLouis' })
+  assert.equal(calls, 6)
+  assert.equal(rcon.observationCalls, 5)
+  assert.equal(optionsSeen.at(-1).allowTools, false)
+  assert.equal(optionsSeen.at(-1).recoveryAttempt, 1)
+  assert.deepEqual(optionsSeen.at(-1).requestBodyPatch, { max_tokens: 700 })
+  assert.equal(result.goalStatus, 'blocked')
+  assert.equal(result.taskBoard.blocker, 'action_omission_after_repair')
+  assert.equal(result.taskBoard.steps[0].description, 'inspect the chest and take the needed plates')
+  assert.equal(rcon.mutations.length, 0)
+})
