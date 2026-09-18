@@ -63,9 +63,12 @@ function strictTaskTypesForOperation(operation) {
 }
 
 function stateHasUnverifiedTransferIntent(state) {
-  if (!state || state.last_mutation_verified === true) return false
+  if (!state) return false
   const stored = Array.isArray(state.last_operations) ? state.last_operations.slice(-16) : []
-  return stored.map(parseStoredOperation).some(operation => operation && TRANSFER_OPERATION_NAMES.has(operation.name))
+  const hasTransfer = stored.map(parseStoredOperation).some(operation => operation && TRANSFER_OPERATION_NAMES.has(operation.name))
+  if (!hasTransfer) return false
+  if (state.admission_status === 'admission_failed') return true
+  return state.last_mutation_verified !== true
 }
 
 function transferFailureReason(evidence) {
