@@ -4,17 +4,29 @@ import { new_area_clearing_controller } from './area_clearing'
 import { new_task_manager } from './task_manager'
 import { TaskStates } from './types'
 
-function entity(name: string, type: string, x: number, options: { building?: boolean, mineable?: boolean } = {}) {
+function entity(
+  name: string,
+  type: string,
+  x: number,
+  options: { building?: boolean, mineable?: boolean, owned?: boolean, placeable?: boolean } = {},
+) {
+  const building = options.building ?? false
+  const mineable = options.mineable !== false
+  const owned = options.owned ?? building
+  const placeable = options.placeable ?? building
   return {
     valid: true,
+    minable: mineable,
     name,
     type,
     position: { x, y: 0 },
     prototype: {
       name,
       type,
-      is_building: options.building ?? false,
-      mineable_properties: options.mineable === false ? undefined : { minable: true, mining_time: 0.5, products: [] },
+      is_building: building,
+      is_entity_with_owner: owned,
+      items_to_place_this: placeable ? [{ name: `${name}-item`, count: 1 }] : undefined,
+      mineable_properties: { minable: mineable, mining_time: 0.5, products: [] },
     },
   } as any
 }
@@ -23,7 +35,7 @@ function fixture() {
   let mining = false
   const treeA = entity('mod-tree-a', 'tree', 1)
   const treeB = entity('mod-tree-b', 'tree', 2)
-  const rock = entity('mod-rock-z', 'simple-entity', 2.4)
+  const rock = entity('mod-rock-z', 'simple-entity', 2.4, { building: true, owned: false, placeable: false })
   const resource = entity('iron-resource-x', 'resource', 1.5)
   const machine = entity('existing-machine-x', 'assembling-machine', 2.5, { building: true })
   const treeOutside = entity('mod-tree-outside', 'tree', 8)
@@ -242,6 +254,35 @@ describe('construction-area finite blocker clearing', () => {
 
     expect(f.manager.player_state.task_state).toBe(TaskStates.IDLE)
     expect(f.manager.get_status_snapshot().last_cancelled_batch?.reason).toBe('clear_construction_area:mining_rejected')
+  })
+
+  it('treats a natural simple-entity rock as clearable even though Factorio reports its prototype as a building', () => {
+    const f = fixture()
+    f.treeA.valid = false
+    f.treeB.valid = false
+
+    expect(f.rock.prototype.is_building).toBe(true)
+    expect(f.rock.prototype.is_entity_with_owner).toBe(false)
+    expect(f.rock.prototype.items_to_place_this).toBeUndefined()
+    expect(f.controller.submit(2, 0, 8, 4)[0]).toBe(true)
+
+    f.controller.tick(f.actor)
+
+    expect(f.manager.player_state.parameters_clear_construction_area?.target).toBe(f.rock)
+    expect(f.actor.set_mining_state).toHaveBeenLastCalledWith({ mining: true, position: f.rock.position })
+  })
+
+  it('does not clear a prototype-mineable blocker that is not currently minable in the live world', () => {
+    const f = fixture()
+    f.treeA.valid = false
+    f.treeB.valid = false
+    f.rock.minable = false
+
+    expect(f.controller.submit(2, 0, 8, 4)[0]).toBe(true)
+    f.controller.tick(f.actor)
+
+    expect(f.manager.player_state.task_state).toBe(TaskStates.IDLE)
+    expect(f.rock.valid).toBe(true)
   })
 
   it('does not treat normal resource patches or placed buildings as finite natural clear targets', () => {

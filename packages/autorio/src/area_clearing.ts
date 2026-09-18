@@ -31,19 +31,46 @@ function task_area(task: PlayerParametersClearConstructionArea) {
   }
 }
 
-function clearable_blocker(entity: LuaEntity | undefined) {
-  if (!entity || !entity.valid || entity.type === 'resource' || entity.type === 'character') return false
+function placed_building(entity: LuaEntity) {
   const prototype = entity.prototype
-  if (!prototype || prototype.is_building === true) return false
-  return prototype.mineable_properties !== undefined && prototype.mineable_properties.minable !== false
+  const place_items = prototype.items_to_place_this
+  return prototype.is_building === true
+    && (prototype.is_entity_with_owner === true
+      || (place_items !== undefined && place_items.length > 0))
+}
+
+/**
+ * Authoritative construction-clearing predicate.
+ *
+ * Factorio's prototype.is_building is broader than "player-placed building":
+ * it also includes SimpleEntityPrototype, which is the engine type used for
+ * mineable rocks. Protect force-owned / item-placeable buildings, while
+ * retaining finite natural simple entities as valid construction blockers.
+ */
+export function clearable_construction_blocker(entity: LuaEntity | undefined) {
+  if (!entity || !entity.valid) return false
+  const prototype = entity.prototype
+  const prototype_type = prototype.type
+  if (prototype_type === 'resource' || prototype_type === 'character') return false
+  if (placed_building(entity)) return false
+  const mineable = prototype.mineable_properties
+  return entity.minable === true && mineable.minable === true
+}
+
+function position_inside_area(position: { x: number, y: number }, area: ReturnType<typeof task_area>) {
+  return position.x >= area.left_top.x
+    && position.x <= area.right_bottom.x
+    && position.y >= area.left_top.y
+    && position.y <= area.right_bottom.y
 }
 
 function nearest_blocker(actor: ControlledActor, task: PlayerParametersClearConstructionArea) {
-  const entities = actor.surface.find_entities_filtered({ area: task_area(task) })
+  const area = task_area(task)
+  const entities = actor.surface.find_entities_filtered({ area })
   let nearest: LuaEntity | undefined
   let best = math.huge
   for (const entity of entities) {
-    if (!clearable_blocker(entity)) continue
+    if (!position_inside_area(entity.position, area) || !clearable_construction_blocker(entity)) continue
     const distance = squared_distance(actor.position, entity.position)
     if (distance < best) {
       nearest = entity
@@ -167,7 +194,7 @@ export function new_area_clearing_controller(
       task.cleared_count++
       clear_target(actor, task)
     }
-    else if (previous_target && !clearable_blocker(previous_target)) {
+    else if (previous_target && !clearable_construction_blocker(previous_target)) {
       clear_target(actor, task)
     }
 
