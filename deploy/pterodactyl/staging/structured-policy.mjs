@@ -395,7 +395,12 @@ export const toolDefinitions = [
   functionTool('getSkillDetails', 'Open one exact AIRI skill/pattern by id after discovery. Treat candidate/manual skills as experienced-player heuristics: reuse the decision pattern, but revalidate all mutable and game-version-specific facts before execution.', {
     type: 'object',
     properties: {
-      id: { type: 'string', minLength: 1, maxLength: 80, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*  functionTool('getPlayerStatus', 'Read one exact human player by name, including availability, surface, position, and distance from AIRI when comparable.', {
+      id: { type: 'string', minLength: 1, maxLength: 80, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' },
+    },
+    required: ['id'],
+    additionalProperties: false,
+  }),
+  functionTool('getPlayerStatus', 'Read one exact human player by name, including availability, surface, position, and distance from AIRI when comparable.', {
     type: 'object', properties: { player_name: nameStringSchema }, required: ['player_name'], additionalProperties: false,
   }),
   functionTool('getNearbyEntities', 'Inspect a bounded local area around AIRI.', {
