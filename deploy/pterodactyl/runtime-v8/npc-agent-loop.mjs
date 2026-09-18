@@ -50,6 +50,185 @@ function cleanMemoryText(value, max) {
   return `${text.slice(0, Math.max(0, max - 1))}…`
 }
 
+function sanitizeDurableModelText(value, max = 2000) {
+  let text = cleanMemoryText(value, max)
+  const trimmed = text.trim()
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      return cleanMemoryText(JSON.stringify(sanitizeDurableModelValue(JSON.parse(trimmed))), max)
+    }
+    catch {}
+  }
+  text = text
+    .replace(/(["']?(?:target_)?unit_number["']?\s*[:=]\s*)\d+/gi, '$1[historical-id-omitted]')
+    .replace(/(["']?observed_unit_numbers["']?\s*[:=]\s*)\[[^\]]*\]/gi, '$1[historical-ids-omitted]')
+    .replace(/\b(?:unit_number|target_unit_number)[_:#-]?\d+\b/gi, 'historical-exact-identity-[omitted]')
+    .replace(/\bunit[_:#-]\d+\b/gi, 'historical-exact-identity-[omitted]')
+    .replace(/\b(?:exact\s+entity\s+target\s+|target\s+)?unit\s+#?\d+\b/gi, 'historical exact identity [omitted]')
+  return cleanMemoryText(text, max)
+}
+
+function sanitizeDurableModelValue(value) {
+  if (Array.isArray(value)) return value.map(item => sanitizeDurableModelValue(item))
+  if (!value || typeof value !== 'object') {
+    return typeof value === 'string' ? sanitizeDurableModelText(value, Math.max(2000, value.length)) : value
+  }
+  const staleExact = value.code === 'stale_exact_target' || value.reason_code === 'stale_exact_target'
+  const result = {}
+  for (const [key, child] of Object.entries(value)) {
+    if (/(?:^|_)unit_number$/i.test(key) || /(?:^|_)unit_numbers$/i.test(key)) continue
+    if (key === 'unit' && Number.isSafeInteger(child)) continue
+    if (staleExact && key === 'identity' && Number.isSafeInteger(child)) continue
+    result[key] = sanitizeDurableModelValue(child)
+  }
+  return result
+}
+
+function durableEntityLocator(observation, semanticRole = '') {
+  if (!observation || typeof observation !== 'object') return undefined
+  const position = observation.position && Number.isFinite(observation.position.x) && Number.isFinite(observation.position.y)
+    ? { x: observation.position.x, y: observation.position.y }
+    : undefined
+  const surface = typeof observation.surface === 'string' && observation.surface
+    ? cleanMemoryText(observation.surface, 128)
+    : undefined
+  const locator = {
+    name: typeof observation.name === 'string' ? cleanMemoryText(observation.name, 200) : undefined,
+    type: typeof observation.type === 'string' ? cleanMemoryText(observation.type, 100) : undefined,
+    surface,
+    surface_index: Number.isSafeInteger(observation.surface_index) ? observation.surface_index : undefined,
+    position,
+    role: semanticRole ? sanitizeDurableModelText(semanticRole, 500) : undefined,
+  }
+  return Object.fromEntries(Object.entries(locator).filter(([, child]) => child !== undefined && child !== ''))
+}
+
+function durableOperationView(operation, { observation, semanticRole = '' } = {}) {
+  if (!operation || typeof operation !== 'object') return sanitizeDurableModelValue(operation)
+  const name = cleanMemoryText(operation.name, 100)
+  const args = sanitizeDurableModelValue(operation.args ?? {})
+  const hadExactIdentity = Number.isSafeInteger(operation.args?.unit_number)
+  const targetLocator = durableEntityLocator(observation, semanticRole)
+  return {
+    name,
+    args,
+    ...(targetLocator && Object.keys(targetLocator).length > 0 ? { target_locator: targetLocator } : {}),
+    ...(hadExactIdentity ? { exact_identity_lifetime: 'request_scoped; re-observe before any later exact operation' } : {}),
+    ...(!targetLocator && semanticRole ? { role: sanitizeDurableModelText(semanticRole, 500) } : {}),
+  }
+}
+
+function parseStoredOperation(value) {
+  if (typeof value !== 'string') return undefined
+  const separator = value.indexOf(' ')
+  if (separator < 1) return undefined
+  try {
+    const args = JSON.parse(value.slice(separator + 1))
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return undefined
+    return { name: value.slice(0, separator), args }
+  }
+  catch {
+    return undefined
+  }
+}
+
+function storedOperationView(value, semanticRole = '', observation) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    if (value.target_locator || value.exact_identity_lifetime) return sanitizeDurableModelValue(value)
+    return durableOperationView(value, { observation, semanticRole })
+  }
+  const parsed = parseStoredOperation(value)
+  if (parsed) return durableOperationView(parsed, { observation, semanticRole })
+  return sanitizeDurableModelText(value, 800)
+}
+
+function historicalExactTargetLocator(state, unitNumber) {
+  if (!state || !Number.isSafeInteger(unitNumber)) return undefined
+  const role = currentPlanStep(state.plan, state.current_step)
+  for (const entry of [...(Array.isArray(state.exact_target_audit) ? state.exact_target_audit : [])].reverse()) {
+    if (entry?.unit_number === unitNumber && entry.locator) return sanitizeDurableModelValue(entry.locator)
+  }
+  const raw = Array.isArray(state.last_operations) ? state.last_operations : []
+  const durable = Array.isArray(state.durable_last_operations) ? state.durable_last_operations : []
+  for (let index = raw.length - 1; index >= 0; index--) {
+    const operation = parseStoredOperation(raw[index])
+    if (operation?.args?.unit_number !== unitNumber) continue
+    const locator = durable[index]?.target_locator
+    if (locator) return sanitizeDurableModelValue(locator)
+  }
+  const evidence = Array.isArray(state.task_board?.evidence) ? state.task_board.evidence : []
+  for (const item of [...evidence].reverse()) {
+    if (typeof item?.summary !== 'string') continue
+    try {
+      const parsed = JSON.parse(item.summary)
+      if (parsed?.identity === unitNumber && parsed?.last_observed) {
+        return durableEntityLocator(parsed.last_observed, role)
+      }
+      const basic = parsed?.basic_operation
+      if (basic?.target_unit_number === unitNumber) {
+        return durableEntityLocator({ name: basic.entity_name }, role)
+      }
+    }
+    catch {}
+  }
+  return undefined
+}
+
+function modelFacingLastOperations(state) {
+  const role = currentPlanStep(state?.plan, state?.current_step)
+  const durable = Array.isArray(state?.durable_last_operations) && state.durable_last_operations.length > 0
+    ? state.durable_last_operations
+    : undefined
+  if (durable) return durable.slice(-16).map(operation => storedOperationView(operation, role))
+  return (Array.isArray(state?.last_operations) ? state.last_operations : []).slice(-16).map((value) => {
+    const parsed = parseStoredOperation(value)
+    const unitNumber = parsed?.args?.unit_number
+    const locator = Number.isSafeInteger(unitNumber) ? historicalExactTargetLocator(state, unitNumber) : undefined
+    return storedOperationView(value, role, locator)
+  })
+}
+
+function modelFacingEntityReferences(state) {
+  if (!state) return []
+  const role = currentPlanStep(state.plan, state.current_step)
+  const references = []
+  for (const entry of Array.isArray(state.exact_target_audit) ? state.exact_target_audit : []) {
+    if (entry?.locator) references.push(sanitizeDurableModelValue(entry.locator))
+  }
+  for (const operation of Array.isArray(state.durable_last_operations) ? state.durable_last_operations : []) {
+    if (operation?.target_locator) references.push(sanitizeDurableModelValue(operation.target_locator))
+  }
+  for (const item of Array.isArray(state.task_board?.evidence) ? state.task_board.evidence : []) {
+    if (typeof item?.summary !== 'string') continue
+    try {
+      const parsed = JSON.parse(item.summary)
+      if (parsed?.last_observed) references.push(durableEntityLocator(parsed.last_observed, role))
+    }
+    catch {}
+  }
+  const unique = new Map()
+  for (const reference of references) {
+    if (!reference || typeof reference !== 'object') continue
+    const safe = sanitizeDurableModelValue(reference)
+    const position = safe.position
+    const key = JSON.stringify([
+      safe.name ?? '',
+      safe.type ?? '',
+      safe.surface ?? '',
+      safe.surface_index ?? '',
+      position?.x ?? '',
+      position?.y ?? '',
+      safe.role ?? '',
+    ])
+    unique.set(key, safe)
+  }
+  return [...unique.values()].slice(-16)
+}
+
+function modelFacingTaskBoard(board) {
+  return sanitizeDurableModelValue(visibleTaskBoard(board))
+}
+
 function sanitizeTraceValue(value, key = '') {
   if (SENSITIVE_TRACE_KEY.test(key)) return '[REDACTED]'
   if (typeof value === 'string') {
@@ -188,33 +367,79 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return state.task_board
   }
 
+  remember(key, turnId, { sender, user, assistant, operations = [] }) {
+    const bucket = this.bucket(key)
+    const actionText = operations.length
+      ? cleanMemoryText(operations.map(operation => JSON.stringify(storedOperationView(operation))).join('; '), this.maxFieldChars)
+      : ''
+    const next = {
+      id: turnId,
+      sender: cleanMemoryText(sender, 128),
+      user: cleanMemoryText(user, this.maxFieldChars),
+      assistant: cleanMemoryText(assistant, this.maxFieldChars),
+      actions: actionText,
+    }
+    const index = bucket.recent.findIndex(turn => turn.id === turnId)
+    if (index >= 0) {
+      const previous = bucket.recent[index]
+      next.actions = actionText || previous.actions
+      bucket.recent[index] = next
+    }
+    else {
+      bucket.recent.push(next)
+    }
+    this.compact(bucket)
+  }
+
+  dialogueContext(key) {
+    const bucket = this.byNpc.get(key)
+    if (!bucket || (!bucket.summary && bucket.recent.length === 0)) return ''
+    const lines = [
+      '[MEMORY] Bounded prior dialogue for this NPC. Historical exact entity identities are non-executable; re-observe mutable game state before depending on it.',
+    ]
+    if (bucket.summary) lines.push(`Compacted earlier dialogue:\n${sanitizeDurableModelText(bucket.summary, this.maxSummaryChars)}`)
+    if (bucket.recent.length) {
+      lines.push('Recent dialogue:')
+      for (const turn of bucket.recent) {
+        lines.push(`[CHAT] ${sanitizeDurableModelText(turn.sender, 128)}: ${sanitizeDurableModelText(turn.user, this.maxFieldChars)}`)
+        lines.push(`[AIRI] ${sanitizeDurableModelText(turn.assistant, this.maxFieldChars)}`)
+        if (turn.actions) lines.push(`[ACTIONS] ${sanitizeDurableModelText(turn.actions, this.maxFieldChars)}`)
+      }
+    }
+    const text = lines.join('\n')
+    if (text.length <= this.maxContextChars) return text
+    const prefix = `${lines[0]}\nCompacted earlier dialogue:\n[older memory compacted]\n`
+    return `${prefix}${text.slice(-Math.max(0, this.maxContextChars - prefix.length))}`
+  }
+
   planContext(key) {
     const state = this.planByNpc.get(key)
     if (!state) return ''
     const taskBoard = this.ensureTaskBoard(state)
     const visible = {
-      goal_id: state.goal_id,
-      owner: state.owner,
-      objective: state.objective,
+      goal_id: sanitizeDurableModelText(state.goal_id, 100),
+      owner: sanitizeDurableModelText(state.owner, 128),
+      objective: sanitizeDurableModelText(state.objective, 1000),
       status: state.status,
       admission_status: state.admission_status,
-      blocker: state.blocker,
-      pause_reason: state.pause_reason,
-      persistent_runtime: state.persistent_runtime,
-      task_board: visibleTaskBoard(taskBoard),
-      plan: state.plan,
+      blocker: sanitizeDurableModelText(state.blocker, 500),
+      pause_reason: sanitizeDurableModelText(state.pause_reason, 300),
+      persistent_runtime: sanitizeDurableModelValue(state.persistent_runtime),
+      task_board: modelFacingTaskBoard(taskBoard),
+      entity_references: modelFacingEntityReferences(state),
+      plan: (state.plan ?? []).map(step => sanitizeDurableModelText(step, 500)),
       current_step: state.current_step,
-      current_step_text: currentPlanStep(state.plan, state.current_step),
+      current_step_text: sanitizeDurableModelText(currentPlanStep(state.plan, state.current_step), 500),
       revision: state.revision,
-      last_chat_message: state.last_chat_message,
-      last_operations: state.last_operations,
-      history: state.history.slice(-8),
+      last_chat_message: sanitizeDurableModelText(state.last_chat_message, 2000),
+      last_operations: modelFacingLastOperations(state),
+      history: (state.history ?? []).slice(-8).map(entry => sanitizeDurableModelValue(entry)),
     }
-    return `[PLAN_STATE] Harness-owned durable goal/plan state. Continue from this state when the human asks to continue/resume, but re-observe mutable Factorio state before acting.\n${JSON.stringify(visible)}`
+    return `[PLAN_STATE] Harness-owned durable goal/plan state. Absolute location and semantic role may be durable, but any historical unit_number is non-executable. Re-observe the current entity in this active request before issuing an exact operation.\n${JSON.stringify(visible)}`
   }
 
   context(key) {
-    return [super.context(key), this.planContext(key)].filter(Boolean).join('\n')
+    return [this.dialogueContext(key), this.planContext(key)].filter(Boolean).join('\n')
   }
 
   currentPlan(key) {
@@ -223,9 +448,14 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return state
   }
 
-  recordPlan(key, requestInfo, plan, { continuation = false, persistentRuntime } = {}) {
+  recordPlan(key, requestInfo, plan, { continuation = false, persistentRuntime, durableOperations = [], exactTargetAudit = [] } = {}) {
     const previous = this.planByNpc.get(key)
     const hasOperations = plan.operations.length > 0
+    const incomingDurableOperations = (Array.isArray(durableOperations) ? durableOperations : []).slice(0, 16).map(operation => sanitizeDurableModelValue(operation))
+    const mergedExactTargetAudit = [
+      ...(Array.isArray(previous?.exact_target_audit) ? previous.exact_target_audit : []),
+      ...(Array.isArray(exactTargetAudit) ? exactTargetAudit : []),
+    ].slice(-32)
     const incomingPlan = safePlan(plan.plan)
     const incomingStep = Number.isSafeInteger(plan.currentStep) ? plan.currentStep : 0
     const now = Date.now()
@@ -261,6 +491,8 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         revision: (previous?.revision ?? 0) + 1,
         last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
         last_operations: plan.operations.slice(0, 16).map(operation => cleanMemoryText(`${operation.name} ${JSON.stringify(operation.args ?? {})}`, 800)),
+        durable_last_operations: incomingDurableOperations,
+        exact_target_audit: mergedExactTargetAudit,
         last_mutation_verified: false,
         last_verified_batch_id: undefined,
         updated_at: now,
@@ -286,6 +518,8 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         revision: (previous?.revision ?? 0) + 1,
         last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
         last_operations: [],
+        durable_last_operations: [],
+        exact_target_audit: mergedExactTargetAudit,
         updated_at: now,
         history,
       }
@@ -314,6 +548,8 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         revision: previous.revision + 1,
         last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
         last_operations: preserveBlockedMutation ? previous.last_operations : [],
+        durable_last_operations: preserveBlockedMutation ? modelFacingLastOperations(previous) : [],
+        exact_target_audit: mergedExactTargetAudit,
         updated_at: now,
         history,
       }
@@ -333,6 +569,8 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       revision: previous.revision + 1,
       last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
       last_operations: [],
+      durable_last_operations: [],
+      exact_target_audit: mergedExactTargetAudit,
       updated_at: now,
       history,
     }
@@ -486,6 +724,16 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : 1,
         last_chat_message: cleanMemoryText(value.last_chat_message, 2000),
         last_operations: (Array.isArray(value.last_operations) ? value.last_operations : []).slice(-16).map(operation => cleanMemoryText(operation, 800)),
+        durable_last_operations: (Array.isArray(value.durable_last_operations) ? value.durable_last_operations : []).slice(-16).map(operation => sanitizeDurableModelValue(operation)),
+        exact_target_audit: (Array.isArray(value.exact_target_audit) ? value.exact_target_audit : []).slice(-32).flatMap(entry => {
+          if (!Number.isSafeInteger(entry?.unit_number)) return []
+          return [{
+            unit_number: entry.unit_number,
+            operation_name: cleanMemoryText(entry.operation_name, 100),
+            locator: sanitizeDurableModelValue(entry.locator),
+            recorded_at: Number.isFinite(entry.recorded_at) ? entry.recorded_at : undefined,
+          }]
+        }),
         last_mutation_verified: value.last_mutation_verified === true,
         last_verified_batch_id: Number.isSafeInteger(value.last_verified_batch_id) && value.last_verified_batch_id > 0 ? value.last_verified_batch_id : undefined,
         updated_at: Number.isFinite(value.updated_at) ? value.updated_at : Date.now(),
@@ -934,6 +1182,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
     this.liveEntityObservations = new Map()
+    this.rejectedExactTargets = new Set()
     this.staleExactPreflightRetries = 0
     this.onActivity = typeof options.onActivity === 'function' ? options.onActivity : null
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
@@ -990,7 +1239,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     return toolCommand(name, args)
   }
 
-  recordLiveEntityObservation(entity, actorPosition, source) {
+  recordLiveEntityObservation(entity, actorPosition, source, observationMeta = {}) {
     if (!entity || typeof entity !== 'object' || typeof entity.name !== 'string') return
     const unitNumber = Number.isSafeInteger(entity.unit_number) ? entity.unit_number : undefined
     const position = entity.position && Number.isFinite(entity.position.x) && Number.isFinite(entity.position.y)
@@ -1012,12 +1261,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const key = unitNumber !== undefined
       ? `unit:${unitNumber}`
       : `fallback:${entity.name}:${entity.type ?? 'unknown'}:${position?.x ?? '?'}:${position?.y ?? '?'}`
+    const surface = [entity.surface_name, entity.surface, observationMeta.surface_name, observationMeta.surface]
+      .find(value => typeof value === 'string' && value)
+    const surfaceIndex = [entity.surface_index, observationMeta.surface_index]
+      .find(value => Number.isSafeInteger(value))
     this.liveEntityObservations.set(key, {
       name: entity.name,
       type: entity.type,
       unit_number: unitNumber,
       position,
       distance,
+      surface,
+      surface_index: surfaceIndex,
       source,
     })
   }
@@ -1029,11 +1284,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     catch { return }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
     const actorPosition = parsed.actor_position
+    const observationMeta = {
+      surface: parsed.surface,
+      surface_name: parsed.surface_name,
+      surface_index: parsed.surface_index,
+    }
     if (Array.isArray(parsed.entities)) {
-      for (const entity of parsed.entities) this.recordLiveEntityObservation(entity, actorPosition, toolName)
+      for (const entity of parsed.entities) this.recordLiveEntityObservation(entity, actorPosition, toolName, observationMeta)
     }
     if (parsed.entity && typeof parsed.entity === 'object') {
-      this.recordLiveEntityObservation(parsed.entity, actorPosition, toolName)
+      this.recordLiveEntityObservation(parsed.entity, actorPosition, toolName, observationMeta)
     }
   }
 
@@ -1118,11 +1378,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.reserve({ epoch: current.epoch, actorId: current.actor_id })
     const currentGoal = planState
       ? {
-          goal_id: planState.goal_id,
-          objective: cleanMemoryText(planState.objective, 500),
+          goal_id: sanitizeDurableModelText(planState.goal_id, 100),
+          objective: sanitizeDurableModelText(planState.objective, 500),
           status: planState.status,
           active_step: Number.isSafeInteger(planState.task_board?.active_index)
-            ? cleanMemoryText(planState.task_board?.steps?.[planState.task_board.active_index]?.description, 300)
+            ? sanitizeDurableModelText(planState.task_board?.steps?.[planState.task_board.active_index]?.description, 300)
             : undefined,
         }
       : null
@@ -1284,6 +1544,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
 
     this.liveEntityObservations = new Map()
+    this.rejectedExactTargets = new Set()
     this.staleExactPreflightRetries = 0
     this.bootstrapDependencyPreflightRetries = 0
     this.planUpdateReason = intent === 'new_goal'
@@ -1655,12 +1916,28 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       if (!EXACT_ENTITY_TARGET_OPERATIONS.has(operation.name)) continue
       const unitNumber = operation.args?.unit_number
       if (this.liveObservedExactTarget(unitNumber)) continue
+      const repeated = this.rejectedExactTargets.has(unitNumber)
+      this.rejectedExactTargets.add(unitNumber)
+      const locator = historicalExactTargetLocator(this.memory.currentPlan?.(this.activePlanKey()), unitNumber)
+      const location = locator?.position && Number.isFinite(locator.position.x) && Number.isFinite(locator.position.y)
+        ? ` Durable semantic locator: ${locator.name ?? 'entity'} at absolute position (${locator.position.x}, ${locator.position.y})${locator.surface ? ` on surface ${locator.surface}` : ''}.`
+        : locator?.name
+          ? ` Durable semantic context identifies ${locator.name}, but no executable exact identity is retained.`
+          : ''
       const error = new AgentLoopError(
-        `Exact entity target unit ${unitNumber} is not bound by a live observation in this active request. Do not execute unit_number values copied from durable plan/dialogue memory. For a known location, navigate by its absolute world coordinate with walk_to_position, then re-observe the current entity and use the newly observed unit_number for the exact operation.`,
+        repeated
+          ? `Exact entity target unit ${unitNumber} was already rejected in this active request and still has no live observation binding. Repeating the same historical exact identity cannot make it executable. Do not resubmit it; use durable location/context, obtain a fresh getNearbyEntities/getEntityStatus/findLongRangeEntities observation, and only then use the exact unit_number returned by that observation.${location}`
+          : `Exact entity target unit ${unitNumber} is not bound by a live observation in this active request. Historical unit_number values are non-executable even when they appear in old diagnostics. Do not resubmit the rejected id. Use durable location/context to navigate with walk_to_position if needed, obtain a fresh getNearbyEntities/getEntityStatus/findLongRangeEntities observation, and then bind the exact unit_number returned by that current observation.${location}`,
       )
       error.failureClass = 'plan_category'
       error.code = 'exact_entity_requires_live_observation'
-      error.details = { operation_name: operation.name, unit_number: unitNumber }
+      error.details = {
+        operation_name: operation.name,
+        unit_number: unitNumber,
+        durable_locator: locator,
+        repeated_stale_exact_target: repeated,
+        deterministic_no_retry: repeated,
+      }
       throw error
     }
     for (const operation of plan.operations) {
@@ -1877,15 +2154,36 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           canonical_plan_length: durablePlan.plan.length,
         })
       }
+      const semanticRole = currentPlanStep(durablePlan.plan, durablePlan.currentStep)
+      const durableOperations = plan.operations.slice(0, 16).map(operation => {
+        const observation = Number.isSafeInteger(operation.args?.unit_number)
+          ? this.liveObservedExactTarget(operation.args.unit_number)
+          : undefined
+        return durableOperationView(operation, { observation, semanticRole })
+      })
+      const exactTargetAudit = plan.operations.slice(0, 16).flatMap(operation => {
+        const unitNumber = operation.args?.unit_number
+        if (!Number.isSafeInteger(unitNumber)) return []
+        const observation = this.liveObservedExactTarget(unitNumber)
+        if (!observation) return []
+        return [{
+          unit_number: unitNumber,
+          operation_name: cleanMemoryText(operation.name, 100),
+          locator: durableEntityLocator(observation, semanticRole),
+          recorded_at: Date.now(),
+        }]
+      })
       this.memory.remember(this.requestInfo.memoryKey, this.requestInfo.turnId, {
         sender: this.requestInfo.sender,
         user: this.requestInfo.text,
         assistant: plan.chatMessage,
-        operations: plan.operations,
+        operations: durableOperations,
       })
       stateResult = this.memory.recordPlan?.(this.requestInfo.memoryKey, this.requestInfo, durablePlan, {
         continuation: this.continuations > 0,
         persistentRuntime,
+        durableOperations,
+        exactTargetAudit,
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
         allowReplan: this.planUpdateReason === 'failure',

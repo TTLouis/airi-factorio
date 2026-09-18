@@ -244,3 +244,37 @@ test('true new_goal clears the previous canonical task context and starts main p
   assert.equal(calls[1].triggerSource, 'new_goal')
   assert.notEqual(memory.currentPlan('npc:airi')?.goal_id, 'goal_existing')
 })
+
+
+test('interaction router does not receive historical exact ids from durable goal fields', async () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const state = activePlan()
+  state.objective = 'return to unit 331 and finish the furnace'
+  state.task_board.steps[1].description = 'load unit_number=331 at the remembered furnace'
+  memory.planByNpc.set('npc:airi', state)
+
+  let routedMessages
+  const interactionProvider = async (messages, context) => {
+    assert.equal(context.interactionRouter, true)
+    routedMessages = messages
+    return { content: JSON.stringify({ intent: 'status_query', queue_conflict: false, reply: '' }) }
+  }
+  const agent = new NpcAgentLoop({
+    rcon: new RouterRcon({ running: true }),
+    memory,
+    systemPrompt: 'interaction durable identity boundary test',
+    npcId: 'airi',
+    provider: async () => {
+      throw new Error('main planner should not run for status_query')
+    },
+    interactionProvider,
+    traceFile: null,
+    stateFile: null,
+  })
+
+  const result = await agent.request('status?', { sender: 'tester' })
+  assert.equal(result.routedOnly, true)
+  const contextText = routedMessages.map(message => String(message.content ?? '')).join('\n')
+  assert.doesNotMatch(contextText, /331/)
+  assert.match(contextText, /historical exact identity \[omitted\]|historical-id-omitted/)
+})

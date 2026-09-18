@@ -134,12 +134,26 @@ test('old task unit id cannot leak into a new human request', async () => {
       }
       if (calls === 2) return planMessage([{ name: 'mine_entity_exact', args: { unit_number: 289 } }])
       if (calls === 3) {
+        const durableContext = messages.map(message => String(message.content ?? '')).join('\n')
+        assert.doesNotMatch(durableContext, /unit_number["']?\s*:\s*289/i)
+        assert.doesNotMatch(durableContext, /\bunit\s+289\b/i)
+        assert.match(durableContext, /entity_references/)
+        assert.match(durableContext, /target_locator/)
+        assert.match(durableContext, /"name":"stone-furnace"/)
+        assert.match(durableContext, /"position":\{"x":8,"y":1\}/)
         return planMessage([{ name: 'walk_to_entity_exact', args: { unit_number: 289, reach_distance: 2.5 } }])
       }
-      const text = messages.map(message => String(message.content ?? '')).join('\n')
-      assert.match(text, /not bound by a live observation in this active request/i)
-      assert.match(text, /walk_to_position/i)
-      return planMessage([{ name: 'walk_to_position', args: { x: 8, y: 1, reach_distance: 2 } }])
+      if (calls === 4) {
+        const text = messages.map(message => String(message.content ?? '')).join('\n')
+        assert.match(text, /not bound by a live observation in this active request/i)
+        assert.match(text, /walk_to_position/i)
+        assert.match(text, /absolute position \(8, 1\)/i)
+        return planMessage([{ name: 'walk_to_position', args: { x: 8, y: 1, reach_distance: 2 } }])
+      }
+      if (calls === 5) {
+        return { content: null, tool_calls: [toolCall('observe-replacement', 'getNearbyEntities', { radius: 16, name: 'stone-furnace', limit: 4 })] }
+      }
+      return planMessage([{ name: 'mine_entity_exact', args: { unit_number: 417 } }])
     },
   })
 
@@ -153,6 +167,20 @@ test('old task unit id cannot leak into a new human request', async () => {
   assert.equal(calls, 4)
   assert.equal(rcon.mutations.length, 2)
   assert.doesNotMatch(rcon.mutations[1], /walk_to_entity_exact',289/)
+
+  rcon.nearby = {
+    actor_position: { x: 7, y: 1 },
+    entities: [{ name: 'stone-furnace', type: 'furnace', unit_number: 417, position: { x: 8, y: 1 }, distance: 1 }],
+  }
+  rcon.completedStatus(2, ['walking_direct'])
+  const rebound = await agent.completed()
+
+  assert.equal(rebound.operations[0].name, 'mine_entity_exact')
+  assert.equal(rebound.operations[0].args.unit_number, 417)
+  assert.equal(calls, 6)
+  assert.equal(rcon.mutations.length, 3)
+  assert.match(rcon.mutations[2], /mine_entity_exact',417/)
+  assert.doesNotMatch(rcon.mutations[2], /mine_entity_exact',289/)
 })
 
 test('stale exact id is rejected before admission and replacement is rebound after coordinate return', async () => {
@@ -237,4 +265,159 @@ test('stale exact id is rejected before admission and replacement is rebound aft
   assert.equal(rcon.mutations.length, 2)
   assert.match(rcon.mutations[1], /mine_entity_exact',289/)
   assert.doesNotMatch(rcon.mutations[1], /mine_entity_exact',60/)
+})
+
+
+test('restored legacy durable memory sanitizes historical exact ids while preserving semantic location', () => {
+  const memory = new NpcDialogueMemory()
+  memory.restore({
+    version: 1,
+    dialogue: [{
+      key: 'npc:airi',
+      summary: 'tester: return to unit 991337 | AIRI: remembered target | actions: mine_entity_exact {"unit_number":991337}',
+      recent: [{
+        id: 7,
+        sender: 'tester',
+        user: 'continue with unit 991337',
+        assistant: 'I will use target_unit_number=991337',
+        actions: 'move_items_exact {"item_name":"iron-ore","unit_number":991337,"max_count":10,"to_entity":true}',
+      }],
+    }],
+    plans: [{
+      key: 'npc:airi',
+      state: {
+        goal_id: 'goal_legacy',
+        owner: 'tester',
+        objective: 'return to unit 991337 at the known furnace',
+        status: 'blocked',
+        admission_status: 'admission_failed',
+        blocker: 'Exact entity target unit 991337 is stale',
+        pause_reason: 'paused after unit_number=991337 was rejected',
+        plan: ['Return to unit 991337', 'Load the furnace'],
+        current_step: 0,
+        revision: 4,
+        last_chat_message: 'Target unit 991337 needs recovery',
+        last_operations: ['move_items_exact {"item_name":"iron-ore","unit_number":991337,"max_count":10,"to_entity":true}'],
+        history: [{
+          revision: 3,
+          status: 'active',
+          current_step: 0,
+          step: 'Walk back to unit 991337',
+          chat: 'using unit_number=991337',
+        }],
+        task_board: {
+          kind: 'task_board_lite',
+          goal_id: 'goal_legacy',
+          status: 'blocked',
+          blocker: 'target unit 991337 is stale',
+          pause_reason: 'unit_number=991337 failed',
+          revision: 4,
+          active_index: 0,
+          steps: [
+            { id: 'step_1', description: 'Return to unit 991337', status: 'blocked', revision: 1 },
+            { id: 'step_2', description: 'Load the furnace', status: 'pending', revision: 1 },
+          ],
+          evidence: [{
+            id: 'e1',
+            kind: 'operation_preflight_rejection',
+            summary: JSON.stringify({
+              code: 'stale_exact_target',
+              identity: 991337,
+              last_observed: {
+                unit_number: 991337,
+                name: 'stone-furnace',
+                surface_index: 1,
+                position: { x: 120.5, y: -42.5 },
+              },
+              basic_operation: {
+                target_unit_number: 991337,
+                entity_name: 'stone-furnace',
+              },
+            }),
+            ref: 'legacy/unit_991337/stale',
+            at: 1,
+          }],
+          events: [{
+            seq: 1,
+            type: 'blocked',
+            at: 1,
+            revision: 4,
+            from_step: 'unit 991337',
+            to_step: 'recover location',
+          }],
+          created_at: 1,
+          updated_at: 2,
+        },
+        updated_at: 2,
+      },
+    }],
+  })
+
+  const raw = memory.currentPlan('npc:airi')
+  assert.match(raw.last_operations[0], /991337/)
+  assert.match(raw.task_board.evidence[0].summary, /991337/)
+  assert.match(memory.snapshot().dialogue[0].summary, /991337/)
+
+  const context = memory.context('npc:airi')
+  assert.match(context, /entity_references/)
+  assert.match(context, /stone-furnace/)
+  assert.match(context, /120\.5/)
+  assert.match(context, /-42\.5/)
+  assert.doesNotMatch(context, /991337/)
+  assert.doesNotMatch(context, /"unit_number"\s*:\s*991337/)
+  assert.doesNotMatch(context, /"target_unit_number"\s*:\s*991337/)
+})
+
+test('repeating the same stale durable exact id stops after one corrective retry without mutating canonical state', async () => {
+  const rcon = new ExactTargetRcon()
+  rcon.nearby = {
+    actor_position: { x: 0, y: 0 },
+    entities: [{ name: 'stone-furnace', type: 'furnace', unit_number: 331, position: { x: 12, y: -3 }, distance: 12.4 }],
+  }
+  let calls = 0
+  const agent = new NpcAgentLoop({
+    rcon,
+    memory: new NpcDialogueMemory(),
+    systemPrompt: 'repeat stale exact identity test',
+    provider: async (messages) => {
+      calls++
+      if (calls === 1) {
+        return { content: null, tool_calls: [toolCall('observe-old', 'getNearbyEntities', { radius: 64, name: 'stone-furnace', limit: 4 })] }
+      }
+      if (calls === 2) {
+        return planMessage([{ name: 'mine_entity_exact', args: { unit_number: 331 } }], {
+          plan: ['Act on the furnace'],
+        })
+      }
+      const text = messages.map(message => String(message.content ?? '')).join('\n')
+      if (calls === 3) {
+        assert.doesNotMatch(text, /unit_number["']?\s*:\s*331/i)
+        assert.match(text, /"position":\{"x":12,"y":-3\}/)
+      }
+      if (calls === 4) {
+        assert.match(text, /Do not resubmit the rejected id/i)
+        assert.match(text, /absolute position \(12, -3\)/i)
+      }
+      return planMessage([{ name: 'mine_entity_exact', args: { unit_number: 331 } }], {
+        plan: ['Act on the furnace'],
+      })
+    },
+  })
+
+  const first = await agent.request('act on the observed furnace', { sender: 'tester' })
+  assert.equal(first.operations[0].args.unit_number, 331)
+  const before = agent.memory.currentPlan('npc:airi')
+  assert.equal(rcon.mutations.length, 1)
+
+  const second = await agent.request('continue at that furnace', { sender: 'tester' })
+  assert.equal(second.blocked, true)
+  assert.equal(second.blocker.class, 'plan_category')
+  assert.match(second.blocker.reason, /already rejected in this active request/i)
+  assert.equal(calls, 4)
+  assert.equal(rcon.mutations.length, 1)
+
+  const after = agent.memory.currentPlan('npc:airi')
+  assert.equal(after.goal_id, before.goal_id)
+  assert.equal(after.revision, before.revision)
+  assert.deepEqual(after.last_operations, before.last_operations)
 })

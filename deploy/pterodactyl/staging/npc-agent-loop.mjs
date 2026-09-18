@@ -887,6 +887,12 @@ export class NpcAgentLoop {
             tools_enabled: true,
             ...(error?.details && typeof error.details === 'object' ? error.details : {}),
           })
+          if (error?.details?.deterministic_no_retry === true) {
+            return this.blockedWithoutMutation(
+              `${reason} The harness stopped this request without changing canonical task state because repeating the same deterministically invalid repair cannot create a live exact-entity binding.`,
+              'plan_category',
+            )
+          }
           if (this.planCategoryRetries > this.maxToolValidationRetries) {
             return this.blockedWithoutMutation(`Provider repeatedly placed an observation tool in operations (${error?.details?.tool_name ?? 'unknown'}).`, 'plan_category')
           }
