@@ -112,14 +112,15 @@ test('scripted provider can observe actor then submit an epoch-authorized struct
   assert.ok(agent.messages.some(message => message.role === 'user' && message.content === '[CHAT] TTLouis: wait briefly'))
 })
 
-test('default observation budget allows eleven distinct tool rounds before the final plan', async () => {
+test('distinct read-only tools receive decision pressure before exhausting the observation budget', async () => {
   const rcon = new FakeRcon()
   let calls = 0
   const agent = new NpcAgentLoop({
     rcon,
-    provider: async () => {
+    provider: async (messages) => {
       calls++
-      if (calls < 12) return toolMessage(`tool-${calls}`, 'getRecipe', { item: `test-item-${calls}` })
+      if (calls <= 4) return toolMessage(`tool-${calls}`, 'getRecipe', { item: `test-item-${calls}` })
+      assert.match(messages.map(message => String(message.content ?? '')).join('\n'), /Decision pressure after 4 consecutive observation-only rounds/)
       return planMessage([{ name: 'wait', args: { ticks: 1 } }])
     },
     systemPrompt: 'NPC test prompt',
@@ -127,7 +128,7 @@ test('default observation budget allows eleven distinct tool rounds before the f
 
   const result = await agent.request('observe before acting')
 
-  assert.equal(calls, 12)
+  assert.equal(calls, 5)
   assert.equal(result.operations[0].name, 'wait')
   assert.equal(rcon.mutations.length, 1)
 })
