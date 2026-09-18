@@ -146,6 +146,21 @@ describe('task board debug and UI freshness helpers', () => {
     expect(task_conversation_messages(undefined)).toEqual([])
   })
 
+  it('hides an explicit old conversation as soon as its snapshot is suppressed', () => {
+    const old = {
+      goal_id: 'goal-old',
+      objective: 'build power',
+      conversation_id: 'task-old',
+      conversation: [
+        { id: 'm1', role: 'user', sender: 'TTLouis', text: 'old request' },
+        { id: 'm2', role: 'assistant', sender: 'AIRI', text: 'old answer' },
+      ],
+    }
+    expect(task_conversation_messages(old)).toHaveLength(2)
+    suppress_snapshot(old)
+    expect(task_conversation_messages(old)).toEqual([])
+  })
+
   it('rejects a delayed projection of a cleared goal but accepts a genuinely new goal', () => {
     suppress_snapshot({ goal_id: 'goal_old', objective: 'Build green circuits' })
     expect(snapshot_is_suppressed({ goal_id: 'goal_old', objective: 'Build green circuits' })).toBe(true)

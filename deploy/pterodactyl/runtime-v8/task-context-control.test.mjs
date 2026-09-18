@@ -6,7 +6,7 @@ import path from 'node:path'
 
 import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
-import { executeUiControl, parseUiControlLine, Session } from './supervisor.mjs'
+import { executeUiControl, finalizeCompletedTaskBoundary, parseUiControlLine, Session } from './supervisor.mjs'
 
 function activePlan(goalId, objective) {
   return {
@@ -103,13 +103,72 @@ function controlSession(agent, order = []) {
   return session
 }
 
+test('verified completion archives the completed stages before resetting the live prompt pipeline', async t => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-ui-completion-boundary-'))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  const stateFile = path.join(dir, 'npc-state.json')
+  const memory = new CanonicalTaskBoardMemory()
+  seedContext(memory, 'npc:airi', 'goal_complete', 'completed task')
+  const agent = persistentAgent(stateFile, memory)
+  agent.active = true
+  agent.requestInfo = { memoryKey: 'npc:airi', sender: 'TTLouis', text: 'completed task', turnId: 1 }
+  agent.messages = [{ role: 'user', content: 'old provider context' }]
+  agent.baseMessages = [{ role: 'system', content: 'old system context' }]
+  await agent.persistState()
+
+  const order = []
+  const session = controlSession(agent, order)
+  session.agentLive.objective = 'completed task'
+  const completedBoard = {
+    kind: 'task_board_lite',
+    goal_id: 'goal_complete',
+    status: 'completed',
+    blocker: '',
+    pause_reason: '',
+    revision: 4,
+    completed_count: 2,
+    total_steps: 2,
+    active_index: 1,
+    active_step_id: undefined,
+    steps: [
+      { id: 'step_1', description: 'Do work', status: 'completed' },
+      { id: 'step_2', description: 'Verify work', status: 'completed' },
+    ],
+    evidence: [],
+    events: [],
+  }
+
+  const finalized = await finalizeCompletedTaskBoundary(session, {
+    goalId: 'goal_complete',
+    goalStatus: 'completed',
+    chatMessage: 'Done and verified.',
+    taskBoard: completedBoard,
+  })
+
+  assert.equal(finalized, true)
+  assert.deepEqual(order, ['ui:sync', 'persist', 'ui:clear'])
+  assert.equal(session.syncs.length, 1)
+  assert.equal(session.syncs[0].task_board.status, 'completed')
+  assert.deepEqual(session.syncs[0].task_board.steps.map(step => step.status), ['completed', 'completed'])
+  const resetContext = memory.context('npc:airi')
+  assert.match(resetContext, /No active durable goal/)
+  assert.doesNotMatch(resetContext, /completed task|I remember this task/i)
+  assert.equal(memory.currentPlan('npc:airi'), undefined)
+  assert.equal(agent.active, false)
+  assert.deepEqual(agent.messages, [])
+  assert.deepEqual(agent.baseMessages, [])
+  assert.equal(session.agentLive.conversation_id, 'task_test_3')
+  assert.deepEqual(session.agentLive.conversation, [])
+  assert.equal(session.commands.includes('CLEAR_UI'), true)
+})
+
 test('UI control parser accepts server-authoritative new_task and still rejects arbitrary actions', () => {
   const event = parseUiControlLine('[AIRI_UI_CONTROL] {"version":1,"action":"new_task","player_index":7,"player_name":"TTLouis","tick":900}')
   assert.deepEqual(event, { version: 1, action: 'new_task', player_index: 7, player_name: 'TTLouis', tick: 900 })
   assert.equal(parseUiControlLine('[AIRI_UI_CONTROL] {"version":1,"action":"clear_memory","player_index":7,"player_name":"TTLouis","tick":900}'), undefined)
 })
 
-test('terminate aborts world work and durable goal while preserving the visible conversation', async t => {
+test('terminate aborts world work and durable goal while clearing the Current Task Conversation', async t => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-ui-terminate-'))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
   const stateFile = path.join(dir, 'npc-state.json')
@@ -134,17 +193,17 @@ test('terminate aborts world work and durable goal while preserving the visible 
     'world:cancel',
     'memory:terminate:npc:airi',
     'persist',
-    'ui:sync',
+    'ui:clear',
   ])
   assert.equal(memory.currentPlan('npc:airi'), undefined)
   assert.match(memory.context('npc:airi'), /remember old terminate task/)
   assert.equal(session.agentLive.phase, 'idle')
   assert.equal(session.agentLive.objective, '')
   assert.deepEqual(session.agentLive.activity, [])
-  assert.equal(session.agentLive.conversation_id, 'task_test_2')
-  assert.deepEqual(session.agentLive.conversation.map(entry => entry.text), ['old task', 'Working.'])
-  assert.equal(session.commands.includes('CLEAR_UI'), false)
-  assert.deepEqual(session.syncs, [undefined])
+  assert.equal(session.agentLive.conversation_id, 'task_test_3')
+  assert.deepEqual(session.agentLive.conversation, [])
+  assert.equal(session.commands.includes('CLEAR_UI'), true)
+  assert.deepEqual(session.syncs, [])
 
   const restarted = persistentAgent(stateFile)
   await restarted.loadPersistentState()

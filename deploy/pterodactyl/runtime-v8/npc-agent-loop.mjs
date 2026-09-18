@@ -43,6 +43,8 @@ The task_board field is the canonical single-NPC Task Board Lite. Its stable ste
 
 For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
 
+Plan entries must represent goal-bearing Factorio work or verification. Do not add terminal lifecycle/meta steps such as "Stop", "Done", "Finish", or "Report completion"; stopping after the verified goal is represented by returning plan: [], currentStep: 0, operations: [].
+
 An empty operations array normally means no new Autorio world action will happen after your reply. Never claim that a finite action is continuing when neither a new operation nor a live persistent runtime mode exists. Persistent controllers such as follow are different: if a read-only status tool proves the controller is active, healthy, and live, operations: [] may accurately describe that background mode without submitting a duplicate operation. When the whole requested goal is actually verified complete, return plan: [], currentStep: 0, operations: [], and say it is complete.
 
 When finite canonical work remains but execution is truthfully impossible, keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or blocker. This is the explicit no-mutation blocker contract. Future-tense prose such as "I will take the items" is not a blocker and does not authorize the harness to invent an operation.
@@ -457,6 +459,12 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       return override
     }
     return [this.dialogueContext(key), this.planContext(key)].filter(Boolean).join('\n')
+  }
+
+  clearTaskContext(key) {
+    const result = super.clearTaskContext(key)
+    if (key) this.nextContextOverride.delete(key)
+    return result
   }
 
   currentPlan(key) {
@@ -1330,12 +1338,25 @@ function finalStepCanCloseFromFreshObservation(state) {
   return stored.every(value => /^wait(?:\s|$)/i.test(String(value ?? '').trim()))
 }
 
+function terminalControlOnlyPlanStep(value) {
+  const text = cleanMemoryText(value, 120).toLowerCase().replace(/[.!]+$/g, '').trim()
+  return text === 'stop'
+    || text === 'done'
+    || text === 'finish'
+    || text === 'finished'
+    || text === 'complete'
+    || text === 'completed'
+}
+
 function verifiedFinalCompletion(plan, state, triggerSource, { freshObservation = false } = {}) {
   if (triggerSource !== 'completion' || plan?.operations?.length !== 0 || plan?.plan?.length !== 0) return false
   const board = state?.task_board
   if (state?.status !== 'active') return false
   if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps) || board.steps.length === 0) return false
-  if (board.active_index !== board.steps.length - 1) return false
+  const activeIndex = Number.isSafeInteger(board.active_index) ? board.active_index : -1
+  if (activeIndex < 0 || activeIndex >= board.steps.length) return false
+  const trailingSteps = board.steps.slice(activeIndex + 1)
+  if (trailingSteps.some(step => !terminalControlOnlyPlanStep(step?.description))) return false
   const ref = Number.isSafeInteger(state.last_verified_batch_id) ? `batch_${state.last_verified_batch_id}` : ''
   const deterministicCurrentStep = [...(board.evidence ?? [])].reverse().some(item => item?.kind === 'deterministic_verification'
     && item?.step_id === board.active_step_id
@@ -1397,6 +1418,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.persistQueue = Promise.resolve()
     this.traceRequest = null
     this.traceRequestSequence = 0
+    this.decisionRequestSequence = 0
+    this.decisionTraceSequence = 0
     this.planUpdateReason = 'request'
     this.requestLifecycle = 'new_goal'
     this.pendingInteractionAmendment = null
@@ -1418,6 +1441,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const traceFile = options.traceFile ?? process.env.SGLUNA_BEHAVIOR_TRACE_FILE ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
       ?? (process.env.NODE_TEST_CONTEXT ? null : path.resolve(process.cwd(), 'logs', 'sgluna-behavior.jsonl'))
     this.behaviorTrace = traceFile ? new BehaviorTraceWriter(traceFile, message => this.log(`[trace] ${message}`)) : null
+    const decisionTraceFile = Object.prototype.hasOwnProperty.call(options, 'decisionTraceFile')
+      ? options.decisionTraceFile
+      : (process.env.SGLUNA_DECISION_TRACE_FILE
+        ?? (this.interactionDecisionProvider && !process.env.NODE_TEST_CONTEXT
+          ? path.resolve(process.cwd(), 'logs', 'sgluna-decision.jsonl')
+          : null))
+    this.decisionTrace = this.interactionDecisionProvider && decisionTraceFile
+      ? new BehaviorTraceWriter(decisionTraceFile, message => this.log(`[decision-trace] ${message}`))
+      : null
   }
 
   async loadPersistentState() {
@@ -1628,19 +1660,60 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const controller = new AbortController()
     this.interactionAbort = controller
 
+    const decisionQuestions = interactionDecisionQuestions()
+    const decisionId = this.interactionDecisionProvider
+      ? `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
+      : undefined
+    if (decisionId) {
+      await this.decisionTraceEvent('decision.request', {
+        decision_id: decisionId,
+        contract: 'interaction_route',
+        mode: 'shadow',
+        question_ids: Object.keys(decisionQuestions),
+        message_chars: state.message.length,
+        has_current_goal: currentGoal !== null,
+        runtime_task_state: cleanMemoryText(taskStatus?.task_state, 64),
+        runtime_queue_length: Number.isSafeInteger(taskStatus?.queue_length) ? taskStatus.queue_length : 0,
+      })
+    }
+
     const decisionStartedAt = Date.now()
     const decisionPromise = this.interactionDecisionProvider
-      ? this.interactionDecisionProvider(state, interactionDecisionQuestions(), {
+      ? this.interactionDecisionProvider(state, decisionQuestions, {
           epoch: current.epoch,
           actorId: current.actor_id,
           signal: controller.signal,
-        }).then(response => ({
-          shadow: parseInteractionDecisionShadow(response),
-          latency_ms: Date.now() - decisionStartedAt,
-        })).catch(error => ({
-          error: cleanMemoryText(error instanceof Error ? error.message : String(error), 300),
-          latency_ms: Date.now() - decisionStartedAt,
-        }))
+        }).then(async response => {
+          const shadow = parseInteractionDecisionShadow(response)
+          const latency_ms = Date.now() - decisionStartedAt
+          await this.decisionTraceEvent('decision.response', {
+            decision_id: decisionId,
+            contract: 'interaction_route',
+            mode: 'shadow',
+            provider: shadow.provider,
+            model: shadow.model,
+            intent: shadow.intent,
+            confidence: shadow.intent_confidence,
+            queue_conflict_probability: shadow.queue_conflict_probability,
+            latency_ms,
+            input_units: Number.isFinite(shadow.usage?.input_tokens) ? Math.max(0, Math.trunc(shadow.usage.input_tokens)) : 0,
+            output_units: Number.isFinite(shadow.usage?.output_tokens) ? Math.max(0, Math.trunc(shadow.usage.output_tokens)) : 0,
+            cost_usd: Number.isFinite(shadow.usage?.cost) && shadow.usage.cost >= 0 ? shadow.usage.cost : 0,
+          })
+          return { shadow, latency_ms }
+        }).catch(async error => {
+          const latency_ms = Date.now() - decisionStartedAt
+          const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+          await this.decisionTraceEvent('decision.fallback', {
+            decision_id: decisionId,
+            contract: 'interaction_route',
+            mode: 'shadow',
+            fallback_target: 'interaction_router',
+            reason: message,
+            latency_ms,
+          })
+          return { error: message, latency_ms }
+        })
       : Promise.resolve(undefined)
 
     try {
@@ -1661,10 +1734,24 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           response_format: { type: 'json_object' },
         },
       })
+      const route = parseInteractionRoute(message)
       const decision = await decisionPromise
+      if (decisionId) {
+        await this.decisionTraceEvent('decision.route_applied', {
+          decision_id: decisionId,
+          contract: 'interaction_route',
+          mode: 'shadow',
+          active_source: 'interaction_router',
+          active_intent: route.intent,
+          shadow_intent: decision?.shadow?.intent ?? '',
+          agreement: decision?.shadow ? decision.shadow.intent === route.intent : undefined,
+          shadow_available: Boolean(decision?.shadow),
+        })
+      }
       return {
-        route: parseInteractionRoute(message),
+        route,
         epoch: current,
+        decision_id: decisionId,
         decision_shadow: decision?.shadow,
         decision_shadow_error: decision?.error,
         decision_shadow_latency_ms: decision?.latency_ms,
@@ -1874,6 +1961,47 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.persistState()
     super.cancel()
     return state
+  }
+
+  async finalizeCompletedTaskContext() {
+    await this.loadPersistentState()
+    const key = this.requestInfo?.memoryKey ?? this.lastMemoryKey ?? `npc:${this.npcId}`
+    this.memory.clearTaskContext?.(key)
+    await this.persistState()
+
+    // Completion is a hard planner boundary. Do not carry the completed task's
+    // provider working set, continuation counters, recovery state, or dialogue
+    // context into the next goal.
+    super.cancel()
+    this.traceRequest = null
+    this.planUpdateReason = 'request'
+    this.requestLifecycle = 'new_goal'
+    this.pendingInteractionAmendment = null
+    this.lastTaskStatusView = null
+    this.lastHandledRuntimeReceipt = { completion: null, failure: null }
+    this.outputBudgetRecoveryUsed = false
+    this.outputBudgetRecoveryGuard = null
+    this.clearActionOmissionRecovery()
+    this.liveEntityObservations = new Map()
+    this.rejectedExactTargets = new Set()
+    this.staleExactPreflightRetries = 0
+    this.bootstrapDependencyPreflightRetries = 0
+    return true
+  }
+
+  decisionTraceEvent(event, data = {}) {
+    if (!this.decisionTrace) return Promise.resolve()
+    const { decision_id, ...details } = data ?? {}
+    return this.decisionTrace.emit({
+      schema: 1,
+      ts: new Date().toISOString(),
+      seq: ++this.decisionTraceSequence,
+      event,
+      decision_id,
+      actor_id: this.epoch?.actor_id,
+      epoch: this.epoch?.epoch,
+      data: details,
+    })
   }
 
   traceEvent(event, data = {}) {
@@ -2604,6 +2732,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const explicitBlocker = providerBlockerReason(plan)
 
     if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
+      if (this.genericRecoveryDecisionActive) {
+        // Generic strict recovery exists because the provider already failed to
+        // produce a valid decision. Tools are intentionally disabled there, so
+        // a no-op/"BLOCKED" answer can describe the recovery sandbox rather
+        // than a real Factorio blocker. Never persist that as semantic world
+        // truth. Let the request fail upward; the supervisor will pause the
+        // durable plan when Autorio is authoritatively idle, preserving the
+        // verified prefix for a fresh tool-capable Continue turn.
+        const attemptedBlocker = explicitBlocker
+          ? ` Recovery attempted BLOCKED: ${cleanMemoryText(explicitBlocker, 600)}`
+          : ''
+        throw new AgentLoopError(
+          `Provider strict recovery could not safely resolve remaining canonical work without a fresh normal tool-capable turn.${attemptedBlocker}`,
+        )
+      }
       if (explicitBlocker) {
         return this.finishNoOperationBlock(plan, before, 'provider_reported_blocker', explicitBlocker, 'provider_blocker')
       }
@@ -2614,15 +2757,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           'output_budget_recovery_no_operation',
           'Output-budget recovery supplied no fresh world evidence and no executable operation for the remaining canonical work.',
           'output_budget_recovery',
-        )
-      }
-      if (this.genericRecoveryDecisionActive) {
-        return this.finishNoOperationBlock(
-          plan,
-          before,
-          'recovery_no_operation',
-          'The bounded provider recovery returned no executable operation and no explicit BLOCKED: reason.',
-          'recovery_no_operation',
         )
       }
       if (this.actionOmissionRepairActive) {

@@ -403,6 +403,53 @@ test('normal execution has zero action-omission provider overhead', async () => 
   assert.equal(calls[0].options.requestBodyPatch, undefined)
 })
 
+test('strict provider recovery cannot turn its no-tools limitation into a durable world blocker', async () => {
+  const plan = ['Start smelting', 'Verify at least 20 iron plates']
+  let calls = 0
+  const agent = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    provider: async (_messages, options) => {
+      calls++
+      if (calls === 1) {
+        return planMessage({
+          chatMessage: 'Starting the smelting wait.',
+          plan,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        })
+      }
+      if (calls === 2) return { content: 'this is not valid JSON' }
+      assert.equal(options.allowTools, false)
+      assert.ok(options.recoveryAttempt >= 1)
+      return planMessage({
+        chatMessage: 'BLOCKED: I cannot issue another observation during this strict recovery turn, so I cannot confirm the plate count.',
+        plan,
+        currentStep: 1,
+        operations: [],
+      })
+    },
+    systemPrompt: 'Strict recovery blocker truth test',
+    memory: new CanonicalTaskBoardMemory(),
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const started = await agent.request('smelt and verify plates', { sender: 'TTLouis' })
+  assert.equal(started.operations[0].name, 'wait')
+
+  await assert.rejects(
+    agent.completed(),
+    /strict recovery could not safely resolve remaining canonical work/i,
+  )
+
+  const state = agent.memory.currentPlan('npc:airi')
+  assert.equal(state.status, 'active')
+  assert.notEqual(state.blocker, 'provider_reported_blocker')
+  assert.notEqual(state.task_board.blocker, 'provider_reported_blocker')
+  assert.equal(state.task_board.steps.at(-1).description, 'Verify at least 20 iron plates')
+  assert.equal(agent.rcon.mutations.length, 1)
+})
+
 test('healthy persistent runtime and explicit truthful blocker do not trigger omission repair', async () => {
   let followCalls = 0
   const followAgent = new NpcAgentLoop({
@@ -749,6 +796,61 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
 })
 
 
+test('verified completion can close before a trailing control-only Stop step', async () => {
+  let calls = 0
+  const rcon = new ActionOmissionRcon()
+  const plan = ['Perform the requested work', 'Verify the result', 'Stop']
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      calls++
+      if (calls === 1) {
+        return planMessage({
+          chatMessage: 'Performing the requested work.',
+          plan,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        })
+      }
+      if (calls === 2) {
+        return planMessage({
+          chatMessage: 'The work is done; moving to verification.',
+          plan,
+          currentStep: 1,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        })
+      }
+      if (calls === 3) return toolMessage('final-verification')
+      return planMessage({
+        chatMessage: 'The requested result is verified. Nothing further needs execution.',
+        plan: [],
+        currentStep: 0,
+        operations: [],
+      })
+    },
+    systemPrompt: 'Trailing control-only completion regression test',
+    memory: new CanonicalTaskBoardMemory(),
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const started = await agent.request('do the work, verify it, then stop', { sender: 'TTLouis' })
+  assert.equal(started.operations.length, 1)
+  assert.equal(started.taskBoard.active_index, 0)
+
+  const verifying = await agent.completed()
+  assert.equal(verifying.operations.length, 1)
+  assert.equal(verifying.taskBoard.active_index, 1)
+  assert.equal(verifying.taskBoard.steps[2].description, 'Stop')
+
+  const finished = await agent.completed()
+  assert.equal(calls, 4)
+  assert.equal(finished.goalStatus, 'completed')
+  assert.equal(finished.operations.length, 0)
+  assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
+  assert.equal(rcon.mutations.length, 2)
+})
+
 test('verified final completion is not mistaken for an action omission', async () => {
   let calls = 0
   const rcon = new ActionOmissionRcon()
@@ -784,4 +886,13 @@ test('verified final completion is not mistaken for an action omission', async (
   assert.equal(finished.goalStatus, 'completed')
   assert.equal(finished.operations.length, 0)
   assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
+  assert.match(agent.memory.context('npc:airi'), /place one furnace|requested furnace/i)
+
+  await agent.finalizeCompletedTaskContext()
+  assert.equal(agent.active, false)
+  assert.equal(agent.messages.length, 0)
+  assert.equal(agent.baseMessages.length, 0)
+  const resetContext = agent.memory.context('npc:airi')
+  assert.match(resetContext, /No active durable goal/)
+  assert.doesNotMatch(resetContext, /place one furnace|requested furnace/i)
 })

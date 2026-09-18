@@ -18,6 +18,17 @@ describe('task board New Task control regression', () => {
     expect(prompt).toContain('const pending = LIFECYCLE.current(player.index)')
     expect(prompt).toContain('new_task.enabled = pending === undefined')
     expect(handler).toContain('if (element_name === NEW_TASK_BUTTON_NAME)')
-    expect(handler).toMatch(/NEW_TASK_BUTTON_NAME\)[^\n]*LIFECYCLE\.current\(player\.index\) !== undefined[^\n]*return true[^\n]*clear_terminate_confirmation\(player\.index\)[^\n]*emit_control\(player, 'new_task'\)/)
+    expect(handler).toMatch(/NEW_TASK_BUTTON_NAME\)[^\n]*LIFECYCLE\.current\(player\.index\) !== undefined[^\n]*return true[^\n]*clear_terminate_confirmation\(player\.index\)[^\n]*debug_ui\.suppress_snapshot\(storage\.airi_task_board_ui\)[^\n]*debug_ui\.reset_task_conversation\(\)[^\n]*emit_control\(player, 'new_task'\)/)
+    expect(handler).toContain("if (element_name === TERMINATE_BUTTON_NAME)")
+    expect(handler).toMatch(/LIFECYCLE\.begin\(player\.index, 'terminate'\)[\s\S]*debug_ui\.suppress_snapshot\(storage\.airi_task_board_ui\)[\s\S]*debug_ui\.reset_task_conversation\(\)[\s\S]*emit_control\(player, 'terminate'\)/)
+  })
+
+  it('refreshes Current Task Conversation while the console stays open', () => {
+    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const refresh = source.split('function refresh_columns(')[1]?.split('function build_panel(')[0] ?? ''
+
+    expect(refresh).toContain('dynamic.clear(); build_left_dynamic(dynamic, player, board, synced_tick, runtime)')
+    expect(refresh).toContain("debug_ui.render_ai_reply(dynamic, board?.response ?? '', LEFT_COLUMN_WIDTH)")
+    expect(refresh.indexOf('debug_ui.render_ai_reply')).toBeGreaterThan(refresh.indexOf('build_left_dynamic'))
   })
 })

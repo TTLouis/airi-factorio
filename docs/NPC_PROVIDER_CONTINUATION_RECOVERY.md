@@ -69,6 +69,30 @@ The harness should distinguish:
 
 Provider/recovery failure should be reported as such and must not be persisted as semantic Factorio evidence.
 
+### 6. Strict recovery cannot author a semantic world blocker
+
+Generic strict recovery is entered because the provider failed a response/protocol contract such as invalid JSON. Its no-tools sandbox is an orchestration constraint, not Factorio evidence.
+
+If canonical work remains and a strict-recovery answer has no executable operation, the runtime must not persist `BLOCKED` merely because that recovery turn cannot observe again. Even an explicit `BLOCKED:` response from that strict-recovery call is treated as an unresolved provider failure rather than durable world truth.
+
+The request should fail upward. When authoritative Autorio state is `idle` with an empty queue, the supervisor pauses the durable task while preserving the verified Task Board prefix. A later Continue/resume starts a fresh tool-capable planner turn from that verified state.
+
+Normal planner turns may still report a truthful explicit blocker when grounded evidence establishes a real world/human/capability condition.
+
+## Deferred: calculated / condition-based waits
+
+Current `wait {ticks}` duration is selected by the planner and then executed deterministically by Autorio. It is not yet calculated by runtime from live recipe/machine timing.
+
+Future work should move mechanical timing out of the main LLM:
+
+- derive an expected bounded wait from live recipe energy, machine crafting speed, requested remaining output, and other authoritative modifiers when available;
+- prefer condition-based polling so the wait can end early once the target condition is satisfied;
+- keep a bounded timeout/failure path instead of waiting indefinitely;
+- treat `wait` as elapsed-time control only, never as proof that production actually completed;
+- keep final success verification authoritative (inventory/entity/production observation), not inferred from elapsed ticks.
+
+This is intentionally documented but not implemented in the current recovery fix.
+
 ## Budget strategy
 
 Preferred order for successful completion continuation:

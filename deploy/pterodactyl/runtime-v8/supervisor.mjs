@@ -266,6 +266,16 @@ const UI_TASK_PAUSE_SUMMARIES = new Map([
   ['follow_mode', 'AIRI paused the current task while following a player.'],
 ])
 
+function requestFailurePauseSummary(raw) {
+  if (raw.startsWith('provider_output_budget_exhausted:')) {
+    return 'AIRI paused because the model exhausted its response budget while no Autorio work was running. Continue to retry from the verified task state.'
+  }
+  if (raw.startsWith('request_failed:')) {
+    return 'AIRI paused because the model request failed while no Autorio work was running. Continue to retry from the verified task state.'
+  }
+  return ''
+}
+
 export function formatTaskCondition(value, kind = 'blocker') {
   const raw = uiText(value, kind === 'pause' ? 300 : 500)
   if (!raw) return { raw: '', summary: '' }
@@ -277,6 +287,8 @@ export function formatTaskCondition(value, kind = 'blocker') {
     if (raw.startsWith('server_stop_')) {
       return { raw, summary: 'AIRI paused because the server is stopping.' }
     }
+    const requestFailure = requestFailurePauseSummary(raw)
+    if (requestFailure) return { raw, summary: requestFailure }
     return {
       raw,
       summary: UI_TASK_PAUSE_SUMMARIES.get(raw) ?? 'AIRI is paused by an internal task condition.',
@@ -910,7 +922,7 @@ async function pausePlanIfPresent(session, reason) {
   return session.agent.pausePersistentPlan(reason)
 }
 
-function resetLiveTaskContext(session, { clearConversation = true } = {}) {
+function resetLiveTaskContext(session) {
   if (!session.agentLive || typeof session.agentLive !== 'object') return
   Object.assign(session.agentLive, {
     phase: 'idle',
@@ -919,10 +931,11 @@ function resetLiveTaskContext(session, { clearConversation = true } = {}) {
     at: Date.now(),
     activity: [],
   })
-  // Terminate discards the durable goal but intentionally preserves bounded
-  // dialogue memory. Keep the visible Current Task Conversation aligned with
-  // that contract; only New Task is the destructive conversation boundary.
-  if (clearConversation) session.startNewUiConversation?.()
+  // Terminate and New Task are both boundaries for the *current* task
+  // conversation. Terminate may retain bounded model dialogue memory internally,
+  // but that retained memory belongs to history/continuity rather than the
+  // Current Task Conversation panel.
+  session.startNewUiConversation?.()
 }
 
 async function discardTaskContext(session, reason, { clearDialogue = false } = {}) {
@@ -941,17 +954,46 @@ async function discardTaskContext(session, reason, { clearDialogue = false } = {
     ? agent.memory?.clearTaskContext?.(key)
     : agent.memory?.terminatePlan?.(key)
   await agent.persistState?.()
-  resetLiveTaskContext(session, { clearConversation: clearDialogue })
-  if (clearDialogue) {
-    await session.clearTaskBoardUi()
-  }
-  else {
-    // Keep the retained conversation visible as an idle, plan-less snapshot.
-    // The snapshot is still server-authoritative and replicated through the
-    // existing Task Board remote interface; GUI render code remains read-only.
-    await session.syncTaskBoardUi()
-  }
+  resetLiveTaskContext(session)
+  // Both destructive lifecycle boundaries clear the current UI snapshot. Old
+  // task/history data is retained by the history subsystem, and Terminate still
+  // preserves bounded dialogue memory internally when clearDialogue is false.
+  await session.clearTaskBoardUi()
   return cleared
+}
+
+function completedTaskResult(result) {
+  return result?.goalStatus === 'completed' || result?.taskBoard?.status === 'completed'
+}
+
+export async function finalizeCompletedTaskBoundary(session, result) {
+  if (!session?.agent || !completedTaskResult(result)) return false
+
+  // Publish exactly one final completed snapshot before clearing the live slot.
+  // This lets Old Tasks and learning consume the completed stages, evidence and
+  // player-facing conversation instead of seeing the task simply disappear.
+  const taskBoard = result?.taskBoard
+  if (taskBoard?.status === 'completed') {
+    const completedState = {
+      goal_id: result?.goalId ?? taskBoard.goal_id ?? '',
+      owner: session.agent?.requestInfo?.sender ?? '',
+      objective: session.agentLive?.objective ?? '',
+      status: 'completed',
+      blocker: '',
+      pause_reason: '',
+      plan: [],
+      current_step: 0,
+      last_chat_message: result?.chatMessage ?? '',
+      last_operations: [],
+      task_board: taskBoard,
+    }
+    await session.syncTaskBoardUi(completedState)
+  }
+
+  await session.agent.finalizeCompletedTaskContext?.()
+  resetLiveTaskContext(session)
+  await session.clearTaskBoardUi()
+  return true
 }
 
 export async function executeUiControl(session, event) {
@@ -1022,6 +1064,38 @@ export function shouldRecoverInterruptedPlan(state) {
   if (state.status !== 'paused') return false
   const pauseReason = String(state.pause_reason ?? '')
   return SYSTEM_RECOVERY_PAUSE_REASONS.has(pauseReason) || pauseReason.startsWith('server_stop_')
+}
+
+function idleAutorioRuntime(status) {
+  if (!status || typeof status !== 'object' || Array.isArray(status) || status.status_error) return false
+  if (!Number.isSafeInteger(status.queue_length) || typeof status.task_state !== 'string') return false
+  return status.queue_length === 0 && status.task_state.trim().toLowerCase() === 'idle'
+}
+
+export async function pauseStrandedPlanAfterRequestError(session, message) {
+  const agent = session?.agent
+  const state = session?.currentPlanState?.()
+  if (!agent || state?.status !== 'active') return undefined
+
+  let runtime
+  try {
+    runtime = typeof agent.readInteractionTaskStatus === 'function'
+      ? await agent.readInteractionTaskStatus()
+      : undefined
+  }
+  catch {
+    return undefined
+  }
+  // Never let a provider/runtime exception cancel or relabel real world work
+  // that Autorio still owns. Only close the false ACTIVE+IDLE split-brain state.
+  if (!idleAutorioRuntime(runtime)) return undefined
+
+  const clean = uiText(message, 240)
+  const outputBudget = /provider_output_budget_exhausted|finish=length|output budget/i.test(clean)
+  const reason = `${outputBudget ? 'provider_output_budget_exhausted' : 'request_failed'}: ${clean || 'unexpected request failure'}`
+  const paused = await agent.pausePersistentPlan?.(reason)
+  if (paused) await session.syncTaskBoardUi?.(paused)
+  return paused
 }
 
 export async function recoverInterruptedAgentPlan(agent, reason, details = {}) {
@@ -1559,14 +1633,18 @@ export class Session {
     this.eventQueue = this.eventQueue.then(fn).catch(async error => {
       const message = error instanceof Error ? error.message : String(error)
       this.log(message)
-      if (reportError && providerRecoveryExhausted(message) && this.agent) {
+      if (reportError && !expectedCancellation(error) && this.agent) {
         try {
-          const state = await this.agent.pausePersistentPlan(`provider_recovery_exhausted: ${message.slice(0, 240)}`)
-          await this.syncTaskBoardUi(state)
-          if (state) this.log('Canonical Task Board paused after provider response recovery exhaustion')
+          const state = await pauseStrandedPlanAfterRequestError(this, message)
+          if (state) this.log('Canonical Task Board paused after a failed request left Autorio idle')
+          else if (providerRecoveryExhausted(message)) {
+            // Preserve the old diagnostic signal without blindly pausing if
+            // Autorio status is unknown or still owns live world work.
+            this.log('Provider recovery exhausted; durable task was not auto-paused because Autorio was not authoritatively idle')
+          }
         }
         catch (pauseError) {
-          this.log(`Unable to pause Task Board after provider response recovery exhaustion: ${pauseError instanceof Error ? pauseError.message : pauseError}`)
+          this.log(`Unable to reconcile Task Board after request failure: ${pauseError instanceof Error ? pauseError.message : pauseError}`)
         }
       }
       if (reportError && !expectedCancellation(error)) {
@@ -1635,7 +1713,8 @@ export class Session {
         this.appendUiConversation('user', sender, text)
         const result = await this.agent.request(text, { sender })
         if (result?.chatMessage) this.appendUiConversation('assistant', this.npcName || 'AIRI', result.chatMessage)
-        await this.syncTaskBoardUi()
+        const finalized = await finalizeCompletedTaskBoundary(this, result)
+        if (!finalized) await this.syncTaskBoardUi()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }
       finally {
@@ -1700,7 +1779,8 @@ export class Session {
         await this.ensureAuthorization()
         if (!this.agent.active) return
         const result = await this.agent.completed()
-        await this.syncTaskBoardUi()
+        const finalized = await finalizeCompletedTaskBoundary(this, result)
+        if (!finalized) await this.syncTaskBoardUi()
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
       return

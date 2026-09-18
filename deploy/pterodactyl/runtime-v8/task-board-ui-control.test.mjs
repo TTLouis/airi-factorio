@@ -12,6 +12,7 @@ import {
   parseUiControlLine,
   parseUiInputBatch,
   parseUiPromptLine,
+  pauseStrandedPlanAfterRequestError,
   Session,
   taskBoardUiJson,
   taskBoardUiSnapshot,
@@ -203,6 +204,14 @@ test('task blocker presentation is human-readable without changing authoritative
     raw: 'future_internal_pause',
     summary: 'AIRI is paused by an internal task condition.',
   })
+  assert.deepEqual(formatTaskCondition('provider_output_budget_exhausted: finish=length', 'pause'), {
+    raw: 'provider_output_budget_exhausted: finish=length',
+    summary: 'AIRI paused because the model exhausted its response budget while no Autorio work was running. Continue to retry from the verified task state.',
+  })
+  assert.deepEqual(formatTaskCondition('request_failed: Provider HTTP 500', 'pause'), {
+    raw: 'request_failed: Provider HTTP 500',
+    summary: 'AIRI paused because the model request failed while no Autorio work was running. Continue to retry from the verified task state.',
+  })
 
   const state = {
     goal_id: 'goal_blocked',
@@ -328,6 +337,34 @@ function sessionFixture({ state = { status: 'active' } } = {}) {
   }
 }
 
+test('failed request pauses an otherwise-active task only when Autorio is authoritatively idle', async () => {
+  const idleState = { status: 'active', goal_id: 'goal_idle' }
+  const idle = sessionFixture({ state: idleState })
+  const pausedReasons = []
+  idle.agent.readInteractionTaskStatus = async () => ({ task_state: 'idle', queue_length: 0 })
+  idle.agent.pausePersistentPlan = async reason => {
+    pausedReasons.push(reason)
+    return { ...idleState, status: 'paused', pause_reason: reason }
+  }
+
+  const paused = await pauseStrandedPlanAfterRequestError(idle, 'provider_output_budget_exhausted · finish=length')
+  assert.equal(paused.status, 'paused')
+  assert.match(pausedReasons[0], /^provider_output_budget_exhausted:/)
+  assert.equal(idle.syncs.length, 1)
+  assert.equal(idle.syncs[0].status, 'paused')
+
+  const busyState = { status: 'active', goal_id: 'goal_busy' }
+  const busy = sessionFixture({ state: busyState })
+  let busyPaused = false
+  busy.agent.readInteractionTaskStatus = async () => ({ task_state: 'placing', queue_length: 2 })
+  busy.agent.pausePersistentPlan = async () => { busyPaused = true; return { ...busyState, status: 'paused' } }
+
+  const untouched = await pauseStrandedPlanAfterRequestError(busy, 'Provider HTTP 500')
+  assert.equal(untouched, undefined)
+  assert.equal(busyPaused, false)
+  assert.equal(busy.syncs.length, 0)
+})
+
 test('pause preserves plan and stops autorio work plus follow mode', async () => {
   const session = sessionFixture()
   await executeUiControl(session, { action: 'pause', player_name: 'TTLouis' })
@@ -336,15 +373,15 @@ test('pause preserves plan and stops autorio work plus follow mode', async () =>
   assert.ok(session.commands.some(command => command.includes('stop_follow_player')))
 })
 
-test('terminate discards durable state and stops work without forcibly erasing retained conversation UI', async () => {
+test('terminate discards durable state, stops work, and clears the Current Task Conversation UI', async () => {
   const session = sessionFixture()
   let terminated = false
   session.agent.memory.terminatePlan = () => { terminated = true; return { status: 'active' } }
   await executeUiControl(session, { action: 'terminate', player_name: 'TTLouis' })
   assert.equal(terminated, true)
   assert.equal(session.agent.cancelReason, 'ui_terminate')
-  assert.equal(session.commands.includes('CLEAR_UI'), false)
-  assert.deepEqual(session.syncs, [undefined])
+  assert.equal(session.commands.includes('CLEAR_UI'), true)
+  assert.deepEqual(session.syncs, [])
 })
 
 test('follow pauses the active plan, cancels old work, and directly enables follow', async () => {

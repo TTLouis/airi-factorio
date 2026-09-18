@@ -73,12 +73,13 @@ Initial responsibilities:
 Representative outputs:
 
 ```text
-message_route =
-  conversation
+interaction_route =
+  continue_current
+  status_query
+  amend_current
   new_goal
-  amend_current_goal
-  continue_current_goal
-  planner_question
+  cancel_current
+  chat_only
 
 post_operation =
   continue
@@ -292,12 +293,15 @@ Decision:
 
 ```text
 route =
+  continue_current
+  status_query
+  amend_current
   new_goal
-  amend_current_goal
-  continue_current_goal
-  conversation
-  planner_question
+  cancel_current
+  chat_only
 ```
+
+The Phase 1 contract intentionally distinguishes `status_query` from `chat_only`: status can be answered from authoritative task/runtime state, while casual conversation belongs to the future personality lane. `cancel_current` also remains explicit because cancellation has lifecycle authority. A future `planner_question`-style escalation belongs to planner wake/sleep or recovery routing rather than being treated as a human-message intent in the current contract.
 
 Rules:
 
@@ -399,7 +403,7 @@ A safe reduction order is:
 2. preserve the exact observations and receipts that feed that heuristic;
 3. express the choice as a bounded decision schema;
 4. run Jev in shadow mode and compare decisions without changing behavior;
-5. enable Jev for that choice behind a feature flag;
+5. promote that specific decision contract from shadow to active-with-fallback after evidence justifies it; this is a per-contract rollout state, not a global Jev enabled flag;
 6. preserve a deterministic fallback/escalation path;
 7. only then remove duplicated heuristic policy if the model path is stable.
 
@@ -441,7 +445,7 @@ The experiment must remain usable with no decision-provider credentials configur
 
 ## Configuration
 
-Jev credentials must remain environment-only and must never be persisted into `airi-config.json` or traces.
+Jev credentials must remain environment-only and must never be persisted into canonical `sgluna-config.json`, legacy compatibility config, or traces.
 
 There is deliberately **no separate enabled flag**. The decision provider is present when a decision-provider API key is present, and absent when it is not. Missing decision-provider credentials must never prevent an otherwise valid SGLuna server from starting.
 
@@ -541,7 +545,7 @@ Do not log secrets.
 Do not log hidden chain-of-thought.
 Prefer compact state/decision metadata and redact user text where appropriate.
 
-Suggested trace events:
+Decision trace events:
 
 ```text
 decision.request
@@ -554,9 +558,11 @@ conversation.request
 conversation.response
 ```
 
-The existing provider trace should remain distinct from the Jev decision trace so request-cumulative planner usage is not confused with decision-layer usage.
+During the experiment, Jev decision lifecycle events are written to a dedicated `logs/sgluna-decision.jsonl` stream (overridable with `SGLUNA_DECISION_TRACE_FILE`) rather than being folded into the planner's `logs/sgluna-behavior.jsonl` request trace. The decision trace records bounded contract/mode, route, confidence, latency, normalized usage/cost, agreement, and fallback metadata; it does not copy the full player message or credentials. The existing provider trace remains distinct so request-cumulative planner usage is not confused with decision-layer usage.
 
 ## Rollout plan
+
+Current branch status: Phase 0 is implemented, and Phase 1 shadow interaction-routing plumbing is implemented but still awaiting real E2E trace evidence. Phases 2-6 remain design targets and must not be inferred as active from the presence of telemetry counters.
 
 ### Phase 0 - documentation and seam
 

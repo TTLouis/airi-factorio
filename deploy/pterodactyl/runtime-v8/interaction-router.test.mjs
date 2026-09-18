@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
 import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
@@ -92,6 +95,8 @@ function agentFor(intent, {
   queueConflict = intent === 'amend_current',
   decisionIntent,
   decisionConflictProbability = 0.2,
+  decisionError,
+  decisionTraceFile = null,
 } = {}) {
   const memory = new CanonicalTaskBoardMemory()
   if (withPlan) memory.planByNpc.set('npc:airi', activePlan())
@@ -114,9 +119,10 @@ function agentFor(intent, {
       }),
     }
   }
-  const interactionDecisionProvider = decisionIntent
+  const interactionDecisionProvider = decisionIntent || decisionError
     ? async (state, questions, context) => {
         decisionCalls.push({ state, questions, context })
+        if (decisionError) throw new Error(decisionError)
         const probabilities = Object.fromEntries(Object.keys(questions.intent.criteria).map(key => [key, key === decisionIntent ? 0.95 : 0.01]))
         return {
           model: 'jev-latest',
@@ -150,6 +156,8 @@ function agentFor(intent, {
     provider: mockProvider,
     interactionProvider: mockProvider,
     interactionDecisionProvider,
+    traceFile: null,
+    decisionTraceFile,
   })
   if (running && withPlan) {
     agent.active = true
@@ -208,6 +216,49 @@ test('Jev shadow disagreement is observed without changing the active interactio
   assert.equal(decisionCalls[0].questions.queue_conflict.type, 'noul')
   assert.ok(decisionCalls[0].context.signal instanceof AbortSignal)
   assert.equal(rcon.cancelCount, 0)
+})
+
+
+test('Jev shadow writes a dedicated decision lifecycle trace without copying the player message', async t => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sgluna-jev-trace-'))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  const decisionTraceFile = path.join(dir, 'decision.jsonl')
+  const { agent } = agentFor('status_query', { decisionIntent: 'new_goal', decisionTraceFile })
+
+  await agent.request('what are you doing?', { sender: 'tester' })
+  const events = (await fsp.readFile(decisionTraceFile, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+
+  assert.deepEqual(events.map(event => event.event), ['decision.request', 'decision.response', 'decision.route_applied'])
+  assert.equal(events[0].data.contract, 'interaction_route')
+  assert.equal(events[0].data.mode, 'shadow')
+  assert.equal(events[0].data.message_chars, 'what are you doing?'.length)
+  assert.equal(events[0].data.message, undefined)
+  assert.deepEqual(events[0].data.question_ids, ['intent', 'queue_conflict'])
+  assert.equal(events[1].data.intent, 'new_goal')
+  assert.equal(events[1].data.input_units, 120)
+  assert.equal(events[1].data.output_units, 20)
+  assert.equal(events[2].data.active_source, 'interaction_router')
+  assert.equal(events[2].data.active_intent, 'status_query')
+  assert.equal(events[2].data.shadow_intent, 'new_goal')
+  assert.equal(events[2].data.agreement, false)
+})
+
+test('Jev shadow provider failure records fallback while the existing router remains authoritative', async t => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sgluna-jev-fallback-'))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  const decisionTraceFile = path.join(dir, 'decision.jsonl')
+  const { agent } = agentFor('status_query', { decisionError: 'temporary Jev outage', decisionTraceFile })
+
+  const result = await agent.request('status?', { sender: 'tester' })
+  assert.equal(result.interactionIntent, 'status_query')
+  assert.equal(result.routedOnly, true)
+
+  const events = (await fsp.readFile(decisionTraceFile, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual(events.map(event => event.event), ['decision.request', 'decision.fallback', 'decision.route_applied'])
+  assert.equal(events[1].data.fallback_target, 'interaction_router')
+  assert.match(events[1].data.reason, /temporary Jev outage/)
+  assert.equal(events[2].data.active_intent, 'status_query')
+  assert.equal(events[2].data.shadow_available, false)
 })
 
 test('deterministic no-goal routing skips Jev shadow entirely', async () => {

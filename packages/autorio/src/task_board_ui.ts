@@ -1032,6 +1032,11 @@ function refresh_columns(columns: LuaGuiElement, player: LuaPlayer) {
   // The tracker is never cleared on a routine refresh: it owns two scroll-panes.
   if (left === undefined || !refresh_tracker(left, board, player)) return false
   dynamic.clear(); build_left_dynamic(dynamic, player, board, synced_tick, runtime)
+  // Current Task Conversation intentionally lives outside the dynamic flow so
+  // its scroll position survives refreshes. That also means it must be
+  // explicitly refreshed here; otherwise snapshots update storage while an
+  // already-open console keeps stale rows until it is closed and reopened.
+  debug_ui.render_ai_reply(dynamic, board?.response ?? '', LEFT_COLUMN_WIDTH)
   // Never clear the preview column on a routine refresh: it owns the zoom slider.
   const resources = right[RIGHT_RESOURCES_NAME]
   if (!refresh_world_preview(right, runtime, player) || !resources?.valid) {
@@ -1090,7 +1095,11 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
     if (LIFECYCLE.current(player.index) !== undefined) return true
     if (task_board_ui_terminate_is_armed(player.index, game.tick)) {
       clear_terminate_confirmation(player.index)
-      if (LIFECYCLE.begin(player.index, 'terminate')) emit_control(player, 'terminate')
+      if (LIFECYCLE.begin(player.index, 'terminate')) {
+        debug_ui.suppress_snapshot(storage.airi_task_board_ui)
+        debug_ui.reset_task_conversation()
+        emit_control(player, 'terminate')
+      }
     } else arm_terminate(player.index)
     render_panel(player)
     return true
