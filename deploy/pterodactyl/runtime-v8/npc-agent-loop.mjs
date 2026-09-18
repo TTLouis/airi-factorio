@@ -21,6 +21,10 @@ const STATE_SCHEMA = 1
 const PLAN_HISTORY_LIMIT = 24
 const DUPLICATE_OBSERVATION_MESSAGE = '[HARNESS] Duplicate observation suppressed. The result is unchanged from the earlier identical tool call already present in this decision context; reuse it and act or report a blocker.'
 const OUTPUT_BUDGET_RECOVERY_MESSAGE = '[HARNESS] The immediately preceding provider response exhausted its output budget before emitting content or tool calls. Continue the same logical request and goal from this unchanged harness context. Tools remain available. Do not treat the empty response as an action, plan update, completion, or evidence. Do not replay any world mutation already proven complete by the supplied receipts or canonical Task Board. Return the next necessary tool call(s) or one valid strict-JSON plan.'
+const ACTION_OMISSION_MAX_TOKENS = 700
+const ACTION_OMISSION_BLOCKER_PREFIX = 'BLOCKED:'
+const ACTION_OMISSION_REPAIR_MESSAGE = 'Finite canonical work remains, but no executable operation was submitted. Reuse the authoritative evidence already collected and do not repeat completed observations. If that evidence already parameterizes the next action, submit the next executable operation now. If exactly one mutable fact is genuinely missing, use exactly one targeted observation for that fact; after it, no more observation turns are allowed. Otherwise keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or truthful blocker.'
+const ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE = 'The single targeted observation for this decision is complete. Do not observe again or switch to another read-only tool. Submit the next executable operation now, or keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact still-missing fact or truthful blocker.'
 const EXACT_ENTITY_TARGET_OPERATIONS = new Set([
   'walk_to_entity_exact',
   'mine_entity_exact',
@@ -40,6 +44,8 @@ The task_board field is the canonical single-NPC Task Board Lite. Its stable ste
 For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
 
 An empty operations array normally means no new Autorio world action will happen after your reply. Never claim that a finite action is continuing when neither a new operation nor a live persistent runtime mode exists. Persistent controllers such as follow are different: if a read-only status tool proves the controller is active, healthy, and live, operations: [] may accurately describe that background mode without submitting a duplicate operation. When the whole requested goal is actually verified complete, return plan: [], currentStep: 0, operations: [], and say it is complete.
+
+When finite canonical work remains but execution is truthfully impossible, keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or blocker. This is the explicit no-mutation blocker contract. Future-tense prose such as "I will take the items" is not a blocker and does not authorize the harness to invent an operation.
 
 Before a non-empty operation batch, chatMessage should tell the human what concrete current plan step AIRI is about to attempt. Do not say mining, construction, transfer, crafting, or any other mutation has started unless that mutation is in the admitted/running operation batch or authoritative runtime evidence proves it. Navigation completion proves arrival only; it never proves that a later mining or construction action started. [MOD] completion/error messages may include a detailed getTaskStatus snapshot. Use that receipt plus any needed read-only verification to advance, replan, complete, or report a blocker.
 `.trim()
@@ -347,6 +353,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
   constructor(options = {}) {
     super(options)
     this.planByNpc = new Map()
+    this.nextContextOverride = new Map()
   }
 
   ensureTaskBoard(state) {
@@ -438,7 +445,17 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return `[PLAN_STATE] Harness-owned durable goal/plan state. Absolute location and semantic role may be durable, but any historical unit_number is non-executable. Re-observe the current entity in this active request before issuing an exact operation.\n${JSON.stringify(visible)}`
   }
 
+  setNextContextOverride(key, content) {
+    if (!key || typeof content !== 'string' || content.length === 0) return
+    this.nextContextOverride.set(key, content)
+  }
+
   context(key) {
+    const override = this.nextContextOverride.get(key)
+    if (override !== undefined) {
+      this.nextContextOverride.delete(key)
+      return override
+    }
     return [this.dialogueContext(key), this.planContext(key)].filter(Boolean).join('\n')
   }
 
@@ -638,6 +655,89 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return state
   }
 
+  beginActionOmissionRecovery(key, requestInfo, plan) {
+    const previous = key ? this.planByNpc.get(key) : undefined
+    const now = Date.now()
+    if (!previous) {
+      const incomingPlan = safePlan(plan?.plan)
+      if (incomingPlan.length === 0) return undefined
+      const incomingStep = Number.isSafeInteger(plan?.currentStep)
+        ? Math.min(Math.max(plan.currentStep, 0), incomingPlan.length - 1)
+        : 0
+      const state = {
+        goal_id: `goal_${now.toString(36)}`,
+        owner: cleanMemoryText(requestInfo?.sender ?? 'unknown', 128),
+        objective: cleanMemoryText(requestInfo?.text ?? '', 1000),
+        status: 'active',
+        admission_status: 'action_omission_repair',
+        blocker: '',
+        pause_reason: '',
+        persistent_runtime: undefined,
+        plan: incomingPlan,
+        current_step: incomingStep,
+        revision: 1,
+        last_chat_message: cleanMemoryText(plan?.chatMessage, 2000),
+        last_operations: [],
+        durable_last_operations: [],
+        exact_target_audit: [],
+        last_mutation_verified: false,
+        last_verified_batch_id: undefined,
+        updated_at: now,
+        history: [],
+      }
+      state.task_board = sanitizeTaskBoard(undefined, {
+        fallbackPlan: state.plan,
+        fallbackCurrentStep: state.current_step,
+        goalId: state.goal_id,
+        now,
+      })
+      state.task_board = setTaskBoardStatus(state.task_board, 'active', { now })
+      this.planByNpc.set(key, state)
+      return state
+    }
+
+    if (previous.status !== 'active') return previous
+    previous.admission_status = 'action_omission_repair'
+    previous.blocker = ''
+    previous.pause_reason = ''
+    previous.task_board = setTaskBoardStatus(this.ensureTaskBoard(previous), 'active', { now })
+    previous.revision += 1
+    previous.updated_at = now
+    this.planByNpc.set(key, previous)
+    return previous
+  }
+
+  blockRemainingPlan(key, { blocker, reason = '', chatMessage = '', evidenceKind = 'lifecycle_blocker' } = {}) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state) return undefined
+    const now = Date.now()
+    const code = cleanMemoryText(blocker || 'action_omission_after_repair', 500)
+    state.status = 'blocked'
+    state.admission_status = undefined
+    state.blocker = code
+    state.pause_reason = ''
+    state.persistent_runtime = undefined
+    if (chatMessage) state.last_chat_message = cleanMemoryText(chatMessage, 2000)
+    let board = setTaskBoardStatus(this.ensureTaskBoard(state), 'blocked', { blocker: code, now })
+    if (reason) {
+      board = addTaskBoardEvidence(board, {
+        kind: evidenceKind,
+        ref: `${state.goal_id}/${code}`,
+        summary: JSON.stringify({
+          blocker: code,
+          reason: sanitizeDurableModelText(reason, 1200),
+          semantics: 'No world mutation was synthesized by the harness.',
+        }),
+        now,
+      })
+    }
+    state.task_board = board
+    state.revision += 1
+    state.updated_at = now
+    this.planByNpc.set(key, state)
+    return state
+  }
+
   pausePlan(key, reason = 'cancelled') {
     const previous = key ? this.planByNpc.get(key) : undefined
     if (!previous || previous.status === 'completed') return previous
@@ -715,7 +815,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         owner: cleanMemoryText(value.owner, 128),
         objective: cleanMemoryText(value.objective, 1000),
         status: value.status,
-        admission_status: ['proposed', 'admitting', 'admitted', 'admission_failed'].includes(value.admission_status) ? value.admission_status : undefined,
+        admission_status: ['proposed', 'admitting', 'admitted', 'admission_failed', 'action_omission_repair'].includes(value.admission_status) ? value.admission_status : undefined,
         blocker: cleanMemoryText(value.blocker, 500),
         pause_reason: cleanMemoryText(value.pause_reason, 300),
         persistent_runtime: safePersistentRuntime(value.persistent_runtime),
@@ -1160,6 +1260,52 @@ function protectOutputBudgetRecoveryPlan(plan, state, guard) {
   }
 }
 
+function providerBlockerReason(plan) {
+  const text = cleanMemoryText(plan?.chatMessage, 2000)
+  if (!text.toUpperCase().startsWith(ACTION_OMISSION_BLOCKER_PREFIX)) return ''
+  return cleanMemoryText(text.slice(ACTION_OMISSION_BLOCKER_PREFIX.length), 1200)
+}
+
+function canonicalWorkRemains(state) {
+  const board = state?.task_board
+  if (state?.status !== 'active' || board?.kind !== 'task_board_lite' || !Array.isArray(board.steps) || board.steps.length === 0) return false
+  return board.status === 'active' && (board.completed_count ?? 0) < board.steps.length
+}
+
+function persistentRuntimeHealthy(runtime) {
+  return runtime?.active === true && runtime.healthy === true && runtime.controller_live === true
+}
+
+function actionOmissionRecoveryCapsule(state, runtimeStatus) {
+  const board = state?.task_board
+  const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : state?.current_step ?? 0
+  const activeStep = Array.isArray(board?.steps) ? board.steps[activeIndex] : undefined
+  const capsule = {
+    goal_id: sanitizeDurableModelText(state?.goal_id, 100),
+    objective: sanitizeDurableModelText(state?.objective, 1000),
+    canonical_step: {
+      index: activeIndex,
+      id: sanitizeDurableModelText(activeStep?.id, 100),
+      description: sanitizeDurableModelText(activeStep?.description ?? currentPlanStep(state?.plan, activeIndex), 500),
+    },
+    progress: {
+      completed_count: Number.isSafeInteger(board?.completed_count) ? board.completed_count : 0,
+      total_steps: Array.isArray(board?.steps) ? board.steps.length : 0,
+    },
+    authoritative_evidence: (Array.isArray(board?.evidence) ? board.evidence : []).slice(-4).map(item => sanitizeDurableModelValue(item)),
+    runtime: sanitizeDurableModelValue(runtimeStatus ?? state?.persistent_runtime),
+    durable_locators: modelFacingEntityReferences(state).slice(-4),
+    reason: 'action_omission_recovery',
+    contract: {
+      normal_path_extra_calls: 0,
+      allowed_targeted_observations: 1,
+      next_response: 'submit the next executable operation, or start chatMessage with BLOCKED: and name the exact missing fact/truthful blocker',
+      exact_identity: 'historical unit_number values are non-executable; bind any exact identity from a live observation in this active request',
+    },
+  }
+  return `[ACTION_OMISSION_RECOVERY] Compact recovery capsule. It intentionally omits unrelated dialogue and historical tool results.\n${JSON.stringify(capsule)}`
+}
+
 export class NpcAgentLoop extends BaseNpcAgentLoop {
   constructor(options) {
     const memory = options.memory ?? new NpcDialogueMemory()
@@ -1181,6 +1327,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
+    this.actionOmissionRepairActive = false
+    this.actionOmissionObservationUsed = false
+    this.actionOmissionForceNoTools = false
+    this.actionOmissionNeedsPostObservationDecision = false
+    this.pendingFiniteNoOperationPlan = null
     this.liveEntityObservations = new Map()
     this.rejectedExactTargets = new Set()
     this.staleExactPreflightRetries = 0
@@ -1557,13 +1708,30 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
+    const resumeActionOmission = intent === 'continue_current'
+      && planBefore?.status === 'active'
+      && planBefore?.admission_status === 'action_omission_repair'
+      && !healthyRuntime
+    this.actionOmissionRepairActive = resumeActionOmission
+    this.actionOmissionObservationUsed = false
+    this.actionOmissionForceNoTools = false
+    this.actionOmissionNeedsPostObservationDecision = false
+    this.pendingFiniteNoOperationPlan = null
+    if (resumeActionOmission) {
+      this.memory.setNextContextOverride?.(memoryKey, actionOmissionRecoveryCapsule(planBefore, taskStatus))
+    }
     if (this.traceRequest) await this.traceEvent('request.superseded', { usage: this.traceRequest.usage })
     this.traceRequest = {
       id: `req_${Date.now().toString(36)}_${(++this.traceRequestSequence).toString(36)}`,
       seq: 0,
       usage: emptyUsageSummary(),
     }
-    await this.traceEvent('request.received', { sender, text, interaction_intent: intent })
+    await this.traceEvent('request.received', {
+      sender,
+      text,
+      interaction_intent: intent,
+      action_omission_recovery: resumeActionOmission,
+    })
     try {
       const result = await super.request(text, options)
       if (this.requestInfo?.memoryKey) this.lastMemoryKey = this.requestInfo.memoryKey
@@ -1709,6 +1877,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.planCategoryRetries = 0
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
+    this.actionOmissionRepairActive = false
+    this.actionOmissionObservationUsed = false
+    this.actionOmissionForceNoTools = false
+    this.actionOmissionNeedsPostObservationDecision = false
+    this.pendingFiniteNoOperationPlan = null
     this.staleExactPreflightRetries = 0
     this.messages.push({ role: 'user', content: cleanMemoryText(modMessage, 18000) })
     await this.traceEvent(traceEventName)
@@ -1770,6 +1943,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.traceRequest = null
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
+    this.actionOmissionRepairActive = false
+    this.actionOmissionObservationUsed = false
+    this.actionOmissionForceNoTools = false
+    this.actionOmissionNeedsPostObservationDecision = false
+    this.pendingFiniteNoOperationPlan = null
     return super.cancel()
   }
 
@@ -1780,6 +1958,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     recoveryKind,
     providerMessagesOverride,
   }) {
+    const omissionRepair = this.actionOmissionRepairActive && recoveryKind !== 'output_budget_exhaustion'
+    const effectiveAllowTools = omissionRepair && this.actionOmissionForceNoTools ? false : allowTools
+    const effectiveRecoveryKind = omissionRepair ? 'action_omission' : recoveryKind
+    if (omissionRepair && !effectiveAllowTools && this.actionOmissionObservationUsed) {
+      this.actionOmissionNeedsPostObservationDecision = false
+    }
     const budgetStartedAt = Date.now()
     let budget
     try {
@@ -1802,15 +1986,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         ...(this.traceRequest.recovery ?? {}),
         attempt: recoveryAttempt,
         round,
-        ...(recoveryKind ? { kind: recoveryKind } : {}),
+        ...(effectiveRecoveryKind ? { kind: effectiveRecoveryKind } : {}),
       }
     }
     await this.traceEvent('provider.request', {
       round,
       trigger_source: this.planUpdateReason,
-      allow_tools: allowTools,
+      allow_tools: effectiveAllowTools,
       recovery_attempt: recoveryAttempt,
-      recovery_kind: recoveryKind,
+      recovery_kind: effectiveRecoveryKind,
       message_count: providerMessages.length,
       message_chars: providerMessages.reduce((total, message) => total + messageChars(message), 0),
     })
@@ -1820,11 +2004,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         epoch: current.epoch,
         actorId: current.actor_id,
         round,
-        allowTools,
+        allowTools: effectiveAllowTools,
         recoveryAttempt,
-        recoveryKind,
+        recoveryKind: effectiveRecoveryKind,
         triggerSource: this.planUpdateReason,
         lifecycle: this.requestLifecycle,
+        requestBodyPatch: omissionRepair ? { max_tokens: ACTION_OMISSION_MAX_TOKENS } : undefined,
         signal: controller.signal,
       })
       const usage = normalizedProviderUsage(message?._airiProvider?.usage)
@@ -1834,7 +2019,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         round,
         trigger_source: this.planUpdateReason,
         recovery_attempt: recoveryAttempt,
-        recovery_kind: recoveryKind,
+        recovery_kind: effectiveRecoveryKind,
         latency_ms: Date.now() - startedAt,
         has_tool_calls: message?.tool_calls !== undefined,
         content_chars: typeof message?.content === 'string' ? message.content.length : 0,
@@ -1851,7 +2036,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         round,
         trigger_source: this.planUpdateReason,
         recovery_attempt: recoveryAttempt,
-        recovery_kind: recoveryKind,
+        recovery_kind: effectiveRecoveryKind,
         latency_ms: Date.now() - startedAt,
         message: messageText,
         timeout: /timed out/i.test(messageText),
@@ -1868,7 +2053,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.assertCurrent()
     if (!message || typeof message !== 'object') throw new AgentLoopError('Provider returned no message')
 
-    if (allowTools && recoveryAttempt === 0 && !this.outputBudgetRecoveryUsed && providerOutputBudgetExhausted(message)) {
+    if (effectiveAllowTools && !omissionRepair && recoveryAttempt === 0 && !this.outputBudgetRecoveryUsed && providerOutputBudgetExhausted(message)) {
       this.outputBudgetRecoveryUsed = true
       const state = this.memory.currentPlan?.(this.activePlanKey())
       this.outputBudgetRecoveryGuard = {
@@ -1992,6 +2177,27 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   async handleToolBatch(message, prepared = this.prepareToolBatch(message)) {
+    if (this.actionOmissionRepairActive && (this.actionOmissionObservationUsed || prepared.length !== 1)) {
+      this.actionOmissionForceNoTools = true
+      this.actionOmissionNeedsPostObservationDecision = false
+      const reason = this.actionOmissionObservationUsed
+        ? 'The action-omission repair already consumed its one targeted observation.'
+        : `The action-omission repair permits exactly one targeted observation, but the provider requested ${prepared.length}.`
+      this.messages.push({
+        role: 'user',
+        content: `[HARNESS] ${reason} No observation from this batch was executed. ${ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE}`,
+      })
+      await this.recoveryDiagnostic({
+        failure_class: 'action_omission',
+        reason_code: 'action_omission_observation_budget',
+        reason,
+        retry: 1,
+        retry_limit: 1,
+        tools_enabled: false,
+      })
+      return
+    }
+
     const cachedBefore = prepared.map(entry => this.toolCache.has(entry.signature))
     const staticCachedBefore = prepared.map(entry => entry.tool.function.name === 'getPrototypeDetails' && this.staticPrototypeCache.has(entry.signature))
     for (let index = 0; index < prepared.length; index++) {
@@ -2042,20 +2248,68 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       await this.traceEvent('tool.result', { ...toolTrace, output })
     }
     this.compactWorkingContext()
+    if (this.actionOmissionRepairActive) {
+      this.actionOmissionObservationUsed = true
+      this.actionOmissionForceNoTools = true
+      this.actionOmissionNeedsPostObservationDecision = true
+      this.messages.push({ role: 'user', content: `[HARNESS] ${ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE}` })
+      await this.traceEvent('recovery.action_omission_observation_complete', {
+        cached: cachedBefore[0] === true,
+        observation: prepared[0]?.tool?.function?.name,
+        tools_enabled_next_round: false,
+      })
+    }
+  }
+
+  clearActionOmissionRecovery() {
+    this.actionOmissionRepairActive = false
+    this.actionOmissionObservationUsed = false
+    this.actionOmissionForceNoTools = false
+    this.actionOmissionNeedsPostObservationDecision = false
+    this.pendingFiniteNoOperationPlan = null
+  }
+
+  async beginActionOmissionRepair(plan, reasonCode) {
+    if (!this.requestInfo) return undefined
+    const state = this.memory.beginActionOmissionRecovery?.(this.requestInfo.memoryKey, this.requestInfo, plan)
+    if (!state || state.status !== 'active') return state
+    this.actionOmissionRepairActive = true
+    this.actionOmissionObservationUsed = false
+    this.actionOmissionForceNoTools = false
+    this.actionOmissionNeedsPostObservationDecision = false
+    await this.persistState()
+    await this.traceEvent('recovery.action_omission_started', {
+      reason_code: reasonCode,
+      goal_id: state.goal_id,
+      active_step: state.task_board?.active_index,
+      completed_count: state.task_board?.completed_count,
+      provider_call_budget: '1 act-or-block call; one targeted observation may require one final no-tools decision call',
+    })
+    return state
   }
 
   async recoveryDiagnostic(details) {
+    if (details?.reason_code === 'finite_goal_continuation_pressure' && this.pendingFiniteNoOperationPlan) {
+      const omittedPlan = this.pendingFiniteNoOperationPlan
+      this.pendingFiniteNoOperationPlan = null
+      const state = await this.beginActionOmissionRepair(omittedPlan, 'finite_goal_continuation_pressure')
+      if (state?.status === 'active') {
+        this.messages.push({ role: 'assistant', content: JSON.stringify(omittedPlan) })
+      }
+    }
     if (this.traceRequest) this.traceRequest.recovery = { ...(this.traceRequest.recovery ?? {}), ...details }
     await this.traceEvent('recovery.classified', details)
   }
 
   finiteNoOperationPressure(plan) {
     if (plan?.operations?.length > 0 || !Array.isArray(plan?.plan) || plan.plan.length === 0) return ''
+    if (providerBlockerReason(plan)) return ''
     const state = this.memory.currentPlan?.(this.activePlanKey())
     if (this.planUpdateReason !== 'completion' || state?.status !== 'active' || state?.last_mutation_verified !== true) return ''
     const latestVerification = [...(state?.task_board?.evidence ?? [])].reverse().find(item => item?.kind === 'deterministic_verification')
     if (!latestVerification) return ''
-    return 'The previous Autorio batch completed, but the finite user goal still has remaining canonical work. Completing navigation, crafting, or another prerequisite does not start the next mutation. Continue now: submit the next executable operation if it is already parameterized, make only one targeted observation if one mutable fact is truly missing, or report a truthful blocker. Do not stop and wait for a human “continue” message, and do not claim a later action has started unless its mutation was admitted or runtime evidence proves it.'
+    this.pendingFiniteNoOperationPlan = plan
+    return ACTION_OMISSION_REPAIR_MESSAGE
   }
 
   async preflightOperations(operations) {
@@ -2117,6 +2371,69 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     return state ? { ...(stateResult ?? {}), state } : stateResult
   }
 
+  async finishNoOperationBlock(plan, before, blocker, reason, evidenceKind) {
+    if (!this.requestInfo) {
+      this.active = false
+      this.clearActionOmissionRecovery()
+      return {
+        chatMessage: plan.chatMessage,
+        plan: plan.plan,
+        currentStep: plan.currentStep,
+        operations: [],
+        epoch: before.epoch,
+        actorId: before.actor_id,
+        blocked: true,
+        blocker: { class: blocker, reason },
+      }
+    }
+
+    let state = this.memory.currentPlan?.(this.requestInfo.memoryKey)
+    if (!state && Array.isArray(plan.plan) && plan.plan.length > 0) {
+      state = this.memory.beginActionOmissionRecovery?.(this.requestInfo.memoryKey, this.requestInfo, plan)
+    }
+    this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
+    this.memory.remember(this.requestInfo.memoryKey, this.requestInfo.turnId, {
+      sender: this.requestInfo.sender,
+      user: this.requestInfo.text,
+      assistant: plan.chatMessage,
+      operations: [],
+    })
+    state = this.memory.blockRemainingPlan?.(this.requestInfo.memoryKey, {
+      blocker,
+      reason,
+      chatMessage: plan.chatMessage,
+      evidenceKind,
+    }) ?? state
+    await this.persistState()
+    await this.traceEvent('plan.persisted', {
+      lifecycle: 'blocked',
+      blocker,
+      goal_id: state?.goal_id,
+      task_board: visibleTaskBoard(state?.task_board),
+    })
+    this.active = false
+    await this.traceEvent('request.completed', {
+      chat_message: plan.chatMessage,
+      outcome: 'blocked_no_operation',
+      task_board: visibleTaskBoard(state?.task_board),
+      usage: this.traceRequest?.usage,
+    })
+    this.traceRequest = null
+    this.clearActionOmissionRecovery()
+    return {
+      chatMessage: planProgress(plan, { state, blockedByHarness: true }),
+      plan: state?.plan ?? plan.plan,
+      currentStep: state?.current_step ?? plan.currentStep,
+      operations: [],
+      epoch: before.epoch,
+      actorId: before.actor_id,
+      goalId: state?.goal_id,
+      goalStatus: state?.status ?? 'blocked',
+      taskBoard: visibleTaskBoard(state?.task_board),
+      blocker: { class: blocker, reason: cleanMemoryText(reason, 1200) },
+    }
+  }
+
   async commitPlan(plan) {
     const commands = plan.operations.map(renderOperation)
     const operations = plan.operations.map((operation, index) => ({
@@ -2136,13 +2453,41 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const persistentRuntime = commands.length === 0 && plan.plan.length > 0
       ? await this.persistentRuntimeStatus()
       : undefined
+    const previousState = this.requestInfo
+      ? this.memory.currentPlan?.(this.requestInfo.memoryKey)
+      : undefined
+    const runtimeHealthy = persistentRuntimeHealthy(persistentRuntime)
+    const remainingCanonicalWork = canonicalWorkRemains(previousState)
+      || (!previousState && Array.isArray(plan.plan) && plan.plan.length > 0)
+    const explicitBlocker = providerBlockerReason(plan)
 
+    if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
+      if (explicitBlocker) {
+        return this.finishNoOperationBlock(plan, before, 'provider_reported_blocker', explicitBlocker, 'provider_blocker')
+      }
+      if (this.actionOmissionRepairActive) {
+        return this.finishNoOperationBlock(
+          plan,
+          before,
+          'action_omission_after_repair',
+          'The bounded act-or-block repair returned no executable operation and no explicit BLOCKED: reason.',
+          'action_omission',
+        )
+      }
+      const state = await this.beginActionOmissionRepair(plan, 'no_operation_for_remaining_plan')
+      if (state?.status === 'active') {
+        this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
+        this.messages.push({ role: 'user', content: `[HARNESS] ${ACTION_OMISSION_REPAIR_MESSAGE}` })
+        return this.runTurn()
+      }
+    }
+
+    if (runtimeHealthy) this.clearActionOmissionRecovery()
     this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
     let stateResult
     let durablePlan = plan
     if (this.requestInfo) {
       this.lastMemoryKey = this.requestInfo.memoryKey
-      const previousState = this.memory.currentPlan?.(this.requestInfo.memoryKey)
       const previousBoard = previousState?.task_board
       durablePlan = protectOutputBudgetRecoveryPlan(plan, previousState, this.outputBudgetRecoveryGuard)
       if (durablePlan !== plan) {
@@ -2201,6 +2546,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
     }
     this.outputBudgetRecoveryGuard = null
+    if (commands.length > 0) this.clearActionOmissionRecovery()
 
     if (commands.length > 0 && stateResult?.blockedByHarness === true) {
       this.active = false
@@ -2413,13 +2759,83 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   async recoverPlan(generation, reason, roundBase) {
+    const reasonText = reason instanceof Error ? reason.message : String(reason)
     const recovery = {
-      reason: reason instanceof Error ? reason.message : String(reason),
+      reason: reasonText,
       round_base: roundBase,
       attempt: 0,
     }
     if (this.traceRequest) this.traceRequest.recovery = recovery
     await this.traceEvent('replan.started', recovery)
+
+    const observationDecisionComplete = /single targeted observation allowed by decision pressure is complete/i.test(reasonText)
+    const currentState = this.memory.currentPlan?.(this.activePlanKey())
+    if (observationDecisionComplete && canonicalWorkRemains(currentState)) {
+      if (!this.actionOmissionRepairActive) {
+        await this.beginActionOmissionRepair({
+          chatMessage: '',
+          plan: currentState.plan,
+          currentStep: currentState.current_step,
+          operations: [],
+        }, 'observation_decision_pressure_complete')
+      }
+      this.actionOmissionObservationUsed = true
+      this.actionOmissionForceNoTools = true
+      this.actionOmissionNeedsPostObservationDecision = false
+      this.messages.push({ role: 'user', content: `[HARNESS] ${ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE}` })
+      const current = await this.assertCurrent()
+      let message
+      try {
+        message = await this.callProvider(current, generation, {
+          round: roundBase,
+          allowTools: false,
+          recoveryAttempt: 0,
+          recoveryKind: 'action_omission',
+        })
+      }
+      catch (error) {
+        throw error
+      }
+      let plan
+      try {
+        plan = this.parsePlanMessage(message)
+      }
+      catch (error) {
+        const fallback = {
+          chatMessage: 'Action-omission repair did not produce a valid executable plan.',
+          plan: currentState.plan,
+          currentStep: currentState.current_step,
+          operations: [],
+        }
+        return this.finishNoOperationBlock(
+          fallback,
+          current,
+          'action_omission_after_repair',
+          `The bounded act-or-block repair was invalid: ${error instanceof Error ? error.message : String(error)}`,
+          'action_omission',
+        )
+      }
+      return this.commitPlan(plan)
+    }
+
+    if (this.actionOmissionRepairActive) {
+      const current = await this.assertCurrent()
+      const fallbackState = this.memory.currentPlan?.(this.activePlanKey())
+      const fallback = {
+        chatMessage: 'Action-omission repair exhausted without a valid executable action.',
+        plan: fallbackState?.plan ?? [],
+        currentStep: fallbackState?.current_step ?? 0,
+        operations: [],
+      }
+      return this.finishNoOperationBlock(
+        fallback,
+        current,
+        'action_omission_after_repair',
+        `The bounded act-or-block repair could not produce a valid final decision: ${reasonText}`,
+        'action_omission',
+      )
+    }
+
     return super.recoverPlan(generation, reason, roundBase)
   }
 }
