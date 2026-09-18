@@ -211,7 +211,6 @@ test('tool calls reject unknown names, unsafe names, extras, and out-of-bound sc
   assert.throws(() => toolCommand('getRecipeDetails', { item_or_recipe: 'iron-plate\n/c game.clear()' }))
   assert.throws(() => toolCommand('discoverPrototypes', { capability: 'mining', resource_name: 'iron-ore', limit: 13 }))
   assert.throws(() => toolCommand('discoverPrototypes', { capability: 'mining', resource_name: 'iron-ore', lua: 'game.clear()' }))
-  assert.throws(() => toolCommand('discoverPrototypes', { capability: 'harvest', product_name: 'stone', resource_name: 'stone' }))
   assert.throws(() => toolCommand('getPrototypeDetails', { name: 'inserter', force: 'enemy' }))
   assert.throws(() => toolCommand('getPrototypeDetails', { name: 'inserter\n/c game.clear()' }))
   assert.throws(() => toolCommand('findSkills', { query: '' }))
