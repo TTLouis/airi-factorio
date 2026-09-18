@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AIRI Factorio Pterodactyl v8 standalone-NPC installer.
+# SGLuna Factorio Pterodactyl v8 standalone-NPC installer.
 # Install/runtime image: ghcr.io/ptero-eggs/yolks:debian_bookworm
 set -Eeuo pipefail
 umask 077
@@ -11,11 +11,11 @@ AIRI_REF="ad3e87523b157880a360e773de68519e49f809f0"
 REVISION="2026-09-14.22"
 DEPLOYMENT_REVISION="airi-deploy-v8-npc-staging"
 AIRI_ACTOR_MODE="${AIRI_ACTOR_MODE:-npc}"
-[[ "$AIRI_ACTOR_MODE" == "npc" ]] || { echo "[AIRI install] ERROR: v8 egg currently requires AIRI_ACTOR_MODE=npc" >&2; exit 1; }
+[[ "$AIRI_ACTOR_MODE" == "npc" ]] || { echo "[SGLuna install] ERROR: v8 egg currently requires AIRI_ACTOR_MODE=npc" >&2; exit 1; }
 export AIRI_ACTOR_MODE
 WORK=""
 
-log() { printf '[AIRI install] %s\n' "$*"; }
+log() { printf '[SGLuna install] %s\n' "$*"; }
 fail() { log "ERROR: $*" >&2; exit 1; }
 cleanup() {
   local code=$?
@@ -46,7 +46,7 @@ exec 9>"$SERVER_DIR/.airi/operation.lock"
 flock -n 9 || fail 'Another AIRI installer/runtime owns this server volume'
 
 if [[ ! -e "$SERVER_DIR/start-airi.sh" && ! -L "$SERVER_DIR/start-airi.sh" ]]; then
-  printf '#!/bin/bash\necho "[AIRI] No completed installation is active" >&2\nexit 78\n' > "$SERVER_DIR/start-airi.sh"
+  printf '#!/bin/bash\necho "[SGLuna] No completed installation is active" >&2\nexit 78\n' > "$SERVER_DIR/start-airi.sh"
   chmod 755 "$SERVER_DIR/start-airi.sh"
 fi
 
@@ -80,8 +80,8 @@ node "$APP/node/lib/node_modules/npm/bin/npm-cli.js" install --global --prefix "
 export PATH="$WORK/build-tools/bin:$PATH"
 [[ "$(pnpm --version)" == "$PNPM_VERSION" ]] || fail 'pnpm verification failed'
 
-log 'Downloading pinned AIRI fork source'
-fetch "https://codeload.github.com/TTLouis/airi-factorio/tar.gz/$AIRI_REF" "$WORK/airi-source.tar.gz"
+log 'Downloading pinned Factorio NPC source'
+fetch "https://codeload.github.com/TTLouis/factorio-npc/tar.gz/$AIRI_REF" "$WORK/airi-source.tar.gz"
 mkdir -p "$WORK/source"
 tar -xzf "$WORK/airi-source.tar.gz" --strip-components=1 --no-same-owner -C "$WORK/source"
 [[ -f "$WORK/source/pnpm-lock.yaml" ]] || fail 'Pinned source lockfile is missing'
@@ -175,9 +175,9 @@ ROOT="${CONTAINER_ROOT:-/home/container}"
 ROOT="$(readlink -f -- "$ROOT")"
 SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
 APP="$(dirname -- "$SELF")"
-[[ -d "$ROOT/.airi" && ! -L "$ROOT/.airi" ]] || { echo '[AIRI] Missing managed state directory' >&2; exit 78; }
+[[ -d "$ROOT/.airi" && ! -L "$ROOT/.airi" ]] || { echo '[SGLuna] Missing managed state directory' >&2; exit 78; }
 exec 9>"$ROOT/.airi/operation.lock"
-flock -n 9 || { echo '[AIRI] Another AIRI install/runtime owns this server volume' >&2; exit 73; }
+flock -n 9 || { echo '[SGLuna] Another SGLuna install/runtime owns this server volume' >&2; exit 73; }
 unset NODE_OPTIONS NODE_PATH
 export NODE_TLS_REJECT_UNAUTHORIZED=1
 export HOME="$ROOT" CONTAINER_ROOT="$ROOT"
@@ -274,12 +274,33 @@ const { migrateConfigFile } = await import(pathToFileURL(process.env.AIRI_SUPERV
 await migrateConfigFile(process.env.AIRI_CONFIG_PATH)
 CONFIG
 
+mkdir -p "$SERVER_DIR/mods" "$SERVER_DIR/saves"
+cat > "$SERVER_DIR/README-SGLUNA.txt" <<EOF_SGLUNA
+SGLuna Factorio Server
+======================
+
+Client mod download: client-mods/autorio_0.1.0.zip
+User Factorio mods:   mods/
+Saves:                saves/
+Effective config:     airi-config.json (compatibility filename; non-secret runtime config)
+Managed runtime:      .airi/ (internal implementation; do not edit)
+Visibility:           automatic from FACTORIO_USERNAME + FACTORIO_TOKEN
+                      both blank = private/hidden; both supplied = public
+Installed source:     $AIRI_REF
+Installed release:    $REVISION
+Startup:              bash ./start-airi.sh
+EOF_SGLUNA
+chmod 644 "$SERVER_DIR/README-SGLUNA.txt"
+
 log "Installation complete: $DEPLOYMENT_REVISION"
 log "Pinned source: $AIRI_REF"
 log "Factorio: $FACTORIO_TARGET"
 log 'Actor ownership: standalone NPC; zero connected humans is valid.'
-log 'Managed client mod: client-mods/autorio_0.1.0.zip'
-log 'Set AIRI_CHAT_PLAYERS to control who may issue !airi requests (blank/* = everyone, comma list = allowlist, none = disabled).'
-log 'Set FACTORIO_USERNAME and FACTORIO_TOKEN together to publish the server; leave both blank for a hidden server.'
+log 'Client mod download: client-mods/autorio_0.1.0.zip'
+log 'Compatibility setting AIRI_CHAT_PLAYERS controls who may issue !airi requests (blank/* = everyone, comma list = allowlist, none = disabled).'
+log 'Factorio visibility is automatic: set FACTORIO_USERNAME and FACTORIO_TOKEN together for public listing; leave both blank for private/hidden.'
+log 'User Factorio mods: mods/'
+log 'Managed runtime mods: .airi/run-*/mods/ (internal; do not edit)'
+log 'Operator help: README-SGLUNA.txt'
 log 'Startup command: bash ./start-airi.sh'
 exit 0
