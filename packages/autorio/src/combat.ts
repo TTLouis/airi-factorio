@@ -176,12 +176,12 @@ function selected_weapon_range(character: LuaEntity) {
   const guns = character.get_inventory(defines.inventory.character_guns)
   if (!factorioIndex || !guns) return undefined
   const gun = guns[factorioIndex - 1]
-  const range = gun?.valid_for_read === true ? gun.prototype.attack_parameters?.range : undefined
+  const range = gun?.valid_for_read === true ? gun.prototype?.attack_parameters?.range : undefined
   return typeof range === 'number' && range > 0 ? range : undefined
 }
 
 function gun_turret_range() {
-  const range = prototypes.entity['gun-turret']?.turret_range
+  const range = typeof prototypes !== 'undefined' ? prototypes.entity['gun-turret']?.turret_range : undefined
   return typeof range === 'number' && range > 0 ? range : 18
 }
 
