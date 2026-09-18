@@ -38,7 +38,7 @@ class FakeRcon {
     if (text.includes('remote.call("autorio_preflight","operation"')) return JSON.stringify({ ok: true })
     if (text.includes('remote.call("autorio_operations","status")')) {
       return JSON.stringify({
-        task_state: 'IDLE',
+        task_state: 'idle',
         queue_empty: true,
         queue_length: 0,
         last_completed_batch: {

@@ -1278,7 +1278,8 @@ function persistentRuntimeHealthy(runtime) {
 
 function finalStepCanCloseFromFreshObservation(state) {
   const stored = Array.isArray(state?.last_operations) ? state.last_operations.slice(-16) : []
-  if (stored.length === 0) return true
+  if (state?.last_mutation_verified === true) return true
+  if (stored.length === 0) return false
   return stored.every(value => /^wait(?:\s|$)/i.test(String(value ?? '').trim()))
 }
 
