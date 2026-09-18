@@ -62,17 +62,19 @@ function turret(unit_number: number, position: { x: number, y: number }) {
 }
 
 describe('combat encounter-owned turret registry', () => {
-  it('tracks only successfully created support turrets in authoritative encounter state', () => {
+  it('keeps authoritative temporary-turret ownership across a cancelled combat batch and recovers it later', () => {
     const enemies = [enemy(90, 30), enemy(91, 40)]
     const main = inventory([itemStack('gun-turret', 2), itemStack('firearm-magazine', 80)])
     const created: any[] = []
     let nextPathId = 100
     const guns: any = [{ valid_for_read: true }]
     const magazines: any = [{ valid_for_read: true }]
+    let miningState: any = { mining: false }
     const character: any = {
       health: 250,
       max_health: 250,
       selected_gun_index: 1,
+      reach_distance: 8,
       prototype: {
         collision_box: [[-0.2, -0.2], [0.2, 0.2]],
         collision_mask: { layers: { player: true }, consider_tile_transitions: true },
@@ -105,6 +107,8 @@ describe('combat encounter-owned turret registry', () => {
       set_shooting_state: vi.fn(),
       update_selected_entity: vi.fn(),
       get_main_inventory: () => main,
+      get_mining_state: vi.fn(() => miningState),
+      set_mining_state: vi.fn((state: any) => { miningState = state }),
       entity_build_args: () => ({ force: actor.force }),
     }
     Object.defineProperty(character, 'position', { get: () => actor.position })
@@ -125,5 +129,22 @@ describe('combat encounter-owned turret registry', () => {
       encounter_owned_turret_count: 2,
       encounter_owned_turret_unit_numbers: [500, 501],
     })
+
+    manager.cancel_all_tasks()
+    expect(manager.player_state.task_state).toBe((globalThis as any).TaskStates?.IDLE ?? manager.player_state.task_state)
+
+    for (const hostile of enemies) hostile.valid = false
+    controller.submit_clear(80)
+    controller.tick(actor)
+
+    ;(globalThis as any).game.tick += 120
+    controller.tick(actor)
+
+    expect(controller.status()).toMatchObject({
+      combat_phase: 'cleanup',
+      encounter_owned_turret_count: 2,
+      encounter_owned_turret_unit_numbers: [500, 501],
+    })
+    expect(actor.set_mining_state).toHaveBeenCalledWith(expect.objectContaining({ mining: true }))
   })
 })
