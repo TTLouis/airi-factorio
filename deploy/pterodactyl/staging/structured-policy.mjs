@@ -74,6 +74,10 @@ const operationKeys = {
   clear_enemy_area: ['search_radius'],
   research_technology: ['technology_name'],
   wait: ['ticks'],
+} 
+
+export function isApprovedOperationName(name) {
+  return typeof name === 'string' && Object.hasOwn(operationKeys, name)
 }
 
 export function parseOperation(value) {
