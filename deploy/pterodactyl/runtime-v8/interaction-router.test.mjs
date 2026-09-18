@@ -86,7 +86,7 @@ class RouterRcon {
   }
 }
 
-function agentFor(intent, { running = true, withPlan = true } = {}) {
+function agentFor(intent, { running = true, withPlan = true, queueConflict = intent === 'amend_current' } = {}) {
   const memory = new CanonicalTaskBoardMemory()
   if (withPlan) memory.planByNpc.set('npc:airi', activePlan())
   const rcon = new RouterRcon({ running })
@@ -101,7 +101,7 @@ function agentFor(intent, { running = true, withPlan = true } = {}) {
       if (context.interactionRouter) {
         assert.equal(context.allowTools, false)
         assert.equal(context.triggerSource, 'interaction_router')
-        return { content: JSON.stringify({ intent, reply: intent === 'chat_only' ? 'Hello from the side router.' : '' }) }
+        return { content: JSON.stringify({ intent, queue_conflict: intent === 'amend_current' ? queueConflict : false, reply: intent === 'chat_only' ? 'Hello from the side router.' : '' }) }
       }
       return {
         content: JSON.stringify({
@@ -117,9 +117,10 @@ function agentFor(intent, { running = true, withPlan = true } = {}) {
 }
 
 test('interaction route parser is strict and runtime health uses authoritative task state', () => {
-  assert.deepEqual(parseInteractionRoute({ content: '{"intent":"status_query","reply":""}' }), { intent: 'status_query', reply: '' })
-  assert.throws(() => parseInteractionRoute({ content: '{"intent":"status_query","reply":"","operations":[]}' }))
-  assert.throws(() => parseInteractionRoute({ content: '{"intent":"bogus","reply":""}' }))
+  assert.deepEqual(parseInteractionRoute({ content: '{"intent":"status_query","queue_conflict":false,"reply":""}' }), { intent: 'status_query', queue_conflict: false, reply: '' })
+  assert.throws(() => parseInteractionRoute({ content: '{"intent":"status_query","queue_conflict":false,"reply":"","operations":[]}' }))
+  assert.throws(() => parseInteractionRoute({ content: '{"intent":"bogus","queue_conflict":false,"reply":""}' }))
+  assert.throws(() => parseInteractionRoute({ content: '{"intent":"status_query","queue_conflict":true,"reply":""}' }))
   assert.equal(interactionRuntimeHealthy({ task_state: 'placing', queue_length: 0 }), true)
   assert.equal(interactionRuntimeHealthy({ task_state: 'idle', queue_length: 0 }), false)
 })
@@ -168,6 +169,23 @@ test('amend_current cancels remaining Autorio work once, preserves the canonical
   assert.equal(calls.length, 2)
   assert.equal(calls[1].triggerSource, 'amend_current')
   assert.equal(memory.currentPlan('npc:airi')?.goal_id, 'goal_existing')
+})
+
+test('compatible same-goal amendment does not cancel an active queue and is deferred to the next main-planner boundary', async () => {
+  const { agent, rcon, calls, memory } = agentFor('amend_current', { queueConflict: false })
+  const result = await agent.request('继续当前目标，但之后优先把炉子排紧一点', { sender: 'tester' })
+
+  assert.equal(result.interactionIntent, 'amend_current')
+  assert.equal(result.routedOnly, true)
+  assert.equal(result.amendmentDeferred, true)
+  assert.equal(rcon.cancelCount, 0)
+  assert.equal(calls.length, 1)
+  assert.equal(memory.currentPlan('npc:airi')?.goal_id, 'goal_existing')
+
+  const completion = await agent.completed()
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1].triggerSource, 'amend_current')
+  assert.equal(completion.interactionIntent, undefined)
 })
 
 test('cancel_current uses authoritative cancellation without launching the main planner', async () => {
