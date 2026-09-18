@@ -6,6 +6,7 @@ import {
   buildSteeringContext,
   classifyUserSteering,
   providerRequest,
+  selectReasoningPolicy,
 } from './provider.mjs'
 
 function planState(overrides = {}) {
@@ -171,4 +172,17 @@ test('provider request injects steering while preserving compact completion beha
   assert.match(body.messages.at(-2).content, /^\[STEERING\]/)
   assert.match(body.messages.at(-2).content, /last_receipt=completed batch=9 tasks=placing/)
   assert.match(body.messages.at(-1).content, /Compact task receipt/)
+})
+
+
+test('action omission repair stays low reasoning even though it is a bounded recovery call', () => {
+  const policy = selectReasoningPolicy({
+    model: 'deepseek-chat',
+  }, [
+    { role: 'user', content: '[CHAT] TTLouis: continue' },
+  ], {
+    recoveryAttempt: 1,
+    actionOmissionRepair: true,
+  })
+  assert.deepEqual(policy, { effort: 'low', reason: 'action_omission_repair' })
 })
