@@ -10,6 +10,7 @@ import type {
 import type { ControlledActor } from './actors/types'
 import { get_controlled_actor } from './actors/actor_controller'
 import { new_awareness_controller } from './awareness'
+import { new_area_clearing_controller } from './area_clearing'
 import { craft_bootstrap_preflight_for_actor } from './bootstrap_planning'
 import { new_basic_operation_runtime } from './basic_operation_runtime'
 import { new_basic_operation_controller } from './basic_operations'
@@ -54,6 +55,7 @@ let setup_complete = false
 export const task_manager = new_task_manager(get_controlled_actor)
 set_task_board_world_task_provider(() => task_manager.get_status_snapshot())
 const awareness_controller = new_awareness_controller()
+const area_clearing_controller = new_area_clearing_controller(get_controlled_actor, task_manager)
 const basic_operation_controller = new_basic_operation_controller(get_controlled_actor, task_manager)
 const basic_operation_runtime = new_basic_operation_runtime(task_manager, basic_operation_controller)
 const orientation_runtime = new_orientation_runtime(task_manager, basic_operation_controller)
@@ -363,6 +365,11 @@ remote.add_interface('autorio_operations', {
     if (result[0]) log(`[AUTORIO] New harvest_product task: ${product_name} +${count}, radius=${search_radius}`)
     return result
   },
+  clear_construction_area: (x: number, y: number, width: number, height: number): [boolean, string] => {
+    const result = area_clearing_controller.submit(x, y, width, height)
+    if (result[0]) log(`[AUTORIO] New clear_construction_area task: center=(${x},${y}), size=${width}x${height}`)
+    return result
+  },
   supply_entity: (unit_number: number, items: Array<{ item_name: string, count: number }>): [boolean, string] => {
     const result = composite_operation_controller.supply_entity(unit_number, items)
     if (result[0]) log(`[AUTORIO] New supply_entity task: unit=${unit_number}, item_types=${items.length}`)
@@ -519,6 +526,9 @@ script.on_event(defines.events.on_player_mined_entity, (event: OnPlayerMinedEnti
   if (task_manager.player_state.task_state === TaskStates.HARVESTING) {
     harvest_controller.on_player_mined_entity(actor, event.player_index)
   }
+  else if (task_manager.player_state.task_state === TaskStates.CLEARING_AREA) {
+    area_clearing_controller.on_player_mined_entity(actor, event.player_index)
+  }
   else {
     basic_operation_runtime.on_player_mined_entity(actor, event.player_index)
   }
@@ -575,6 +585,9 @@ script.on_event(defines.events.on_tick, (unused_event) => {
     }
     else if (task_manager.player_state.task_state === TaskStates.HARVESTING) {
       harvest_controller.tick(actor)
+    }
+    else if (task_manager.player_state.task_state === TaskStates.CLEARING_AREA) {
+      area_clearing_controller.tick(actor)
     }
     else if (task_manager.player_state.task_state === TaskStates.PLACING) {
       basic_operation_runtime.state_placing(actor)
