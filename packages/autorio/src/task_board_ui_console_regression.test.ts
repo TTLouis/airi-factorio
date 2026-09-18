@@ -53,14 +53,15 @@ describe('AIRI NPC console layout regressions', () => {
     expect(fill_debug).not.toContain('Execution Activity')
     const refresh = debug_source.split('function refresh_debug_activity(')[1]?.split('function build_debug_popout(')[0] ?? ''
     expect(refresh).toContain('activity_state.activity_rows_diff(shown, keys)')
-    expect(refresh).toContain('view.follow && !view.hover')
+    expect(refresh).toContain('if (force || view.follow)')
+    expect(refresh).not.toContain('view.hover')
     expect(refresh).toContain('(scroll as ScrollPaneGuiElement).scroll_to_bottom()')
     expect(refresh).not.toContain('scroll.clear()')
     expect(debug_source).toContain("name: DEBUG_ACTIVITY_SCROLL_NAME")
     expect(debug_source).toContain("vertical_scroll_policy: 'auto-and-reserve-space'")
     expect(source).toContain('debug_ui.toggle_debug_activity_follow(player.index)')
-    expect(source).toContain('debug_ui.set_debug_activity_hover(event.player_index, true)')
-    expect(source).toContain('debug_ui.set_debug_activity_hover(event.player_index, false)')
+    expect(source).not.toContain('debug_ui.set_debug_activity_hover')
+    expect(debug_source).not.toContain('set_debug_activity_hover')
   })
 
   it('keeps Current Task Conversation explicitly scrollable without rebuilding its pane', () => {
@@ -145,11 +146,12 @@ describe('AIRI NPC console layout regressions', () => {
     expect(source).toContain('script.on_event(TRACKER.scroll_down_input, on_activity_wheel)')
     expect(source).toContain('activity_state.stop_activity_follow(player.index, last_shown_activity_key(element))')
 
-    // Hovering holds the feed still; the rows ignore the mouse so the pane is
-    // what the cursor and the wheel land on.
-    expect(source).toContain('activity_scroll.raise_hover_events = true')
-    expect(source).toContain('defines.events.on_gui_hover')
-    expect(source).toContain('defines.events.on_gui_leave')
+    // Hover is deliberately not state. Rows still ignore interaction so the
+    // ordinary wheel reaches the pane, while only synchronized wheel input pauses follow.
+    expect(source).not.toContain('raise_hover_events')
+    expect(source).not.toContain('defines.events.on_gui_hover')
+    expect(source).not.toContain('defines.events.on_gui_leave')
+    expect(source).not.toContain('set_activity_hover')
     expect(source).toContain("column_count: 3, ignored_by_interaction: true")
 
     // One indicator doubles as the follow switch.

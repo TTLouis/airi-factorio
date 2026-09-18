@@ -842,10 +842,8 @@ function render_tracker(parent: LuaGuiElement, board: TaskBoardUiSnapshot | unde
   const count = activity_header.add({ type: 'label', name: TRACKER.count, caption: '', style: 'semibold_label' }); count.style.right_padding = 4
   const activity_empty = body.add({ type: 'label', name: TRACKER.activity_empty, caption: '' }); activity_empty.style.font_color = TONE_COLORS.muted
   const activity_scroll = body.add({ type: 'scroll-pane', name: TRACKER.activity_scroll, style: 'scroll_pane_in_shallow_frame', horizontal_scroll_policy: 'never' }); activity_scroll.style.horizontally_stretchable = true
-  // Hovering holds the feed still while it is being read, and scrolling it hands
-  // control to the player. The rows ignore the mouse so that the pane itself is
-  // what the cursor is over, which is what both of those signals are keyed on.
-  activity_scroll.raise_hover_events = true
+  // Rows ignore interaction so manual wheel input reaches the scroll pane; the
+  // synchronized wheel handler is the only pointer-adjacent signal that changes follow.
   const activity_table = activity_scroll.add({ type: 'table', name: TRACKER.activity_table, column_count: 3, ignored_by_interaction: true, tags: { keys: [] } }); activity_table.style.horizontal_spacing = 10; activity_table.style.vertical_spacing = 4
   refresh_tracker(parent, board, player)
 }

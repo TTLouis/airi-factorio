@@ -97,7 +97,8 @@ describe('AIRI NPC console compact tracker layout', () => {
     expect(source).toContain('terminate.enabled = pending === undefined')
 
     expect(source).toContain('caption: debug_ui.follow_button_caption(follow?.active === true)')
-    expect(source).toContain('Distance: ${math.floor(follow.current_distance * 10) / 10} tiles')
+    expect(source).toContain("return follow?.active ? 'Click to stop following. A goal paused by Follow will automatically resume.'")
+    expect(source).not.toContain('Distance: ${math.floor(follow.current_distance * 10) / 10} tiles')
     expect(source).toContain('if (issue_text.length > 0)')
   })
 
