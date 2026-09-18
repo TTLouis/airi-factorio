@@ -82,6 +82,8 @@ test('in-game task board snapshot is a projection of canonical durable state', (
       provider_latency_ms: 0,
       provider_diagnostic_code: '',
       provider_finish_reason: '',
+      reasoning_effort: '',
+      reasoning_policy_reason: '',
       content_chars: 0,
       reasoning_content_chars: 0,
       input_units: 0,
