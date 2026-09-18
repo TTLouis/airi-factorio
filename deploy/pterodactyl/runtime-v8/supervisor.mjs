@@ -265,6 +265,16 @@ const UI_TASK_PAUSE_SUMMARIES = new Map([
   ['follow_mode', 'AIRI paused the current task while following a player.'],
 ])
 
+function requestFailurePauseSummary(raw) {
+  if (raw.startsWith('provider_output_budget_exhausted:')) {
+    return 'AIRI paused because the model exhausted its response budget while no Autorio work was running. Continue to retry from the verified task state.'
+  }
+  if (raw.startsWith('request_failed:')) {
+    return 'AIRI paused because the model request failed while no Autorio work was running. Continue to retry from the verified task state.'
+  }
+  return ''
+}
+
 export function formatTaskCondition(value, kind = 'blocker') {
   const raw = uiText(value, kind === 'pause' ? 300 : 500)
   if (!raw) return { raw: '', summary: '' }
@@ -276,6 +286,8 @@ export function formatTaskCondition(value, kind = 'blocker') {
     if (raw.startsWith('server_stop_')) {
       return { raw, summary: 'AIRI paused because the server is stopping.' }
     }
+    const requestFailure = requestFailurePauseSummary(raw)
+    if (requestFailure) return { raw, summary: requestFailure }
     return {
       raw,
       summary: UI_TASK_PAUSE_SUMMARIES.get(raw) ?? 'AIRI is paused by an internal task condition.',
@@ -948,6 +960,38 @@ export function shouldRecoverInterruptedPlan(state) {
   return SYSTEM_RECOVERY_PAUSE_REASONS.has(pauseReason) || pauseReason.startsWith('server_stop_')
 }
 
+function idleAutorioRuntime(status) {
+  if (!status || typeof status !== 'object' || Array.isArray(status) || status.status_error) return false
+  if (!Number.isSafeInteger(status.queue_length) || typeof status.task_state !== 'string') return false
+  return status.queue_length === 0 && status.task_state.trim().toLowerCase() === 'idle'
+}
+
+export async function pauseStrandedPlanAfterRequestError(session, message) {
+  const agent = session?.agent
+  const state = session?.currentPlanState?.()
+  if (!agent || state?.status !== 'active') return undefined
+
+  let runtime
+  try {
+    runtime = typeof agent.readInteractionTaskStatus === 'function'
+      ? await agent.readInteractionTaskStatus()
+      : undefined
+  }
+  catch {
+    return undefined
+  }
+  // Never let a provider/runtime exception cancel or relabel real world work
+  // that Autorio still owns. Only close the false ACTIVE+IDLE split-brain state.
+  if (!idleAutorioRuntime(runtime)) return undefined
+
+  const clean = uiText(message, 240)
+  const outputBudget = /provider_output_budget_exhausted|finish=length|output budget/i.test(clean)
+  const reason = `${outputBudget ? 'provider_output_budget_exhausted' : 'request_failed'}: ${clean || 'unexpected request failure'}`
+  const paused = await agent.pausePersistentPlan?.(reason)
+  if (paused) await session.syncTaskBoardUi?.(paused)
+  return paused
+}
+
 export async function recoverInterruptedAgentPlan(agent, reason, details = {}) {
   if (!agent) return { recovered: false, reason: 'agent_unavailable' }
   await agent.loadPersistentState?.()
@@ -1469,14 +1513,18 @@ export class Session {
     this.eventQueue = this.eventQueue.then(fn).catch(async error => {
       const message = error instanceof Error ? error.message : String(error)
       this.log(message)
-      if (reportError && providerRecoveryExhausted(message) && this.agent) {
+      if (reportError && !expectedCancellation(error) && this.agent) {
         try {
-          const state = await this.agent.pausePersistentPlan(`provider_recovery_exhausted: ${message.slice(0, 240)}`)
-          await this.syncTaskBoardUi(state)
-          if (state) this.log('Canonical Task Board paused after provider response recovery exhaustion')
+          const state = await pauseStrandedPlanAfterRequestError(this, message)
+          if (state) this.log('Canonical Task Board paused after a failed request left Autorio idle')
+          else if (providerRecoveryExhausted(message)) {
+            // Preserve the old diagnostic signal without blindly pausing if
+            // Autorio status is unknown or still owns live world work.
+            this.log('Provider recovery exhausted; durable task was not auto-paused because Autorio was not authoritatively idle')
+          }
         }
         catch (pauseError) {
-          this.log(`Unable to pause Task Board after provider response recovery exhaustion: ${pauseError instanceof Error ? pauseError.message : pauseError}`)
+          this.log(`Unable to reconcile Task Board after request failure: ${pauseError instanceof Error ? pauseError.message : pauseError}`)
         }
       }
       if (reportError && !expectedCancellation(error)) {
