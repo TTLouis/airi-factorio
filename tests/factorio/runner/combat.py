@@ -226,9 +226,10 @@ def run(client: Rcon, results: Path) -> None:
     require(cancel_target['alive'] is True and cancel_target['health'] == cancel_fixture['health'], cancel_target)
 
     # Real clear-area lifecycle: two nests share one clear_enemy_area operation.
-    # AIRI must recover every support turret after the first nest, interrupt real
-    # mining for a pursuer, restabilize safety, finish recovery, and only then
-    # acquire the second nest. A pre-existing player turret must never be owned.
+    # AIRI must keep useful temporary support while any clear-area hostile remains,
+    # then recover every surviving owned turret after both nests are gone. Real
+    # cleanup mining must still be interruptible by a new pursuer and resume only
+    # after a fresh safety window. A pre-existing player turret must never be owned.
     lifecycle_fixture = json_command(
         "/silent-command local s=game.surfaces[1]; local enemy=game.forces.enemy; local player=game.forces.player; "
         "local a=nil; for _,e in pairs(s.find_entities_filtered{name='character'}) do "
@@ -296,7 +297,7 @@ def run(client: Rcon, results: Path) -> None:
         time.sleep(0.03)
     require(cleanup_started is not None, 'clear-area combat never entered real support-turret mining cleanup')
     require(cleanup_started['first_alive'] is False, cleanup_started)
-    require(cleanup_started['second_alive'] is True, cleanup_started)
+    require(cleanup_started['second_alive'] is False, cleanup_started)
     require(cleanup_started['player_turret_alive'] is True, cleanup_started)
     deployed_at_cleanup = cleanup_started['combat']['encounter_owned_turret_count']
     require(deployed_at_cleanup >= 3, cleanup_started)
@@ -328,7 +329,7 @@ def run(client: Rcon, results: Path) -> None:
     require(interrupted is not None, 'mobile threat did not interrupt native turret mining')
     require(interrupted['combat']['combat_phase'] == 'engage', interrupted)
     require(interrupted['combat']['encounter_owned_turret_count'] >= 1, interrupted)
-    require(interrupted['second_alive'] is True and interrupted['player_turret_alive'] is True, interrupted)
+    require(interrupted['second_alive'] is False and interrupted['player_turret_alive'] is True, interrupted)
 
     safety_after_pursuer = None
     pursuer_deadline = time.monotonic() + 30.0
@@ -341,7 +342,7 @@ def run(client: Rcon, results: Path) -> None:
         time.sleep(0.03)
     require(safety_after_pursuer is not None, 'combat did not return to cleanup safety after pursuer')
     require(safety_after_pursuer['mining'] is False, safety_after_pursuer)
-    require(safety_after_pursuer['second_alive'] is True, safety_after_pursuer)
+    require(safety_after_pursuer['second_alive'] is False, safety_after_pursuer)
     safety_tick = safety_after_pursuer['combat']['local_safe_since_tick']
     require(isinstance(safety_tick, (int, float)), safety_after_pursuer)
 
@@ -369,7 +370,7 @@ def run(client: Rcon, results: Path) -> None:
         time.sleep(0.02)
     require(resumed_cleanup is not None, 'cleanup did not resume after fresh stable safety')
     require(resumed_cleanup['runtime']['tick'] - safety_tick >= 120, resumed_cleanup)
-    require(resumed_cleanup['second_alive'] is True, resumed_cleanup)
+    require(resumed_cleanup['second_alive'] is False, resumed_cleanup)
 
     cleanup_finished = None
     finish_cleanup_deadline = time.monotonic() + 25.0
@@ -382,7 +383,7 @@ def run(client: Rcon, results: Path) -> None:
         time.sleep(0.03)
     require(cleanup_finished is not None, 'not all encounter-owned turrets were recovered')
     require(cleanup_finished['owned_valid'] == 0, cleanup_finished)
-    require(cleanup_finished['second_alive'] is True, cleanup_finished)
+    require(cleanup_finished['second_alive'] is False, cleanup_finished)
     require(cleanup_finished['player_turret_alive'] is True, cleanup_finished)
     require(
         cleanup_finished['main_gun_turrets'] >= cleanup_started['main_gun_turrets'] + cleanup_started['owned_valid'],
