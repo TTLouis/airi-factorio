@@ -2808,7 +2808,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           round: roundBase,
           allowTools: false,
           recoveryAttempt: 0,
-          recoveryKind: 'action_omission',
         })
       }
       catch (error) {
