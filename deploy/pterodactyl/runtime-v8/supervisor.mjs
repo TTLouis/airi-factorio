@@ -968,6 +968,10 @@ export class Session {
   }
 
   onAgentActivity(event, data) {
+    if (event === 'interaction.routed') {
+      if (data?.intent === 'new_goal') this.startNewUiConversation()
+      this.appendUiConversation('user', data?.sender, data?.text)
+    }
     if (event === 'request.received') this.appendUiConversation('user', data?.sender, data?.text)
     if ((event === 'plan.accepted' || event === 'request.completed') && data?.chat_message) {
       this.appendUiConversation('assistant', this.npcName || 'AIRI', data.chat_message)
@@ -1393,10 +1397,9 @@ export class Session {
         }
         await this.ensureAuthorization()
         await this.applyNavigationObstaclePolicy(text)
-        // Bind the public request at the Session boundary before handing it to the
-        // provider loop. request.received repeats the same projection and is
-        // intentionally deduplicated by appendUiConversation().
-        this.appendUiConversation('user', sender, text)
+        // The interaction router owns task-conversation lifecycle. It emits
+        // interaction.routed before any main planner reset so same-goal follow-ups
+        // remain in the current conversation and only true new goals start another.
         const result = await this.agent.request(text, { sender })
         if (result?.chatMessage) this.appendUiConversation('assistant', this.npcName || 'AIRI', result.chatMessage)
         await this.syncTaskBoardUi()
