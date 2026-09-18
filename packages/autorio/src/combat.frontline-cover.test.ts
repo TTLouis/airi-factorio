@@ -300,10 +300,10 @@ describe('sacrificial combat support frontline', () => {
     expect(c.surface.request_path).toHaveBeenLastCalledWith(expect.objectContaining({
       start: { x: 6, y: 0 },
       goal: { x: 17, y: 0 },
-      radius: 8,
+      radius: 1.5,
     }))
     expect(c.controller.status()).toMatchObject({
-      path: { mode: 'approach', target_position: { x: 17, y: 0 } },
+      path: { mode: 'retreat', target_position: { x: 17, y: 0 } },
       encounter_owned_turret_count: 1,
     })
   })
