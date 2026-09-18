@@ -214,6 +214,56 @@ describe('sacrificial combat support frontline', () => {
     expect(c.surface.request_path).not.toHaveBeenCalled()
   })
 
+  it('opens a second support stage when the active swarm leaves current turret coverage without requiring stage spacing', () => {
+    const spitter = enemy(45, 'medium-spitter', 'unit', 20)
+    const c = world([spitter], 2)
+
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+    expect(c.createdTurrets).toHaveLength(1)
+    expect(c.createdTurrets[0].position).toEqual({ x: 6, y: 0 })
+
+    c.actor.position = { x: 2, y: 0 }
+    spitter.position = { x: 25, y: 0 }
+    tick(c)
+
+    expect(c.createdTurrets).toHaveLength(2)
+    expect(c.createdTurrets[1].position).toEqual({ x: 8, y: 0 })
+    expect(Math.abs(c.createdTurrets[1].position.x - c.createdTurrets[0].position.x)).toBeLessThan(3)
+    expect(c.controller.status()).toMatchObject({
+      support_stage_start_turret_count: 1,
+      support_stage_target_turret_count: 2,
+      encounter_owned_turret_count: 2,
+    })
+  })
+
+  it('advances only to the protected rear point when ranged pressure is outside AIRI weapon range, then resumes shooting', () => {
+    const spitter = enemy(46, 'medium-spitter', 'unit', 20)
+    const c = world([spitter], 1)
+    c.character.can_shoot.mockImplementation((_target: any, position: { x: number, y: number }) =>
+      Math.abs(c.actor.position.x - position.x) <= 17)
+
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+    expect(c.createdTurrets).toHaveLength(1)
+
+    tick(c)
+    expect(c.surface.request_path).toHaveBeenLastCalledWith(expect.objectContaining({
+      start: { x: 0, y: 0 },
+      goal: { x: 3.5, y: 0 },
+      radius: 1.5,
+    }))
+
+    c.actor.position = { x: 3.5, y: 0 }
+    tick(c)
+
+    expect(c.actor.set_shooting_state).toHaveBeenLastCalledWith({
+      state: (globalThis as any).defines.shooting.shooting_selected,
+      position: { x: 20, y: 0 },
+    })
+    expect(c.actor.set_walking_state).toHaveBeenLastCalledWith({ walking: false, direction: 'north' })
+  })
+
   it('preserves panic-range mobile preemption ahead of support placement', () => {
     const nest = enemy(50, 'biter-spawner', 'unit-spawner', 30)
     const c = world([nest], 1)
