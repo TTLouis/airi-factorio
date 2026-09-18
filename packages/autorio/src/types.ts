@@ -9,8 +9,6 @@ export enum TaskStates {
   CLEARING_AREA = 'clearing_area',
   PLACING = 'placing',
   ROTATING = 'rotating',
-  PLACING_IN_CHEST = 'placing_in_chest',
-  PICKING_UP = 'picking_up',
   CRAFTING = 'crafting',
   RESEARCHING = 'researching',
   WALKING_DIRECT = 'walking_direct',

@@ -1,5 +1,6 @@
 import type { ControlledActor } from './actors/types'
 import { register_actor_mode_transition_handler, register_npc_recovery_handler } from './actors/actor_controller'
+import { is_runtime_task_state, unsupported_task_state_reason } from './task_state_runtime'
 import type { PlayerParameters, PlayerState } from './types'
 import { TaskStates } from './types'
 
@@ -108,6 +109,15 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     if (stop_shooting) actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
   }
 
+  function stop_all_task_controls() {
+    const actor = get_controlled_actor()
+    if (!actor || !actor.is_valid || !actor.character) return
+
+    actor.set_walking_state({ walking: false, direction: defines.direction.north })
+    actor.set_mining_state({ mining: false })
+    actor.set_shooting_state({ state: defines.shooting.not_shooting, position: actor.position })
+  }
+
   function clear_task_state_without_controls() {
     player_state.task_state = TaskStates.IDLE
     player_state.parameters_walk_to_entity = undefined
@@ -130,6 +140,27 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     clear_task_state_without_controls()
   }
 
+  function fail_unsupported_task_state(state: unknown) {
+    const reason = unsupported_task_state_reason(state)
+    const queued_task_types = task_queue.map(task => task.type)
+    const batch_label = active_batch_id === undefined ? 'none' : `${active_batch_id}`
+    log(`[AUTORIO] ERROR unsupported task state: state=${state}, batch=${batch_label}, queued_task_count=${task_queue.length}, queued_task_types=${queued_task_types.join(',') || 'none'}, active_batch_tasks=${active_batch_task_types.join(',') || 'none'}, reason=${reason}`)
+
+    run_cancel_cleanup()
+    stop_all_task_controls()
+    clear_task_state_without_controls()
+    task_queue.length = 0
+
+    const receipt = close_batch('cancelled', reason)
+    if (receipt) {
+      const details = receipt_details(receipt)
+      game.print(`[AUTORIO] Operation batch cancelled: ${details}`)
+      log(`[AUTORIO] Operation batch cancelled: ${details}`)
+    }
+  }
+
+  function assert_task_activation_exhaustive(_task: never) {}
+
   function next_task() {
     if (player_state.task_state !== TaskStates.IDLE) {
       log('[AUTORIO] Task state is not IDLE, wont execute next task')
@@ -146,6 +177,12 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
         : `batch=none, task_count=0, tasks=none, tick=${game.tick}`
       if (!quiet_completion) game.print(`[AUTORIO] All operations completed: ${details}`)
       log(`[AUTORIO] All operations completed: ${details}`)
+      return
+    }
+
+    const task_type = (task as { type: unknown }).type
+    if (!is_runtime_task_state(task_type)) {
+      fail_unsupported_task_state(task_type)
       return
     }
 
@@ -191,6 +228,10 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
       case TaskStates.WAITING:
         player_state.parameters_waiting = task
         break
+      default:
+        assert_task_activation_exhaustive(task)
+        fail_unsupported_task_state(task_type)
+        return
     }
   }
 
@@ -420,6 +461,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     reset_task_state,
     cancel_task,
     cancel_all_tasks,
+    fail_unsupported_task_state,
     discard_all_tasks_after_actor_loss,
     register_cancel_handler,
   }

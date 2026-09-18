@@ -36,6 +36,7 @@ import { new_recipe_configuration_runtime } from './recipe_configuration'
 import { new_research_controller } from './research'
 import { ensure_basic_skill_definitions } from './skills'
 import { with_research_trigger } from './research_trigger'
+import { is_runtime_task_state, type RuntimeTaskState } from './task_state_runtime'
 import { new_task_manager } from './task_manager'
 import { create_task_board_ui_remote_interface, set_task_board_world_task_provider } from './task_board_ui'
 import { create_tools_remote_interface } from './tools'
@@ -74,6 +75,31 @@ const follow_controller = new_follow_controller(
   (player_name, follow_distance) => navigation_controller.submit_player(player_name, follow_distance),
 )
 const defense_controller = new_defense_controller(get_controlled_actor)
+
+type RuntimeTaskDispatcher = (actor: ControlledActor) => void
+
+const runtime_task_dispatchers: Record<RuntimeTaskState, RuntimeTaskDispatcher> = {
+  [TaskStates.WALKING_TO_ENTITY]: (actor) => {
+    const handled = navigation_obstacle_recovery.tick(actor, task_manager.player_state.parameters_walk_to_entity)
+    if (!handled) navigation_controller.tick(actor)
+  },
+  [TaskStates.WALKING_DIRECT]: actor => state_walking_direct(actor),
+  [TaskStates.MINING]: actor => basic_operation_runtime.state_mining(actor),
+  [TaskStates.HARVESTING]: actor => harvest_controller.tick(actor),
+  [TaskStates.CLEARING_AREA]: actor => area_clearing_controller.tick(actor),
+  [TaskStates.PLACING]: actor => basic_operation_runtime.state_placing(actor),
+  [TaskStates.ROTATING]: actor => orientation_runtime.state_rotating(actor),
+  [TaskStates.MOVING_ITEMS]: actor => basic_operation_runtime.state_moving_items(actor),
+  [TaskStates.SETTING_RECIPE]: actor => recipe_configuration_runtime.state_setting_recipe(actor),
+  [TaskStates.CRAFTING]: actor => crafting_controller.tick(actor),
+  [TaskStates.RESEARCHING]: actor => research_controller.tick(actor),
+  [TaskStates.ATTACKING]: actor => combat_controller.tick(actor),
+  [TaskStates.WAITING]: actor => basic_operation_runtime.state_waiting(actor),
+}
+
+export function runtime_dispatch_has_handler(state: RuntimeTaskState) {
+  return runtime_task_dispatchers[state] !== undefined
+}
 
 remote.add_interface('autorio_navigation', {
   status: () => ({
@@ -572,51 +598,30 @@ script.on_event(defines.events.on_tick, (unused_event) => {
   follow_controller.suspend(actor)
   defense_controller.suspend(actor)
 
+  let task_state = task_manager.player_state.task_state
+  if (!is_runtime_task_state(task_state)) {
+    navigation_obstacle_recovery.suspend(actor)
+    task_manager.fail_unsupported_task_state(task_state)
+    return
+  }
+
   if (interaction_recovery.tick(actor)) return
 
-  if (task_manager.player_state.task_state === TaskStates.WALKING_TO_ENTITY) {
-    const handled = navigation_obstacle_recovery.tick(actor, task_manager.player_state.parameters_walk_to_entity)
-    if (!handled) navigation_controller.tick(actor)
-  }
-  else {
+  task_state = task_manager.player_state.task_state
+  if (task_state === TaskStates.IDLE) {
     navigation_obstacle_recovery.suspend(actor)
-    if (task_manager.player_state.task_state === TaskStates.MINING) {
-      basic_operation_runtime.state_mining(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.HARVESTING) {
-      harvest_controller.tick(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.CLEARING_AREA) {
-      area_clearing_controller.tick(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.PLACING) {
-      basic_operation_runtime.state_placing(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.ROTATING) {
-      orientation_runtime.state_rotating(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.MOVING_ITEMS) {
-      basic_operation_runtime.state_moving_items(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.SETTING_RECIPE) {
-      recipe_configuration_runtime.state_setting_recipe(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.CRAFTING) {
-      crafting_controller.tick(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.RESEARCHING) {
-      research_controller.tick(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.WALKING_DIRECT) {
-      state_walking_direct(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.ATTACKING) {
-      combat_controller.tick(actor)
-    }
-    else if (task_manager.player_state.task_state === TaskStates.WAITING) {
-      basic_operation_runtime.state_waiting(actor)
-    }
+    return
   }
+  if (!is_runtime_task_state(task_state)) {
+    navigation_obstacle_recovery.suspend(actor)
+    task_manager.fail_unsupported_task_state(task_state)
+    return
+  }
+
+  if (task_state !== TaskStates.WALKING_TO_ENTITY) {
+    navigation_obstacle_recovery.suspend(actor)
+  }
+  runtime_task_dispatchers[task_state](actor)
 })
 
 script.on_event(defines.events.on_player_crafted_item, (event: OnPlayerCraftedItemEvent) => {
