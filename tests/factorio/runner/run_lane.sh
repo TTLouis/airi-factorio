@@ -133,6 +133,8 @@ case "$LANE" in
     run_py control_lifecycle.py
     printf '[npc-test][core] Running owned basic-operation outcome/failure gates...\n'
     run_py basic_outcomes.py
+    printf '[npc-test][core] Running exact non-resource mining auto-approach gate...\n'
+    run_py exact_entity_mining.py
     ;;
 
   research-combat)
