@@ -1,72 +1,905 @@
 {
   "version": 3,
-  "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"],
+  "surfaces": [
+    "ordinary-agent",
+    "pterodactyl-runtime-v8"
+  ],
   "operations": {
-    "walk_to_entity": { "args": ["entity_name", "search_radius"], "remote": ["autorio_operations", "walk_to_entity"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "walk_to_entity_exact": { "args": ["unit_number", "reach_distance"], "defaults": { "reach_distance": 2.5 }, "remote": ["autorio_operations", "walk_to_entity_exact"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "walk_to_position": { "args": ["x", "y", "reach_distance"], "defaults": { "reach_distance": 0.75 }, "remote": ["autorio_operations", "walk_to_position"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "walk_to_player": { "args": ["player_name"], "remote": ["autorio_operations", "walk_to_player"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "follow_player": { "args": ["player_name", "follow_distance"], "defaults": { "follow_distance": 4 }, "remote": ["autorio_operations", "follow_player"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "stop_follow_player": { "args": [], "remote": ["autorio_operations", "stop_follow_player"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "set_auto_defense": { "args": ["enabled"], "remote": ["autorio_operations", "set_auto_defense"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "equip_weapon": { "args": ["item_name", "slot"], "defaults": { "slot": 1 }, "remote": ["autorio_operations", "equip_weapon"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "equip_ammo": { "args": ["item_name", "slot"], "defaults": { "slot": 1 }, "remote": ["autorio_operations", "equip_ammo"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "equip_armor": { "args": ["item_name"], "remote": ["autorio_operations", "equip_armor"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "select_weapon_slot": { "args": ["slot"], "remote": ["autorio_operations", "select_weapon_slot"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "mine_entity": { "args": ["entity_name", "count"], "defaults": { "count": 1 }, "remote": ["autorio_operations", "mine_entity"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "mine_entity_exact": { "args": ["unit_number"], "remote": ["autorio_operations", "mine_entity_exact"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "mine_resource_at": { "args": ["resource_name", "x", "y", "count"], "defaults": { "count": 1 }, "remote": ["autorio_operations", "mine_resource_at"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "gather_resource": { "args": ["resource_name", "count", "search_radius"], "defaults": { "count": 1, "search_radius": 256 }, "remote": ["autorio_operations", "gather_resource"], "surfaces": ["pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "supply_entity": { "args": ["unit_number", "items"], "remote": ["autorio_operations", "supply_entity"], "surfaces": ["pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "execute_construction_plan": { "args": ["validation_id", "placement_count"], "remote": ["autorio_operations", "execute_construction_plan"], "surfaces": ["pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "place_entity": { "args": ["entity_name", "x", "y", "direction"], "remote": ["autorio_operations", "place_entity"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "place_candidate": { "args": ["candidate_set_id", "candidate_id"], "remote": ["autorio_operations", "place_candidate"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "runtime-v8-extension" },
-    "rotate_entity": { "args": ["unit_number", "reverse"], "defaults": { "reverse": false }, "remote": ["autorio_operations", "rotate_entity"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "move_items": { "args": ["item_name", "entity_name", "max_count", "to_entity"], "remote": ["autorio_operations", "move_items"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "move_items_exact": { "args": ["item_name", "unit_number", "max_count", "to_entity"], "remote": ["autorio_operations", "move_items_exact"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "set_machine_recipe": { "args": ["unit_number", "recipe_name"], "remote": ["autorio_operations", "set_machine_recipe"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "move_items_with_player": { "args": ["item_name", "player_name", "max_count", "to_player"], "remote": ["autorio_operations", "move_items_with_player"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "craft_item": { "args": ["item_name", "count"], "defaults": { "count": 1 }, "remote": ["autorio_operations", "craft_item"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "attack_nearest_enemy": { "args": ["search_radius"], "defaults": { "search_radius": 50 }, "remote": ["autorio_operations", "attack_nearest_enemy"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "clear_enemy_area": { "args": ["search_radius"], "defaults": { "search_radius": 96 }, "remote": ["autorio_operations", "clear_enemy_area"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "research_technology": { "args": ["technology_name"], "remote": ["autorio_operations", "research_technology"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" },
-    "wait": { "args": ["ticks"], "remote": ["autorio_operations", "wait"], "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "pterodactyl_layer": "staging-base" }
+    "walk_to_entity": {
+      "args": [
+        "entity_name",
+        "search_radius"
+      ],
+      "remote": [
+        "autorio_operations",
+        "walk_to_entity"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "walk_to_entity_exact": {
+      "args": [
+        "unit_number",
+        "reach_distance"
+      ],
+      "defaults": {
+        "reach_distance": 2.5
+      },
+      "remote": [
+        "autorio_operations",
+        "walk_to_entity_exact"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "walk_to_position": {
+      "args": [
+        "x",
+        "y",
+        "reach_distance"
+      ],
+      "defaults": {
+        "reach_distance": 0.75
+      },
+      "remote": [
+        "autorio_operations",
+        "walk_to_position"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "walk_to_player": {
+      "args": [
+        "player_name"
+      ],
+      "remote": [
+        "autorio_operations",
+        "walk_to_player"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "follow_player": {
+      "args": [
+        "player_name",
+        "follow_distance"
+      ],
+      "defaults": {
+        "follow_distance": 4
+      },
+      "remote": [
+        "autorio_operations",
+        "follow_player"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "stop_follow_player": {
+      "args": [],
+      "remote": [
+        "autorio_operations",
+        "stop_follow_player"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "set_auto_defense": {
+      "args": [
+        "enabled"
+      ],
+      "remote": [
+        "autorio_operations",
+        "set_auto_defense"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "equip_weapon": {
+      "args": [
+        "item_name",
+        "slot"
+      ],
+      "defaults": {
+        "slot": 1
+      },
+      "remote": [
+        "autorio_operations",
+        "equip_weapon"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "equip_ammo": {
+      "args": [
+        "item_name",
+        "slot"
+      ],
+      "defaults": {
+        "slot": 1
+      },
+      "remote": [
+        "autorio_operations",
+        "equip_ammo"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "equip_armor": {
+      "args": [
+        "item_name"
+      ],
+      "remote": [
+        "autorio_operations",
+        "equip_armor"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "select_weapon_slot": {
+      "args": [
+        "slot"
+      ],
+      "remote": [
+        "autorio_operations",
+        "select_weapon_slot"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "mine_entity": {
+      "args": [
+        "entity_name",
+        "count"
+      ],
+      "defaults": {
+        "count": 1
+      },
+      "remote": [
+        "autorio_operations",
+        "mine_entity"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "mine_entity_exact": {
+      "args": [
+        "unit_number"
+      ],
+      "remote": [
+        "autorio_operations",
+        "mine_entity_exact"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "mine_resource_at": {
+      "args": [
+        "resource_name",
+        "x",
+        "y",
+        "count"
+      ],
+      "defaults": {
+        "count": 1
+      },
+      "remote": [
+        "autorio_operations",
+        "mine_resource_at"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "gather_resource": {
+      "args": [
+        "resource_name",
+        "count",
+        "search_radius"
+      ],
+      "defaults": {
+        "count": 1,
+        "search_radius": 256
+      },
+      "remote": [
+        "autorio_operations",
+        "gather_resource"
+      ],
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "supply_entity": {
+      "args": [
+        "unit_number",
+        "items"
+      ],
+      "remote": [
+        "autorio_operations",
+        "supply_entity"
+      ],
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "execute_construction_plan": {
+      "args": [
+        "validation_id",
+        "placement_count"
+      ],
+      "remote": [
+        "autorio_operations",
+        "execute_construction_plan"
+      ],
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "place_entity": {
+      "args": [
+        "entity_name",
+        "x",
+        "y",
+        "direction"
+      ],
+      "remote": [
+        "autorio_operations",
+        "place_entity"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "place_candidate": {
+      "args": [
+        "candidate_set_id",
+        "candidate_id"
+      ],
+      "remote": [
+        "autorio_operations",
+        "place_candidate"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "runtime-v8-extension"
+    },
+    "rotate_entity": {
+      "args": [
+        "unit_number",
+        "reverse"
+      ],
+      "defaults": {
+        "reverse": false
+      },
+      "remote": [
+        "autorio_operations",
+        "rotate_entity"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "move_items": {
+      "args": [
+        "item_name",
+        "entity_name",
+        "max_count",
+        "to_entity"
+      ],
+      "remote": [
+        "autorio_operations",
+        "move_items"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "move_items_exact": {
+      "args": [
+        "item_name",
+        "unit_number",
+        "max_count",
+        "to_entity"
+      ],
+      "remote": [
+        "autorio_operations",
+        "move_items_exact"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "set_machine_recipe": {
+      "args": [
+        "unit_number",
+        "recipe_name"
+      ],
+      "remote": [
+        "autorio_operations",
+        "set_machine_recipe"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "move_items_with_player": {
+      "args": [
+        "item_name",
+        "player_name",
+        "max_count",
+        "to_player"
+      ],
+      "remote": [
+        "autorio_operations",
+        "move_items_with_player"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "craft_item": {
+      "args": [
+        "item_name",
+        "count"
+      ],
+      "defaults": {
+        "count": 1
+      },
+      "remote": [
+        "autorio_operations",
+        "craft_item"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "attack_nearest_enemy": {
+      "args": [
+        "search_radius"
+      ],
+      "defaults": {
+        "search_radius": 50
+      },
+      "remote": [
+        "autorio_operations",
+        "attack_nearest_enemy"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "clear_enemy_area": {
+      "args": [
+        "search_radius"
+      ],
+      "defaults": {
+        "search_radius": 96
+      },
+      "remote": [
+        "autorio_operations",
+        "clear_enemy_area"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "research_technology": {
+      "args": [
+        "technology_name"
+      ],
+      "remote": [
+        "autorio_operations",
+        "research_technology"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    },
+    "wait": {
+      "args": [
+        "ticks"
+      ],
+      "remote": [
+        "autorio_operations",
+        "wait"
+      ],
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "pterodactyl_layer": "staging-base"
+    }
   },
   "tools": {
-    "getActorStatus": { "remote": ["autorio_actor", "status"], "category": "status", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getTaskStatus": { "remote": ["autorio_operations", "status"], "category": "status", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getInventoryItems": { "remote": ["autorio_tools", "get_inventory_items"], "category": "inventory", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getEquipmentStatus": { "remote": ["autorio_equipment", "status"], "category": "equipment", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getRecipe": { "remote": ["autorio_tools", "get_recipe"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getRecipeDetails": { "remote": ["autorio_knowledge", "recipe_details"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "discoverPrototypes": { "remote": ["autorio_prototypes", "discover"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getPrototypeDetails": { "remote": ["autorio_prototypes", "details"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getPlayerStatus": { "remote": ["autorio_tools", "get_player_status"], "category": "status", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getNearbyEntities": { "remote": ["autorio_tools", "get_nearby_entities"], "category": "observation", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getPlacementCandidates": { "remote": ["autorio_tools", "get_placement_candidates"], "category": "construction", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "findLongRangeEntities": { "remote": ["autorio_discovery", "find_entities"], "category": "observation", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "findNearestEnemy": { "remote": ["autorio_discovery", "find_nearest_enemy"], "category": "combat", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getEntityStatus": { "remote": ["autorio_tools", "get_entity_status"], "category": "observation", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getEntityGeometry": { "remote": ["autorio_knowledge", "entity_geometry"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getLogisticsTopology": { "remote": ["autorio_knowledge", "logistics_topology"], "category": "knowledge", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "measureTransportThroughput": { "remote": ["autorio_planning", "throughput_measurement_start"], "category": "throughput", "surfaces": ["pterodactyl-runtime-v8"], "surface_policy": "runtime-v8-only" },
-    "getNavigationStatus": { "remote": ["autorio_navigation", "status"], "category": "status", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getFollowStatus": { "remote": ["autorio_follow", "status"], "category": "status", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getDefenseStatus": { "remote": ["autorio_defense", "status"], "category": "status", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getCraftingStatus": { "remote": ["autorio_crafting", "status"], "category": "status", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getResearchStatus": { "remote": ["autorio_research", "status"], "category": "research", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getResearchRequest": { "remote": ["autorio_research", "request_result"], "category": "research", "surfaces": ["pterodactyl-runtime-v8"], "surface_policy": "runtime-v8-only" },
-    "getTechnology": { "remote": ["autorio_research", "technology"], "category": "research", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getCombatStatus": { "remote": ["autorio_combat", "status"], "category": "status", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getProductionScope": { "remote": ["autorio_planning", "scope_context"], "category": "production", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "solveProduction": { "remote": ["autorio_planning", "solve"], "category": "production", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getTransportCapacity": { "remote": ["autorio_planning", "capacity"], "category": "throughput", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getLocalSpatialObservation": { "remote": ["autorio_planning", "spatial_observation"], "category": "construction", "surfaces": ["pterodactyl-runtime-v8"], "surface_policy": "runtime-v8-only" },
-    "planPlacement": { "remote": ["autorio_planning", "plan_placement"], "category": "construction", "surfaces": ["pterodactyl-runtime-v8"], "surface_policy": "runtime-v8-only" },
-    "findConstructionSites": { "remote": ["autorio_planning", "find_construction_sites"], "category": "construction", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "validateConstructionPlan": { "remote": ["autorio_planning", "validate_construction_plan"], "category": "construction", "surfaces": ["pterodactyl-runtime-v8"], "surface_policy": "runtime-v8-only" },
-    "inspectConstructionIntent": { "remote": ["autorio_map_construction", "intent"], "category": "construction", "surfaces": ["ordinary-agent", "pterodactyl-runtime-v8"], "surface_policy": "shared" },
-    "getResearchPath": { "remote": ["autorio_planning", "research_path"], "category": "research", "surfaces": ["pterodactyl-runtime-v8"], "surface_policy": "runtime-v8-only" }
+    "getActorStatus": {
+      "remote": [
+        "autorio_actor",
+        "status"
+      ],
+      "category": "status",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getTaskStatus": {
+      "remote": [
+        "autorio_operations",
+        "status"
+      ],
+      "category": "status",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getInventoryItems": {
+      "remote": [
+        "autorio_tools",
+        "get_inventory_items"
+      ],
+      "category": "inventory",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getEquipmentStatus": {
+      "remote": [
+        "autorio_equipment",
+        "status"
+      ],
+      "category": "equipment",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getRecipe": {
+      "remote": [
+        "autorio_tools",
+        "get_recipe"
+      ],
+      "category": "knowledge",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getRecipeDetails": {
+      "remote": [
+        "autorio_knowledge",
+        "recipe_details"
+      ],
+      "category": "knowledge",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "discoverPrototypes": {
+      "remote": [
+        "autorio_prototypes",
+        "discover"
+      ],
+      "category": "knowledge",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getPrototypeDetails": {
+      "remote": [
+        "autorio_prototypes",
+        "details"
+      ],
+      "category": "knowledge",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getPlayerStatus": {
+      "remote": [
+        "autorio_tools",
+        "get_player_status"
+      ],
+      "category": "status",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getNearbyEntities": {
+      "remote": [
+        "autorio_tools",
+        "get_nearby_entities"
+      ],
+      "category": "observation",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getPlacementCandidates": {
+      "remote": [
+        "autorio_tools",
+        "get_placement_candidates"
+      ],
+      "category": "construction",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "findLongRangeEntities": {
+      "remote": [
+        "autorio_discovery",
+        "find_entities"
+      ],
+      "category": "observation",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "findNearestEnemy": {
+      "remote": [
+        "autorio_discovery",
+        "find_nearest_enemy"
+      ],
+      "category": "combat",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getEntityStatus": {
+      "remote": [
+        "autorio_tools",
+        "get_entity_status"
+      ],
+      "category": "observation",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getEntityGeometry": {
+      "remote": [
+        "autorio_knowledge",
+        "entity_geometry"
+      ],
+      "category": "knowledge",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getLogisticsTopology": {
+      "remote": [
+        "autorio_knowledge",
+        "logistics_topology"
+      ],
+      "category": "knowledge",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "measureTransportThroughput": {
+      "remote": [
+        "autorio_planning",
+        "throughput_measurement_start"
+      ],
+      "category": "throughput",
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "runtime-v8-only"
+    },
+    "getNavigationStatus": {
+      "remote": [
+        "autorio_navigation",
+        "status"
+      ],
+      "category": "status",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getFollowStatus": {
+      "remote": [
+        "autorio_follow",
+        "status"
+      ],
+      "category": "status",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getDefenseStatus": {
+      "remote": [
+        "autorio_defense",
+        "status"
+      ],
+      "category": "status",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getCraftingStatus": {
+      "remote": [
+        "autorio_crafting",
+        "status"
+      ],
+      "category": "status",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getResearchStatus": {
+      "remote": [
+        "autorio_research",
+        "status"
+      ],
+      "category": "research",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getResearchRequest": {
+      "remote": [
+        "autorio_research",
+        "request_result"
+      ],
+      "category": "research",
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "runtime-v8-only"
+    },
+    "getTechnology": {
+      "remote": [
+        "autorio_research",
+        "technology"
+      ],
+      "category": "research",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getCombatStatus": {
+      "remote": [
+        "autorio_combat",
+        "status"
+      ],
+      "category": "status",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getProductionScope": {
+      "remote": [
+        "autorio_planning",
+        "scope_context"
+      ],
+      "category": "production",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "solveProduction": {
+      "remote": [
+        "autorio_planning",
+        "solve"
+      ],
+      "category": "production",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getTransportCapacity": {
+      "remote": [
+        "autorio_planning",
+        "capacity"
+      ],
+      "category": "throughput",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getLocalSpatialObservation": {
+      "remote": [
+        "autorio_planning",
+        "spatial_observation"
+      ],
+      "category": "construction",
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "runtime-v8-only"
+    },
+    "planPlacement": {
+      "remote": [
+        "autorio_planning",
+        "plan_placement"
+      ],
+      "category": "construction",
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "runtime-v8-only"
+    },
+    "findConstructionSites": {
+      "remote": [
+        "autorio_planning",
+        "find_construction_sites"
+      ],
+      "category": "construction",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "validateConstructionPlan": {
+      "remote": [
+        "autorio_planning",
+        "validate_construction_plan"
+      ],
+      "category": "construction",
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "runtime-v8-only"
+    },
+    "inspectConstructionIntent": {
+      "remote": [
+        "autorio_map_construction",
+        "intent"
+      ],
+      "category": "construction",
+      "surfaces": [
+        "ordinary-agent",
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "shared"
+    },
+    "getResearchPath": {
+      "remote": [
+        "autorio_planning",
+        "research_path"
+      ],
+      "category": "research",
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "runtime-v8-only"
+    },
+    "findSkills": {
+      "remote": [
+        "autorio_skills",
+        "find"
+      ],
+      "category": "knowledge",
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "runtime-v8-only"
+    },
+    "getSkillDetails": {
+      "remote": [
+        "autorio_skills",
+        "get"
+      ],
+      "category": "knowledge",
+      "surfaces": [
+        "pterodactyl-runtime-v8"
+      ],
+      "surface_policy": "runtime-v8-only"
+    }
   },
   "limits": {
     "factorio_name_max_length": 200,
