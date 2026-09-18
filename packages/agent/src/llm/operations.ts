@@ -131,6 +131,15 @@ export const structuredOperationSchema = z.discriminatedUnion('name', [
     }).strict(),
   }).strict(),
   z.object({
+    name: z.literal('clear_construction_area'),
+    args: z.object({
+      x: placementCoordinate,
+      y: placementCoordinate,
+      width: z.number().int().min(1).max(64),
+      height: z.number().int().min(1).max(64),
+    }).strict().refine(value => value.width * value.height <= 4096, 'construction clearing area exceeds 4096 tiles'),
+  }).strict(),
+  z.object({
     name: z.literal('place_candidate'),
     args: z.object({
       candidate_set_id: placementCandidateSetId,
@@ -237,6 +246,7 @@ const legacyOperationPatterns = [
   new RegExp(`${callStart}['"]select_weapon_slot['"]${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]mine_entity['"]${separator}${quotedSafeName}(?:${separator}${positiveInteger})?${callEnd}`),
   new RegExp(`${callStart}['"]harvest_product['"]${separator}${quotedSafeName}${separator}${positiveInteger}${separator}${positiveInteger}${callEnd}`),
+  new RegExp(`${callStart}['"]clear_construction_area['"]${separator}-?[0-9]+(?:\\.[0-9]+)?${separator}-?[0-9]+(?:\\.[0-9]+)?${separator}${positiveInteger}${separator}${positiveInteger}${callEnd}`),
   new RegExp(`${callStart}['"]place_entity['"]${separator}${quotedSafeName}${callEnd}`),
   new RegExp(`${callStart}['"]rotate_entity['"]${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
   new RegExp(`${callStart}['"]move_items['"]${separator}${quotedSafeName}${separator}${quotedSafeName}${separator}${positiveInteger}${separator}(?:true|false)${callEnd}`),
@@ -302,6 +312,8 @@ export function renderStructuredOperation(operation: StructuredOperation): strin
       return `remote.call('autorio_operations', 'mine_resource_at', ${renderLuaString(operation.args.resource_name)}, ${operation.args.x}, ${operation.args.y}, ${operation.args.count})`
     case 'harvest_product':
       return `remote.call('autorio_operations', 'harvest_product', ${renderLuaString(operation.args.product_name)}, ${operation.args.count}, ${operation.args.search_radius})`
+    case 'clear_construction_area':
+      return `remote.call('autorio_operations', 'clear_construction_area', ${operation.args.x}, ${operation.args.y}, ${operation.args.width}, ${operation.args.height})`
     case 'place_candidate':
       return `remote.call('autorio_operations', 'place_candidate', ${renderLuaString(operation.args.candidate_set_id)}, ${renderLuaString(operation.args.candidate_id)})`
     case 'place_entity': {
