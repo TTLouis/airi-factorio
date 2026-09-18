@@ -282,6 +282,32 @@ describe('sacrificial combat support frontline', () => {
     })
   })
 
+  it('advances a stale support line into restaging range instead of retreating forever behind old turrets', () => {
+    const nest = enemy(47, 'biter-spawner', 'unit-spawner', 20)
+    const c = world([nest], 2)
+
+    c.controller.submit_clear(80)
+    c.controller.tick(c.actor)
+    c.actor.position = { x: 6, y: 0 }
+    tick(c)
+    expect(c.createdTurrets).toHaveLength(1)
+    expect(c.createdTurrets[0].position).toEqual({ x: 12, y: 0 })
+
+    nest.position = { x: 40, y: 0 }
+    tick(c)
+
+    expect(c.createdTurrets).toHaveLength(1)
+    expect(c.surface.request_path).toHaveBeenLastCalledWith(expect.objectContaining({
+      start: { x: 6, y: 0 },
+      goal: { x: 17, y: 0 },
+      radius: 8,
+    }))
+    expect(c.controller.status()).toMatchObject({
+      path: { mode: 'approach', target_position: { x: 17, y: 0 } },
+      encounter_owned_turret_count: 1,
+    })
+  })
+
   it('advances only to the protected rear point when ranged pressure is outside AIRI weapon range, then resumes shooting', () => {
     const spitter = enemy(46, 'medium-spitter', 'unit', 20)
     const c = world([spitter], 1)
