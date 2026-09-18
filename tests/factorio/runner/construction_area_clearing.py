@@ -43,32 +43,37 @@ def run(client: Rcon, results: Path) -> None:
         "if mineable and p.type~='tree' and p.type~='resource' and p.type~='character' and not p.is_building then finite_blockers[#finite_blockers+1]=name end; "
         "if p.type=='resource' and mineable and p.infinite_resource~=true then resources[#resources+1]=name end end; "
         "table.sort(trees); table.sort(rocks); table.sort(finite_blockers); table.sort(resources); "
-        "local blocker_candidates=(#rocks>0) and rocks or finite_blockers; "
         "local base=s.find_non_colliding_position('wooden-chest',{x=a.position.x+8,y=a.position.y},24,0.5); "
         "if not base then rcon.print(helpers.table_to_json({setup_ok=false,reason='no_base',tree_candidates=#trees,rock_candidates=#rocks,resource_candidates=#resources})); return end; "
         "local area={{base.x-4,base.y-4},{base.x+4,base.y+4}}; "
         "for _,e in pairs(s.find_entities_filtered{area=area}) do if e.valid and e~=a and e.type~='character' then e.destroy() end end; "
         "local outside_target={x=base.x+6,y=base.y}; for _,e in pairs(s.find_entities_filtered{position=outside_target,radius=1.5}) do if e.valid and e~=a and e.type~='character' then e.destroy() end end; "
+        "local function inside_footprint(pos) return pos and math.abs(pos.x-base.x)<3.75 and math.abs(pos.y-base.y)<3.75 end; "
         "local function create_inside(names,want,skip) for _,name in ipairs(names) do if name~=skip then "
         "local pos=s.find_non_colliding_position(name,want,0.75,0.25); "
-        "if pos and math.abs(pos.x-base.x)<3.75 and math.abs(pos.y-base.y)<3.75 then local e=s.create_entity{name=name,position=pos}; if e then return e,name,pos end end end end return nil,nil,want end; "
+        "if pos then local e=s.create_entity{name=name,position=pos}; if e then local actual={x=e.position.x,y=e.position.y}; "
+        "if inside_footprint(actual) then return e,name,actual end; e.destroy() end end end end return nil,nil,want end; "
         "local t1,tree1,p1=create_inside(trees,{x=base.x,y=base.y},nil); "
         "local t2,tree2,p2=create_inside(trees,{x=base.x+1.5,y=base.y+1.5},tree1); "
-        "local rock,rock_name,pr=create_inside(blocker_candidates,{x=base.x-1.5,y=base.y+1.5},nil); "
-        "local pres={x=base.x+1.5,y=base.y-1.5}; local res=nil; local resource_name=nil; "
-        "for _,name in ipairs(resources) do local candidate=s.create_entity{name=name,position=pres,amount=1000}; if candidate then res=candidate; resource_name=name; break end end; "
-        "local pb=s.find_non_colliding_position('wooden-chest',{x=base.x-1.5,y=base.y-1.5},0.75,0.25); "
-        "local building=pb and s.create_entity{name='wooden-chest',position=pb,force=a.force} or nil; "
-        "local po=tree1 and s.find_non_colliding_position(tree1,outside_target,1,0.25) or nil; "
-        "local outside=(tree1 and po) and s.create_entity{name=tree1,position=po} or nil; "
+        "local blocker,blocker_name,blocker_position=create_inside(rocks,{x=base.x-1.5,y=base.y+1.5},nil); local rock_like=blocker~=nil; "
+        "if not blocker then blocker,blocker_name,blocker_position=create_inside(finite_blockers,{x=base.x-1.5,y=base.y+1.5},nil) end; "
+        "local res=nil; local resource_name=nil; local resource_position={x=base.x+1.5,y=base.y-1.5}; "
+        "for _,name in ipairs(resources) do local candidate=s.create_entity{name=name,position=resource_position,amount=1000}; "
+        "if candidate then local actual={x=candidate.position.x,y=candidate.position.y}; if inside_footprint(actual) then res=candidate; resource_name=name; resource_position=actual; break end; candidate.destroy() end end; "
+        "local building_position=s.find_non_colliding_position('wooden-chest',{x=base.x-1.5,y=base.y-1.5},0.75,0.25); "
+        "local building=building_position and s.create_entity{name='wooden-chest',position=building_position,force=a.force} or nil; "
+        "if building then building_position={x=building.position.x,y=building.position.y}; if not inside_footprint(building_position) then building.destroy(); building=nil end end; "
+        "local outside_position=tree1 and s.find_non_colliding_position(tree1,outside_target,1,0.25) or nil; "
+        "local outside=(tree1 and outside_position) and s.create_entity{name=tree1,position=outside_position} or nil; "
+        "if outside then outside_position={x=outside.position.x,y=outside.position.y} end; "
         "local dx=base.x-a.position.x; local dy=base.y-a.position.y; local initial_distance=math.sqrt(dx*dx+dy*dy); "
         "local inv=a.get_main_inventory(); local inserted=inv.insert{name='wooden-chest',count=1}; "
-        "local setup_ok=t1~=nil and t2~=nil and rock~=nil and res~=nil and building~=nil and outside~=nil and inserted==1 and initial_distance>a.resource_reach_distance+1; "
-        "rcon.print(helpers.table_to_json({setup_ok=setup_ok,actor_id=a.unit_number,tree1=tree1,tree2=tree2,rock=rock_name,resource=resource_name,"
-        "center=base,inside1=p1,inside2=p2,rock_position=pr,resource_position=pres,building_position=pb,outside=po,"
+        "local setup_ok=t1~=nil and t2~=nil and blocker~=nil and res~=nil and building~=nil and outside~=nil and inserted==1 and initial_distance>a.resource_reach_distance+1; "
+        "rcon.print(helpers.table_to_json({setup_ok=setup_ok,actor_id=a.unit_number,tree1=tree1,tree2=tree2,blocker=blocker_name,resource=resource_name,"
+        "center=base,inside1=p1,inside2=p2,blocker_position=blocker_position,resource_position=resource_position,building_position=building_position,outside=outside_position,"
         "initial_distance=initial_distance,resource_reach=a.resource_reach_distance,chests=inv.get_item_count('wooden-chest'),"
         "tree_candidates=#trees,rock_candidates=#rocks,finite_blocker_candidates=#finite_blockers,resource_candidates=#resources,"
-        "rock_like=(#rocks>0),blocker_type=rock and rock.type or nil,created={tree1=t1~=nil,tree2=t2~=nil,rock=rock~=nil,resource=res~=nil,building=building~=nil,outside=outside~=nil},inserted=inserted}))",
+        "rock_like=rock_like,blocker_type=blocker and blocker.type or nil,created={tree1=t1~=nil,tree2=t2~=nil,blocker=blocker~=nil,resource=res~=nil,building=building~=nil,outside=outside~=nil},inserted=inserted}))",
         'construction area fixture',
     )
     require(fixture.get('setup_ok') is True, fixture)
@@ -94,23 +99,23 @@ def run(client: Rcon, results: Path) -> None:
         "/silent-command local s=game.surfaces[1]; "
         f"local p1={{x={fixture['inside1']['x']},y={fixture['inside1']['y']}}}; "
         f"local p2={{x={fixture['inside2']['x']},y={fixture['inside2']['y']}}}; "
-        f"local pr={{x={fixture['rock_position']['x']},y={fixture['rock_position']['y']}}}; "
+        f"local blocker_position={{x={fixture['blocker_position']['x']},y={fixture['blocker_position']['y']}}}; "
         f"local pres={{x={fixture['resource_position']['x']},y={fixture['resource_position']['y']}}}; "
         f"local pb={{x={fixture['building_position']['x']},y={fixture['building_position']['y']}}}; "
         f"local po={{x={fixture['outside']['x']},y={fixture['outside']['y']}}}; "
         f"local c={{x={center['x']},y={center['y']}}}; "
         f"local i1=#s.find_entities_filtered{{name={fixture['tree1']!r},position=p1,radius=0.3}}; "
         f"local i2=#s.find_entities_filtered{{name={fixture['tree2']!r},position=p2,radius=0.3}}; "
-        f"local rock=#s.find_entities_filtered{{name={fixture['rock']!r},position=pr,radius=0.3}}; "
+        f"local blocker=#s.find_entities_filtered{{name={fixture['blocker']!r},position=blocker_position,radius=0.3}}; "
         f"local resource=#s.find_entities_filtered{{name={fixture['resource']!r},position=pres,radius=0.3}}; "
         "local building=#s.find_entities_filtered{name='wooden-chest',position=pb,radius=0.3}; "
         f"local o=#s.find_entities_filtered{{name={fixture['tree1']!r},position=po,radius=0.3}}; "
         "local chest=#s.find_entities_filtered{name='wooden-chest',position=c,radius=0.3}; "
-        "rcon.print(helpers.table_to_json({inside1=i1,inside2=i2,rock=rock,resource=resource,building=building,outside=o,chest=chest}))",
+        "rcon.print(helpers.table_to_json({inside1=i1,inside2=i2,blocker=blocker,resource=resource,building=building,outside=o,chest=chest}))",
         'construction area verification',
     )
     require(verify.get('inside1') == 0 and verify.get('inside2') == 0, verify)
-    require(verify.get('rock') == 0, verify)
+    require(verify.get('blocker') == 0, verify)
     require(verify.get('resource') == 1, verify)
     require(verify.get('building') == 1, verify)
     require(verify.get('outside') == 1, verify)
