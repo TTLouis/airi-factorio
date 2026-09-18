@@ -78,7 +78,13 @@ describe('recipe bootstrap dependency closure', () => {
       name: 'iron-plate',
       status: 'needs_acquisition/processing',
       resolution: { kind: 'processing', recipe_name: 'iron-plate', crafts_needed: 6 },
-      machine_dependency: { required: 1, held: 4, status: 'already_satisfied' },
+      machine_dependency: {
+        required: 1,
+        held: 4,
+        status: 'already_satisfied',
+        satisfaction_scope: 'inventory_acquisition',
+        placed_instance_required: true,
+      },
     })
   })
 
@@ -92,6 +98,8 @@ describe('recipe bootstrap dependency closure', () => {
       required: 1,
       held: 4,
       status: 'already_satisfied',
+      satisfaction_scope: 'inventory_acquisition',
+      placed_instance_required: true,
     })
     expect(result.inventory_overlay.machine_dependency?.selected_item_dependency).toBeUndefined()
   })

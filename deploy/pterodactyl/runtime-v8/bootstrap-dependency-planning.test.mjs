@@ -65,6 +65,8 @@ class BootstrapRcon {
                 required: 1,
                 held: 4,
                 status: 'already_satisfied',
+                satisfaction_scope: 'inventory_acquisition',
+                placed_instance_required: true,
                 candidates: [{ name: 'furnace-x', held_count: 4, place_items: [{ name: 'furnace-x', count: 1 }] }],
               },
             },
@@ -86,6 +88,8 @@ class BootstrapRcon {
                 required: 1,
                 held: 4,
                 status: 'already_satisfied',
+                satisfaction_scope: 'inventory_acquisition',
+                placed_instance_required: true,
               },
             },
           },
@@ -123,24 +127,23 @@ test('uncraftable downstream craft is replanned to first bootstrap dependency be
       assert.match(text, /"kind":"processing"/)
       assert.match(text, /"held":4/)
       assert.match(text, /already_satisfied/)
+      assert.match(text, /satisfaction_scope":"inventory_acquisition"/)
+      assert.match(text, /placed_instance_required":true/)
+      assert.match(text, /Never invent a unit_number/)
       return planMessage([{
-        name: 'supply_entity',
-        args: {
-          unit_number: 77,
-          items: [
-            { item_name: 'ore-x', count: 6 },
-            { item_name: 'fuel-x', count: 2 },
-          ],
-        },
-      }], 'Bootstrap plate-x in the already-held processing machine first')
+        name: 'place_entity',
+        args: { entity_name: 'furnace-x' },
+      }], 'Place the already-held processing machine before supplying it')
     },
   })
 
   const result = await agent.request('build the early production chain', { sender: 'tester' })
 
   assert.equal(calls, 2)
-  assert.equal(result.operations[0].name, 'supply_entity')
+  assert.equal(result.operations[0].name, 'place_entity')
+  assert.deepEqual(result.operations[0].args, { entity_name: 'furnace-x' })
   assert.equal(rcon.mutations.length, 1)
   assert.doesNotMatch(rcon.mutations[0], /craft_item/)
-  assert.match(rcon.mutations[0], /supply_entity/)
+  assert.doesNotMatch(rcon.mutations[0], /supply_entity/)
+  assert.match(rcon.mutations[0], /place_entity/)
 })

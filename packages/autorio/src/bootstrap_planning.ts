@@ -13,6 +13,8 @@ export interface BootstrapMachineDependency {
   required: number
   held: number
   status: BootstrapDependencyStatus
+  satisfaction_scope: 'inventory_acquisition'
+  placed_instance_required: boolean
   matched_count: number
   truncated: boolean
   candidates: BootstrapMachineCandidate[]
@@ -243,6 +245,8 @@ function machine_dependency_for(
         required: 1,
         held: machines.held,
         status: 'already_satisfied',
+        satisfaction_scope: 'inventory_acquisition',
+        placed_instance_required: true,
         matched_count: machines.matched_count,
         truncated: machines.truncated,
         candidates: machines.candidates,
@@ -266,6 +270,8 @@ function machine_dependency_for(
       required: 1,
       held: 0,
       status: selected_item_dependency?.status ?? 'needs_acquisition/processing',
+      satisfaction_scope: 'inventory_acquisition',
+      placed_instance_required: true,
       matched_count: machines.matched_count,
       truncated: machines.truncated,
       candidates: machines.candidates,
