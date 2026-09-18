@@ -537,6 +537,14 @@ function emptyAgentDebug(fallback = {}) {
     decision_input_units: 0,
     decision_output_units: 0,
     decision_cost_micro_usd: 0,
+    decision_calls_total: 0,
+    decision_input_units_total: 0,
+    decision_output_units_total: 0,
+    decision_cost_micro_usd_total: 0,
+    decision_shadow_matches_total: 0,
+    decision_shadow_mismatches_total: 0,
+    decision_planner_skips_total: 0,
+    decision_planner_wakes_total: 0,
     decision_error: '',
     last_tool: '',
     last_event: '',
@@ -559,6 +567,14 @@ function decisionDebugFields(value = {}) {
     decision_input_units: debugInteger(value.decision_input_units),
     decision_output_units: debugInteger(value.decision_output_units),
     decision_cost_micro_usd: debugInteger(value.decision_cost_micro_usd),
+    decision_calls_total: debugInteger(value.decision_calls_total),
+    decision_input_units_total: debugInteger(value.decision_input_units_total),
+    decision_output_units_total: debugInteger(value.decision_output_units_total),
+    decision_cost_micro_usd_total: debugInteger(value.decision_cost_micro_usd_total),
+    decision_shadow_matches_total: debugInteger(value.decision_shadow_matches_total),
+    decision_shadow_mismatches_total: debugInteger(value.decision_shadow_mismatches_total),
+    decision_planner_skips_total: debugInteger(value.decision_planner_skips_total),
+    decision_planner_wakes_total: debugInteger(value.decision_planner_wakes_total),
     decision_error: uiText(value.decision_error, 300),
   }
 }
@@ -657,13 +673,29 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
       debug.decision_confidence_percent = decisionPercent(shadow.intent_confidence)
       debug.decision_queue_conflict_percent = decisionPercent(shadow.queue_conflict_probability)
       debug.decision_latency_ms = debugInteger(data.decision_shadow_latency_ms)
-      debug.decision_input_units = debugInteger(shadow.usage?.input_tokens)
-      debug.decision_output_units = debugInteger(shadow.usage?.output_tokens)
-      debug.decision_cost_micro_usd = decisionMicroUsd(shadow.usage?.cost)
+      const decisionInput = debugInteger(shadow.usage?.input_tokens)
+      const decisionOutput = debugInteger(shadow.usage?.output_tokens)
+      const decisionCost = decisionMicroUsd(shadow.usage?.cost)
+      debug.decision_input_units = decisionInput
+      debug.decision_output_units = decisionOutput
+      debug.decision_cost_micro_usd = decisionCost
+      debug.decision_calls_total = debugInteger(debug.decision_calls_total) + 1
+      debug.decision_input_units_total = debugInteger(debug.decision_input_units_total) + decisionInput
+      debug.decision_output_units_total = debugInteger(debug.decision_output_units_total) + decisionOutput
+      debug.decision_cost_micro_usd_total = debugInteger(debug.decision_cost_micro_usd_total) + decisionCost
+      if (shadow.intent === data.intent) debug.decision_shadow_matches_total = debugInteger(debug.decision_shadow_matches_total) + 1
+      else debug.decision_shadow_mismatches_total = debugInteger(debug.decision_shadow_mismatches_total) + 1
       debug.decision_error = ''
     }
     const decisionError = uiText(data.decision_shadow_error, 300)
     if (decisionError) debug.decision_error = decisionError
+  }
+
+  if (event === 'planner.skipped' && data?.source === 'decision_provider') {
+    debug.decision_planner_skips_total = debugInteger(debug.decision_planner_skips_total) + 1
+  }
+  if (event === 'planner.wake' && data?.source === 'decision_provider') {
+    debug.decision_planner_wakes_total = debugInteger(debug.decision_planner_wakes_total) + 1
   }
 
   if (event === 'tool.call' || event === 'tool.result') debug.last_tool = uiText(data.name, 120)

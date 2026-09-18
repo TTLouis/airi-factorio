@@ -78,6 +78,14 @@ export interface TaskBoardUiDebugSnapshot {
   decision_input_units: number
   decision_output_units: number
   decision_cost_micro_usd: number
+  decision_calls_total: number
+  decision_input_units_total: number
+  decision_output_units_total: number
+  decision_cost_micro_usd_total: number
+  decision_shadow_matches_total: number
+  decision_shadow_mismatches_total: number
+  decision_planner_skips_total: number
+  decision_planner_wakes_total: number
   decision_error: string
   last_tool: string
   last_event: string
@@ -136,6 +144,14 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     decision_input_units: integer(debug.decision_input_units),
     decision_output_units: integer(debug.decision_output_units),
     decision_cost_micro_usd: integer(debug.decision_cost_micro_usd),
+    decision_calls_total: integer(debug.decision_calls_total),
+    decision_input_units_total: integer(debug.decision_input_units_total),
+    decision_output_units_total: integer(debug.decision_output_units_total),
+    decision_cost_micro_usd_total: integer(debug.decision_cost_micro_usd_total),
+    decision_shadow_matches_total: integer(debug.decision_shadow_matches_total),
+    decision_shadow_mismatches_total: integer(debug.decision_shadow_mismatches_total),
+    decision_planner_skips_total: integer(debug.decision_planner_skips_total),
+    decision_planner_wakes_total: integer(debug.decision_planner_wakes_total),
     decision_error: clean_text(debug.decision_error, 300),
     last_tool: clean_text(debug.last_tool, 120),
     last_event: clean_text(debug.last_event, 120),
@@ -549,6 +565,14 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const decision_input = integer(debug.decision_input_units)
   const decision_output = integer(debug.decision_output_units)
   const decision_cost = integer(debug.decision_cost_micro_usd)
+  const decision_calls_total = integer(debug.decision_calls_total)
+  const decision_input_total = integer(debug.decision_input_units_total)
+  const decision_output_total = integer(debug.decision_output_units_total)
+  const decision_cost_total = integer(debug.decision_cost_micro_usd_total)
+  const decision_matches = integer(debug.decision_shadow_matches_total)
+  const decision_mismatches = integer(debug.decision_shadow_mismatches_total)
+  const decision_planner_skips = integer(debug.decision_planner_skips_total)
+  const decision_planner_wakes = integer(debug.decision_planner_wakes_total)
   const tokens = integer(debug.total_units) > 0 ? `${integer(debug.input_units)} in / ${integer(debug.cached_input_units)} cached / ${integer(debug.output_units)} out / ${integer(debug.total_units)} total` : '—'
   const latest_round_tokens = integer(debug.latest_round_total_units) > 0
     ? `round ${integer(debug.latest_round_provider_round) + 1} · ${integer(debug.latest_round_input_units)} in / ${integer(debug.latest_round_cached_input_units)} cached / ${integer(debug.latest_round_output_units)} out / ${integer(debug.latest_round_total_units)} total`
@@ -572,6 +596,8 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Decision provider', decision_model.length > 0 ? `${decision_provider || 'decision'} · ${decision_model}` : '—')
   add_row(table, 'Decision shadow', decision_shadow.length > 0 ? `${decision_shadow} · ${decision_confidence}% · active ${decision_active || 'unknown'} · conflict ${decision_conflict}%` : '—')
   add_row(table, 'Decision usage', decision_shadow.length > 0 ? `${decision_input} in / ${decision_output} out · ${decision_latency} ms${decision_cost > 0 ? ` · ${decision_cost} µUSD` : ''}` : '—')
+  add_row(table, 'Decision totals', decision_calls_total > 0 ? `${decision_calls_total} calls · ${decision_input_total} in / ${decision_output_total} out${decision_cost_total > 0 ? ` · ${decision_cost_total} µUSD` : ''} · shadow ${decision_matches} match / ${decision_mismatches} differ` : '—')
+  add_row(table, 'Planner routing · Jev', decision_planner_skips > 0 || decision_planner_wakes > 0 ? `${decision_planner_skips} skipped / ${decision_planner_wakes} wakes` : 'not active yet')
   add_row(table, 'Provider diag', clean_text(debug.provider_diagnostic_code, 160) || '—')
   add_row(table, 'Finish', clean_text(debug.provider_finish_reason, 80) || '—')
   add_row(table, 'Content chars', `${integer(debug.content_chars)}`)

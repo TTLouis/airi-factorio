@@ -34,6 +34,14 @@ describe('task board debug and UI freshness helpers', () => {
       decision_input_units: 120,
       decision_output_units: 20,
       decision_cost_micro_usd: 5,
+      decision_calls_total: 7,
+      decision_input_units_total: 840,
+      decision_output_units_total: 140,
+      decision_cost_micro_usd_total: 35,
+      decision_shadow_matches_total: 6,
+      decision_shadow_mismatches_total: 1,
+      decision_planner_skips_total: 3,
+      decision_planner_wakes_total: 1,
       decision_error: '',
     })
 
@@ -49,6 +57,14 @@ describe('task board debug and UI freshness helpers', () => {
     expect(debug.decision_input_units).toBe(120)
     expect(debug.decision_output_units).toBe(20)
     expect(debug.decision_cost_micro_usd).toBe(5)
+    expect(debug.decision_calls_total).toBe(7)
+    expect(debug.decision_input_units_total).toBe(840)
+    expect(debug.decision_output_units_total).toBe(140)
+    expect(debug.decision_cost_micro_usd_total).toBe(35)
+    expect(debug.decision_shadow_matches_total).toBe(6)
+    expect(debug.decision_shadow_mismatches_total).toBe(1)
+    expect(debug.decision_planner_skips_total).toBe(3)
+    expect(debug.decision_planner_wakes_total).toBe(1)
   })
 
   it('uses concise follow captions', () => {

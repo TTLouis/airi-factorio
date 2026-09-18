@@ -484,6 +484,46 @@ Jev is inexpensive, but the integration should still be efficient by constructio
 
 TypeSafe explicitly recommends asking same-state questions together because they are evaluated in parallel. The goal is therefore to conserve **requests and repeated state tokens**, not to artificially force every workflow into one question.
 
+## Cost model and experiment economics
+
+The economic target is **not to minimize Jev calls**. Jev should be used freely enough to prevent unnecessary expensive planner work, while remaining bounded against runaway loops.
+
+As of 2026-09-18, TypeSafe publishes Jev pricing at **$0.042 per 1M input tokens ($42 per billion); output tokens are free**:
+<https://typesafe.ai/blog/introducing-system-one-models-and-jev>
+
+At that published input price, a $5 promotional balance corresponds to roughly **119 million input tokens**. Illustrative SGLuna workloads:
+
+| Workload | Jev input / gameplay hour | Approx cost / gameplay hour | Approx hours from $5 |
+| --- | ---: | ---: | ---: |
+| 60 calls/hour × 1k input tokens | 60k | $0.00252 | ~1,984 h |
+| 60 calls/hour × 2k input tokens | 120k | $0.00504 | ~992 h |
+| 180 calls/hour × 4k input tokens | 720k | $0.03024 | ~165 h |
+
+These are planning estimates, not billing authority. Promotional credits may have expiration or account-specific terms. Runtime observability should prefer provider-reported `usage.cost` when present and must not hard-code the published token price as billing truth.
+
+The optimization objective is therefore:
+
+> spend cheap Jev decisions when they remove or shorten expensive planner work; treat the hourly Jev request cap primarily as runaway-loop protection, not as a reason to wake the planner unnecessarily.
+
+### Metrics required for real E2E evaluation
+
+The experiment should make it possible to compute:
+
+- Jev calls per task and per active gameplay hour;
+- Jev input/output tokens per call and cumulatively;
+- provider-reported Jev cost per call and cumulatively;
+- Jev cost per active gameplay hour;
+- latency distribution;
+- shadow agreement/disagreement with the currently active router;
+- planner wakes explicitly caused by the decision layer;
+- planner calls explicitly skipped by the decision layer;
+- planner input/output tokens avoided after Jev becomes active;
+- task correctness, recovery frequency, and real Factorio completion rate.
+
+Do **not** claim a saved planner call from a shadow decision. Shadow mode is counterfactual evidence only. A planner call counts as avoided only when an active Jev-controlled path explicitly emits a `planner.skipped` event with decision-provider attribution. Likewise, planner escalation should emit an attributed `planner.wake` event.
+
+The live Debug projection keeps the latest Jev call separate from cumulative Jev experiment totals. Per-gameplay-hour reporting should use active task/gameplay intervals from traces rather than wall-clock server uptime, so idle servers do not make the economics look artificially cheap.
+
 ## Observability
 
 We need enough visibility to answer:
