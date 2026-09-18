@@ -35,7 +35,7 @@ function parseStoredOperation(value) {
 }
 
 function parseReceiptSummary(evidence) {
-  if (evidence?.kind !== 'operation_receipt' || typeof evidence.summary !== 'string') return undefined
+  if (!['operation_receipt', 'operation_error_receipt'].includes(evidence?.kind) || typeof evidence.summary !== 'string') return undefined
   try {
     const parsed = JSON.parse(evidence.summary)
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined
