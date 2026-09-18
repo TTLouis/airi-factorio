@@ -124,9 +124,12 @@ Movement targeting rule: use `walk_to_entity` only for a genuinely nearest-match
   args: { "resource_name": string, "count": integer, "search_radius": integer }
   `count` defaults to 1 and `search_radius` defaults to 256; the radius is bounded to 1..4096.
   This is the preferred deterministic operation for ordinary resource collection. It queues a bounded pathfind to the nearest exact resource prototype and then mines the requested count in the same Autorio batch. Navigation failure cancels the dependent mining task. Once mining begins, the mining runtime automatically repositions within the resource patch as later resource entities move outside real mining reach. Do not manually split normal resource collection into repeated walk/mine loops unless this composite reports a blocker.
+- harvest_product
+  args: { "product_name": string, "count": integer, "search_radius": integer }
+  Use this for finite non-resource world entities when the goal is to collect an item quantity, such as stone from mineable rocks or wood from trees. The runtime derives the compatible source-prototype set from current engine mineable-product data, excludes normal resource patches, mines one concrete source at a time, verifies the actual inventory delta, and may continue with a different compatible prototype variant. It stops immediately once the requested product gain is verified; do not estimate entity counts from expected yields.
 - mine_entity
   args: { "entity_name": string, "count": integer }
-  `count` defaults to 1 when omitted. This is the legacy/local nearest-name form: it may select the nearest matching entity only within the runtime's local mining search range. Use it only when exact identity or an exact resource position is unavailable. A target merely seen by getNearbyEntities at longer range is not locally mineable by name: approach it first, verify navigation completion when needed, then continue the same finite goal into mining without waiting for another human message.
+  `count` defaults to 1 when omitted and always means mining cycles/entities, not item quantity. This is the legacy/local nearest-name form: it may select the nearest matching entity only within the runtime's local mining search range. Use it only when exact identity or an exact resource position is unavailable. A target merely seen by getNearbyEntities at longer range is not locally mineable by name: approach it first, verify navigation completion when needed, then continue the same finite goal into mining without waiting for another human message.
 - mine_entity_exact
   args: { "unit_number": integer }
   Mines/deconstructs one exact observed entity by stable Factorio identity. Prefer this over name-based `mine_entity` whenever a live observation supplied `unit_number`; once that exact identity has been observed, do not fall back to same-name mining for that selected target. Exact mining may reposition AIRI at runtime when the exact entity is outside mining reach, and the runtime must not substitute another same-name entity if the target disappears.
@@ -134,7 +137,7 @@ Movement targeting rule: use `walk_to_entity` only for a genuinely nearest-match
   args: { "resource_name": string, "x": number, "y": number, "count": integer }
   Mines the exact observed resource entity at the requested world position. `count` defaults to 1. Use this when AIRI intentionally selected one resource tile/position; it does not retarget to another nearby resource position if that exact target is gone.
 
-Use `gather_resource` for the goal "collect N of this resource". Use `mine_resource_at` when the exact resource position matters, and `mine_entity_exact` when dismantling/mining one exact observed placed entity. These are targeting primitives, not resource-patch or production-layout solvers.
+Use `gather_resource` for normal resource patches such as ore/coal/stone resource entities. Use `harvest_product` when the desired quantity is an item yielded by finite non-resource entities. Use `mine_resource_at` when an exact resource position matters, and `mine_entity_exact` when dismantling/mining one exact observed placed entity. Never translate a desired stone/wood item count into `mine_entity.count`.
 
 5. Placement and orientation
 - place_entity
