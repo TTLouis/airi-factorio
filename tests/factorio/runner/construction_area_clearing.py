@@ -36,11 +36,14 @@ def run(client: Rcon, results: Path) -> None:
         "/silent-command local s=game.surfaces[1]; local a=nil; "
         f"for _,e in pairs(s.find_entities_filtered{{name='character'}}) do if e.unit_number=={actor_id} then a=e end end; "
         "assert(a); remote.call('autorio_operations','cancel_all_tasks'); "
-        "local trees={}; local rocks={}; local resources={}; for name,p in pairs(prototypes.entity) do "
-        "if p.type=='tree' and p.mineable_properties and p.mineable_properties.minable then trees[#trees+1]=name end; "
-        "if p.type=='simple-entity' and p.mineable_properties and p.mineable_properties.minable and not p.is_building then rocks[#rocks+1]=name end; "
-        "if p.type=='resource' and p.mineable_properties and p.mineable_properties.minable and p.infinite_resource~=true then resources[#resources+1]=name end end; "
-        "table.sort(trees); table.sort(rocks); table.sort(resources); "
+        "local trees={}; local rocks={}; local finite_blockers={}; local resources={}; for name,p in pairs(prototypes.entity) do "
+        "local mineable=p.mineable_properties and p.mineable_properties.minable; "
+        "if p.type=='tree' and mineable then trees[#trees+1]=name end; "
+        "if mineable and p.count_as_rock_for_filtered_deconstruction==true then rocks[#rocks+1]=name end; "
+        "if mineable and p.type~='tree' and p.type~='resource' and p.type~='character' and not p.is_building then finite_blockers[#finite_blockers+1]=name end; "
+        "if p.type=='resource' and mineable and p.infinite_resource~=true then resources[#resources+1]=name end end; "
+        "table.sort(trees); table.sort(rocks); table.sort(finite_blockers); table.sort(resources); "
+        "local blocker_candidates=(#rocks>0) and rocks or finite_blockers; "
         "local base=s.find_non_colliding_position('wooden-chest',{x=a.position.x+8,y=a.position.y},24,0.5); "
         "if not base then rcon.print(helpers.table_to_json({setup_ok=false,reason='no_base',tree_candidates=#trees,rock_candidates=#rocks,resource_candidates=#resources})); return end; "
         "local area={{base.x-4,base.y-4},{base.x+4,base.y+4}}; "
@@ -51,7 +54,7 @@ def run(client: Rcon, results: Path) -> None:
         "if pos and math.abs(pos.x-base.x)<3.75 and math.abs(pos.y-base.y)<3.75 then local e=s.create_entity{name=name,position=pos}; if e then return e,name,pos end end end end return nil,nil,want end; "
         "local t1,tree1,p1=create_inside(trees,{x=base.x,y=base.y},nil); "
         "local t2,tree2,p2=create_inside(trees,{x=base.x+1.5,y=base.y+1.5},tree1); "
-        "local rock,rock_name,pr=create_inside(rocks,{x=base.x-1.5,y=base.y+1.5},nil); "
+        "local rock,rock_name,pr=create_inside(blocker_candidates,{x=base.x-1.5,y=base.y+1.5},nil); "
         "local pres={x=base.x+1.5,y=base.y-1.5}; local res=nil; local resource_name=nil; "
         "for _,name in ipairs(resources) do local candidate=s.create_entity{name=name,position=pres,amount=1000}; if candidate then res=candidate; resource_name=name; break end end; "
         "local pb=s.find_non_colliding_position('wooden-chest',{x=base.x-1.5,y=base.y-1.5},0.75,0.25); "
@@ -64,7 +67,8 @@ def run(client: Rcon, results: Path) -> None:
         "rcon.print(helpers.table_to_json({setup_ok=setup_ok,actor_id=a.unit_number,tree1=tree1,tree2=tree2,rock=rock_name,resource=resource_name,"
         "center=base,inside1=p1,inside2=p2,rock_position=pr,resource_position=pres,building_position=pb,outside=po,"
         "initial_distance=initial_distance,resource_reach=a.resource_reach_distance,chests=inv.get_item_count('wooden-chest'),"
-        "tree_candidates=#trees,rock_candidates=#rocks,resource_candidates=#resources,created={tree1=t1~=nil,tree2=t2~=nil,rock=rock~=nil,resource=res~=nil,building=building~=nil,outside=outside~=nil},inserted=inserted}))",
+        "tree_candidates=#trees,rock_candidates=#rocks,finite_blocker_candidates=#finite_blockers,resource_candidates=#resources,"
+        "rock_like=(#rocks>0),blocker_type=rock and rock.type or nil,created={tree1=t1~=nil,tree2=t2~=nil,rock=rock~=nil,resource=res~=nil,building=building~=nil,outside=outside~=nil},inserted=inserted}))",
         'construction area fixture',
     )
     require(fixture.get('setup_ok') is True, fixture)
