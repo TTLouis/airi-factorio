@@ -127,6 +127,8 @@ describe('recipe knowledge', () => {
       is_valid: true,
       force: { recipes: { 'make-widget-with-a-different-name': alternate } },
       character: { prototype: { crafting_categories: { crafting: true } } },
+      get_main_inventory: () => ({ get_item_count: () => 0 }),
+      get_craftable_count: () => 0,
     } as any
 
     const result = recipe_details_for_actor(actor, 'widget') as any
