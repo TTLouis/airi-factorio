@@ -931,8 +931,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
-    this.requestLifecycle = intent
-    this.pendingInteractionAmendment = null
     this.liveEntityObservations = new Map()
     this.staleExactPreflightRetries = 0
     this.onActivity = typeof options.onActivity === 'function' ? options.onActivity : null
@@ -1282,6 +1280,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       : intent === 'amend_current'
         ? 'amend_current'
         : 'continue_current'
+    this.requestLifecycle = intent
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
