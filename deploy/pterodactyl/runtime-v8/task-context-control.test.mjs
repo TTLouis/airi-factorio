@@ -109,7 +109,7 @@ test('UI control parser accepts server-authoritative new_task and still rejects 
   assert.equal(parseUiControlLine('[AIRI_UI_CONTROL] {"version":1,"action":"clear_memory","player_index":7,"player_name":"TTLouis","tick":900}'), undefined)
 })
 
-test('terminate aborts world work and durable goal while preserving the visible conversation', async t => {
+test('terminate aborts world work and durable goal while clearing the Current Task Conversation', async t => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-ui-terminate-'))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
   const stateFile = path.join(dir, 'npc-state.json')
@@ -134,17 +134,17 @@ test('terminate aborts world work and durable goal while preserving the visible 
     'world:cancel',
     'memory:terminate:npc:airi',
     'persist',
-    'ui:sync',
+    'ui:clear',
   ])
   assert.equal(memory.currentPlan('npc:airi'), undefined)
   assert.match(memory.context('npc:airi'), /remember old terminate task/)
   assert.equal(session.agentLive.phase, 'idle')
   assert.equal(session.agentLive.objective, '')
   assert.deepEqual(session.agentLive.activity, [])
-  assert.equal(session.agentLive.conversation_id, 'task_test_2')
-  assert.deepEqual(session.agentLive.conversation.map(entry => entry.text), ['old task', 'Working.'])
-  assert.equal(session.commands.includes('CLEAR_UI'), false)
-  assert.deepEqual(session.syncs, [undefined])
+  assert.equal(session.agentLive.conversation_id, 'task_test_3')
+  assert.deepEqual(session.agentLive.conversation, [])
+  assert.equal(session.commands.includes('CLEAR_UI'), true)
+  assert.deepEqual(session.syncs, [])
 
   const restarted = persistentAgent(stateFile)
   await restarted.loadPersistentState()

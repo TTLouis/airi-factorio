@@ -275,6 +275,11 @@ export function reset_task_conversation() {
 
 export function task_conversation_messages(board: any): TaskConversationMessage[] {
   if (board === undefined || board === null) return []
+  // A destructive lifecycle boundary owns the current-conversation reset even
+  // before the runtime has drained the queued control. Likewise, once the old
+  // snapshot is tombstoned, never project its explicit conversation again while
+  // waiting for the authoritative clear/new snapshot.
+  if (destructive_clear_is_queued() || snapshot_is_suppressed(board)) return []
   const explicit = Array.isArray(board.conversation) ? board.conversation as any[] : []
   const conversation_id = clean_text(board.conversation_id, 120)
   if (conversation_id.length > 0) {

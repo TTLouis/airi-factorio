@@ -1090,7 +1090,11 @@ function handle_control_click(player: LuaPlayer, element_name: string) {
     if (LIFECYCLE.current(player.index) !== undefined) return true
     if (task_board_ui_terminate_is_armed(player.index, game.tick)) {
       clear_terminate_confirmation(player.index)
-      if (LIFECYCLE.begin(player.index, 'terminate')) emit_control(player, 'terminate')
+      if (LIFECYCLE.begin(player.index, 'terminate')) {
+        debug_ui.suppress_snapshot(storage.airi_task_board_ui)
+        debug_ui.reset_task_conversation()
+        emit_control(player, 'terminate')
+      }
     } else arm_terminate(player.index)
     render_panel(player)
     return true

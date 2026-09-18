@@ -804,7 +804,7 @@ async function pausePlanIfPresent(session, reason) {
   return session.agent.pausePersistentPlan(reason)
 }
 
-function resetLiveTaskContext(session, { clearConversation = true } = {}) {
+function resetLiveTaskContext(session) {
   if (!session.agentLive || typeof session.agentLive !== 'object') return
   Object.assign(session.agentLive, {
     phase: 'idle',
@@ -813,10 +813,11 @@ function resetLiveTaskContext(session, { clearConversation = true } = {}) {
     at: Date.now(),
     activity: [],
   })
-  // Terminate discards the durable goal but intentionally preserves bounded
-  // dialogue memory. Keep the visible Current Task Conversation aligned with
-  // that contract; only New Task is the destructive conversation boundary.
-  if (clearConversation) session.startNewUiConversation?.()
+  // Terminate and New Task are both boundaries for the *current* task
+  // conversation. Terminate may retain bounded model dialogue memory internally,
+  // but that retained memory belongs to history/continuity rather than the
+  // Current Task Conversation panel.
+  session.startNewUiConversation?.()
 }
 
 async function discardTaskContext(session, reason, { clearDialogue = false } = {}) {
@@ -835,16 +836,11 @@ async function discardTaskContext(session, reason, { clearDialogue = false } = {
     ? agent.memory?.clearTaskContext?.(key)
     : agent.memory?.terminatePlan?.(key)
   await agent.persistState?.()
-  resetLiveTaskContext(session, { clearConversation: clearDialogue })
-  if (clearDialogue) {
-    await session.clearTaskBoardUi()
-  }
-  else {
-    // Keep the retained conversation visible as an idle, plan-less snapshot.
-    // The snapshot is still server-authoritative and replicated through the
-    // existing Task Board remote interface; GUI render code remains read-only.
-    await session.syncTaskBoardUi()
-  }
+  resetLiveTaskContext(session)
+  // Both destructive lifecycle boundaries clear the current UI snapshot. Old
+  // task/history data is retained by the history subsystem, and Terminate still
+  // preserves bounded dialogue memory internally when clearDialogue is false.
+  await session.clearTaskBoardUi()
   return cleared
 }
 
