@@ -188,7 +188,7 @@ test('durable plan survives a new agent instance and empty actions cannot preten
   assert.equal(first.active, true)
 
   const stopped = await first.completed()
-  assert.match(stopped.chatMessage, /^\[Plan paused\] Load the furnace/)
+  assert.match(stopped.chatMessage, /^\[Plan blocked\]/)
   assert.equal(stopped.goalStatus, 'blocked')
   assert.equal(stopped.taskBoard.active_step_id, 'step_2')
   assert.equal(stopped.taskBoard.completed_count, 1)
@@ -703,7 +703,7 @@ test('interrupted omission recovery uses a compact capsule instead of replaying 
   assert.doesNotMatch(context, /unrelated ancient chatter/)
   assert.doesNotMatch(context, /Recent dialogue:/)
   assert.doesNotMatch(context, /999/)
-  assert.doesNotMatch(context, /unit_number/)
+  assert.match(context, /historical unit_number values are non-executable/)
   assert.match(context, /remaining_steps/)
   assert.equal(resumed.goalId, goalId)
   assert.equal(resumed.goalStatus, 'blocked')
@@ -736,7 +736,7 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
 
   const result = await agent.request('inspect the chest and take the needed plates', { sender: 'TTLouis' })
   assert.equal(calls, 6)
-  assert.equal(rcon.observationCalls, 5)
+  assert.equal(rcon.observationCalls, 1)
   assert.equal(optionsSeen.at(-1).allowTools, false)
   assert.equal(optionsSeen.at(-1).recoveryAttempt, 1)
   assert.deepEqual(optionsSeen.at(-1).requestBodyPatch, { max_tokens: 700 })

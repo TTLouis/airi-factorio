@@ -121,6 +121,12 @@ test('an unhealthy follow flag does not bypass the finite no-operation protectio
       currentStep: 1,
       operations: [],
     }),
+    planMessage({
+      chatMessage: 'BLOCKED: follow controller reports navigation_blocked and is not healthy.',
+      plan: ['Enable follow', 'Keep following'],
+      currentStep: 1,
+      operations: [],
+    }),
   ]
   const rcon = new FakeRcon({ healthyFollow: false })
   const agent = new NpcAgentLoop({
@@ -133,7 +139,7 @@ test('an unhealthy follow flag does not bypass the finite no-operation protectio
 
   await agent.request('follow me', { sender: 'TTLouis' })
   const result = await agent.completed()
-  assert.match(result.chatMessage, /^\[Plan paused\]/)
+  assert.match(result.chatMessage, /^\[Plan blocked\].*navigation_blocked/i)
   assert.equal(result.goalStatus, 'blocked')
-  assert.equal(agent.memory.currentPlan('npc:airi').blocker, 'no_autorio_operation_for_remaining_plan')
+  assert.equal(agent.memory.currentPlan('npc:airi').blocker, 'provider_reported_blocker')
 })

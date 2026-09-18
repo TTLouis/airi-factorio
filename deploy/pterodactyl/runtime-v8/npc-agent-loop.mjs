@@ -23,7 +23,7 @@ const DUPLICATE_OBSERVATION_MESSAGE = '[HARNESS] Duplicate observation suppresse
 const OUTPUT_BUDGET_RECOVERY_MESSAGE = '[HARNESS] The immediately preceding provider response exhausted its output budget before emitting content or tool calls. Continue the same logical request and goal from this unchanged harness context. Tools remain available. Do not treat the empty response as an action, plan update, completion, or evidence. Do not replay any world mutation already proven complete by the supplied receipts or canonical Task Board. Return the next necessary tool call(s) or one valid strict-JSON plan.'
 const ACTION_OMISSION_MAX_TOKENS = 700
 const ACTION_OMISSION_BLOCKER_PREFIX = 'BLOCKED:'
-const ACTION_OMISSION_REPAIR_MESSAGE = 'Finite canonical work remains, but no executable operation was submitted. Reuse the authoritative evidence already collected and do not repeat completed observations. If that evidence already parameterizes the next action, submit the next executable operation now. If exactly one mutable fact is genuinely missing, use exactly one targeted observation for that fact; after it, no more observation turns are allowed. Otherwise keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or truthful blocker.'
+const ACTION_OMISSION_REPAIR_MESSAGE = 'Finite canonical work remains, but no executable operation was submitted. Reuse the authoritative evidence already collected and do not repeat completed observations. If that evidence already parameterizes the next action, submit the next executable operation now. If exactly one mutable fact is genuinely missing, use exactly one targeted observation for that fact; after it, no more observation turns are allowed. Do not stop and wait for a human "continue" message. Otherwise keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or truthful blocker.'
 const ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE = 'The single targeted observation for this decision is complete. Do not observe again or switch to another read-only tool. Submit the next executable operation now, or keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact still-missing fact or truthful blocker.'
 const EXACT_ENTITY_TARGET_OPERATIONS = new Set([
   'walk_to_entity_exact',
@@ -1276,16 +1276,18 @@ function persistentRuntimeHealthy(runtime) {
   return runtime?.active === true && runtime.healthy === true && runtime.controller_live === true
 }
 
-function verifiedFinalCompletion(plan, state, triggerSource) {
+function verifiedFinalCompletion(plan, state, triggerSource, { freshObservation = false } = {}) {
   if (triggerSource !== 'completion' || plan?.operations?.length !== 0 || plan?.plan?.length !== 0) return false
   const board = state?.task_board
-  if (state?.status !== 'active' || state?.last_mutation_verified !== true) return false
+  if (state?.status !== 'active') return false
   if (!board || board.kind !== 'task_board_lite' || !Array.isArray(board.steps) || board.steps.length === 0) return false
   if (board.active_index !== board.steps.length - 1) return false
   const ref = Number.isSafeInteger(state.last_verified_batch_id) ? `batch_${state.last_verified_batch_id}` : ''
-  return [...(board.evidence ?? [])].reverse().some(item => item?.kind === 'deterministic_verification'
+  const deterministicCurrentStep = [...(board.evidence ?? [])].reverse().some(item => item?.kind === 'deterministic_verification'
     && item?.step_id === board.active_step_id
     && (!ref || item?.ref === ref))
+  if (deterministicCurrentStep) return true
+  return freshObservation === true && state?.last_mutation_verified === true
 }
 
 function actionOmissionRecoveryCapsule(state, runtimeStatus) {
@@ -1349,8 +1351,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.actionOmissionRepairActive = false
     this.actionOmissionObservationUsed = false
     this.actionOmissionForceNoTools = false
-    this.actionOmissionNeedsPostObservationDecision = false
     this.pendingFiniteNoOperationPlan = null
+    this.freshObservationSinceContinuation = false
+    this.genericRecoveryDecisionActive = false
     this.liveEntityObservations = new Map()
     this.rejectedExactTargets = new Set()
     this.staleExactPreflightRetries = 0
@@ -1734,7 +1737,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.actionOmissionRepairActive = resumeActionOmission
     this.actionOmissionObservationUsed = false
     this.actionOmissionForceNoTools = false
-    this.actionOmissionNeedsPostObservationDecision = false
     this.pendingFiniteNoOperationPlan = null
     if (resumeActionOmission) {
       this.memory.setNextContextOverride?.(memoryKey, actionOmissionRecoveryCapsule(planBefore, taskStatus))
@@ -1899,8 +1901,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.actionOmissionRepairActive = false
     this.actionOmissionObservationUsed = false
     this.actionOmissionForceNoTools = false
-    this.actionOmissionNeedsPostObservationDecision = false
     this.pendingFiniteNoOperationPlan = null
+    this.freshObservationSinceContinuation = false
+    this.genericRecoveryDecisionActive = false
     this.staleExactPreflightRetries = 0
     this.messages.push({ role: 'user', content: cleanMemoryText(modMessage, 18000) })
     await this.traceEvent(traceEventName)
@@ -1965,8 +1968,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.actionOmissionRepairActive = false
     this.actionOmissionObservationUsed = false
     this.actionOmissionForceNoTools = false
-    this.actionOmissionNeedsPostObservationDecision = false
     this.pendingFiniteNoOperationPlan = null
+    this.freshObservationSinceContinuation = false
+    this.genericRecoveryDecisionActive = false
     return super.cancel()
   }
 
@@ -1982,7 +1986,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const effectiveRecoveryAttempt = omissionRepair ? Math.max(1, recoveryAttempt) : recoveryAttempt
     const traceRecoveryKind = omissionRepair ? 'action_omission' : recoveryKind
     if (omissionRepair && !effectiveAllowTools && this.actionOmissionObservationUsed) {
-      this.actionOmissionNeedsPostObservationDecision = false
     }
     const budgetStartedAt = Date.now()
     let budget
@@ -2217,7 +2220,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   async handleToolBatch(message, prepared = this.prepareToolBatch(message)) {
     if (this.actionOmissionRepairActive && (this.actionOmissionObservationUsed || prepared.length !== 1)) {
       this.actionOmissionForceNoTools = true
-      this.actionOmissionNeedsPostObservationDecision = false
       const reason = this.actionOmissionObservationUsed
         ? 'The action-omission repair already consumed its one targeted observation.'
         : `The action-omission repair permits exactly one targeted observation, but the provider requested ${prepared.length}.`
@@ -2264,6 +2266,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     const results = this.messages.slice(beforeCount + 1).filter(item => item.role === 'tool')
     const freshResultObserved = results.some((_, index) => cachedBefore[index] !== true && staticCachedBefore[index] !== true)
+    if (freshResultObserved) this.freshObservationSinceContinuation = true
     if (this.outputBudgetRecoveryGuard && freshResultObserved) {
       this.outputBudgetRecoveryGuard.world_evidence_observed = true
       this.outputBudgetRecoveryGuard.fresh_tool_evidence = true
@@ -2289,7 +2292,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (this.actionOmissionRepairActive) {
       this.actionOmissionObservationUsed = true
       this.actionOmissionForceNoTools = true
-      this.actionOmissionNeedsPostObservationDecision = true
       this.messages.push({ role: 'user', content: `[HARNESS] ${ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE}` })
       await this.traceEvent('recovery.action_omission_observation_complete', {
         cached: cachedBefore[0] === true,
@@ -2303,8 +2305,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.actionOmissionRepairActive = false
     this.actionOmissionObservationUsed = false
     this.actionOmissionForceNoTools = false
-    this.actionOmissionNeedsPostObservationDecision = false
     this.pendingFiniteNoOperationPlan = null
+    this.freshObservationSinceContinuation = false
+    this.genericRecoveryDecisionActive = false
   }
 
   async beginActionOmissionRepair(plan, reasonCode) {
@@ -2314,7 +2317,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.actionOmissionRepairActive = true
     this.actionOmissionObservationUsed = false
     this.actionOmissionForceNoTools = false
-    this.actionOmissionNeedsPostObservationDecision = false
     await this.persistState()
     await this.traceEvent('recovery.action_omission_started', {
       reason_code: reasonCode,
@@ -2496,7 +2498,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       ? this.memory.currentPlan?.(this.requestInfo.memoryKey)
       : undefined
     const runtimeHealthy = persistentRuntimeHealthy(persistentRuntime)
-    const finalCompletionVerified = verifiedFinalCompletion(plan, previousState, this.planUpdateReason)
+    const finalCompletionVerified = verifiedFinalCompletion(plan, previousState, this.planUpdateReason, {
+      freshObservation: this.freshObservationSinceContinuation,
+    })
     const remainingCanonicalWork = !finalCompletionVerified && (
       canonicalWorkRemains(previousState)
       || (!previousState && Array.isArray(plan.plan) && plan.plan.length > 0)
@@ -2506,6 +2510,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
       if (explicitBlocker) {
         return this.finishNoOperationBlock(plan, before, 'provider_reported_blocker', explicitBlocker, 'provider_blocker')
+      }
+      if (this.genericRecoveryDecisionActive) {
+        return this.finishNoOperationBlock(
+          plan,
+          before,
+          'recovery_no_operation',
+          'The bounded provider recovery returned no executable operation and no explicit BLOCKED: reason.',
+          'recovery_no_operation',
+        )
       }
       if (this.actionOmissionRepairActive) {
         return this.finishNoOperationBlock(
@@ -2835,7 +2848,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
       this.actionOmissionObservationUsed = true
       this.actionOmissionForceNoTools = true
-      this.actionOmissionNeedsPostObservationDecision = false
       this.messages.push({ role: 'user', content: `[HARNESS] ${ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE}` })
       const current = await this.assertCurrent()
       let message
@@ -2900,6 +2912,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       )
     }
 
-    return super.recoverPlan(generation, reason, roundBase)
+    this.genericRecoveryDecisionActive = true
+    try {
+      return await super.recoverPlan(generation, reason, roundBase)
+    }
+    finally {
+      this.genericRecoveryDecisionActive = false
+    }
   }
 }

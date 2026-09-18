@@ -70,7 +70,7 @@ function planMessage(operations, chatMessage = 'Working.') {
   return {
     content: JSON.stringify({
       chatMessage,
-      plan: operations.length ? ['Perform bounded step'] : ['Done'],
+      plan: operations.length ? ['Perform bounded step'] : [],
       currentStep: 0,
       operations,
     }),
