@@ -1300,6 +1300,13 @@ function actionOmissionRecoveryCapsule(state, runtimeStatus) {
       id: sanitizeDurableModelText(activeStep?.id, 100),
       description: sanitizeDurableModelText(activeStep?.description ?? currentPlanStep(state?.plan, activeIndex), 500),
     },
+    remaining_steps: (Array.isArray(board?.steps) ? board.steps : [])
+      .slice(activeIndex, activeIndex + 8)
+      .map(step => ({
+        id: sanitizeDurableModelText(step?.id, 100),
+        description: sanitizeDurableModelText(step?.description, 500),
+        status: sanitizeDurableModelText(step?.status, 32),
+      })),
     progress: {
       completed_count: Number.isSafeInteger(board?.completed_count) ? board.completed_count : 0,
       total_steps: Array.isArray(board?.steps) ? board.steps.length : 0,
@@ -2451,8 +2458,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     })
     this.traceRequest = null
     this.clearActionOmissionRecovery()
+    const visibleReason = providerBlockerReason(plan) || cleanMemoryText(reason, 800) || blocker
     return {
-      chatMessage: planProgress(plan, { state, blockedByHarness: true }),
+      chatMessage: `[Plan blocked] ${visibleReason}`,
       plan: state?.plan ?? plan.plan,
       currentStep: state?.current_step ?? plan.currentStep,
       operations: [],
