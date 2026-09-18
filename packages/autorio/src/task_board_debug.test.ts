@@ -69,6 +69,9 @@ describe('task board debug and UI freshness helpers', () => {
       { kind: 'observation', text: 'Observed something' },
       { kind: 'decision', text: 'Newest answer' },
     ] })).toBe('Newest answer')
+    expect(latest_ai_reply({ activity: [
+      { kind: 'system', text: 'Jev shadow: status_query · 91%' },
+    ] })).toBe('')
   })
 
   it('projects all player and AIRI messages for the current durable goal', () => {
