@@ -1497,7 +1497,11 @@ export function new_combat_controller(get_actor: () => ControlledActor | undefin
           // Old support must not pin AIRI in the rear when it no longer reaches
           // the active static target. Advance only far enough to make a new
           // frontline placement feasible, then retry support on the next tick.
-          follow_combat_path(actor, task, staging_goal, 'approach')
+          // Use the tighter retreat-path tolerance for this precise staging
+          // waypoint. Static-target approach paths use an 8-tile goal radius,
+          // which can report an empty path when the staging point is only a few
+          // tiles away and then burn through retries without moving.
+          follow_combat_path(actor, task, staging_goal, 'retreat')
           return
         }
         if (!is_worm_enemy(target)) {
