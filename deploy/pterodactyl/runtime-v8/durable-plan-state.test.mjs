@@ -58,6 +58,61 @@ function planMessage({ chatMessage = 'Working.', plan = [], currentStep = 0, ope
   return { content: JSON.stringify({ chatMessage, plan, currentStep, operations }) }
 }
 
+class RejectingTransferRcon extends FakeRcon {
+  async command(text) {
+    if (text.includes('remote.call("autorio_preflight","operation"') && text.includes('move_items_exact')) {
+      return JSON.stringify({ ok: false, code: 'transfer_target_rejected', operation: 'move_items_exact' })
+    }
+    return super.command(text)
+  }
+}
+
+test('rejected transfer cannot advance or complete the canonical plan step', async () => {
+  const plan = ['Load furnace with ore and fuel', 'Retrieve 20 iron plates']
+  let reply = 0
+  const agent = new NpcAgentLoop({
+    rcon: new RejectingTransferRcon(),
+    provider: async () => {
+      reply++
+      if (reply === 1) {
+        return planMessage({
+          chatMessage: 'Loading the observed furnace.',
+          plan,
+          currentStep: 0,
+          operations: [{
+            name: 'move_items_exact',
+            args: { item_name: 'iron-ore', unit_number: 582, max_count: 20, to_entity: true },
+          }],
+        })
+      }
+      return planMessage({
+        chatMessage: 'Trying to continue despite the rejected transfer.',
+        plan,
+        currentStep: 1,
+        operations: [],
+      })
+    },
+    systemPrompt: 'NPC transfer truth test prompt',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const rejected = await agent.request('produce 20 iron plates', { sender: 'TTLouis' })
+  assert.equal(rejected.goalStatus, 'blocked')
+  assert.equal(rejected.taskBoard.active_index, 0)
+  assert.equal(rejected.taskBoard.completed_count, 0)
+  assert.equal(rejected.taskBoard.steps[0].status, 'blocked')
+  assert.equal(rejected.taskBoard.blocker, 'operation_preflight_failed:transfer_target_rejected')
+
+  const attemptedSkip = await agent.request('continue', { sender: 'TTLouis' })
+  assert.equal(attemptedSkip.goalStatus, 'blocked')
+  assert.equal(attemptedSkip.taskBoard.active_index, 0)
+  assert.equal(attemptedSkip.taskBoard.completed_count, 0)
+  assert.equal(attemptedSkip.taskBoard.steps[0].status, 'blocked')
+  assert.equal(attemptedSkip.taskBoard.blocker, 'operation_preflight_failed:transfer_target_rejected')
+  assert.equal(agent.memory.currentPlan('npc:airi').current_step, 0)
+})
+
 test('durable plan survives a new agent instance and empty actions cannot pretend execution continued', async t => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-durable-plan-'))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
