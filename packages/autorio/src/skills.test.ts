@@ -3,9 +3,13 @@ import {
   assert_safe_skill_id,
   canonicalize_skill_definition,
   create_skill_candidate,
+  ensure_basic_skill_definitions,
   export_skill,
+  find_skill_definitions,
   generate_skill_markdown,
+  get_skill_definition,
   handle_skill_export_click,
+  list_skill_definitions,
   serialize_skill_json,
   skill_export_relative_directory,
 } from './skills'
@@ -79,6 +83,51 @@ beforeEach(() => {
     table_to_json: (value: unknown) => JSON.stringify(value),
     write_file: (filename: string, data: string, append: boolean) => writes.push({ filename, data, append }),
   }
+})
+
+describe('curated basic skill library', () => {
+  it('seeds exactly ten manual candidate patterns idempotently', () => {
+    expect(ensure_basic_skill_definitions()).toEqual({ added: 10, total: 10 })
+    const skills = list_skill_definitions()
+    expect(skills).toHaveLength(10)
+    expect(skills.every(skill => skill.source.kind === 'manual')).toBe(true)
+    expect(skills.every(skill => skill.status === 'candidate')).toBe(true)
+    expect(skills.every(skill => skill.stage === 'pattern')).toBe(true)
+    expect(skills.every(skill => skill.verification.production_output === 'not_tested')).toBe(true)
+    expect(ensure_basic_skill_definitions()).toEqual({ added: 0, total: 10 })
+    expect(list_skill_definitions()).toHaveLength(10)
+  })
+
+  it('finds early patterns from English goals and Chinese player shorthand', () => {
+    ensure_basic_skill_definitions()
+    expect(find_skill_definitions('煤蛇', 3)[0].id).toBe('burner-coal-loop')
+
+    const smelting = find_skill_definitions('produce iron plates smelting', 5).map(result => result.id)
+    expect(smelting).toContain('direct-miner-smelting')
+    expect(smelting).toContain('starter-smelting-row')
+
+    const merging = find_skill_definitions('并线', 3).map(result => result.id)
+    expect(merging).toContain('belt-side-load-merge')
+    expect(() => find_skill_definitions('coal', 6)).toThrow(/at most 5/i)
+  })
+
+  it('never overwrites an existing same-id save skill while seeding builtins', () => {
+    create_skill_candidate(candidate({
+      id: 'burner-coal-loop',
+      name: 'Player Authored Coal Pattern',
+      source: {
+        kind: 'completed_goal',
+        goal_id: 'goal_player',
+        entity_unit_numbers: [],
+        recipe_ids: [],
+        evidence_refs: ['goal:player'],
+      },
+    }))
+
+    expect(ensure_basic_skill_definitions()).toEqual({ added: 9, total: 10 })
+    expect(get_skill_definition('burner-coal-loop')?.name).toBe('Player Authored Coal Pattern')
+    expect(get_skill_definition('burner-coal-loop')?.source.kind).toBe('completed_goal')
+  })
 })
 
 describe('learned skill record and export', () => {
