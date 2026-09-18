@@ -140,6 +140,7 @@ def run(client: Rcon, results: Path) -> None:
         ('coal', fixture['coal'], FUEL_COUNT),
         ('iron-ore', fixture['iron'], ore_needed),
     ]:
+        mining_timeout = max(40.0, float(count) * 3.0)
         run_operation(
             remote_call(
                 'autorio_operations',
@@ -150,7 +151,7 @@ def run(client: Rcon, results: Path) -> None:
                 str(count),
             ),
             f'mine {item_name} x{count}',
-            40.0,
+            mining_timeout,
         )
 
     mined = actor_counts('resources mined')
