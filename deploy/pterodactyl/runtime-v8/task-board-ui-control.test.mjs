@@ -538,7 +538,7 @@ test('pause/terminate and resume acknowledge only after their queued runtime wor
   assert.deepEqual(acknowledgements, [[7, 'pause'], [7, 'terminate'], [7, 'resume']])
 })
 
-test('chat-only final replies are retained once even when plan.accepted already exposed the same text', async () => {
+test('chat-only request boundaries retain one user/reply pair without duplicate assistant messages', async () => {
   const session = Object.create(Session.prototype)
   const queued = []
   Object.assign(session, {
@@ -557,8 +557,75 @@ test('chat-only final replies are retained once even when plan.accepted already 
     printChat: async () => {},
   })
 
-  session.appendUiConversation('assistant', 'AIRI', 'visible answer')
   assert.equal(session.queuePlayerRequest('TTLouis', 'hello'), true)
   await queued.shift()()
-  assert.deepEqual(session.agentLive.conversation.map(entry => entry.text), ['visible answer'])
+  assert.deepEqual(session.agentLive.conversation.map(entry => entry.text), ['hello', 'visible answer'])
+})
+
+test('real provider lifecycle events reach the supervisor sync as the current request/reply conversation', async () => {
+  const session = Object.create(Session.prototype)
+  const queued = []
+  const writes = []
+  Object.assign(session, {
+    npcName: 'AIRI',
+    activityEpoch: 'epoch',
+    conversationGeneration: 0,
+    conversationSequence: 0,
+    agentLive: { phase: 'idle', detail: '', objective: '', at: 0, activity: [], conversation_id: 'task_epoch_0', conversation: [], debug: {} },
+    rcon: {},
+    stopping: false,
+    queueEvent: fn => { queued.push(fn); return true },
+    ensureAuthorization: async () => true,
+    applyNavigationObstaclePolicy: async () => {},
+    requestTaskBoardUiSync: () => {},
+    currentPlanState: () => undefined,
+    writeTaskBoardUi: async (command, label) => { writes.push({ command, label }); return true },
+    printChat: async () => {},
+  })
+
+  const loop = Object.create(NpcAgentLoop.prototype)
+  Object.assign(loop, {
+    behaviorTrace: null,
+    onActivity: (event, data) => session.onAgentActivity(event, data),
+    log: () => {},
+    traceRequest: { id: 'req-provider-conversation', seq: 0, usage: {} },
+    continuations: 0,
+    epoch: { actor_id: 7, epoch: 3 },
+    active: true,
+  })
+  loop.request = async (text, { sender }) => {
+    await NpcAgentLoop.prototype.traceEvent.call(loop, 'request.received', { sender, text })
+    for (let round = 0; round < 3; round++) {
+      await NpcAgentLoop.prototype.traceEvent.call(loop, 'provider.request', { round, recovery_attempt: 0 })
+      await NpcAgentLoop.prototype.traceEvent.call(loop, 'provider.response', {
+        round,
+        recovery_attempt: 0,
+        latency_ms: 10 + round,
+        provider: { model: 'test-provider', finish_reason: round === 2 ? 'stop' : 'tool_calls' },
+      })
+    }
+    await NpcAgentLoop.prototype.traceEvent.call(loop, 'request.completed', {
+      chat_message: 'The read-only inspection is complete.',
+      outcome: 'no_operations',
+    })
+    loop.active = false
+    return null
+  }
+  session.agent = loop
+
+  assert.equal(session.queuePlayerRequest('TTLouis', 'inspect the factory without changing anything'), true)
+  await queued.shift()()
+
+  assert.deepEqual(
+    session.agentLive.conversation.map(entry => [entry.role, entry.text]),
+    [
+      ['user', 'inspect the factory without changing anything'],
+      ['assistant', 'The read-only inspection is complete.'],
+    ],
+  )
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].label, 'sync')
+  assert.match(writes[0].command, /"conversation_id":"task_epoch_0"/)
+  assert.match(writes[0].command, /"role":"user".*"text":"inspect the factory without changing anything"/)
+  assert.match(writes[0].command, /"role":"assistant".*"text":"The read-only inspection is complete\."/)
 })
