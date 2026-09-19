@@ -728,6 +728,10 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
       debug.decision_shadow_intent = uiText(shadow.intent, 80)
       debug.decision_active_intent = uiText(data.intent, 80)
       debug.decision_confidence_percent = decisionPercent(shadow.intent_confidence)
+      if (shadow.granularity) {
+        debug.decision_granularity = uiText(shadow.granularity, 32)
+        debug.decision_granularity_confidence_percent = decisionPercent(shadow.granularity_confidence)
+      }
       debug.decision_queue_conflict_percent = decisionPercent(shadow.queue_conflict_probability)
       debug.decision_latency_ms = debugInteger(data.decision_shadow_latency_ms)
       const decisionInput = debugInteger(shadow.usage?.input_tokens)
