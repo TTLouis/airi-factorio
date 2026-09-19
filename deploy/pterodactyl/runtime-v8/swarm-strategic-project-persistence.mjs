@@ -35,8 +35,11 @@ export class SwarmStrategicProjectPersistence {
   save() {
     const snapshot = this.store.snapshot()
     const contents = `${JSON.stringify(snapshot, null, 2)}\n`
-    this.queue = this.queue.then(() => atomicWrite(this.filename, contents, 0o600))
-    return this.queue
+    const write = this.queue
+      .catch(() => undefined)
+      .then(() => atomicWrite(this.filename, contents, 0o600))
+    this.queue = write
+    return write
   }
 
   flush() {
