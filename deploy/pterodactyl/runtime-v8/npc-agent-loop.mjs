@@ -4722,7 +4722,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           round: roundBase,
           allowTools: routed.route === 'targeted_observation',
           recoveryAttempt: 0,
-          recoveryKind: 'jev_recovery_route',
         })
         if (message?.tool_calls !== undefined) {
           if (routed.route !== 'targeted_observation') {
