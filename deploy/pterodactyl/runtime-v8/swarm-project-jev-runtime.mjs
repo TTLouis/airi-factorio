@@ -6,6 +6,7 @@ import { applyStrategicPlannerProposal } from './swarm-strategic-planner-contrac
 import { authorizeStrategicMilestoneCompletion } from './swarm-strategic-transition-gate.mjs'
 import { readSwarmCoordinationSnapshot } from './swarm-coordination-snapshot.mjs'
 import { authorizeStrategicProjectCompletion } from './swarm-strategic-project-completion-gate.mjs'
+import { SwarmProjectJevMonitor } from './swarm-project-jev-monitor.mjs'
 
 export class SwarmProjectJevRuntime {
   constructor({
@@ -41,6 +42,12 @@ export class SwarmProjectJevRuntime {
     this.service = new SwarmProjectJevShadowService({
       controller: this.controller,
       strategicBoard: () => this.store.current(),
+    })
+    this.monitor = new SwarmProjectJevMonitor({
+      rcon,
+      service: this.service,
+      strategicBoard: () => this.store.current(),
+      snapshotLimit,
     })
     this.initialized = false
     this.initializePromise = null
@@ -155,9 +162,18 @@ export class SwarmProjectJevRuntime {
     }
   }
 
+  async poll() {
+    await this.initialize()
+    return this.monitor.poll()
+  }
+
   async trigger(reason) {
     await this.initialize()
     return this.service.trigger(reason)
+  }
+
+  resetMonitorBaseline() {
+    this.monitor.resetBaseline()
   }
 
   currentBoard() {
