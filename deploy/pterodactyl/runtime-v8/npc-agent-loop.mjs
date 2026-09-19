@@ -2922,6 +2922,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         appliedRoute = 'fallback_planner'
         fallbackReason = hierarchyGate.reason
       }
+      if (!hierarchyAction
+        && state.boundary === 'completion'
+        && ['vertical', 'horizontal', 'recover'].includes(hierarchyTelemetry.development)
+        && appliedRoute !== 'wait_runtime') {
+        hierarchyAction = `development_${hierarchyTelemetry.development}`
+      }
 
       await this.decisionTraceEvent('decision.response', {
         decision_id: decisionId,
@@ -3517,7 +3523,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       ? 'hierarchy_split'
       : routed.hierarchy_action === 'advance_next_milestone'
         ? 'hierarchy_advance'
-        : routed.hierarchy_action === 'replan_project'
+        : routed.hierarchy_action === 'development_vertical'
+          ? 'hierarchy_vertical'
+          : routed.hierarchy_action === 'development_horizontal'
+            ? 'hierarchy_horizontal'
+            : routed.hierarchy_action === 'development_recover'
+              ? 'hierarchy_recover'
+              : routed.hierarchy_action === 'replan_project'
           ? 'hierarchy_replan_project'
           : routed.hierarchy_action === 'project_complete_candidate'
             ? 'hierarchy_project_complete_candidate'
@@ -3531,7 +3543,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         ? ' [HIERARCHY] Jev determined the current milestone is too broad. Preserve the user project goal and verified Plan Tracker progress, replace currentMilestone with a smaller bounded strategic outcome, keep at most three tentative nextMilestones, and make plan contain only executable/verifiable steps for the new current milestone.'
         : routed.hierarchy_action === 'advance_next_milestone'
           ? ' [HIERARCHY] The previous milestone is authoritatively verified complete and Jev approved the first tentative next milestone. Build a fresh bounded Plan Tracker only for the newly active currentMilestone. You may refresh the tentative nextMilestones if needed, but do not rewrite the user project goal.'
-          : routed.hierarchy_action === 'replan_project'
+          : routed.hierarchy_action === 'development_vertical'
+            ? ' [HIERARCHY] Jev classified the next development move as VERTICAL relative to the active milestone: advance its critical path by unlocking a required capability or removing the blocking prerequisite. Choose the concrete Factorio strategy yourself; do not interpret vertical as research-only.'
+            : routed.hierarchy_action === 'development_horizontal'
+              ? ' [HIERARCHY] Jev classified the next development move as HORIZONTAL relative to the active milestone: strengthen an already-viable capability for throughput, logistics, redundancy, buffers, resource access, or resilience. Choose the concrete Factorio strategy yourself; do not expand unrelated systems.'
+              : routed.hierarchy_action === 'development_recover'
+                ? ' [HIERARCHY] Jev classified the next move as RECOVER: restore a valid capability or world state before resuming vertical/horizontal progress. Re-observe invalidated mutable state and choose the smallest grounded recovery.'
+                : routed.hierarchy_action === 'replan_project'
             ? ' [HIERARCHY] The previous milestone is authoritatively verified complete, but Jev requires a project-level replan. Choose one new bounded currentMilestone, keep at most three tentative nextMilestones, and make plan contain only the new current milestone steps.'
             : routed.hierarchy_action === 'project_complete_candidate'
               ? ' [HIERARCHY] The previous milestone is authoritatively verified complete and Jev believes the user-level project may now be complete. Verify that project goal from authoritative evidence. If it is not proven complete, choose the next bounded currentMilestone instead. Jev is not completion authority.'
