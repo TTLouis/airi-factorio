@@ -2502,19 +2502,53 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       ...completionCandidatesFromOperations(plan.operations),
     ]
     const questions = stepCheckpointDecisionQuestions(candidates)
-    if (!this.interactionDecisionProvider) {
-      // Jev is advisory for semantic admission safety, not a hard dependency for
-      // performing otherwise-valid useful work. If the decision layer is
-      // unavailable, fail closed on completion proof but fail open on admission:
-      // keep the step open and allow the batch to proceed without inventing a
-      // checkpoint or advancing canonical progress.
+
+    const deterministicCheckpointFallback = async reason => {
+      // Non-quantity operations may have a runtime-authored receipt contract
+      // whose semantics are already narrow enough to be safe without Jev. Use
+      // that one deterministic candidate so ordinary placement/navigation/etc.
+      // can still complete when Jev is unavailable. Quantity/delta operations
+      // intentionally produce no receipt candidate and therefore remain open.
+      const sole = candidates.length === 1 && candidates[0]?.source === 'operation_receipt'
+        ? sanitizeStepCompletionContract(candidates[0])
+        : undefined
+      const contract = sole && sole.mode !== 'semantic_unknown'
+        ? { ...sole, confidence: 1, source: sole.source ?? 'operation_receipt' }
+        : { mode: 'semantic_unknown', requirements: [], confidence: 0 }
+      const boundary = contract.mode === 'semantic_unknown' ? 'keep_step_open' : 'checkpoint_here'
+      const relation = 'advances_current'
+      this.memory.recordBoardEvidence?.(key, {
+        kind: 'step_checkpoint_contract',
+        ref: `checkpoint/${step.id}`,
+        summary: JSON.stringify({
+          contract,
+          boundary,
+          relation,
+          provider: 'deterministic_runtime',
+          model: 'receipt_fallback',
+          fallback_reason: reason,
+        }),
+      })
+      await this.persistState()
+      await this.traceEvent('step.checkpoint_fallback', {
+        active_step_id: step.id,
+        boundary,
+        relation,
+        contract,
+        reason,
+      })
       return {
-        boundary: 'keep_step_open',
-        relation: 'advances_current',
-        contract: { mode: 'semantic_unknown', requirements: [], confidence: 0 },
-        state: planState,
-        reason: 'decision_provider_unavailable',
+        boundary,
+        relation,
+        contract,
+        state: this.memory.currentPlan?.(key) ?? planState,
+        reason,
+        deterministic_fallback: true,
       }
+    }
+
+    if (!this.interactionDecisionProvider) {
+      return deterministicCheckpointFallback('decision_provider_unavailable')
     }
 
     const current = await this.assertCurrent()
@@ -2654,16 +2688,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         latency_ms: Date.now() - startedAt,
       })
       // A Jev/decision-provider outage must not manufacture semantic drift.
-      // Preserve safety by withholding completion authority while allowing the
-      // already-validated operation batch to continue. Explicit Jev decisions
-      // such as belongs_to_later_step/replan_needed still block admission above.
-      return {
-        boundary: 'keep_step_open',
-        relation: 'advances_current',
-        contract: { mode: 'semantic_unknown', requirements: [], confidence: 0 },
-        state: planState,
-        reason: 'checkpoint_decision_failed',
-      }
+      // Reuse only a deterministic receipt-safe checkpoint when the runtime can
+      // authoritatively define one; otherwise keep the semantic step open.
+      return deterministicCheckpointFallback('checkpoint_decision_failed')
     }
     finally {
       controller.abort()
