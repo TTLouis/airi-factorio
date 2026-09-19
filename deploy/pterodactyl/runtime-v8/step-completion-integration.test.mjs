@@ -477,3 +477,94 @@ test('checkpoint decision failure does not masquerade as semantic drift', async 
   assert.equal(result.contract.mode, 'semantic_unknown')
   assert.equal(result.reason, 'checkpoint_decision_failed')
 })
+
+
+test('durable step completion contract survives without checkpoint evidence and remains completion authority', async () => {
+  const state = activeState({ includeCheckpoint: false })
+  state.task_board.evidence = state.task_board.evidence.filter(item => item.kind === 'deterministic_verification')
+  state.task_board.steps[0].completion_contract = {
+    mode: 'all',
+    source: 'planner_semantic_checkpoint',
+    confidence: 0.96,
+    requirements: [{
+      id: 'stone_total',
+      kind: 'inventory_count',
+      item_name: 'stone',
+      minimum: 10,
+    }],
+  }
+  state.task_board.steps[0].completion_contract_at = Date.now()
+
+  let completionJevCalls = 0
+  const { agent } = agentWithState({
+    state,
+    stone: 10,
+    decisionProvider: async () => {
+      completionJevCalls++
+      throw new Error('durable completion verification must not call Jev')
+    },
+  })
+
+  const result = await agent.routeStepCompletionDecision({ view: { last_completed_batch: { batch_id: 7 } } })
+  assert.equal(completionJevCalls, 0)
+  assert.equal(result.verified, true)
+  assert.equal(result.state.task_board.active_index, 1)
+})
+
+test('durable completion contract does not bypass semantic alignment for a later operation batch', async () => {
+  const state = activeState({ includeCheckpoint: false })
+  state.task_board.evidence = []
+  state.task_board.steps[0].completion_contract = {
+    mode: 'all',
+    source: 'planner_semantic_checkpoint',
+    confidence: 0.96,
+    requirements: [{
+      id: 'stone_total',
+      kind: 'inventory_count',
+      item_name: 'stone',
+      minimum: 10,
+    }],
+  }
+  state.task_board.steps[0].completion_contract_at = Date.now()
+
+  let calls = 0
+  const { agent } = agentWithState({
+    state,
+    decisionProvider: async (decisionState, questions) => {
+      calls++
+      assert.equal(decisionState.durable_completion_contract.requirements[0].item_name, 'stone')
+      assert.ok(questions.step_relation)
+      return checkpointDecision('candidate_1', 'keep_step_open', 0.96, 'belongs_to_later_step')
+    },
+  })
+
+  const result = await agent.routeStepCheckpointDecision({
+    operations: [{ name: 'craft_item', args: { item_name: 'stone-furnace', count: 1 } }],
+  })
+  assert.equal(calls, 1)
+  assert.equal(result.relation, 'belongs_to_later_step')
+  assert.equal(result.boundary, 'keep_step_open')
+})
+
+test('approved planner semantic checkpoint is attached to the active Task Board step', async () => {
+  const state = activeState({ includeCheckpoint: false })
+  state.task_board.evidence = []
+  const { agent, memory } = agentWithState({
+    state,
+    decisionProvider: async () => checkpointDecision('candidate_1', 'checkpoint_here', 0.96, 'advances_current'),
+  })
+
+  const result = await agent.routeStepCheckpointDecision({
+    checkpoint: {
+      mode: 'all',
+      source: 'planner_semantic_checkpoint',
+      requirements: [{ id: 'stone_total', kind: 'inventory_count', item_name: 'stone', minimum: 100 }],
+    },
+    operations: [{ name: 'gather_resource', args: { resource_name: 'stone', count: 40, search_radius: 64 } }],
+  })
+
+  assert.equal(result.boundary, 'checkpoint_here')
+  const durable = memory.planByNpc.get('npc:airi').task_board.steps[0].completion_contract
+  assert.equal(durable.source, 'planner_semantic_checkpoint')
+  assert.equal(durable.requirements[0].minimum, 100)
+})

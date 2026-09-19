@@ -1,6 +1,7 @@
 import { NpcDialogueMemory } from './npc-agent-loop.mjs'
 import { createTaskBoard, setTaskBoardStatus } from './common.mjs'
 import { activateNextMilestone, completeCurrentMilestone, sanitizeProjectBoard, updateProjectBoard } from './project-board.mjs'
+import { completionContractSupported, sanitizeStepCompletionContract } from './step-completion.mjs'
 
 const STRICT_TASKS_BY_OPERATION = new Map([
   ['walk_to_entity', ['walking_to_entity']],
@@ -25,6 +26,11 @@ const TRANSFER_OPERATION_NAMES = new Set(['move_items', 'move_items_exact', 'mov
 
 function clean(value) {
   return String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLocaleLowerCase()
+}
+
+function safeDurableStepCompletionContract(value) {
+  const contract = sanitizeStepCompletionContract(value)
+  return completionContractSupported(contract) ? contract : undefined
 }
 
 function safeHierarchySplitPending(value) {
@@ -274,6 +280,32 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     return state.project_board
   }
 
+  setStepCompletionContract(key, stepId, contract, { now = Date.now() } = {}) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    const normalized = safeDurableStepCompletionContract(contract)
+    if (!state || state.status !== 'active' || !normalized || !state.task_board || !Array.isArray(state.task_board.steps)) return state
+    const index = state.task_board.steps.findIndex(step => step?.id === stepId)
+    if (index < 0) return state
+    const previous = state.task_board.steps[index]
+    const steps = state.task_board.steps.slice()
+    steps[index] = {
+      ...previous,
+      completion_contract: normalized,
+      completion_contract_at: now,
+      revision: (Number.isSafeInteger(previous.revision) ? previous.revision : 0) + 1,
+    }
+    state.task_board = {
+      ...state.task_board,
+      steps,
+      revision: (Number.isSafeInteger(state.task_board.revision) ? state.task_board.revision : 0) + 1,
+      updated_at: now,
+    }
+    state.revision = (state.revision ?? 0) + 1
+    state.updated_at = now
+    this.planByNpc.set(key, state)
+    return state
+  }
+
   markHierarchySplitPending(key, envelope = {}) {
     const state = key ? this.planByNpc.get(key) : undefined
     if (!state || state.status !== 'active') return undefined
@@ -447,6 +479,20 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
             }])
         : [],
     )
+    const persistedStepContracts = new Map(
+      Array.isArray(snapshot?.plans)
+        ? snapshot.plans
+            .filter(item => item && typeof item.key === 'string')
+            .map(item => [item.key, new Map(
+              (Array.isArray(item?.state?.task_board?.steps) ? item.state.task_board.steps : [])
+                .filter(step => typeof step?.id === 'string')
+                .map(step => [step.id, {
+                  contract: step.completion_contract,
+                  at: step.completion_contract_at,
+                }]),
+            )])
+        : [],
+    )
     super.restore(snapshot)
     for (const [key, state] of this.planByNpc.entries()) {
       const hierarchyState = persistedHierarchyState.get(key)
@@ -459,6 +505,20 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
       state.hierarchy_split_pending = safeHierarchySplitPending(hierarchyState?.hierarchy_split_pending)
       state.milestone_transition_pending = hierarchyState?.milestone_transition_pending === true
       state.milestone_plan_pending = hierarchyState?.milestone_plan_pending === true
+      const stepContracts = persistedStepContracts.get(key)
+      if (state.task_board && Array.isArray(state.task_board.steps) && stepContracts) {
+        state.task_board.steps = state.task_board.steps.map(step => {
+          const persisted = stepContracts.get(step.id)
+          const contract = safeDurableStepCompletionContract(persisted?.contract)
+          return contract
+            ? {
+                ...step,
+                completion_contract: contract,
+                completion_contract_at: Number.isFinite(persisted?.at) ? persisted.at : state.updated_at,
+              }
+            : step
+        })
+      }
       this.planByNpc.set(key, state)
     }
   }
@@ -485,8 +545,30 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
       this.planByNpc.set(key, state)
       return { ...stateResult, state }
     }
+    const durableContracts = new Map(
+      (Array.isArray(previousBoard?.steps) ? previousBoard.steps : [])
+        .flatMap(step => {
+          const contract = safeDurableStepCompletionContract(step?.completion_contract)
+          return typeof step?.id === 'string' && contract
+            ? [[step.id, { contract, at: step.completion_contract_at }]]
+            : []
+        }),
+    )
     const guarded = canonicalContinuationPlan(previousBoard, plan, { ...options, previousState: truthState })
     const result = super.reconcileTaskBoard(key, previousBoard, guarded, stateResult, options)
+    if (result?.state?.task_board && Array.isArray(result.state.task_board.steps) && durableContracts.size > 0) {
+      result.state.task_board.steps = result.state.task_board.steps.map(step => {
+        const durable = durableContracts.get(step.id)
+        return durable
+          ? {
+              ...step,
+              completion_contract: durable.contract,
+              completion_contract_at: Number.isFinite(durable.at) ? durable.at : result.state.updated_at,
+            }
+          : step
+      })
+      this.planByNpc.set(key, result.state)
+    }
     if (result?.state?.status === 'completed') this.planByNpc.delete(key)
     return result
   }

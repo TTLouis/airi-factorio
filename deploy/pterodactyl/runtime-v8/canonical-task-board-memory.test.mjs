@@ -785,3 +785,55 @@ test('initial project split transaction survives persistence', () => {
   assert.equal(state.hierarchy_split_pending.observation_budget, 3)
   assert.match(restored.planContext('npc:airi'), /HIERARCHY_TRANSITION/)
 })
+
+
+test('durable step completion contracts survive snapshot restore and only follow stable semantic step ids', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', {
+    goal_id: 'goal_contract',
+    owner: 'tester',
+    objective: 'gather stone then build',
+    status: 'active',
+    blocker: '',
+    pause_reason: '',
+    plan: ['Gather stone', 'Build furnace'],
+    current_step: 0,
+    revision: 1,
+    last_chat_message: '',
+    last_operations: [],
+    durable_last_operations: [],
+    exact_target_audit: [],
+    last_mutation_verified: false,
+    updated_at: Date.now(),
+    history: [],
+    task_board: createTaskBoard(['Gather stone', 'Build furnace'], 0, { goalId: 'goal_contract' }),
+  })
+  const contract = {
+    mode: 'all',
+    source: 'planner_semantic_checkpoint',
+    confidence: 0.95,
+    requirements: [{ id: 'stone_total', kind: 'inventory_count', item_name: 'stone', minimum: 100 }],
+  }
+  memory.setStepCompletionContract('npc:airi', 'step_1', contract)
+  const snapshot = memory.snapshot()
+
+  const restored = new CanonicalTaskBoardMemory()
+  restored.restore(snapshot)
+  assert.equal(restored.currentPlan('npc:airi').task_board.steps[0].completion_contract.requirements[0].minimum, 100)
+
+  const previous = restored.currentPlan('npc:airi').task_board
+  restored.reconcileTaskBoard('npc:airi', previous, {
+    plan: ['Gather stone', 'Build furnace'],
+    currentStep: 0,
+  }, { state: restored.currentPlan('npc:airi') }, { allowReplan: false })
+  assert.equal(restored.currentPlan('npc:airi').task_board.steps[0].completion_contract.requirements[0].minimum, 100)
+
+  const beforeReplan = restored.currentPlan('npc:airi').task_board
+  restored.reconcileTaskBoard('npc:airi', beforeReplan, {
+    plan: ['Gather iron', 'Build furnace'],
+    currentStep: 0,
+  }, { state: restored.currentPlan('npc:airi') }, { allowReplan: true })
+  const replanned = restored.currentPlan('npc:airi').task_board
+  assert.notEqual(replanned.steps[0].id, 'step_1')
+  assert.equal(replanned.steps[0].completion_contract, undefined)
+})

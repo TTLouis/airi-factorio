@@ -418,7 +418,18 @@ function safeProviderRecovery(value) {
 }
 
 function persistedStepCheckpoint(board, stepId) {
-  if (!board || !stepId || !Array.isArray(board.evidence)) return undefined
+  if (!board || !stepId) return undefined
+  const step = Array.isArray(board.steps) ? board.steps.find(item => item?.id === stepId) : undefined
+  const durableContract = sanitizeStepCompletionContract(step?.completion_contract)
+  if (completionContractSupported(durableContract)) {
+    return {
+      contract: durableContract,
+      boundary: 'checkpoint_here',
+      relation: 'advances_current',
+      durable: true,
+    }
+  }
+  if (!Array.isArray(board.evidence)) return undefined
   for (let index = board.evidence.length - 1; index >= 0; index--) {
     const item = board.evidence[index]
     if (item?.kind !== 'step_checkpoint_contract' || item?.step_id !== stepId || typeof item.summary !== 'string') continue
@@ -2643,11 +2654,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
 
     const existing = persistedStepCheckpoint(board, step.id)
-    if (existing?.boundary === 'checkpoint_here' && existing.contract?.mode !== 'semantic_unknown' && stepRelationAllowsAdmission(existing.relation)) {
-      return { ...existing, state: planState, reused: true }
-    }
-
     const candidates = [
+      ...(existing && completionContractSupported(existing.contract)
+        ? [{ ...existing.contract, source: existing.durable ? (existing.contract.source ?? 'durable_step_contract') : 'persisted_step_checkpoint' }]
+        : []),
       ...(completionContractSupported(plan.checkpoint) ? [{ ...plan.checkpoint, source: 'planner_semantic_checkpoint' }] : []),
       ...completionCandidatesFromOperations(plan.operations),
     ]
@@ -2721,6 +2731,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       proposed_checkpoint: completionContractSupported(plan.checkpoint)
         ? sanitizeDurableModelValue(plan.checkpoint)
         : undefined,
+      durable_completion_contract: existing?.durable && completionContractSupported(existing.contract)
+        ? sanitizeDurableModelValue(existing.contract)
+        : undefined,
       remaining_steps: (Array.isArray(board?.steps) ? board.steps : [])
         .slice(activeIndex, activeIndex + 6)
         .map(item => ({
@@ -2786,6 +2799,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         boundary = 'split_recommended'
       }
 
+      if (boundary === 'checkpoint_here'
+        && relation === 'advances_current'
+        && contract.source === 'planner_semantic_checkpoint'
+        && completionContractSupported(contract)) {
+        this.memory.setStepCompletionContract?.(key, step.id, contract)
+      }
       this.memory.recordBoardEvidence?.(key, {
         kind: 'step_checkpoint_contract',
         ref: `checkpoint/${step.id}`,
