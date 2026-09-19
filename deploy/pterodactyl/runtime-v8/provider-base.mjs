@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import { check, DeploymentError } from './common.mjs'
-import { parsePlan, toolDefinitions } from './structured-policy.mjs'
+import { parsePlan, providerToolDefinitions as toolDefinitions } from './structured-policy.mjs'
 
 const COMPLETION_MARKER = '[MOD] Autorio operation batch completed.'
 const FAILURE_MARKER = '[MOD] Autorio operation error:'
