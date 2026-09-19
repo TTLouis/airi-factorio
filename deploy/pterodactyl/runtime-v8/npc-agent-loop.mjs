@@ -88,9 +88,9 @@ const DURABLE_PLAN_PROMPT = `
 
 ### Planner submission protocol
 
-When tools are available, prefer the `submitPlan` control tool for the planner decision instead of serializing the whole decision as assistant JSON content. Your normal assistant content may be concise natural-language text for the human. Put canonical plan/currentStep/operations plus optional checkpoint/project proposals in `submitPlan`.
+When tools are available, prefer the submitPlan control tool for the planner decision instead of serializing the whole decision as assistant JSON content. Your normal assistant content may be concise natural-language text for the human. Put canonical plan/currentStep/operations plus optional checkpoint/project proposals in submitPlan.
 
-`submitPlan` is a proposal boundary, not execution authority: Jev checks semantic alignment, the harness validates checkpoint/project shapes, Outcome Authority owns durable completion/blocking truth, and Autorio validates mutations before admission. Do not mix `submitPlan` with observation tool calls in the same assistant message. Observe first when needed, then submit one control decision.
+submitPlan is a proposal boundary, not execution authority: Jev checks semantic alignment, the harness validates checkpoint/project shapes, Outcome Authority owns durable completion/blocking truth, and Autorio validates mutations before admission. Do not mix submitPlan with observation tool calls in the same assistant message. Observe first when needed, then submit one control decision.
 
 Strict JSON assistant content is retained only as a compatibility/fallback path, especially when tools are disabled during bounded recovery. It is no longer the preferred normal-path protocol.
 
