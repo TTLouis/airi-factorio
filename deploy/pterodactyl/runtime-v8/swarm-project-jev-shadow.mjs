@@ -53,18 +53,22 @@ export function buildProjectJevShadowSnapshot(globalSnapshot, {
       id: result.id,
       summary: clean(result.summary, 240),
     })),
-    runtime: {
-      healthy: true,
-      active: globalSnapshot.counts.work > 0 || globalSnapshot.counts.claims > 0,
-      blocked: globalSnapshot.counts.activeWarnings > 0,
-      reason: globalSnapshot.counts.activeWarnings > 0
-        ? 'swarm_active_warnings'
-        : globalSnapshot.counts.claims > 0
-          ? 'swarm_active_claims'
-          : globalSnapshot.counts.work > 0
-            ? 'swarm_work_present'
-            : 'swarm_idle',
-    },
+    runtime: (() => {
+      const sampledActiveWork = globalSnapshot.work.some(item => item?.status === 'claimed' || item?.status === 'active')
+      const active = globalSnapshot.counts.claims > 0 || sampledActiveWork
+      return {
+        healthy: true,
+        active,
+        blocked: globalSnapshot.counts.activeWarnings > 0,
+        reason: globalSnapshot.counts.activeWarnings > 0
+          ? 'swarm_active_warnings'
+          : globalSnapshot.counts.claims > 0
+            ? 'swarm_active_claims'
+            : sampledActiveWork
+              ? 'swarm_sampled_active_work'
+              : 'swarm_idle',
+      }
+    })(),
     global: {
       schema: globalSnapshot.schema,
       tick: globalSnapshot.tick,
