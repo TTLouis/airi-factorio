@@ -3970,6 +3970,19 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     const conditionWaitActive = conditionWait?.state === 'active'
 
+    if (commands.length === 0 && this.actionOmissionRepairActive && !runtimeHealthy && !conditionWaitActive && !finalCompletionVerified) {
+      if (explicitBlocker) {
+        return this.finishNoOperationBlock(plan, before, 'provider_reported_blocker', explicitBlocker, 'provider_blocker')
+      }
+      await this.traceEvent('recovery.action_omission_failed', {
+        reason_code: 'repair_no_executable_action',
+        detail: 'bounded repair returned no executable operation and no explicit BLOCKED reason',
+      })
+      throw new AgentLoopError(
+        'provider_action_omission_repair_failed: bounded act-or-block repair returned no executable operation and no explicit BLOCKED: reason',
+      )
+    }
+
     if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy && !conditionWaitActive) {
       if (this.genericRecoveryDecisionActive) {
         // Generic strict recovery exists because the provider already failed to
