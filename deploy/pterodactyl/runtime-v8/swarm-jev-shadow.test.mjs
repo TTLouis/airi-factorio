@@ -37,7 +37,7 @@ test('builds a bounded swarm snapshot for Jev instead of raw coordination state'
   assert.equal(context.schema, 'swarm_jev_shadow_v1')
   assert.equal(context.project.milestone, 'Establish oil processing')
   assert.equal(context.missions.length, 12)
-  assert.equal(context.counts.missions, 12)
+  assert.equal(context.counts.missions, 20)
   assert.equal(context.runtime.healthy, true)
 })
 
