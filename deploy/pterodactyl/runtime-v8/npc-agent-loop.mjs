@@ -1442,12 +1442,22 @@ export function interactionDecisionQuestions() {
         false: 'There is no amendment, or the amendment is compatible with the work already running or queued.',
       },
     },
+    granularity: {
+      type: 'choice',
+      instructions: 'Judge the semantic scope of the incoming actionable goal. Use split when it is too broad to become one flat Plan Tracker and should first be represented as Project -> current Milestone -> Plan Steps. For status/chat/cancel or already-bounded work, use keep. Do not invent the decomposition.',
+      criteria: {
+        keep: 'The incoming work is already bounded enough to plan directly, or it is not a new actionable goal.',
+        split: 'The incoming goal spans multiple independently verifiable capability phases and needs a milestone layer before execution.',
+        collapse: 'The incoming request is over-fragmented and adjacent intent can be represented as one bounded objective.',
+      },
+    },
   }
 }
 
 export function parseInteractionDecisionShadow(response) {
   const intentAnswer = response?.answers?.intent
   const conflictAnswer = response?.answers?.queue_conflict
+  const granularity = parseDecisionFamily(response, 'granularity', 'keep')
   if (!intentAnswer || !INTERACTION_INTENTS.has(intentAnswer.choice)) throw new AgentLoopError('Decision provider returned invalid interaction intent')
   if (typeof intentAnswer.confidence !== 'number' || !Number.isFinite(intentAnswer.confidence) || intentAnswer.confidence < 0 || intentAnswer.confidence > 1) {
     throw new AgentLoopError('Decision provider returned invalid interaction confidence')
@@ -1461,6 +1471,8 @@ export function parseInteractionDecisionShadow(response) {
     intent_probabilities: intentAnswer.probabilities,
     queue_conflict_probability: conflictAnswer.noul,
     queue_conflict: intentAnswer.choice === 'amend_current' && conflictAnswer.noul >= 0.5,
+    granularity: granularity.decision,
+    granularity_confidence: granularity.confidence,
     model: typeof response?.model === 'string' ? response.model : undefined,
     provider: typeof response?.provider === 'string' ? response.provider : undefined,
     usage: response?.usage && typeof response.usage === 'object' ? response.usage : undefined,
@@ -2333,6 +2345,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
             intent: shadow.intent,
             confidence: shadow.intent_confidence,
             queue_conflict_probability: shadow.queue_conflict_probability,
+            granularity: shadow.granularity,
+            granularity_confidence: shadow.granularity_confidence,
             latency_ms,
             input_units: Number.isFinite(shadow.usage?.input_tokens) ? Math.max(0, Math.trunc(shadow.usage.input_tokens)) : 0,
             output_units: Number.isFinite(shadow.usage?.output_tokens) ? Math.max(0, Math.trunc(shadow.usage.output_tokens)) : 0,
@@ -3092,6 +3106,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
 
     const intent = routed.route.intent
+    const initialHierarchySplit = intent === 'new_goal' && routed.decision_shadow?.granularity === 'split'
     await this.traceEvent('interaction.routed', {
       sender,
       text,
@@ -3106,6 +3121,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       decision_shadow: routed.decision_shadow,
       decision_shadow_error: routed.decision_shadow_error,
       decision_shadow_latency_ms: routed.decision_shadow_latency_ms,
+      hierarchy_initial_granularity: routed.decision_shadow?.granularity,
+      hierarchy_initial_granularity_confidence: routed.decision_shadow?.granularity_confidence,
+      hierarchy_initial_split: initialHierarchySplit,
       decision_shadow_status: routed.classifier_skipped
         ? 'classifier_skipped'
         : routed.decision_shadow
@@ -3165,6 +3183,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.clearLoadedSkillContext()
       super.cancel()
       this.memory.clearTaskContext?.(memoryKey)
+      if (initialHierarchySplit) {
+        this.memory.setNextContextOverride?.(
+          memoryKey,
+          '[HIERARCHY_REQUEST] Jev classified this new user goal as too broad for one flat Plan Tracker. Create a bounded Project hierarchy now: keep the user goal unchanged, choose exactly one currentMilestone with a verifiable outcome, keep at most three tentative nextMilestones, and make plan contain only the executable/verifiable steps for that current milestone. Jev decides that a split is needed; you decide how to decompose it.',
+        )
+      }
       await this.persistState()
     }
 
@@ -3178,7 +3202,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         ? 'amend_current'
         : 'continue_current'
     this.requestLifecycle = intent
-    this.reasoningTriggerSource = null
+    this.reasoningTriggerSource = initialHierarchySplit ? 'hierarchy_initial_split' : null
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
