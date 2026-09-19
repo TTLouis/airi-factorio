@@ -1,6 +1,7 @@
 import type { LuaSurface } from 'factorio:runtime'
 import type { ControlledActor } from './actors/types'
 import { compact_construction_fulfillment, inspect_construction_fulfillment } from './construction_fulfillment'
+import { resolve_entity_placement_item } from './placement_item'
 
 const MAX_SURFACE_INDEX = 4294967295
 const MAX_COORDINATE = 1000000
@@ -54,14 +55,6 @@ function position_visible(actor: ControlledActor, surface: LuaSurface, position:
   return actor.force.is_chunk_visible(surface, chunk_position(position))
 }
 
-function construction_item(entity_name: string) {
-  const prototype = prototypes.entity[entity_name]
-  const place_items = prototype?.items_to_place_this
-  const first = place_items?.[0]
-  if (!first) return undefined
-  return { name: first.name, count: first.count }
-}
-
 function legacy_fulfillment(fixed: ReturnType<typeof inspect_construction_fulfillment>['fixed']) {
   if (fixed.state === 'ready') return 'ready'
   if (fixed.state === 'queued') return 'queued_no_available_construction_robots'
@@ -104,15 +97,21 @@ export function inspect_remote_construction(
     return { ok: false, code: 'area_not_visible', surface_index, position }
   }
 
-  const item = construction_item(entity_name)
-  if (!item) {
+  const placement_item = resolve_entity_placement_item(entity_name)
+  if (!placement_item.ok) {
     return {
       ok: false,
       code: 'entity_not_bot_placeable',
+      placement_item_error: placement_item.code,
+      item_name: placement_item.item_name,
       surface_index,
       position,
       entity_name,
     }
+  }
+  const item = {
+    name: placement_item.requirement.item_name,
+    count: placement_item.requirement.count,
   }
 
   const can_place_ghost = surface.can_place_entity({

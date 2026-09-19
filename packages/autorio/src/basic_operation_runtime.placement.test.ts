@@ -5,10 +5,16 @@ import { new_basic_operation_controller } from './basic_operations'
 import { new_task_manager } from './task_manager'
 import { TaskStates } from './types'
 
-function fixture() {
-  const item = { valid_for_read: true, count: 2 }
+function fixture(itemName = 'steel-chest', itemCount = 2) {
+  const item = { valid_for_read: true, name: itemName, count: itemCount }
   const inventory: any = []
-  inventory.find_item_stack = vi.fn(() => [item, 1])
+  inventory.get_item_count = vi.fn((name: string) => name === item.name ? item.count : 0)
+  inventory.remove = vi.fn(({ name, count }: { name: string, count: number }) => {
+    if (name !== item.name) return 0
+    const removed = math.min(item.count, count)
+    item.count -= removed
+    return removed
+  })
 
   const surface: any = {
     index: 1,
@@ -50,6 +56,7 @@ function fixture() {
 beforeEach(() => {
   ;(globalThis as any).storage = {}
   ;(globalThis as any).game.tick = 100
+  ;(globalThis as any).prototypes.item['steel-chest'] = {}
   ;(globalThis as any).prototypes.entity['steel-chest'] = {
     items_to_place_this: [{ name: 'steel-chest', count: 1 }],
   }
@@ -107,6 +114,7 @@ describe('precise placement runtime', () => {
     })
     expect(f.surface.create_entity).not.toHaveBeenCalled()
     expect(f.item.count).toBe(2)
+    expect((f.actor.get_main_inventory() as any).remove).not.toHaveBeenCalled()
     expect(f.manager.player_state.task_state).toBe(TaskStates.IDLE)
     expect(f.controller.status().last_result).toMatchObject({
       code: 'not_placeable',
@@ -127,6 +135,7 @@ describe('precise placement runtime', () => {
     expect(f.surface.can_place_entity).not.toHaveBeenCalled()
     expect(f.surface.create_entity).not.toHaveBeenCalled()
     expect(f.item.count).toBe(2)
+    expect((f.actor.get_main_inventory() as any).remove).not.toHaveBeenCalled()
     expect(f.manager.player_state.task_state).toBe(TaskStates.IDLE)
     expect(f.controller.status().last_result).toMatchObject({
       code: 'too_far',
@@ -136,4 +145,53 @@ describe('precise placement runtime', () => {
       direction: 2,
     })
   })
+  it('looks up and consumes the resolved placement item alias and count', () => {
+    ;(globalThis as any).prototypes.item['custom-chest-kit'] = {}
+    ;(globalThis as any).prototypes.entity['custom-chest'] = {
+      items_to_place_this: [{ name: 'custom-chest-kit', count: 2 }],
+    }
+    const f = fixture('custom-chest-kit', 3)
+    expect(f.controller.submit_placement('custom-chest', 1, 0, 0)).toBe(true)
+
+    const result = f.runtime.state_placing(f.actor)
+
+    expect(result?.[0]).toBe(true)
+    const inventory = f.actor.get_main_inventory() as any
+    expect(inventory.get_item_count).toHaveBeenCalledWith('custom-chest-kit')
+    expect(inventory.remove).toHaveBeenCalledWith({ name: 'custom-chest-kit', count: 2 })
+    expect(f.item.count).toBe(1)
+    expect(f.surface.create_entity).toHaveBeenCalledWith(expect.objectContaining({ name: 'custom-chest' }))
+  })
+
+  it('does not consume a resolved placement item when entity creation fails', () => {
+    const f = fixture()
+    f.surface.create_entity.mockReturnValueOnce(undefined)
+    expect(f.controller.submit_placement('steel-chest', 1, 0, 0)).toBe(true)
+
+    const result = f.runtime.state_placing(f.actor)
+
+    expect(result?.[0]).toBe(false)
+    expect((f.actor.get_main_inventory() as any).remove).not.toHaveBeenCalled()
+    expect(f.item.count).toBe(2)
+  })
+
+  it('fails closed for ambiguous placement-item prototypes without touching inventory', () => {
+    ;(globalThis as any).prototypes.item['kit-a'] = {}
+    ;(globalThis as any).prototypes.item['kit-b'] = {}
+    ;(globalThis as any).prototypes.entity['ambiguous-chest'] = {
+      items_to_place_this: [{ name: 'kit-a', count: 1 }, { name: 'kit-b', count: 1 }],
+    }
+    const f = fixture('kit-a', 2)
+    expect(f.controller.submit_placement('ambiguous-chest', 1, 0, 0)).toBe(true)
+
+    const result = f.runtime.state_placing(f.actor)
+
+    expect(result?.[0]).toBe(false)
+    const inventory = f.actor.get_main_inventory() as any
+    expect(inventory.get_item_count).not.toHaveBeenCalled()
+    expect(inventory.remove).not.toHaveBeenCalled()
+    expect(f.surface.create_entity).not.toHaveBeenCalled()
+    expect(f.controller.status().last_result).toMatchObject({ code: 'ambiguous_placement_item' })
+  })
+
 })

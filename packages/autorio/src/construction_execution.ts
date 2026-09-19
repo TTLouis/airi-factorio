@@ -2,6 +2,7 @@ import type { ControlledActor } from './actors/types'
 import type { new_basic_operation_controller } from './basic_operations'
 import { local_spatial_observation, prototype_spatial_geometry } from './construction_planning'
 import { execute_prepared_remote_construction_plan } from './map_construction'
+import { resolve_entity_placement_item } from './placement_item'
 import type { new_task_manager } from './task_manager'
 
 type BasicController = ReturnType<typeof new_basic_operation_controller>
@@ -209,9 +210,19 @@ function evaluate_plan(actor: ControlledActor, placements: ConstructionExecution
   const boxes: Array<WorldBox | undefined> = []
   for (let index = 0; index < placements.length; index++) {
     const placement = placements[index]
-    const prototype = prototypes.entity[placement.entity_name]
-    if (!prototype) {
-      return { ok: false, error: { code: 'UNKNOWN_ENTITY', message: `unknown entity ${placement.entity_name}`, index } }
+    const placement_item = resolve_entity_placement_item(placement.entity_name)
+    if (!placement_item.ok) {
+      return {
+        ok: false,
+        error: {
+          code: 'PLACEMENT_ITEM_UNSUPPORTED',
+          message: `cannot resolve placement item for entity ${placement.entity_name}: ${placement_item.code}`,
+          index,
+          entity_name: placement.entity_name,
+          placement_item_error: placement_item.code,
+          item_name: placement_item.item_name,
+        },
+      }
     }
     const position = { x: placement.x, y: placement.y }
     if (squared_distance(actor.position, position) > MAX_LOCAL_DISTANCE ** 2) {
@@ -238,7 +249,8 @@ function evaluate_plan(actor: ControlledActor, placements: ConstructionExecution
         },
       }
     }
-    required[placement.entity_name] = (required[placement.entity_name] ?? 0) + 1
+    const requirement = placement_item.requirement
+    required[requirement.item_name] = (required[requirement.item_name] ?? 0) + requirement.count
     boxes.push(rotated_world_box(placement.entity_name, position, placement.direction))
   }
 
@@ -266,21 +278,17 @@ function evaluate_plan(actor: ControlledActor, placements: ConstructionExecution
     }
   }
 
-  const checked: Record<string, boolean> = {}
-  for (const placement of placements) {
-    const name = placement.entity_name
-    if (checked[name]) continue
-    checked[name] = true
-    const needed = required[name] ?? 0
-    if ((counts[name] ?? 0) < needed) {
+  for (const item_name in required) {
+    const needed = required[item_name] ?? 0
+    if ((counts[item_name] ?? 0) < needed) {
       return {
         ok: false,
         error: {
           code: 'ITEMS_MISSING',
-          message: `construction plan requires ${needed} ${name} but only ${counts[name] ?? 0} are available`,
-          item_name: name,
+          message: `construction plan requires ${needed} ${item_name} but only ${counts[item_name] ?? 0} are available`,
+          item_name,
           required_count: needed,
-          available_count: counts[name] ?? 0,
+          available_count: counts[item_name] ?? 0,
         },
       }
     }

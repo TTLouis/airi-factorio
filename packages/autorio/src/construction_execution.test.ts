@@ -66,7 +66,11 @@ function fixture_with_controller(
 beforeEach(() => {
   ;(globalThis as any).storage = {}
   ;(globalThis as any).game.tick = 100
+  ;(globalThis as any).prototypes.item['stone-furnace'] = {}
+  ;(globalThis as any).prototypes.item['burner-mining-drill'] = {}
+  ;(globalThis as any).prototypes.item['assembling-machine-1'] = {}
   ;(globalThis as any).prototypes.entity['stone-furnace'] = {
+    items_to_place_this: [{ name: 'stone-furnace', count: 1 }],
     type: 'furnace',
     tile_width: 2,
     tile_height: 2,
@@ -74,6 +78,7 @@ beforeEach(() => {
     selection_box: { left_top: { x: -1, y: -1 }, right_bottom: { x: 1, y: 1 } },
   }
   ;(globalThis as any).prototypes.entity['burner-mining-drill'] = {
+    items_to_place_this: [{ name: 'burner-mining-drill', count: 1 }],
     type: 'mining-drill',
     tile_width: 2,
     tile_height: 2,
@@ -82,6 +87,7 @@ beforeEach(() => {
     mining_drill_radius: 1.49,
   }
   ;(globalThis as any).prototypes.entity['assembling-machine-1'] = {
+    items_to_place_this: [{ name: 'assembling-machine-1', count: 1 }],
     type: 'assembling-machine',
     tile_width: 3,
     tile_height: 3,
@@ -262,4 +268,66 @@ describe('validated construction execution', () => {
     ])
     expect(f.manager.get_status_snapshot().task_state).toBe(TaskStates.IDLE)
   })
+  it('validates inventory by the prototype placement item instead of guessing the entity name', () => {
+    ;(globalThis as any).prototypes.item['custom-assembler-kit'] = {}
+    ;(globalThis as any).prototypes.item['custom-assembler'] = {}
+    ;(globalThis as any).prototypes.entity['custom-assembler'] = {
+      items_to_place_this: [{ name: 'custom-assembler-kit', count: 2 }],
+      type: 'assembling-machine',
+      tile_width: 3,
+      tile_height: 3,
+      collision_box: { left_top: { x: -1.4, y: -1.4 }, right_bottom: { x: 1.4, y: 1.4 } },
+      selection_box: { left_top: { x: -1.5, y: -1.5 }, right_bottom: { x: 1.5, y: 1.5 } },
+    }
+
+    const accepted = fixture_with_controller({ 'custom-assembler-kit': 2 })
+    expect(validate_construction_execution_plan(accepted.actor, {
+      plan_id: 'alias-item',
+      placements: [{ entity_name: 'custom-assembler', x: 2, y: 0 }],
+    })).toMatchObject({ ok: true })
+
+    const guessed = fixture_with_controller({ 'custom-assembler': 2 })
+    expect(validate_construction_execution_plan(guessed.actor, {
+      plan_id: 'entity-name-is-not-item-name',
+      placements: [{ entity_name: 'custom-assembler', x: 2, y: 0 }],
+    })).toMatchObject({
+      ok: false,
+      error: {
+        code: 'ITEMS_MISSING',
+        item_name: 'custom-assembler-kit',
+        required_count: 2,
+        available_count: 0,
+      },
+    })
+  })
+
+  it('fails closed before validation for ambiguous or non-item-placeable entities', () => {
+    ;(globalThis as any).prototypes.item['kit-a'] = {}
+    ;(globalThis as any).prototypes.item['kit-b'] = {}
+    ;(globalThis as any).prototypes.entity['ambiguous-machine'] = {
+      items_to_place_this: [{ name: 'kit-a', count: 1 }, { name: 'kit-b', count: 1 }],
+      collision_box: { left_top: { x: -0.4, y: -0.4 }, right_bottom: { x: 0.4, y: 0.4 } },
+    }
+    ;(globalThis as any).prototypes.entity['script-only-entity'] = {
+      items_to_place_this: [],
+      collision_box: { left_top: { x: -0.4, y: -0.4 }, right_bottom: { x: 0.4, y: 0.4 } },
+    }
+    const f = fixture_with_controller({ 'kit-a': 1, 'kit-b': 1 })
+
+    expect(validate_construction_execution_plan(f.actor, {
+      plan_id: 'ambiguous',
+      placements: [{ entity_name: 'ambiguous-machine', x: 2, y: 0 }],
+    })).toMatchObject({
+      ok: false,
+      error: { code: 'PLACEMENT_ITEM_UNSUPPORTED', placement_item_error: 'ambiguous_placement_item', entity_name: 'ambiguous-machine' },
+    })
+    expect(validate_construction_execution_plan(f.actor, {
+      plan_id: 'not-placeable',
+      placements: [{ entity_name: 'script-only-entity', x: 2, y: 0 }],
+    })).toMatchObject({
+      ok: false,
+      error: { code: 'PLACEMENT_ITEM_UNSUPPORTED', placement_item_error: 'not_item_placeable', entity_name: 'script-only-entity' },
+    })
+  })
+
 })

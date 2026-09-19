@@ -4,6 +4,7 @@ import type { new_basic_operation_controller } from './basic_operations'
 import { resolve_exact_entity } from './entity_reference'
 import { build_interaction_reach, entity_interaction_reach } from './interaction_range'
 import { mining_reach_distance, within_mining_reach } from './mining_reach'
+import { resolve_entity_placement_item } from './placement_item'
 import type { new_task_manager } from './task_manager'
 import type { PlayerParametersMineEntity, PlayerParametersWalkToEntity } from './types'
 import { TaskStates } from './types'
@@ -288,16 +289,16 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return [false, 'Cannot access actor inventory']
     }
 
-    const prototype = prototypes.entity[task.entity_name]
-    if (!prototype || !prototype.items_to_place_this || !prototype.items_to_place_this[0]) {
-      controller.fail(actor, task, 'invalid_entity')
-      return [false, 'Invalid entity name']
+    const placement_item = resolve_entity_placement_item(task.entity_name)
+    if (!placement_item.ok) {
+      controller.fail(actor, task, placement_item.code)
+      return [false, `Cannot resolve placement item for ${task.entity_name}: ${placement_item.code}`]
     }
-
-    const [item_stack] = inventory.find_item_stack(task.entity_name)
-    if (!item_stack) {
+    const requirement = placement_item.requirement
+    const available = inventory.get_item_count(requirement.item_name)
+    if (available < requirement.count) {
       controller.fail(actor, task, 'item_missing')
-      return [false, 'Entity not found in inventory']
+      return [false, `Requires ${requirement.count} ${requirement.item_name}, but only ${available} available`]
     }
 
     const build_reach = build_interaction_reach(actor)
@@ -337,8 +338,11 @@ export function new_basic_operation_runtime(manager: Manager, controller: BasicC
       return [false, 'Failed to place entity']
     }
 
-    item_stack.count = item_stack.count - 1
-    log(`[AUTORIO] Entity placed successfully: ${task.entity_name} at ${serpent.line(task.position)} direction=${task.direction ?? 'default'}`)
+    const removed = inventory.remove({ name: requirement.item_name, count: requirement.count })
+    if (removed !== requirement.count) {
+      log(`[AUTORIO] ERROR placement item accounting mismatch after creating ${task.entity_name}: required=${requirement.count} ${requirement.item_name}, removed=${removed}`)
+    }
+    log(`[AUTORIO] Entity placed successfully: ${task.entity_name} using ${requirement.count} ${requirement.item_name} at ${serpent.line(task.position)} direction=${task.direction ?? 'default'}`)
     controller.complete(actor, task, {
       placed_unit_number: entity.unit_number,
       placed_entity_type: entity.type,
