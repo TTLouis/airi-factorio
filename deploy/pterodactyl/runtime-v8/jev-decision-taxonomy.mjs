@@ -141,19 +141,32 @@ export function parseDecisionFamily(response, family, fallback) {
   }
 }
 
-export function parseDecisionEnvelope(response) {
-  const routing = parseDecisionFamily(response, 'routing', 'wake_planner')
+export function parseHierarchyTelemetry(response) {
+  const granularity = parseDecisionFamily(response, 'granularity', 'keep')
+  const development = parseDecisionFamily(response, 'development', 'maintain')
   const reasoning = parseDecisionFamily(response, 'reasoning_budget', 'normal')
   const horizon = choiceOf(response, 'planning_horizon')
   return {
-    routing: routing.decision,
-    routing_confidence: routing.confidence,
+    granularity: granularity.decision,
+    granularity_confidence: granularity.confidence,
+    development: development.decision,
+    development_confidence: development.confidence,
     reasoning_budget: reasoning.decision,
     reasoning_confidence: reasoning.confidence,
     planning_horizon: PLANNING_HORIZONS.has(horizon) ? horizon : 'checkpoint',
     observation_budget: boundedInteger(response?.answers?.observation_budget?.number, 0, 8),
-    model: routing.model ?? reasoning.model,
-    provider: routing.provider ?? reasoning.provider,
-    usage: routing.usage ?? reasoning.usage,
+  }
+}
+
+export function parseDecisionEnvelope(response) {
+  const routing = parseDecisionFamily(response, 'routing', 'wake_planner')
+  const hierarchy = parseHierarchyTelemetry(response)
+  return {
+    routing: routing.decision,
+    routing_confidence: routing.confidence,
+    ...hierarchy,
+    model: routing.model,
+    provider: routing.provider,
+    usage: routing.usage,
   }
 }

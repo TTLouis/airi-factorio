@@ -413,6 +413,17 @@ test('active Jev post-step routing is tracked separately from interaction shadow
       model: 'jev-latest',
       route: 'wait_runtime',
       confidence: 0.88,
+      hierarchy: {
+        granularity: 'keep',
+        granularity_confidence: 0.92,
+        development: 'maintain',
+        development_confidence: 0.86,
+        reasoning_budget: 'micro',
+        reasoning_confidence: 0.81,
+        planning_horizon: 'checkpoint',
+        observation_budget: 1,
+      },
+      hierarchy_shadow_only: true,
       usage: { input_tokens: 90, output_tokens: 8, cost: 0.00000378 },
     },
   }, debug)
@@ -423,6 +434,14 @@ test('active Jev post-step routing is tracked separately from interaction shadow
   assert.equal(debug.decision_post_step_applied_route, 'fallback_planner')
   assert.equal(debug.decision_post_step_confidence_percent, 88)
   assert.equal(debug.decision_post_step_latency_ms, 44)
+  assert.equal(debug.decision_granularity, 'keep')
+  assert.equal(debug.decision_granularity_confidence_percent, 92)
+  assert.equal(debug.decision_development, 'maintain')
+  assert.equal(debug.decision_development_confidence_percent, 86)
+  assert.equal(debug.decision_reasoning_budget, 'micro')
+  assert.equal(debug.decision_reasoning_confidence_percent, 81)
+  assert.equal(debug.decision_planning_horizon, 'checkpoint')
+  assert.equal(debug.decision_observation_budget, 1)
   assert.match(debug.decision_post_step_fallback, /wait_runtime_without/)
   assert.equal(debug.decision_calls_total, 2)
   assert.equal(debug.decision_input_units_total, 210)

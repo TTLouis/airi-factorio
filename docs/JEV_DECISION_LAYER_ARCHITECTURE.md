@@ -75,7 +75,7 @@ The initial decision envelope also separates `planning_horizon` from `observatio
 The implementation order is intentionally conservative:
 
 1. define and test the decision taxonomy;
-2. wire the taxonomy into traces/diagnostics without changing authority;
+2. **done in the experiment:** wire the taxonomy into post-step traces/diagnostics as shadow telemetry without changing authority;
 3. let Jev gate planner wake/sleep for already-supported deterministic wait/continue cases;
 4. add milestone/project durable state above the existing Plan Tracker;
 5. add granularity-driven milestone decomposition;

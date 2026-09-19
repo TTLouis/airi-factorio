@@ -77,6 +77,14 @@ export interface TaskBoardUiDebugSnapshot {
   decision_post_step_confidence_percent: number
   decision_post_step_latency_ms: number
   decision_post_step_fallback: string
+  decision_granularity: string
+  decision_granularity_confidence_percent: number
+  decision_development: string
+  decision_development_confidence_percent: number
+  decision_reasoning_budget: string
+  decision_reasoning_confidence_percent: number
+  decision_planning_horizon: string
+  decision_observation_budget: number
   decision_confidence_percent: number
   decision_queue_conflict_percent: number
   decision_latency_ms: number
@@ -157,6 +165,14 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     decision_post_step_confidence_percent: math.min(100, integer(debug.decision_post_step_confidence_percent)),
     decision_post_step_latency_ms: integer(debug.decision_post_step_latency_ms),
     decision_post_step_fallback: clean_text(debug.decision_post_step_fallback, 300),
+    decision_granularity: clean_text(debug.decision_granularity, 32),
+    decision_granularity_confidence_percent: math.min(100, integer(debug.decision_granularity_confidence_percent)),
+    decision_development: clean_text(debug.decision_development, 32),
+    decision_development_confidence_percent: math.min(100, integer(debug.decision_development_confidence_percent)),
+    decision_reasoning_budget: clean_text(debug.decision_reasoning_budget, 32),
+    decision_reasoning_confidence_percent: math.min(100, integer(debug.decision_reasoning_confidence_percent)),
+    decision_planning_horizon: clean_text(debug.decision_planning_horizon, 32),
+    decision_observation_budget: math.min(8, integer(debug.decision_observation_budget)),
     decision_confidence_percent: math.min(100, integer(debug.decision_confidence_percent)),
     decision_queue_conflict_percent: math.min(100, integer(debug.decision_queue_conflict_percent)),
     decision_latency_ms: integer(debug.decision_latency_ms),
@@ -597,6 +613,14 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const decision_post_step_confidence = math.min(100, integer(debug.decision_post_step_confidence_percent))
   const decision_post_step_latency = integer(debug.decision_post_step_latency_ms)
   const decision_post_step_fallback = clean_text(debug.decision_post_step_fallback, 300)
+  const decision_granularity = clean_text(debug.decision_granularity, 32)
+  const decision_granularity_confidence = math.min(100, integer(debug.decision_granularity_confidence_percent))
+  const decision_development = clean_text(debug.decision_development, 32)
+  const decision_development_confidence = math.min(100, integer(debug.decision_development_confidence_percent))
+  const decision_reasoning_budget = clean_text(debug.decision_reasoning_budget, 32)
+  const decision_reasoning_confidence = math.min(100, integer(debug.decision_reasoning_confidence_percent))
+  const decision_planning_horizon = clean_text(debug.decision_planning_horizon, 32)
+  const decision_observation_budget = math.min(8, integer(debug.decision_observation_budget))
   const decision_confidence = math.min(100, integer(debug.decision_confidence_percent))
   const decision_conflict = math.min(100, integer(debug.decision_queue_conflict_percent))
   const decision_latency = integer(debug.decision_latency_ms)
@@ -643,6 +667,9 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Decision provider', decision_model.length > 0 ? `${decision_provider || 'decision'} · ${decision_model}` : '—')
   add_row(table, 'Decision shadow', decision_shadow.length > 0 ? `${decision_shadow} · ${decision_confidence}% · active ${decision_active || 'unknown'} · conflict ${decision_conflict}%` : '—')
   add_row(table, 'Jev ACTIVE post-step', decision_post_step.length > 0 ? `${decision_post_step}${decision_post_step_applied.length > 0 && decision_post_step_applied !== decision_post_step ? ` → ${decision_post_step_applied}` : ''} · ${decision_post_step_confidence}% · ${decision_post_step_latency} ms${decision_post_step_fallback.length > 0 ? ` · ${decision_post_step_fallback}` : ''}` : '—')
+  add_row(table, 'Jev hierarchy · shadow', decision_granularity.length > 0 || decision_development.length > 0 || decision_reasoning_budget.length > 0
+    ? `granularity ${decision_granularity || '—'} ${decision_granularity_confidence}% · development ${decision_development || '—'} ${decision_development_confidence}% · budget ${decision_reasoning_budget || '—'} ${decision_reasoning_confidence}% · horizon ${decision_planning_horizon || '—'} · observations ${decision_observation_budget}`
+    : '—')
   add_row(table, 'Decision usage', decision_shadow.length > 0 || decision_post_step.length > 0 ? `${decision_input} in / ${decision_output} out · ${decision_latency || decision_post_step_latency} ms${decision_cost > 0 ? ` · ${decision_cost} µUSD` : ''}` : '—')
   add_row(table, 'Decision totals', decision_calls_total > 0 ? `${decision_calls_total} calls · ${decision_input_total} in / ${decision_output_total} out${decision_cost_total > 0 ? ` · ${decision_cost_total} µUSD` : ''} · shadow ${decision_matches} match / ${decision_mismatches} differ` : '—')
   add_row(table, 'Planner routing · Jev', decision_post_step_calls > 0 || decision_planner_skips > 0 || decision_planner_wakes > 0 ? `${decision_planner_skips} skips / ${decision_planner_low} low / ${decision_planner_high} high / ${decision_planner_fallback} fallback · ${decision_post_step_calls} decisions` : 'not active yet')

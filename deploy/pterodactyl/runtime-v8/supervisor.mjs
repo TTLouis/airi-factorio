@@ -548,6 +548,14 @@ function emptyAgentDebug(fallback = {}) {
     decision_post_step_confidence_percent: 0,
     decision_post_step_latency_ms: 0,
     decision_post_step_fallback: '',
+    decision_granularity: '',
+    decision_granularity_confidence_percent: 0,
+    decision_development: '',
+    decision_development_confidence_percent: 0,
+    decision_reasoning_budget: '',
+    decision_reasoning_confidence_percent: 0,
+    decision_planning_horizon: '',
+    decision_observation_budget: 0,
     decision_confidence_percent: 0,
     decision_queue_conflict_percent: 0,
     decision_latency_ms: 0,
@@ -592,6 +600,14 @@ function decisionDebugFields(value = {}) {
     decision_post_step_confidence_percent: debugInteger(value.decision_post_step_confidence_percent),
     decision_post_step_latency_ms: debugInteger(value.decision_post_step_latency_ms),
     decision_post_step_fallback: uiText(value.decision_post_step_fallback, 300),
+    decision_granularity: uiText(value.decision_granularity, 32),
+    decision_granularity_confidence_percent: debugInteger(value.decision_granularity_confidence_percent),
+    decision_development: uiText(value.decision_development, 32),
+    decision_development_confidence_percent: debugInteger(value.decision_development_confidence_percent),
+    decision_reasoning_budget: uiText(value.decision_reasoning_budget, 32),
+    decision_reasoning_confidence_percent: debugInteger(value.decision_reasoning_confidence_percent),
+    decision_planning_horizon: uiText(value.decision_planning_horizon, 32),
+    decision_observation_budget: debugInteger(value.decision_observation_budget),
     decision_confidence_percent: debugInteger(value.decision_confidence_percent),
     decision_queue_conflict_percent: debugInteger(value.decision_queue_conflict_percent),
     decision_latency_ms: debugInteger(value.decision_latency_ms),
@@ -737,6 +753,17 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
       debug.decision_provider = uiText(decision.provider, 80)
       debug.decision_model = uiText(decision.model, 160)
       debug.decision_post_step_confidence_percent = decisionPercent(decision.confidence)
+      const hierarchy = decision.hierarchy && typeof decision.hierarchy === 'object' ? decision.hierarchy : undefined
+      if (hierarchy) {
+        debug.decision_granularity = uiText(hierarchy.granularity, 32)
+        debug.decision_granularity_confidence_percent = decisionPercent(hierarchy.granularity_confidence)
+        debug.decision_development = uiText(hierarchy.development, 32)
+        debug.decision_development_confidence_percent = decisionPercent(hierarchy.development_confidence)
+        debug.decision_reasoning_budget = uiText(hierarchy.reasoning_budget, 32)
+        debug.decision_reasoning_confidence_percent = decisionPercent(hierarchy.reasoning_confidence)
+        debug.decision_planning_horizon = uiText(hierarchy.planning_horizon, 32)
+        debug.decision_observation_budget = debugInteger(hierarchy.observation_budget)
+      }
       const decisionInput = debugInteger(decision.usage?.input_tokens)
       const decisionOutput = debugInteger(decision.usage?.output_tokens)
       const decisionCost = decisionMicroUsd(decision.usage?.cost)

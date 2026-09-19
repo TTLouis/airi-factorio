@@ -8,6 +8,7 @@ import {
   jevDecisionFamilyChoices,
   parseDecisionEnvelope,
   parseDecisionFamily,
+  parseHierarchyTelemetry,
 } from './jev-decision-taxonomy.mjs'
 
 test('exposes separate bounded Jev decision families', () => {
@@ -101,5 +102,27 @@ test('uses conservative fallbacks for invalid Jev output', () => {
     model: undefined,
     provider: undefined,
     usage: undefined,
+  })
+})
+
+test('parses hierarchy telemetry independently from routing authority', () => {
+  const response = {
+    answers: {
+      granularity: { choice: 'split', confidence: 0.91 },
+      development: { choice: 'vertical', confidence: 0.84 },
+      reasoning_budget: { choice: 'strategic', confidence: 0.77 },
+      planning_horizon: { choice: 'strategic' },
+      observation_budget: { number: 4 },
+    },
+  }
+  assert.deepEqual(parseHierarchyTelemetry(response), {
+    granularity: 'split',
+    granularity_confidence: 0.91,
+    development: 'vertical',
+    development_confidence: 0.84,
+    reasoning_budget: 'strategic',
+    reasoning_confidence: 0.77,
+    planning_horizon: 'strategic',
+    observation_budget: 4,
   })
 })

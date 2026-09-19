@@ -10,6 +10,12 @@ import {
   taskBoardProgress,
 } from './common.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
+import {
+  decisionEnvelopeQuestions,
+  developmentDecisionQuestions,
+  granularityDecisionQuestions,
+  parseHierarchyTelemetry,
+} from './jev-decision-taxonomy.mjs'
 import { isLifecycleMetaStep, normalizeCanonicalPlan, validateOutcomeCandidate } from './outcome-authority.mjs'
 import { parseRecoveryDecision, recoveryDecisionQuestions, recoveryFailureClassHint, validateRecoveryRoute } from './recovery-route.mjs'
 import {
@@ -2776,7 +2782,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       ...(conditionWaitHealthy ? { condition_wait: sanitizeDurableModelValue(conditionValidation.wait) } : {}),
       ...(failure ? { failure: cleanMemoryText(failure, 1200) } : {}),
     }
-    const questions = postStepDecisionQuestions()
+    const envelopeQuestions = decisionEnvelopeQuestions()
+    const questions = {
+      ...postStepDecisionQuestions(),
+      ...granularityDecisionQuestions(),
+      ...developmentDecisionQuestions(),
+      reasoning_budget: envelopeQuestions.reasoning_budget,
+      planning_horizon: envelopeQuestions.planning_horizon,
+      observation_budget: envelopeQuestions.observation_budget,
+    }
     const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
     this.postStepDecisionAbort?.abort()
     const controller = new AbortController()
@@ -2805,6 +2819,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
       await this.assertCurrent()
       const decision = parsePostStepDecision(response)
+      const hierarchyTelemetry = parseHierarchyTelemetry(response)
       const latency_ms = Date.now() - startedAt
       if (decision.route === 'wait_runtime' && conditionWaitHealthy) {
         conditionValidation = await this.validateConditionWaitHealth()
@@ -2834,6 +2849,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         model: decision.model,
         route: decision.route,
         confidence: decision.confidence,
+        hierarchy_telemetry: hierarchyTelemetry,
+        hierarchy_shadow_only: true,
         latency_ms,
         input_units: Number.isFinite(decision.usage?.input_tokens) ? Math.max(0, Math.trunc(decision.usage.input_tokens)) : 0,
         output_units: Number.isFinite(decision.usage?.output_tokens) ? Math.max(0, Math.trunc(decision.usage.output_tokens)) : 0,
@@ -2863,6 +2880,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           model: decision.model,
           route: decision.route,
           confidence: decision.confidence,
+          hierarchy: hierarchyTelemetry,
+          hierarchy_shadow_only: true,
           usage: decision.usage,
         },
         decision_latency_ms: latency_ms,
