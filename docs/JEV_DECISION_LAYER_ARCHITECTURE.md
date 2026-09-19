@@ -78,7 +78,7 @@ The implementation order is intentionally conservative:
 2. **done in the experiment:** wire the taxonomy into post-step traces/diagnostics as shadow telemetry without changing authority;
 3. **implemented conservatively in the experiment:** Jev may suppress a post-step planner wake only when authoritative runtime work is healthy, granularity is `keep`, development is `maintain`, and the boundary is a successful completion; otherwise the existing planner path remains authoritative;
 4. **implemented as the next foundation:** add bounded durable Project/Milestone state above the existing Plan Tracker, without yet letting Jev invent or mutate milestones autonomously;
-5. add granularity-driven milestone decomposition;
+5. **in progress:** Main LLM can now propose one bounded current milestone plus up to three tentative next milestones for genuinely long-horizon goals; ordinary unchanged-milestone continuations reuse durable [PROJECT_STATE] instead of rewriting the hierarchy. Jev-driven split/advance is still next;
 6. only then map Jev reasoning budgets into provider/model-specific reasoning controls.
 
 This preserves current completion authority and makes each behavior change independently testable.
@@ -1231,3 +1231,28 @@ Only after the hierarchy is promoted and validated should branch-merging be eval
 
 Merging `experiment/jev-agent-architecture` into `feat/npc-transition-work` is not what "promotion" means here. Merge readiness still requires a frozen candidate SHA, tests, deterministic harness runs, real-provider E2E, and trace comparison against the pre-Jev baseline.
 
+
+
+### Main-planner milestone proposal contract
+
+The Main LLM now has an optional bounded hierarchy output for long-horizon planning. The normal strict plan remains backward compatible, but a long-task planning/replanning turn may additionally emit:
+
+```json
+{
+  "project": {
+    "currentMilestone": {
+      "title": "Establish burner production",
+      "completionSummary": "Stable early iron and copper production is available."
+    },
+    "nextMilestones": [
+      {"title": "Reach Automation"},
+      {"title": "Establish electric power"}
+    ],
+    "developmentDirection": "vertical"
+  }
+}
+```
+
+The project goal/title itself is not writable by the Main LLM. It remains derived from the user's durable goal. Future milestones are capped at three and remain tentative. Project proposals are accepted on initial or strategic planning contexts, but ignored during bounded recovery/output-repair paths and ordinary completion continuation once a current milestone already exists.
+
+This is the first point where the long-horizon hierarchy becomes model-authored durable state rather than only a runtime shell. Jev still does not directly create milestone content.
