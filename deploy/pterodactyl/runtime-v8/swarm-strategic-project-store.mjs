@@ -125,6 +125,45 @@ export class SwarmStrategicProjectStore {
     }
   }
 
+  completeGoal({ verified = false } = {}) {
+    const current = this.ensure()
+    if (!verified) {
+      return {
+        board: current,
+        changed: false,
+        reason: 'project_completion_not_verified',
+      }
+    }
+    if (current.status === 'completed') {
+      return {
+        board: current,
+        changed: false,
+        reason: 'project_already_completed',
+      }
+    }
+
+    const now = this.now()
+    this.status = 'completed'
+    this.board = sanitizeStrategicProjectBoard({
+      ...current,
+      status: 'completed',
+      transition_state: '',
+      revision: current.revision + 1,
+      updated_at: now,
+    }, {
+      goalId: this.goalId,
+      objective: this.objective,
+      status: 'completed',
+      now,
+    })
+
+    return {
+      board: structuredClone(this.board),
+      changed: true,
+      reason: 'project_verified_complete',
+    }
+  }
+
   snapshot() {
     return {
       schema: STORE_SCHEMA,
