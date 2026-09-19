@@ -83,6 +83,15 @@ def run(client, results: Path) -> None:
     )
     assert_true(all(obj.get('status') == 'satisfied' for obj in mission_done.get('objectives') or []), f'not all mission objectives satisfied: {mission_done!r}')
 
+    global_snapshot = coordination_call('snapshot', '1')
+    assert_true(global_snapshot.get('schema') == 'swarm_coordination_snapshot_v1', f'global coordination snapshot schema mismatch: {global_snapshot!r}')
+    assert_true(isinstance(global_snapshot.get('tick'), int), f'global coordination snapshot missing simulation tick: {global_snapshot!r}')
+    assert_true((global_snapshot.get('counts') or {}).get('missions', 0) >= 1, f'global coordination snapshot lost mission count: {global_snapshot!r}')
+    assert_true((global_snapshot.get('counts') or {}).get('objectives', 0) >= 2, f'global coordination snapshot lost objective count: {global_snapshot!r}')
+    assert_true(len(global_snapshot.get('missions') or []) <= 1, f'global coordination snapshot ignored requested bound: {global_snapshot!r}')
+    assert_true(len(global_snapshot.get('objectives') or []) <= 1, f'global coordination snapshot objective projection is unbounded: {global_snapshot!r}')
+    assert_true('latestEvents' not in global_snapshot and 'events' not in global_snapshot, f'global coordination snapshot leaked event history: {global_snapshot!r}')
+
     first_mission_work = work_status(mission_work_ids[0])
     second_mission_work = work_status(mission_work_ids[1])
     mission_agents = {first_mission_work['results'][-1]['agentId'], second_mission_work['results'][-1]['agentId']}
