@@ -1423,6 +1423,7 @@ Return exactly one JSON object with exactly three fields:
 reply must be empty except for chat_only, where it may contain one brief conversational response. No markdown.`
 
 export function interactionDecisionQuestions() {
+  const envelope = decisionEnvelopeQuestions()
   return {
     intent: {
       type: 'choice',
@@ -1453,6 +1454,9 @@ export function interactionDecisionQuestions() {
         collapse: 'The incoming request is over-fragmented and adjacent intent can be represented as one bounded objective.',
       },
     },
+    reasoning_budget: envelope.reasoning_budget,
+    planning_horizon: envelope.planning_horizon,
+    observation_budget: envelope.observation_budget,
   }
 }
 
@@ -1460,6 +1464,7 @@ export function parseInteractionDecisionShadow(response) {
   const intentAnswer = response?.answers?.intent
   const conflictAnswer = response?.answers?.queue_conflict
   const granularity = parseDecisionFamily(response, 'granularity', 'keep')
+  const hierarchy = parseHierarchyTelemetry(response)
   if (!intentAnswer || !INTERACTION_INTENTS.has(intentAnswer.choice)) throw new AgentLoopError('Decision provider returned invalid interaction intent')
   if (typeof intentAnswer.confidence !== 'number' || !Number.isFinite(intentAnswer.confidence) || intentAnswer.confidence < 0 || intentAnswer.confidence > 1) {
     throw new AgentLoopError('Decision provider returned invalid interaction confidence')
@@ -1475,6 +1480,10 @@ export function parseInteractionDecisionShadow(response) {
     queue_conflict: intentAnswer.choice === 'amend_current' && conflictAnswer.noul >= 0.5,
     granularity: granularity.decision,
     granularity_confidence: granularity.confidence,
+    reasoning_budget: hierarchy.reasoning_budget,
+    reasoning_confidence: hierarchy.reasoning_confidence,
+    planning_horizon: hierarchy.planning_horizon,
+    observation_budget: hierarchy.observation_budget,
     model: typeof response?.model === 'string' ? response.model : undefined,
     provider: typeof response?.provider === 'string' ? response.provider : undefined,
     usage: response?.usage && typeof response.usage === 'object' ? response.usage : undefined,
@@ -1744,6 +1753,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.loadedSkillContext = new Map()
     this.reasoningTriggerSource = null
     this.reasoningBudgetOverride = null
+    this.observationBudgetOverride = null
+    this.planningHorizonOverride = null
     this.persistQueue = Promise.resolve()
     this.traceRequest = null
     this.traceRequestSequence = 0
@@ -3221,6 +3232,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         : 'continue_current'
     this.requestLifecycle = intent
     this.reasoningTriggerSource = initialHierarchySplit ? 'hierarchy_initial_split' : null
+    const previousReasoningBudget = this.reasoningBudgetOverride
+    const previousObservationBudget = this.observationBudgetOverride
+    const previousPlanningHorizon = this.planningHorizonOverride
+    if (intent === 'new_goal' && routed.decision_shadow) {
+      this.reasoningBudgetOverride = routed.decision_shadow.reasoning_budget ?? null
+      this.observationBudgetOverride = Number.isSafeInteger(routed.decision_shadow.observation_budget) ? routed.decision_shadow.observation_budget : null
+      this.planningHorizonOverride = routed.decision_shadow.planning_horizon ?? null
+    }
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
@@ -3267,6 +3286,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         this.traceRequest = null
       }
       throw error
+    }
+    finally {
+      this.reasoningBudgetOverride = previousReasoningBudget
+      this.observationBudgetOverride = previousObservationBudget
+      this.planningHorizonOverride = previousPlanningHorizon
     }
   }
 
@@ -3554,7 +3578,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
                   : null
     if (routed.route === 'reanchor_plan') this.planUpdateReason = 'reanchor_plan'
     const previousReasoningBudget = this.reasoningBudgetOverride
+    const previousObservationBudget = this.observationBudgetOverride
+    const previousPlanningHorizon = this.planningHorizonOverride
     this.reasoningBudgetOverride = routed.hierarchy?.reasoning_budget ?? null
+    this.observationBudgetOverride = Number.isSafeInteger(routed.hierarchy?.observation_budget) ? routed.hierarchy.observation_budget : null
+    this.planningHorizonOverride = routed.hierarchy?.planning_horizon ?? null
     try {
       const hierarchyInstruction = routed.hierarchy_action === 'split_current_milestone'
         ? ' [HIERARCHY] Jev determined the current milestone is too broad. Preserve the user project goal and verified Plan Tracker progress, replace currentMilestone with a smaller bounded strategic outcome, keep at most three tentative nextMilestones, and make plan contain only executable/verifiable steps for the new current milestone.'
@@ -3581,6 +3609,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     finally {
       this.reasoningTriggerSource = null
       this.reasoningBudgetOverride = previousReasoningBudget
+      this.observationBudgetOverride = previousObservationBudget
+      this.planningHorizonOverride = previousPlanningHorizon
     }
   }
 
@@ -3617,7 +3647,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           ? 'post_step_replan'
           : null
     const previousReasoningBudget = this.reasoningBudgetOverride
+    const previousObservationBudget = this.observationBudgetOverride
+    const previousPlanningHorizon = this.planningHorizonOverride
     this.reasoningBudgetOverride = routed.hierarchy?.reasoning_budget ?? null
+    this.observationBudgetOverride = Number.isSafeInteger(routed.hierarchy?.observation_budget) ? routed.hierarchy.observation_budget : null
+    this.planningHorizonOverride = routed.hierarchy?.planning_horizon ?? null
     try {
       return await this.continueFromModMessage(
         `[MOD] Autorio operation error: ${cleanError}. Dependent queued operations may have been cancelled. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
@@ -3627,6 +3661,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     finally {
       this.reasoningTriggerSource = null
       this.reasoningBudgetOverride = previousReasoningBudget
+      this.observationBudgetOverride = previousObservationBudget
+      this.planningHorizonOverride = previousPlanningHorizon
     }
   }
 
@@ -3696,6 +3732,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.traceEvent('provider.request', {
       round,
       trigger_source: triggerSource,
+      reasoning_budget: this.reasoningBudgetOverride ?? undefined,
+      planning_horizon: this.planningHorizonOverride ?? undefined,
+      observation_budget: this.observationBudgetOverride ?? undefined,
       allow_tools: effectiveAllowTools,
       recovery_attempt: effectiveRecoveryAttempt,
       recovery_kind: traceRecoveryKind,
@@ -3913,6 +3952,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       void this.traceEvent('tool.rejected', { message: error instanceof Error ? error.message : String(error) })
       throw error
     }
+  }
+
+  observationDecisionPressureBudget() {
+    if (Number.isSafeInteger(this.observationBudgetOverride)) return Math.max(0, Math.min(8, this.observationBudgetOverride))
+    return super.observationDecisionPressureBudget()
   }
 
   async handleToolBatch(message, prepared = this.prepareToolBatch(message)) {

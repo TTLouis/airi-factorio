@@ -409,3 +409,30 @@ test('malformed tool arguments and arbitrary tool names fail before RCON tool ex
     assert.ok(contexts.every(context => context.allowTools === true))
   }
 })
+
+
+test('observation decision pressure can allow a bounded multi-observation window', async () => {
+  const rcon = new FakeRcon()
+  let calls = 0
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async (messages) => {
+      calls++
+      if (calls <= 3) return toolMessage(`tool-${calls}`, 'getRecipe', { item: `test-item-${calls}` })
+      if (calls === 4) {
+        assert.match(messages.map(message => String(message.content ?? '')).join('\n'), /up to 2 additional targeted observation call/)
+        return toolMessage('tool-4', 'getRecipe', { item: 'needed-four' })
+      }
+      if (calls === 5) {
+        assert.match(messages.map(message => String(message.content ?? '')).join('\n'), /1 targeted observation call\(s\) remain/)
+        return planMessage([{ name: 'wait', args: { ticks: 1 } }])
+      }
+      throw new Error('unexpected provider call')
+    },
+    systemPrompt: 'NPC test prompt',
+  })
+  agent.observationDecisionPressureBudget = () => 2
+  const result = await agent.request('observe two more facts before acting')
+  assert.equal(calls, 5)
+  assert.equal(result.operations[0].name, 'wait')
+})

@@ -158,6 +158,9 @@ function agentFor(intent, {
               choice: decisionGranularity,
               confidence: 0.9,
             },
+            reasoning_budget: { type: 'choice', choice: decisionGranularity === 'split' ? 'strategic' : 'normal', confidence: 0.85 },
+            planning_horizon: { type: 'choice', choice: decisionGranularity === 'split' ? 'strategic' : 'checkpoint', confidence: 0.84 },
+            observation_budget: { type: 'number', number: decisionGranularity === 'split' ? 3 : 1, confidence: 0.83 },
           },
           usage: {
             input_tokens: 120,
@@ -235,6 +238,9 @@ test('Jev shadow disagreement is observed without changing the active interactio
   assert.equal(decisionCalls[0].questions.intent.type, 'choice')
   assert.equal(decisionCalls[0].questions.queue_conflict.type, 'noul')
   assert.equal(decisionCalls[0].questions.granularity.type, 'choice')
+  assert.equal(decisionCalls[0].questions.reasoning_budget.type, 'choice')
+  assert.equal(decisionCalls[0].questions.planning_horizon.type, 'choice')
+  assert.equal(decisionCalls[0].questions.observation_budget.type, 'number')
   assert.ok(decisionCalls[0].context.signal instanceof AbortSignal)
   assert.equal(rcon.cancelCount, 0)
 })
@@ -254,7 +260,7 @@ test('Jev shadow writes a dedicated decision lifecycle trace without copying the
   assert.equal(events[0].data.mode, 'shadow')
   assert.equal(events[0].data.message_chars, 'what are you doing?'.length)
   assert.equal(events[0].data.message, undefined)
-  assert.deepEqual(events[0].data.question_ids, ['intent', 'queue_conflict', 'granularity'])
+  assert.deepEqual(events[0].data.question_ids, ['intent', 'queue_conflict', 'granularity', 'reasoning_budget', 'planning_horizon', 'observation_budget'])
   assert.equal(events[1].data.intent, 'new_goal')
   assert.equal(events[1].data.input_units, 120)
   assert.equal(events[1].data.output_units, 20)
@@ -564,4 +570,19 @@ test('new broad goal uses Jev granularity to require Project -> Milestone -> Pla
   assert.equal(state.project_board.next_milestones[0].title, 'Reach the next technology capability')
   assert.equal(state.project_board.development_direction, 'vertical')
   assert.equal(state.task_board.steps[0].description, 'continue the updated production goal')
+})
+
+
+test('new broad goal carries Jev semantic budgets into the first planner call', async () => {
+  const { agent, calls } = agentFor('new_goal', {
+    withPlan: false,
+    running: false,
+    decisionIntent: 'new_goal',
+    decisionGranularity: 'split',
+  })
+  await agent.request('prepare all the way to Automation', { sender: 'TTLouis' })
+  const plannerCall = calls.find(call => call.interactionRouter !== true)
+  assert.equal(plannerCall.reasoningBudget, 'strategic')
+  assert.equal(agent.observationBudgetOverride, null)
+  assert.equal(agent.planningHorizonOverride, null)
 })

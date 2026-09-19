@@ -321,6 +321,7 @@ export class NpcAgentLoop {
     this.observationRecoveryRounds = 0
     this.observationOnlyRounds = 0
     this.observationDecisionPressure = false
+    this.observationDecisionPressureRemaining = 0
     this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
     this.planCategoryRetries = 0
@@ -411,6 +412,10 @@ export class NpcAgentLoop {
     return this.runGuarded()
   }
 
+  observationDecisionPressureBudget() {
+    return 1
+  }
+
   prepareContinuationContext() {
     const latestPlan = [...this.messages].reverse().find(message => message.role === 'assistant' && message.tool_calls === undefined)
     const prototypeContext = this.prototypeContext()
@@ -432,6 +437,7 @@ export class NpcAgentLoop {
     this.observationRecoveryRounds = 0
     this.observationOnlyRounds = 0
     this.observationDecisionPressure = false
+    this.observationDecisionPressureRemaining = 0
     this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
     this.planCategoryRetries = 0
@@ -812,10 +818,10 @@ export class NpcAgentLoop {
           continue
         }
         this.toolValidationRetries = 0
-        if (this.observationDecisionPressure && prepared.length !== 1) {
+        if (this.observationDecisionPressure && prepared.length > this.observationDecisionPressureRemaining) {
           return this.recoverPlan(
             generation,
-            new AgentLoopError('Observation decision pressure allowed one targeted observation for one explicitly missing fact, but the provider requested multiple observations. Reuse the evidence already collected and return the next executable action or a truthful blocker.'),
+            new AgentLoopError(`Observation decision pressure has ${this.observationDecisionPressureRemaining} targeted observation call(s) remaining, but the provider requested ${prepared.length}. Reuse the evidence already collected and return the next executable action or a truthful blocker.`),
             round + 1,
           )
         }
@@ -843,29 +849,43 @@ export class NpcAgentLoop {
             content: `[HARNESS] ${reason}. The duplicate result was suppressed and earlier deterministic observations remain available. Tools stay enabled only for a specific missing fact: do not switch to a different read-only observation merely to avoid the duplicate guard. If the existing evidence already identifies a safe executable next action, return a strict-JSON plan now; otherwise make one targeted observation for the exact missing fact or report a truthful blocker. Do not guess an unobserved Factorio identity and do not force a mutation just to make progress.`,
           })
         }
-        if (this.observationOnlyRounds >= OBSERVATION_DECISION_PRESSURE_ROUNDS) {
-          if (!this.observationDecisionPressure) {
-            this.observationDecisionPressure = true
-            await this.recoveryDiagnostic({
-              failure_class: 'observation_no_progress',
-              reason_code: 'observation_decision_pressure',
-              reason: `Consecutive observation-only rounds reached ${this.observationOnlyRounds}`,
-              retry: 1,
-              retry_limit: 1,
-              tools_enabled: true,
-            })
-            this.messages.push({
-              role: 'user',
-              content: `[HARNESS] Decision pressure after ${this.observationOnlyRounds} consecutive observation-only rounds. If the live evidence already parameterizes a safe executable next action, return one strict-JSON plan now. If execution is still impossible, identify exactly one missing fact and use only one targeted observation tool call for that fact on the next round; otherwise report a truthful blocker. Do not switch among unrelated read-only tools merely to defer the decision.`,
-            })
-          }
-          else {
+        if (this.observationDecisionPressure) {
+          this.observationDecisionPressureRemaining = Math.max(0, this.observationDecisionPressureRemaining - prepared.length)
+          if (this.observationDecisionPressureRemaining <= 0) {
             return this.recoverPlan(
               generation,
-              new AgentLoopError('The single targeted observation allowed by decision pressure is complete. Stop observing. Reuse the live evidence already collected and return the next executable action, or a truthful blocker naming the still-missing fact.'),
+              new AgentLoopError('The targeted observation budget allowed by decision pressure is complete. Stop observing. Reuse the live evidence already collected and return the next executable action, or a truthful blocker naming the still-missing fact.'),
               round + 1,
             )
           }
+          this.messages.push({
+            role: 'user',
+            content: `[HARNESS] Decision-pressure observation budget: ${this.observationDecisionPressureRemaining} targeted observation call(s) remain. Reuse existing evidence first; spend another observation only on a fact still required to choose or parameterize the next action.`,
+          })
+        }
+        else if (this.observationOnlyRounds >= OBSERVATION_DECISION_PRESSURE_ROUNDS) {
+          const allowance = Math.max(0, Math.min(8, Math.trunc(this.observationDecisionPressureBudget())))
+          this.observationDecisionPressure = true
+          this.observationDecisionPressureRemaining = allowance
+          await this.recoveryDiagnostic({
+            failure_class: 'observation_no_progress',
+            reason_code: 'observation_decision_pressure',
+            reason: `Consecutive observation-only rounds reached ${this.observationOnlyRounds}; targeted allowance ${allowance}`,
+            retry: 1,
+            retry_limit: Math.max(1, allowance),
+            tools_enabled: allowance > 0,
+          })
+          if (allowance <= 0) {
+            return this.recoverPlan(
+              generation,
+              new AgentLoopError('Observation decision pressure permits no additional observations for this decision. Reuse the live evidence already collected and return the next executable action, or a truthful blocker naming the still-missing fact.'),
+              round + 1,
+            )
+          }
+          this.messages.push({
+            role: 'user',
+            content: `[HARNESS] Decision pressure after ${this.observationOnlyRounds} consecutive observation-only rounds. If the live evidence already parameterizes a safe executable next action, return one strict-JSON plan now. Otherwise you may spend up to ${allowance} additional targeted observation call(s), only on facts still required for this decision. Do not switch among unrelated read-only tools merely to defer the decision.`,
+          })
         }
         continue
       }

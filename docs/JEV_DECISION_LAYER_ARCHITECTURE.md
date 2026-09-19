@@ -1051,7 +1051,7 @@ If this split works, SGLuna should feel more autonomous and more natural at the 
 
 The hierarchy telemetry now has one deliberately narrow behavioral effect. After a successful post-step boundary, a Jev `continue_current` may be converted to `wait_runtime` only when deterministic runtime work is authoritatively healthy and Jev also says `granularity=keep` plus `development=maintain`. A requested `wait_runtime` is rejected back to the planner when Jev simultaneously says the scope should split or the development direction is vertical/horizontal/recover. Failure boundaries never gain this shortcut.
 
-This is intentionally not yet milestone decomposition or reasoning-budget control. `reasoning_budget`, `planning_horizon`, and `observation_budget` remain diagnostic/shadow fields.
+The hierarchy controls are now progressively active rather than telemetry-only: `reasoning_budget` reaches the provider capability shim, and `observation_budget` is runtime-enforced for decision-pressure observation windows. `planning_horizon` is carried with the planner decision context and trace but does not itself grant authority to mutate future milestones.
 
 ## Promotion criteria: when Jev's hierarchy becomes the real long-horizon control model
 
@@ -1156,7 +1156,7 @@ Promotion requires:
 - unsupported reasoning controls degrade safely;
 - higher budget does not become sticky after one difficult decision;
 - successful progress decays back toward normal/micro;
-- observation budget is enforced by runtime rather than trusted from model output.
+- observation budget is enforced by runtime rather than trusted from model output. **Implemented:** Jev may request 0-8 additional targeted read-only observations for the current decision, and the runtime counts/enforces that allowance once observation decision pressure begins.
 
 ### 7. Long-task E2E acceptance
 
@@ -1346,3 +1346,14 @@ The current DeepSeek-compatible adapter maps these onto the effort controls it s
 - `strategic -> max`
 
 Multiple semantic classes may collapse onto one provider setting when the provider exposes fewer levels. Non-DeepSeek providers do not receive DeepSeek-specific fields. Strict recovery, output-budget recovery, interaction routing, and action-omission safety paths retain higher precedence than Jev's requested semantic budget.
+
+
+### Jev observation budget becomes runtime-enforced
+
+The old observation-decision-pressure path always allowed exactly one final targeted observation after three consecutive observation-only rounds. That fixed allowance conflicted with legitimately complex milestone decisions.
+
+The runtime now keeps the same pressure trigger, but the final targeted observation window is controlled by Jev's semantic `observation_budget` and clamped to `0..8`. The budget counts observation calls, not reasoning tokens, and is enforced by the runtime. A model cannot exceed it by requesting a larger batch.
+
+For a new broad goal, the interaction-side Jev request now returns `reasoning_budget`, `planning_horizon`, and `observation_budget` together with granularity, so the first planner turn is not forced back onto the old one-observation behavior. Post-step planner wakes use the same envelope.
+
+The planning horizon remains semantic context/telemetry for now; it does not authorize the planner to rewrite the durable user project or verified milestone history.
