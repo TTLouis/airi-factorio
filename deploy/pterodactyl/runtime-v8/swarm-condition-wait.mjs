@@ -230,3 +230,21 @@ export function pollSwarmConditionWait(wait, snapshot, { tick } = {}) {
   const observation = observeSwarmWaitCondition(wait.condition, snapshot)
   return applySwarmConditionObservation(wait, observation, { tick })
 }
+
+
+export function summarizeSwarmConditionWait(wait, snapshot = {}) {
+  if (!wait || wait.kind !== 'swarm_condition_wait_v1' || wait.state !== 'active') return undefined
+  const condition = sanitizeSwarmWaitCondition(wait.condition)
+  if (!condition) return undefined
+  return {
+    id: clean(wait.id, 120),
+    mode: wait.mode === 'passive_progress' ? 'passive_progress' : 'completion',
+    state: 'active',
+    condition,
+    checks: Number.isSafeInteger(wait.checks) ? wait.checks : 0,
+    max_checks: Number.isSafeInteger(wait.max_checks) ? wait.max_checks : 0,
+    registered_tick: nonNegativeInteger(wait.registered_tick),
+    updated_tick: nonNegativeInteger(wait.updated_tick),
+    observation: observeSwarmWaitCondition(condition, snapshot),
+  }
+}
