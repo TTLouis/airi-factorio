@@ -2,9 +2,26 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { task_board_resource_rows, task_board_wanted_rows } from './task_board_ui'
 
+function taskBoardUiSource() {
+  const main = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  const constants = readFileSync(new URL('./task_board_ui_constants.ts', import.meta.url), 'utf8')
+  // UI constants moved into a namespace to preserve Factorio Lua local headroom.
+  // Normalize that namespace for source-architecture assertions while retaining
+  // the constants module so declaration/geometry checks still test real code.
+  return `${main.replaceAll('ui_constants.', '')}\n${constants}`
+}
+
+function taskBoardDebugSource() {
+  return [
+    readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8'),
+    readFileSync(new URL('./task_board_debug_render.ts', import.meta.url), 'utf8'),
+  ].join('\n')
+}
+
+
 describe('SGLuna NPC console layout regressions', () => {
-  const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
-  const debug_source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+  const source = taskBoardUiSource()
+  const debug_source = taskBoardDebugSource()
 
   it('keeps a useful inventory viewport across display sizes while reserving sidebar room for equipment', () => {
     expect(task_board_resource_rows(720)).toBe(5)
