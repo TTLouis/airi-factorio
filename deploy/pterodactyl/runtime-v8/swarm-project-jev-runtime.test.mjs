@@ -343,3 +343,58 @@ test('runtime rejects receipt-only milestone progress even when caller asks to c
   assert.equal(result.reason, 'strategic_milestone_not_authoritatively_complete')
   assert.equal(runtime.currentBoard().current_milestone.title, 'Bootstrap power')
 })
+
+
+test('runtime persists an explicit next strategic goal only after prior completion', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const makeRcon = () => ({
+    async command() {
+      return JSON.stringify(coordinationFixture())
+    },
+  })
+
+  const first = new SwarmProjectJevRuntime({
+    rcon: makeRcon(),
+    stateFile: filename,
+    goalId: 'goal-red-science',
+    objective: 'Automate red science',
+  })
+  await first.initialize()
+
+  await assert.rejects(
+    () => first.startNextGoal({
+      goalId: 'goal-green-science',
+      objective: 'Automate green science',
+    }),
+    /requires completed prior goal/,
+  )
+
+  await first.bindGoal({
+    goalId: 'goal-red-science',
+    objective: 'Automate red science',
+    status: 'completed',
+  })
+  const next = await first.startNextGoal({
+    goalId: 'goal-green-science',
+    objective: 'Automate green science',
+  })
+  await first.flush()
+
+  assert.equal(next.goal_id, 'goal-green-science')
+  assert.equal(next.status, 'active')
+  assert.equal(next.revision, 1)
+
+  const reconstructed = new SwarmProjectJevRuntime({
+    rcon: makeRcon(),
+    stateFile: filename,
+  })
+  const loaded = await reconstructed.initialize()
+
+  assert.equal(loaded.loaded, true)
+  assert.equal(reconstructed.currentBoard().goal_id, 'goal-green-science')
+  assert.equal(reconstructed.currentBoard().title, 'Automate green science')
+  assert.equal(reconstructed.currentBoard().status, 'active')
+  assert.deepEqual(reconstructed.currentBoard().completed_milestones, [])
+})
