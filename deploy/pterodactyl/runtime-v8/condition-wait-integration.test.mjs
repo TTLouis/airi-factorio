@@ -620,3 +620,53 @@ test('granularity collapse wakes bounded simplification instead of silently beha
   assert.equal(routed.hierarchy_action, 'collapse_current_scope')
   assert.equal(routed.fallback_reason, 'hierarchy_collapse_requested')
 })
+
+
+test('adaptive observation-pressure completion enters no-more-observation repair', async () => {
+  const { agent } = makeAgent({
+    decisionProvider: async () => decisionResponse('pause_recoverable'),
+  })
+
+  const result = await agent.recoverPlan(
+    agent.generation,
+    new Error('The targeted observation budget allowed by decision pressure is complete. Stop observing. Reuse the live evidence already collected and return the next executable action, or a truthful blocker naming the still-missing fact.'),
+    1,
+  )
+
+  assert.equal(result.goalStatus, 'paused')
+  assert.equal(agent.actionOmissionRepairActive, true)
+  assert.equal(agent.actionOmissionObservationUsed, true)
+  assert.equal(agent.actionOmissionForceNoTools, true)
+})
+
+test('recovery route does not inherit the parent planning reasoning budget', async () => {
+  let seenOptions
+  const { agent } = makeAgent({
+    decisionProvider: async () => decisionResponse('continue_low'),
+    provider: async (_messages, options) => {
+      seenOptions = options
+      throw new Error('stop after capture')
+    },
+  })
+  agent.reasoningBudgetOverride = 'strategic'
+
+  await assert.rejects(
+    agent.recoverPlan(agent.generation, new Error('provider returned invalid JSON'), 1),
+    /provider_jev_recovery_route_failed/,
+  )
+  assert.equal(seenOptions.triggerSource, 'recovery_continue_low')
+  assert.equal(seenOptions.reasoningBudget, undefined)
+  assert.equal(agent.reasoningBudgetOverride, 'strategic')
+})
+
+test('recovery targeted observation is rejected when the Jev observation budget is exhausted', async () => {
+  const { agent } = makeAgent({
+    decisionProvider: async () => decisionResponse('targeted_observation'),
+  })
+  agent.observationBudgetRemaining = 0
+
+  const routed = await agent.routeRecoveryDecision(new Error('one mutable fact is missing'), 1)
+  assert.equal(routed.requested_route, 'targeted_observation')
+  assert.equal(routed.route, 'fallback_runtime')
+  assert.equal(routed.rejection_reason, 'targeted_observation_budget_exhausted')
+})
