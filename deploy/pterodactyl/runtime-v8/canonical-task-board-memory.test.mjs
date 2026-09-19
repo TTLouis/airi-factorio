@@ -742,3 +742,20 @@ test('hierarchy split transaction survives persistence and stays in model contex
   assert.match(restored.planContext('npc:airi'), /\[HIERARCHY_TRANSITION\]/)
   assert.match(restored.planContext('npc:airi'), /Do not continue the old flat Plan Tracker/)
 })
+
+
+test('milestone transition flags survive persistence', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', planState({
+    milestone_transition_pending: true,
+    milestone_plan_pending: true,
+  }))
+
+  const snapshot = memory.snapshot()
+  const restored = new CanonicalTaskBoardMemory()
+  restored.restore(snapshot)
+  const state = restored.currentPlan('npc:airi')
+
+  assert.equal(state.milestone_transition_pending, true)
+  assert.equal(state.milestone_plan_pending, true)
+})
