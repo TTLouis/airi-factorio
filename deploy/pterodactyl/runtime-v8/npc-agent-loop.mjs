@@ -3490,15 +3490,27 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     this.reasoningTriggerSource = routed.hierarchy_action === 'split_current_milestone'
       ? 'hierarchy_split'
-      : routed.route === 'continue_current'
-        ? 'post_step_continue'
-        : routed.route === 'replan'
-          ? 'post_step_replan'
-          : null
+      : routed.hierarchy_action === 'advance_next_milestone'
+        ? 'hierarchy_advance'
+        : routed.hierarchy_action === 'replan_project'
+          ? 'hierarchy_replan_project'
+          : routed.hierarchy_action === 'project_complete_candidate'
+            ? 'hierarchy_project_complete_candidate'
+            : routed.route === 'continue_current'
+              ? 'post_step_continue'
+              : routed.route === 'replan'
+                ? 'post_step_replan'
+                : null
     try {
       const hierarchyInstruction = routed.hierarchy_action === 'split_current_milestone'
         ? ' [HIERARCHY] Jev determined the current milestone is too broad. Preserve the user project goal and verified Plan Tracker progress, replace currentMilestone with a smaller bounded strategic outcome, keep at most three tentative nextMilestones, and make plan contain only executable/verifiable steps for the new current milestone.'
-        : ''
+        : routed.hierarchy_action === 'advance_next_milestone'
+          ? ' [HIERARCHY] The previous milestone is authoritatively verified complete and Jev approved the first tentative next milestone. Build a fresh bounded Plan Tracker only for the newly active currentMilestone. You may refresh the tentative nextMilestones if needed, but do not rewrite the user project goal.'
+          : routed.hierarchy_action === 'replan_project'
+            ? ' [HIERARCHY] The previous milestone is authoritatively verified complete, but Jev requires a project-level replan. Choose one new bounded currentMilestone, keep at most three tentative nextMilestones, and make plan contain only the new current milestone steps.'
+            : routed.hierarchy_action === 'project_complete_candidate'
+              ? ' [HIERARCHY] The previous milestone is authoritatively verified complete and Jev believes the user-level project may now be complete. Verify that project goal from authoritative evidence. If it is not proven complete, choose the next bounded currentMilestone instead. Jev is not completion authority.'
+              : ''
       const result = await this.continueFromModMessage(
         `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}${hierarchyInstruction}`,
         'factorio.completion_continuation',
@@ -4316,7 +4328,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         completionEvidence,
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
-        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason) || triggerSource === 'hierarchy_split',
+        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason) || ['hierarchy_split', 'hierarchy_advance', 'hierarchy_replan_project', 'hierarchy_project_complete_candidate'].includes(triggerSource),
+        newMilestone: ['hierarchy_advance', 'hierarchy_replan_project'].includes(triggerSource),
         previousState,
       }) ?? stateResult
       const projectProposalAllowed = Boolean(plan.project)
@@ -4325,7 +4338,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         && !this.outputBudgetRecoveryGuard
         && (!previousState?.project_board?.current_milestone
           || ['new_goal', 'request', 'amend_current', 'failure', 'reanchor_plan'].includes(this.planUpdateReason)
-          || triggerSource === 'hierarchy_split')
+          || ['hierarchy_split', 'hierarchy_advance', 'hierarchy_replan_project', 'hierarchy_project_complete_candidate'].includes(triggerSource))
       if (projectProposalAllowed) {
         const projectBoard = this.memory.updateProjectBoard?.(this.requestInfo.memoryKey, plan.project)
         if (projectBoard && stateResult?.state) {
