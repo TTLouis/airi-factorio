@@ -2947,6 +2947,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         fallback_reason: fallbackReason,
         runtime_healthy: runtimeHealthy,
         runtime_reason: runtimeReason,
+        hierarchy_action: hierarchyAction,
         decision: {
           provider: decision.provider,
           model: decision.model,
@@ -4329,7 +4330,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
         allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason) || ['hierarchy_split', 'hierarchy_advance', 'hierarchy_replan_project', 'hierarchy_project_complete_candidate'].includes(triggerSource),
-        newMilestone: ['hierarchy_advance', 'hierarchy_replan_project'].includes(triggerSource),
+        newMilestone: ['hierarchy_advance', 'hierarchy_replan_project'].includes(triggerSource)
+          || (triggerSource === 'hierarchy_project_complete_candidate' && durablePlan.plan.length > 0),
         previousState,
       }) ?? stateResult
       const projectProposalAllowed = Boolean(plan.project)
