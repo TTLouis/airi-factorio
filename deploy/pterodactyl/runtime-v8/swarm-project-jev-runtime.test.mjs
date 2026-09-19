@@ -13,8 +13,11 @@ function coordinationFixture() {
     limit: 12,
     counts: {
       missions: 1,
+      incompleteMissions: 1,
       objectives: 1,
+      incompleteObjectives: 1,
       projects: 1,
+      incompleteProjects: 1,
       work: 1,
       requests: 0,
       claims: 0,
