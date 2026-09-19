@@ -2451,15 +2451,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   async runGuarded() {
+    const generation = this.generation
     try {
-      return await super.runGuarded()
+      return await this.runTurn()
     }
     catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const planState = this.memory.currentPlan?.(this.activePlanKey())
+      const recoverablePlannerFailure = planState?.status === 'active'
+        && /provider_action_omission_repair_failed|provider_output_budget_exhausted|Provider strict recovery could not safely resolve remaining canonical work/i.test(message)
+      if (!recoverablePlannerFailure && generation === this.generation) this.reset()
       if (this.traceRequest) {
-        const message = error instanceof Error ? error.message : String(error)
         await this.traceEvent('request.failed', {
           stage: 'runtime',
           message,
+          recoverable: recoverablePlannerFailure,
           usage: this.traceRequest.usage,
           failure_snapshot: this.failureSnapshot('runtime', message),
         })
