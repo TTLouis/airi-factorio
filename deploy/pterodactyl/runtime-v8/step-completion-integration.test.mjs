@@ -197,6 +197,29 @@ test('Jev normalizes a checkpoint from high-level gather intent before execution
   assert.equal(summary.contract.requirements[0].minimum, 10)
 })
 
+test('compound Jev assessment cannot accept a one-requirement checkpoint as step completion', async () => {
+  const state = activeState({ includeCheckpoint: false })
+  state.task_board.evidence = []
+  const { agent, memory } = agentWithState({
+    state,
+    decisionProvider: async () => ({
+      ...checkpointDecision('candidate_1', 'checkpoint_here'),
+      answers: {
+        ...checkpointDecision('candidate_1', 'checkpoint_here').answers,
+        compound_step: { type: 'noul', noul: 0.92 },
+      },
+    }),
+  })
+
+  const result = await agent.routeStepCheckpointDecision({
+    operations: [{ name: 'gather_resource', args: { resource_name: 'stone', count: 10, search_radius: 64 } }],
+  })
+
+  assert.equal(result.boundary, 'split_recommended')
+  const checkpoint = memory.planByNpc.get('npc:airi').task_board.evidence.find(item => item.kind === 'step_checkpoint_contract')
+  assert.equal(JSON.parse(checkpoint.summary).boundary, 'split_recommended')
+})
+
 test('completion uses the pre-admission checkpoint and does not ask Jev to reinterpret low-level task names', async () => {
   let completionJevCalls = 0
   const { agent } = agentWithState({
