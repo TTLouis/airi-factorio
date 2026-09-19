@@ -7,7 +7,7 @@ import {
   compactPlanStateContent,
   providerRequest,
 } from './provider.mjs'
-import { providerToolDefinitions } from './structured-policy.mjs'
+import { providerToolDefinitions, toolDefinitions } from './structured-policy.mjs'
 
 function fakeProviderResponse() {
   return new Response(JSON.stringify({
