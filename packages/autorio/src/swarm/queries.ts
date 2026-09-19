@@ -196,6 +196,33 @@ function clone_evidence(refs: EvidenceRef[]) {
   }))
 }
 
+
+function clone_location(location: { surfaceIndex: number, position: { x: number, y: number }, radius?: number } | undefined) {
+  return location
+    ? {
+        surfaceIndex: location.surfaceIndex,
+        position: { x: location.position.x, y: location.position.y },
+        radius: location.radius,
+      }
+    : undefined
+}
+
+function clone_acceptance(acceptance: SwarmStorage['missions'][string]['acceptance']) {
+  return acceptance.map(condition => ({
+    ...condition,
+    location: clone_location(condition.location),
+  }))
+}
+
+function clone_work_goal(goal: SwarmStorage['board']['work'][string]['goal']) {
+  if (goal.kind === 'acquire_items') return { ...goal, source: clone_location(goal.source) }
+  if (goal.kind === 'deliver_items') return { ...goal, destination: clone_location(goal.destination)! }
+  if (goal.kind === 'gather_resource') return { ...goal, source: clone_location(goal.source)! }
+  if (goal.kind === 'survey_area') return { ...goal, area: clone_location(goal.area)! }
+  if (goal.kind === 'defend_area' || goal.kind === 'repair_area') return { ...goal, area: clone_location(goal.area)! }
+  return { ...goal }
+}
+
 function bounded_sorted_ids<T extends { id: string }>(records: Record<string, T>, limit: number) {
   const values: T[] = []
   for (const id in records) values.push(records[id])
@@ -239,7 +266,7 @@ export function build_swarm_coordination_snapshot(swarm: SwarmStorage, tick: num
     status: mission.status,
     priority: mission.priority,
     goal: mission.goal,
-    acceptance: mission.acceptance.map(condition => ({ ...condition })),
+    acceptance: clone_acceptance(mission.acceptance),
     acceptanceState: clone_acceptance_state(mission.acceptanceState),
     objectiveIds: [...mission.objectiveIds],
     blockers: clone_blockers(mission.blockers),
@@ -253,7 +280,7 @@ export function build_swarm_coordination_snapshot(swarm: SwarmStorage, tick: num
     description: objective.description,
     status: objective.status,
     dependencies: [...objective.dependencies],
-    acceptance: objective.acceptance.map(condition => ({ ...condition })),
+    acceptance: clone_acceptance(objective.acceptance),
     acceptanceState: clone_acceptance_state(objective.acceptanceState),
     evidence: clone_evidence(objective.evidence),
     projectIds: [...objective.projectIds],
@@ -268,16 +295,7 @@ export function build_swarm_coordination_snapshot(swarm: SwarmStorage, tick: num
     status: project.status,
     scope: {
       description: project.scope.description,
-      allowedArea: project.scope.allowedArea
-        ? {
-            surfaceIndex: project.scope.allowedArea.surfaceIndex,
-            position: {
-              x: project.scope.allowedArea.position.x,
-              y: project.scope.allowedArea.position.y,
-            },
-            radius: project.scope.allowedArea.radius,
-          }
-        : undefined,
+      allowedArea: clone_location(project.scope.allowedArea),
       authorityTags: project.scope.authorityTags ? [...project.scope.authorityTags] : undefined,
     },
     revision: project.revision,
@@ -293,7 +311,7 @@ export function build_swarm_coordination_snapshot(swarm: SwarmStorage, tick: num
     missionId: item.missionId,
     objectiveId: item.objectiveId,
     projectId: item.projectId,
-    goal: { ...item.goal },
+    goal: clone_work_goal(item.goal),
     priority: item.priority,
     status: item.status,
     dependencies: [...item.dependencies],
@@ -317,12 +335,28 @@ export function build_swarm_coordination_snapshot(swarm: SwarmStorage, tick: num
     itemName: request.itemName,
     count: request.count,
     ratePerSecond: request.ratePerSecond,
+    destination: clone_location(request.destination),
     blocksWorkIds: [...request.blocksWorkIds],
     satisfyingWorkIds: [...request.satisfyingWorkIds],
     evidence: clone_evidence(request.evidence),
     createdTick: request.createdTick,
     updatedTick: request.updatedTick,
     revision: request.revision,
+  }))
+  const warnings = board.warnings.map(warning => ({
+    id: warning.id,
+    kind: warning.kind,
+    source: warning.source,
+    severity: warning.severity,
+    description: warning.description,
+    missionId: warning.missionId,
+    projectId: warning.projectId,
+    workId: warning.workId,
+    location: clone_location(warning.location),
+    active: warning.active,
+    createdTick: warning.createdTick,
+    resolvedTick: warning.resolvedTick,
+    evidence: clone_evidence(warning.evidence),
   }))
   const claims = bounded_sorted_ids(swarm.board.claims, bounded).map(claim => ({
     id: claim.id,
@@ -420,6 +454,7 @@ export function build_swarm_coordination_snapshot(swarm: SwarmStorage, tick: num
     projects,
     work,
     requests,
+    warnings,
     claims,
     results,
     agents,
