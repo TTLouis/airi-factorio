@@ -276,7 +276,14 @@ test('post-step Jev receives a bounded grounded gate state instead of dialogue h
   assert.equal(captured.state.autorio.latest_basic_operation_result.placed_unit_number, undefined)
   assert.equal(captured.state.skills[0].id, 'burner-coal-loop')
   assert.equal(Object.prototype.hasOwnProperty.call(captured.state, 'dialogue'), false)
-  assert.deepEqual(Object.keys(captured.questions), ['route'])
+  assert.deepEqual(Object.keys(captured.questions), [
+    'route',
+    'granularity',
+    'development',
+    'reasoning_budget',
+    'planning_horizon',
+    'observation_budget',
+  ])
 })
 
 test('invalid Jev post-step output fails open to the planner', async () => {
