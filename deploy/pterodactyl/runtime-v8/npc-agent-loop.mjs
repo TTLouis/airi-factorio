@@ -11,6 +11,7 @@ import {
 } from './common.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
 import { renderOperation, toolCommand } from './structured-policy.mjs'
+import { parseStrategicProjectProposal } from './strategic-project-board.mjs'
 
 export { AgentLoopError }
 
@@ -28,6 +29,10 @@ The Pterodactyl harness may provide a [PLAN_STATE] message. It is harness-owned 
 The task_board field is the canonical single-NPC Task Board Lite. Its stable step ids, statuses, completed count, evidence, and revision are harness-owned. Your plan/currentStep fields are proposals used to advance or intentionally replan the remaining work; do not assume that changing the length of your plan array resets completed progress.
 
 For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
+
+For a genuinely long-horizon goal, you may add one optional root field named project beside chatMessage/plan/currentStep/operations. project must be {"currentMilestone":{"title":"...","completionSummary":"..."},"nextMilestones":[{"title":"...","completionSummary":"..."}],"developmentDirection":"vertical|horizontal|maintain|recover"}. Keep exactly one current milestone and at most three tentative next milestones. The user goal itself is harness-owned and must not be rewritten in project. currentMilestone is a strategic outcome above the NPC Task Board; plan contains only executable or verifiable work for that current milestone. For short tasks, omit project. When [PROJECT_STATE] already contains the unchanged current milestone, normally omit project rather than restating or reshuffling it.
+
+Vertical means removing a blocker on the active milestone critical path. Horizontal means strengthening an already-viable capability for throughput, resilience, logistics, buffers, or future scale. Maintain means continue a valid current strategy. Recover means restore invalidated capability or world state before resuming development.
 
 An empty operations array normally means no new Autorio world action will happen after your reply. Never claim that a finite action is continuing when neither a new operation nor a live persistent runtime mode exists. Persistent controllers such as follow are different: if a read-only status tool proves the controller is active, healthy, and live, operations: [] may accurately describe that background mode without submitting a duplicate operation. When the whole requested goal is actually verified complete, return plan: [], currentStep: 0, operations: [], and say it is complete.
 
@@ -553,6 +558,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.traceRequest = null
     this.traceRequestSequence = 0
     this.planUpdateReason = 'request'
+    this.strategicProjectState = undefined
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
       ?? (process.env.NODE_TEST_CONTEXT ? null : path.resolve(process.cwd(), 'logs', 'airi-behavior.jsonl'))
@@ -737,6 +743,69 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     void this.traceEvent('request.cancelled', { reason })
     this.traceRequest = null
     return super.cancel()
+  }
+
+  setStrategicProjectState(board) {
+    if (!board || typeof board !== 'object' || Array.isArray(board) || !board.goal_id) {
+      this.strategicProjectState = undefined
+      return
+    }
+
+    this.strategicProjectState = {
+      kind: 'strategic_project_board_v1',
+      goal_id: cleanMemoryText(board.goal_id, 100),
+      title: cleanMemoryText(board.title, 500),
+      status: cleanMemoryText(board.status, 32),
+      current_milestone: board.current_milestone
+        ? {
+            id: cleanMemoryText(board.current_milestone.id, 100),
+            title: cleanMemoryText(board.current_milestone.title, 500),
+          }
+        : undefined,
+      next_milestones: Array.isArray(board.next_milestones)
+        ? board.next_milestones.slice(0, 3).map(item => ({
+            id: cleanMemoryText(item?.id, 100),
+            title: cleanMemoryText(item?.title, 500),
+          }))
+        : [],
+      development_direction: cleanMemoryText(board.development_direction, 32),
+      transition_state: cleanMemoryText(board.transition_state, 64),
+      revision: Number.isSafeInteger(board.revision) ? board.revision : 0,
+    }
+  }
+
+  providerMessages() {
+    const messages = super.providerMessages()
+    if (!this.strategicProjectState) return messages
+    messages.splice(1, 0, {
+      role: 'user',
+      content: `[PROJECT_STATE] Harness-owned global strategic project state. It is read-only context; propose changes only through the optional project field and do not rewrite goal_id or title.\n${JSON.stringify(this.strategicProjectState)}`,
+    })
+    return messages
+  }
+
+  parsePlanMessage(message) {
+    if (message?.tool_calls !== undefined) return super.parsePlanMessage(message)
+    if (typeof message?.content !== 'string') return super.parsePlanMessage(message)
+
+    let raw
+    try { raw = JSON.parse(message.content) }
+    catch { return super.parsePlanMessage(message) }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.project === undefined) {
+      return super.parsePlanMessage(message)
+    }
+
+    const project = parseStrategicProjectProposal(raw.project)
+    const base = { ...raw }
+    delete base.project
+    const plan = super.parsePlanMessage({
+      ...message,
+      content: JSON.stringify(base),
+    })
+    return {
+      ...plan,
+      strategicProjectProposal: project,
+    }
   }
 
   async callProvider(current, generation, { round, allowTools = true, recoveryAttempt = 0 }) {
@@ -925,6 +994,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       goalStatus: stateResult?.state?.status,
       taskBoard: visibleTaskBoard(stateResult?.state?.task_board),
       persistentRuntime: stateResult?.state?.persistent_runtime,
+      strategicProjectProposal: plan.strategicProjectProposal,
     }
   }
 
