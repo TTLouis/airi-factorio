@@ -12,6 +12,7 @@ import { create_survey_mission_workflow } from './mission_workflow'
 import type { SurveyMissionTarget } from './mission_workflow'
 import { create_cooperative_craft_mission_workflow } from './production_workflow'
 import { new_request_coordinator } from './request_coordinator'
+import { build_swarm_coordination_snapshot } from './queries'
 import { new_standalone_actor_pool } from './standalone_actor_pool'
 import { get_swarm_storage } from './storage'
 import type { ActorCapability, ActorId, MissionId, RequestId, WorkId } from './types'
@@ -160,6 +161,10 @@ export function new_swarm_runtime_service() {
       tick: game.tick,
       actors: ids.map(id => actor_status(id)),
     }
+  }
+
+  function coordination_snapshot(limit: number = 12) {
+    return build_swarm_coordination_snapshot(swarm, game.tick, limit)
   }
 
   function create_survey_work(
@@ -486,6 +491,7 @@ export function new_swarm_runtime_service() {
       priority,
       surface_index,
     ),
+    snapshot: (limit: number = 12) => coordination_snapshot(limit),
     mission_status: (mission_id?: MissionId) => mission_status(mission_id),
     work_status: (work_id?: WorkId) => work_status(work_id),
     block_work_for_observation: (
@@ -505,6 +511,7 @@ export function new_swarm_runtime_service() {
     create_survey_work,
     create_survey_mission,
     create_cooperative_craft_mission,
+    coordination_snapshot,
     mission_status,
     work_status,
     block_work_for_observation,
