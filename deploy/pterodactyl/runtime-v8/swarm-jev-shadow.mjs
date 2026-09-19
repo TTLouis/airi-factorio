@@ -22,6 +22,12 @@ function boundedList(value) {
   return Array.isArray(value) ? value.slice(0, MAX_ITEMS) : []
 }
 
+
+function authoritativeCount(snapshot, key, fallback) {
+  const value = snapshot?.counts?.[key]
+  return Number.isSafeInteger(value) && value >= 0 ? value : fallback
+}
+
 function summarizeRecords(records, idKeys = ['id']) {
   return boundedList(records).map((record) => {
     const id = idKeys.map(key => record?.[key]).find(value => value !== undefined && value !== null)
@@ -48,7 +54,10 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
   const projectSource = Array.isArray(snapshot.projects) ? snapshot.projects : []
   const requestSource = Array.isArray(snapshot.requests) ? snapshot.requests : []
   const workSource = Array.isArray(snapshot.work) ? snapshot.work : []
+  const warningSource = Array.isArray(snapshot.warnings) ? snapshot.warnings : []
   const claimSource = Array.isArray(snapshot.claims) ? snapshot.claims : []
+  const resultSource = Array.isArray(snapshot.results) ? snapshot.results : []
+  const agentSource = Array.isArray(snapshot.agents) ? snapshot.agents : []
   const actorSource = Array.isArray(snapshot.actors) ? snapshot.actors : []
   const evidenceSource = Array.isArray(snapshot.evidence) ? snapshot.evidence : []
   const missions = boundedList(missionSource)
@@ -56,7 +65,10 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
   const projects = boundedList(projectSource)
   const requests = boundedList(requestSource)
   const work = boundedList(workSource)
+  const warnings = boundedList(warningSource)
   const claims = boundedList(claimSource)
+  const results = boundedList(resultSource)
+  const agents = boundedList(agentSource)
   const actors = boundedList(actorSource)
   const evidence = boundedList(evidenceSource)
   const strategicBoard = snapshot.strategicBoard && typeof snapshot.strategicBoard === 'object'
@@ -122,13 +134,16 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
     condition_wait: conditionWait,
     recovery: recoveryCapsule,
     counts: {
-      missions: missionSource.length,
-      objectives: objectiveSource.length,
-      projects: projectSource.length,
-      requests: requestSource.length,
-      work: workSource.length,
-      claims: claimSource.length,
-      actors: actorSource.length,
+      missions: authoritativeCount(snapshot, 'missions', missionSource.length),
+      objectives: authoritativeCount(snapshot, 'objectives', objectiveSource.length),
+      projects: authoritativeCount(snapshot, 'projects', projectSource.length),
+      requests: authoritativeCount(snapshot, 'requests', requestSource.length),
+      work: authoritativeCount(snapshot, 'work', workSource.length),
+      warnings: authoritativeCount(snapshot, 'activeWarnings', warningSource.length),
+      claims: authoritativeCount(snapshot, 'claims', claimSource.length),
+      results: authoritativeCount(snapshot, 'results', resultSource.length),
+      agents: authoritativeCount(snapshot, 'agents', agentSource.length),
+      actors: authoritativeCount(snapshot, 'actors', actorSource.length),
       evidence: evidenceSource.length,
     },
     missions: summarizeRecords(missions),
@@ -136,7 +151,10 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
     projects: summarizeRecords(projects),
     requests: summarizeRecords(requests),
     work: summarizeRecords(work),
+    warnings: summarizeRecords(warnings),
     claims: summarizeRecords(claims, ['id', 'claimId']),
+    results: summarizeRecords(results),
+    agents: summarizeRecords(agents, ['id', 'agentId']),
     actors: summarizeRecords(actors, ['agentId', 'actorId', 'id']),
     runtime: snapshot.runtime && typeof snapshot.runtime === 'object'
       ? {
