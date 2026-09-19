@@ -919,7 +919,7 @@ export function list_skill_verification_runs(limit = MAX_RUN_HISTORY) {
   const result: SkillVerificationRun[] = []
   for (let index = order.length - 1; index >= 0 && result.length < limit; index--) {
     const run = registry[order[index]]
-    if (run) result.push(run)
+    if (run !== undefined) result.push(run)
   }
   return result
 }
