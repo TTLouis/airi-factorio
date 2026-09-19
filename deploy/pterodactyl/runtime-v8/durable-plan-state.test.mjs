@@ -208,21 +208,19 @@ test('durable plan survives a new agent instance and empty actions cannot preten
   assert.equal(saved.plans[0].state.task_board.completed_count, 1)
   assert.equal(saved.plans[0].state.task_board.evidence.some(item => item.ref === 'batch_7'), true)
 
-  let observed
   const second = new NpcAgentLoop({
     rcon: new FakeRcon(),
-    provider: async messages => {
-      observed = messages
-      return planMessage({ chatMessage: 'The saved plan is still available.', plan: [], operations: [] })
+    provider: async () => {
+      throw new Error('durable restart inspection should not need a planner call')
     },
     systemPrompt: 'NPC test prompt',
     memory: new CanonicalTaskBoardMemory(),
     stateFile,
     traceFile: null,
   })
-  await second.request('what were you doing?', { sender: 'TTLouis' })
+  await second.loadPersistentState()
 
-  const context = observed.map(message => message.content ?? '').join('\n')
+  const context = second.memory.planContext('npc:airi')
   assert.match(context, /\[PLAN_STATE\]/)
   assert.match(context, /task_board/)
   assert.match(context, /prepare the furnace/)
