@@ -30,6 +30,7 @@ import {
   evaluateCompletionContract,
   makeConditionWait,
   parseStepCheckpointDecision,
+  requiresExplicitSemanticCheckpoint,
   sanitizeStepCompletionContract,
   stepCheckpointDecisionQuestions,
   stepRelationAllowsAdmission,
@@ -70,6 +71,7 @@ const JEV_PIPELINE_RUNTIME_GUARDS = [
   ['parseProjectProposal', typeof parseProjectProposal],
   ['completionContractSupported', typeof completionContractSupported],
   ['sanitizeStepCompletionContract', typeof sanitizeStepCompletionContract],
+  ['requiresExplicitSemanticCheckpoint', typeof requiresExplicitSemanticCheckpoint],
 ]
 for (const [name, type] of JEV_PIPELINE_RUNTIME_GUARDS) {
   if (type !== 'function') throw new Error(`Jev pipeline dependency ${name} is unavailable`)
@@ -4055,6 +4057,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     plan.plan = normalizedPlan.plan
     plan.currentStep = normalizedPlan.currentStep
+    if (requiresExplicitSemanticCheckpoint(plan.operations) && !completionContractSupported(plan.checkpoint)) {
+      const error = new AgentLoopError(
+        'This quantity/delta mutation requires an explicit runtime-supported checkpoint for the active semantic step. Operation count is not completion proof.',
+      )
+      error.failureClass = 'plan_category'
+      error.code = 'semantic_checkpoint_required'
+      throw error
+    }
     for (const operation of plan.operations) {
       if (!EXACT_ENTITY_TARGET_OPERATIONS.has(operation.name)) continue
       const unitNumber = operation.args?.unit_number
