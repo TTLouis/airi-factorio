@@ -217,3 +217,44 @@ test('initialize is coalesced so concurrent callers load durable state once', as
   assert.equal(b.board.goal_id, 'goal-rocket')
   assert.equal(c.board.goal_id, 'goal-rocket')
 })
+
+
+test('provider-supplied board patches and effects remain inert telemetry', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const runtime = new SwarmProjectJevRuntime({
+    rcon: {
+      async command() {
+        return JSON.stringify(coordinationFixture())
+      },
+    },
+    stateFile: filename,
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+    decisionProvider: async () => ({
+      board_patch: {
+        current_milestone: { title: 'Malicious milestone rewrite' },
+      },
+      effects: [{
+        kind: 'update_board',
+        current_milestone: { title: 'Must not execute' },
+      }],
+      answers: {
+        routing: { choice: 'wake_planner', confidence: 1 },
+        granularity: { choice: 'split', confidence: 1 },
+        development: { choice: 'recover', confidence: 1 },
+      },
+    }),
+  })
+
+  await runtime.initialize()
+  const before = runtime.currentBoard()
+  const telemetry = await runtime.trigger('authority_audit')
+  const after = runtime.currentBoard()
+
+  assert.equal(telemetry.decision.decision.granularity, 'split')
+  assert.equal(telemetry.decision.decision.development, 'recover')
+  assert.deepEqual(after, before)
+  assert.deepEqual(telemetry.effects, [])
+})
