@@ -318,3 +318,46 @@ test('non-DeepSeek providers ignore the DeepSeek-specific Jev reasoning mapping'
     reasoningBudget: 'deep',
   }), undefined)
 })
+
+
+test('Jev deep and strategic completion decisions escape the compact 1000-token path', async () => {
+  for (const reasoningBudget of ['deep', 'strategic']) {
+    const { seen } = await captureRequest([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: '[CHAT] tester: continue the long project' },
+      { role: 'user', content: COMPLETION },
+    ], {
+      allowTools: true,
+      triggerSource: 'hierarchy_replan_project',
+      reasoningBudget,
+    })
+    assert.equal(seen.body.reasoning_effort, 'max')
+    assert.equal(seen.body.max_tokens, 6000)
+  }
+})
+
+test('Jev normal budget keeps its full planner output budget after completion', async () => {
+  const { seen } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: COMPLETION },
+  ], {
+    allowTools: true,
+    triggerSource: 'hierarchy_vertical',
+    reasoningBudget: 'normal',
+  })
+  assert.equal(seen.body.reasoning_effort, 'high')
+  assert.equal(seen.body.max_tokens, 4000)
+})
+
+test('Jev micro budget preserves compact completion behavior', async () => {
+  const { seen } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: COMPLETION },
+  ], {
+    allowTools: true,
+    triggerSource: 'post_step_continue',
+    reasoningBudget: 'micro',
+  })
+  assert.equal(seen.body.reasoning_effort, 'low')
+  assert.equal(seen.body.max_tokens, 1000)
+})
