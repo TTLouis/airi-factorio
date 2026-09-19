@@ -1,4 +1,5 @@
 const PROJECT_BOARD_NEXT_LIMIT = 3
+const PROJECT_BOARD_COMPLETED_LIMIT = 12
 const PROJECT_STATUSES = new Set(['active', 'blocked', 'paused', 'completed'])
 const DEVELOPMENT_DIRECTIONS = new Set(['vertical', 'horizontal', 'maintain', 'recover'])
 
@@ -37,6 +38,10 @@ export function sanitizeProjectBoard(value, {
 } = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   const current = milestone(source.current_milestone, 'active')
+  const completed = (Array.isArray(source.completed_milestones) ? source.completed_milestones : [])
+    .slice(-PROJECT_BOARD_COMPLETED_LIMIT)
+    .map(item => milestone(item, 'completed'))
+    .filter(Boolean)
   const next = (Array.isArray(source.next_milestones) ? source.next_milestones : [])
     .slice(0, PROJECT_BOARD_NEXT_LIMIT)
     .map(item => milestone(item, 'tentative'))
@@ -46,11 +51,13 @@ export function sanitizeProjectBoard(value, {
     project_id: clean(source.project_id || goalId, 100),
     title: clean(source.title || objective, 500),
     status: PROJECT_STATUSES.has(status) ? status : 'active',
+    completed_milestones: completed,
     current_milestone: current,
     next_milestones: next,
     development_direction: DEVELOPMENT_DIRECTIONS.has(source.development_direction)
       ? source.development_direction
       : '',
+    transition_state: source.transition_state === 'awaiting_next_milestone' ? 'awaiting_next_milestone' : '',
     revision: Number.isSafeInteger(source.revision) && source.revision > 0 ? source.revision : 1,
     updated_at: Number.isFinite(source.updated_at) ? source.updated_at : now,
   }
@@ -61,9 +68,11 @@ export function updateProjectBoard(current, patch = {}, context = {}) {
   const now = Number.isFinite(context.now) ? context.now : Date.now()
   return sanitizeProjectBoard({
     ...previous,
+    completed_milestones: patch.completed_milestones === undefined ? previous.completed_milestones : patch.completed_milestones,
     current_milestone: patch.current_milestone === undefined ? previous.current_milestone : patch.current_milestone,
     next_milestones: patch.next_milestones === undefined ? previous.next_milestones : patch.next_milestones,
     development_direction: patch.development_direction === undefined ? previous.development_direction : patch.development_direction,
+    transition_state: patch.transition_state === undefined ? previous.transition_state : patch.transition_state,
     revision: previous.revision + 1,
     updated_at: now,
   }, { ...context, now })
@@ -95,5 +104,43 @@ export function parseProjectProposal(value) {
     current_milestone: current,
     next_milestones: next,
     development_direction: direction,
+  }
+}
+
+
+export function completeCurrentMilestone(current, { verified = false, now = Date.now(), goalId = '', objective = '', status = 'active' } = {}) {
+  const board = sanitizeProjectBoard(current, { goalId, objective, status, now })
+  if (!verified || !board.current_milestone) return { board, changed: false, reason: verified ? 'no_current_milestone' : 'completion_not_verified' }
+  const completed = [...board.completed_milestones, { ...board.current_milestone, status: 'completed' }].slice(-PROJECT_BOARD_COMPLETED_LIMIT)
+  return {
+    board: sanitizeProjectBoard({
+      ...board,
+      completed_milestones: completed,
+      current_milestone: undefined,
+      transition_state: 'awaiting_next_milestone',
+      revision: board.revision + 1,
+      updated_at: now,
+    }, { goalId, objective, status: 'active', now }),
+    changed: true,
+    reason: 'milestone_verified_complete',
+  }
+}
+
+export function activateNextMilestone(current, { now = Date.now(), goalId = '', objective = '', status = 'active' } = {}) {
+  const board = sanitizeProjectBoard(current, { goalId, objective, status, now })
+  if (board.current_milestone) return { board, changed: false, reason: 'current_milestone_still_active' }
+  const [next, ...rest] = board.next_milestones
+  if (!next) return { board, changed: false, reason: 'no_tentative_next_milestone' }
+  return {
+    board: sanitizeProjectBoard({
+      ...board,
+      current_milestone: { ...next, status: 'active' },
+      next_milestones: rest,
+      transition_state: '',
+      revision: board.revision + 1,
+      updated_at: now,
+    }, { goalId, objective, status, now }),
+    changed: true,
+    reason: 'next_milestone_activated',
   }
 }
