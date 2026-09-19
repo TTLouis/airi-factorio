@@ -28,14 +28,15 @@ function clean(value) {
 }
 
 function safeHierarchySplitPending(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || value.kind !== 'split_current_milestone') return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  if (!['split_project_goal', 'split_current_milestone'].includes(value.kind)) return undefined
   const reasoningBudget = ['micro', 'normal', 'deep', 'strategic'].includes(value.reasoning_budget) ? value.reasoning_budget : undefined
   const planningHorizon = ['immediate', 'checkpoint', 'subgoal', 'strategic'].includes(value.planning_horizon) ? value.planning_horizon : undefined
   const observationBudget = Number.isSafeInteger(value.observation_budget)
     ? Math.max(0, Math.min(8, value.observation_budget))
     : undefined
   return {
-    kind: 'split_current_milestone',
+    kind: value.kind,
     reason_code: String(value.reason_code ?? 'hierarchy_split_requested').slice(0, 120),
     reasoning_budget: reasoningBudget,
     planning_horizon: planningHorizon,
@@ -214,6 +215,54 @@ export function canonicalContinuationPlan(previousBoard, plan, { allowReplan = f
 }
 
 export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
+  beginHierarchyGoal(key, requestInfo = {}, envelope = {}) {
+    if (!key) return undefined
+    const now = Date.now()
+    const state = {
+      goal_id: `goal_${now.toString(36)}`,
+      owner: String(requestInfo?.sender ?? 'unknown').slice(0, 128),
+      objective: String(requestInfo?.text ?? '').slice(0, 1000),
+      status: 'active',
+      admission_status: undefined,
+      blocker: '',
+      pause_reason: '',
+      persistent_runtime: undefined,
+      condition_wait: undefined,
+      plan: [],
+      current_step: 0,
+      revision: 1,
+      last_chat_message: '',
+      last_operations: [],
+      durable_last_operations: [],
+      exact_target_audit: [],
+      last_mutation_verified: false,
+      last_verified_batch_id: undefined,
+      updated_at: now,
+      history: [],
+    }
+    state.task_board = setTaskBoardStatus(
+      createTaskBoard([], 0, { goalId: state.goal_id, now }),
+      'active',
+      { now },
+    )
+    state.project_board = sanitizeProjectBoard(undefined, {
+      goalId: state.goal_id,
+      objective: state.objective,
+      status: state.status,
+      now,
+    })
+    state.hierarchy_split_pending = safeHierarchySplitPending({
+      kind: 'split_project_goal',
+      reason_code: envelope.reason_code ?? 'hierarchy_initial_split',
+      reasoning_budget: envelope.reasoning_budget,
+      planning_horizon: envelope.planning_horizon,
+      observation_budget: envelope.observation_budget,
+      requested_at: now,
+    })
+    this.planByNpc.set(key, state)
+    return state
+  }
+
   ensureProjectBoard(state) {
     if (!state) return undefined
     state.project_board = sanitizeProjectBoard(state.project_board, {
@@ -230,7 +279,9 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     if (!state || state.status !== 'active') return undefined
     const now = Date.now()
     state.hierarchy_split_pending = {
-      kind: 'split_current_milestone',
+      kind: ['split_project_goal', 'split_current_milestone'].includes(envelope.kind)
+        ? envelope.kind
+        : 'split_current_milestone',
       reason_code: String(envelope.reason_code ?? 'hierarchy_split_requested').slice(0, 120),
       reasoning_budget: ['micro', 'normal', 'deep', 'strategic'].includes(envelope.reasoning_budget) ? envelope.reasoning_budget : undefined,
       planning_horizon: ['immediate', 'checkpoint', 'subgoal', 'strategic'].includes(envelope.planning_horizon) ? envelope.planning_horizon : undefined,
