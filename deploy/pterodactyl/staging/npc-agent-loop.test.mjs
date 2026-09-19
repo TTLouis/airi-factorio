@@ -436,3 +436,58 @@ test('observation decision pressure can allow a bounded multi-observation window
   assert.equal(calls, 5)
   assert.equal(result.operations[0].name, 'wait')
 })
+
+
+test('observation budget exhaustion becomes a normal no-tools decision round', async () => {
+  const rcon = new FakeRcon()
+  let calls = 0
+  const contexts = []
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async (messages, context) => {
+      calls++
+      contexts.push({ ...context })
+      if (calls <= 4) return toolMessage(`tool-${calls}`, 'getRecipe', { item: `decision-item-${calls}` })
+      assert.equal(context.allowTools, false)
+      assert.equal(context.recoveryAttempt, 0)
+      assert.match(messages.map(message => String(message.content ?? '')).join('\n'), /observation phase for this decision is now closed/i)
+      return planMessage([{ name: 'wait', args: { ticks: 1 } }])
+    },
+    systemPrompt: 'NPC test prompt',
+  })
+
+  const result = await agent.request('observe until the bounded decision budget closes')
+  assert.equal(calls, 5)
+  assert.equal(contexts[4].allowTools, false)
+  assert.equal(result.operations[0].name, 'wait')
+})
+
+test('oversized final observation batch closes the observation phase without entering recovery', async () => {
+  const rcon = new FakeRcon()
+  let calls = 0
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async (_messages, context) => {
+      calls++
+      if (calls <= 3) return toolMessage(`tool-${calls}`, 'getRecipe', { item: `pressure-item-${calls}` })
+      if (calls === 4) {
+        return {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { id: 'too-many-1', type: 'function', function: { name: 'getRecipe', arguments: JSON.stringify({ item: 'a' }) } },
+            { id: 'too-many-2', type: 'function', function: { name: 'getRecipe', arguments: JSON.stringify({ item: 'b' }) } },
+          ],
+        }
+      }
+      assert.equal(context.allowTools, false)
+      assert.equal(context.recoveryAttempt, 0)
+      return planMessage([{ name: 'wait', args: { ticks: 1 } }])
+    },
+    systemPrompt: 'NPC test prompt',
+  })
+
+  const result = await agent.request('do not convert observation pressure into recovery')
+  assert.equal(calls, 5)
+  assert.equal(result.operations[0].name, 'wait')
+})
