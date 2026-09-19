@@ -137,7 +137,7 @@ test('next strategic goal cannot replace active blocked or paused goal identity'
         goalId: `goal-next-${status}`,
         objective: 'New goal must not overwrite unfinished work',
       }),
-      /requires completed prior goal/,
+      /requires terminal prior goal/,
     )
     assert.equal(store.current().goal_id, `goal-${status}`)
     assert.equal(store.current().status, status)
