@@ -304,6 +304,13 @@ function safeConditionWait(value) {
   if (condition.kind === 'entity_state' && !['working', 'not_working', 'exists'].includes(condition.expected)) return undefined
   if (!Number.isSafeInteger(value.actor_id) || value.actor_id < 1) return undefined
   if (!Number.isSafeInteger(value.actor_epoch) || value.actor_epoch < 0) return undefined
+
+  const safeCondition = { kind: condition.kind }
+  if (Number.isSafeInteger(condition.unit_number)) safeCondition.unit_number = condition.unit_number
+  if (typeof condition.item_name === 'string') safeCondition.item_name = cleanMemoryText(condition.item_name, 160)
+  if (Number.isSafeInteger(condition.minimum)) safeCondition.minimum = condition.minimum
+  if (typeof condition.expected === 'string') safeCondition.expected = condition.expected
+
   return {
     id: cleanMemoryText(value.id, 100),
     goal_id: cleanMemoryText(value.goal_id, 100),
@@ -311,7 +318,7 @@ function safeConditionWait(value) {
     actor_id: value.actor_id,
     actor_epoch: value.actor_epoch,
     mode: value.mode === 'passive_progress' ? 'passive_progress' : 'completion',
-    condition: sanitizeDurableModelValue(condition),
+    condition: safeCondition,
     state: 'active',
     checks: Number.isSafeInteger(value.checks) ? Math.max(0, value.checks) : 0,
     max_checks: Number.isSafeInteger(value.max_checks) ? Math.max(1, Math.min(value.max_checks, 7200)) : 900,
@@ -2151,6 +2158,66 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
+
+  observedMiningTargets(entityName) {
+    const byReference = new Map()
+    const remember = (entity, actorPosition) => {
+      if (!entity || entity.name !== entityName) return
+      const reference = Number.isSafeInteger(entity.unit_number)
+        ? `entity:${entity.unit_number}`
+        : `fallback:${entity.name}:${entity.type ?? 'unknown'}:${entity.position?.x ?? '?'}:${entity.position?.y ?? '?'}`
+      let distance = Number.isFinite(entity.distance) ? entity.distance : undefined
+      if (distance === undefined && actorPosition && entity.position
+        && Number.isFinite(actorPosition.x) && Number.isFinite(actorPosition.y)
+        && Number.isFinite(entity.position.x) && Number.isFinite(entity.position.y)) {
+        distance = Math.hypot(entity.position.x - actorPosition.x, entity.position.y - actorPosition.y)
+      }
+      byReference.set(reference, {
+        name: entity.name,
+        type: entity.type,
+        unit_number: Number.isSafeInteger(entity.unit_number) ? entity.unit_number : undefined,
+        position: entity.position,
+        distance,
+      })
+    }
+
+    for (const entity of this.liveEntityObservations?.values?.() ?? []) remember(entity, undefined)
+    return [...byReference.values()]
+  }
+
+  legacyMiningApproachVerified(entityName) {
+    const state = this.memory.currentPlan?.(this.activePlanKey())
+    if (state?.last_mutation_verified !== true || !Array.isArray(state.last_operations)) return false
+    return state.last_operations.some((value) => {
+      const separator = typeof value === 'string' ? value.indexOf(' ') : -1
+      if (separator < 1 || value.slice(0, separator) !== 'walk_to_entity') return false
+      try {
+        const args = JSON.parse(value.slice(separator + 1))
+        return args?.entity_name === entityName
+      }
+      catch {
+        return false
+      }
+    })
+  }
+
+  failureSnapshot(stage, message) {
+    const request = this.traceRequest
+    const planState = this.memory.currentPlan?.(this.activePlanKey())
+    return {
+      stage,
+      message: cleanMemoryText(message, 2000),
+      request_id: request?.id,
+      turn: request ? this.continuations + 1 : undefined,
+      actor_id: this.epoch?.actor_id,
+      epoch: this.epoch?.epoch,
+      provider: request?.last_provider_event,
+      recovery: request?.recovery,
+      last_tool: request?.last_tool,
+      plan: compactPlanFailureState(planState),
+      usage: request?.usage,
+    }
+  }
 
   async readInteractionTaskStatus() {
     try {
