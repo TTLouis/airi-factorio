@@ -2462,9 +2462,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const contract = confidenceAccepted
         ? sanitizeStepCompletionContract(normalized.contract)
         : { mode: 'semantic_unknown', requirements: [], confidence: normalized.contract?.confidence ?? 0 }
-      const boundary = normalized.boundary === 'checkpoint_here' && contract.mode === 'semantic_unknown'
-        ? 'keep_step_open'
-        : normalized.boundary
+      const compoundNeedsStrongProof = typeof normalized.compound_probability !== 'number'
+        || normalized.compound_probability >= 0.5
+      const compoundProofStrongEnough = contract.mode === 'all'
+        && Array.isArray(contract.requirements)
+        && contract.requirements.length > 1
+      let boundary = normalized.boundary
+      if (boundary === 'checkpoint_here' && contract.mode === 'semantic_unknown') boundary = 'keep_step_open'
+      if (boundary === 'checkpoint_here' && compoundNeedsStrongProof && !compoundProofStrongEnough) {
+        boundary = 'split_recommended'
+      }
 
       this.memory.recordBoardEvidence?.(key, {
         kind: 'step_checkpoint_contract',
