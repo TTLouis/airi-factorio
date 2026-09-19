@@ -438,3 +438,139 @@ test('bindGoal cannot be abused to mark the strategic project blocked paused or 
 
   assert.equal(runtime.currentBoard().status, 'active')
 })
+
+
+function completedCoordinationFixture() {
+  const value = coordinationFixture()
+  value.tick = 900
+  value.counts.incompleteMissions = 0
+  value.counts.incompleteObjectives = 0
+  value.counts.incompleteProjects = 0
+  value.counts.openWork = 0
+  value.counts.executingWork = 0
+  value.counts.blockedWork = 0
+  value.counts.openRequests = 0
+  value.counts.activeClaims = 0
+  value.counts.activeWarnings = 0
+  value.missions = [{ id: 'mission-1', status: 'satisfied', title: 'Bootstrap' }]
+  value.objectives = [{ id: 'objective-1', status: 'satisfied', description: 'Power' }]
+  value.projects = [{ id: 'project-1', status: 'complete', title: 'Steam power' }]
+  value.work = []
+  value.requests = []
+  value.warnings = []
+  value.claims = []
+  return value
+}
+
+test('whole strategic goal completion requires final milestone and canonical global quiescence', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  let snapshot = coordinationFixture()
+  const runtime = new SwarmProjectJevRuntime({
+    rcon: {
+      async command() {
+        return JSON.stringify(snapshot)
+      },
+    },
+    stateFile: filename,
+    goalId: 'goal-red-science',
+    objective: 'Automate red science',
+  })
+
+  await runtime.applyPlannerProposal({
+    currentMilestone: { title: 'Build final red science line' },
+    nextMilestones: [],
+    developmentDirection: 'vertical',
+  })
+
+  const early = await runtime.completeProject({
+    jevDecision: { milestone_transition: 'project_complete_candidate' },
+  })
+  assert.equal(early.changed, false)
+  assert.equal(early.reason, 'current_milestone_still_active')
+  assert.equal(runtime.currentBoard().status, 'active')
+
+  await runtime.completeCurrentMilestone({
+    authority: 'verdict_only',
+    effects: [],
+    strategic_milestone: {
+      state: 'completed',
+      authoritative: true,
+      reason: 'strategic_milestone_verified',
+    },
+  })
+
+  const stillBusy = await runtime.completeProject({
+    jevDecision: { milestone_transition: 'project_complete_candidate' },
+  })
+  assert.equal(stillBusy.changed, false)
+  assert.equal(stillBusy.reason, 'swarm_missions_incomplete')
+  assert.equal(runtime.currentBoard().status, 'active')
+
+  snapshot = completedCoordinationFixture()
+  const completed = await runtime.completeProject({
+    jevDecision: { milestone_transition: 'project_complete_candidate' },
+  })
+
+  assert.equal(completed.changed, true)
+  assert.equal(completed.reason, 'project_verified_complete')
+  assert.equal(completed.authorization.authorized, true)
+  assert.equal(completed.authorization.candidate, true)
+  assert.equal(completed.coordination_tick, 900)
+  assert.equal(runtime.currentBoard().status, 'completed')
+})
+
+test('completed strategic goal may then start and persist an explicit next goal', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const makeRcon = () => ({
+    async command() {
+      return JSON.stringify(completedCoordinationFixture())
+    },
+  })
+
+  const first = new SwarmProjectJevRuntime({
+    rcon: makeRcon(),
+    stateFile: filename,
+    goalId: 'goal-red-science',
+    objective: 'Automate red science',
+  })
+
+  await first.applyPlannerProposal({
+    currentMilestone: { title: 'Final red science milestone' },
+    nextMilestones: [],
+    developmentDirection: 'vertical',
+  })
+  await first.completeCurrentMilestone({
+    authority: 'verdict_only',
+    effects: [],
+    strategic_milestone: {
+      state: 'completed',
+      authoritative: true,
+      reason: 'strategic_milestone_verified',
+    },
+  })
+  const completed = await first.completeProject()
+  assert.equal(completed.changed, true)
+
+  const next = await first.startNextGoal({
+    goalId: 'goal-green-science',
+    objective: 'Automate green science',
+  })
+  await first.flush()
+
+  assert.equal(next.goal_id, 'goal-green-science')
+  assert.equal(next.status, 'active')
+
+  const reconstructed = new SwarmProjectJevRuntime({
+    rcon: makeRcon(),
+    stateFile: filename,
+  })
+  const loaded = await reconstructed.initialize()
+  assert.equal(loaded.loaded, true)
+  assert.equal(reconstructed.currentBoard().goal_id, 'goal-green-science')
+  assert.equal(reconstructed.currentBoard().title, 'Automate green science')
+  assert.equal(reconstructed.currentBoard().status, 'active')
+})
