@@ -603,7 +603,6 @@ test('final Plan Tracker step completes the milestone without completing the lon
   assert.equal(result.decision.accepted, true)
   assert.equal(result.milestoneCompleted, true)
   assert.equal(result.state.status, 'active')
-  assert.equal(result.state.milestone_transition_pending, true)
   assert.equal(result.state.project_board.current_milestone, undefined)
   assert.equal(result.state.project_board.completed_milestones.at(-1).title, 'Establish burner production')
   assert.equal(result.state.project_board.transition_state, 'awaiting_next_milestone')
@@ -633,7 +632,7 @@ test('activating a tentative next milestone resets the Plan Tracker for a fresh 
   const advanced = memory.activateNextMilestone('npc:airi')
   assert.equal(advanced.changed, true)
   assert.equal(advanced.state.project_board.current_milestone.title, 'Reach Automation')
-  assert.equal(advanced.state.project_board.transition_state, '')
+  assert.equal(advanced.state.project_board.transition_state, 'awaiting_milestone_plan')
   assert.equal(advanced.state.task_board.total_steps, 0)
   assert.equal(advanced.state.plan.length, 0)
 })
@@ -661,13 +660,12 @@ test('activated next milestone stays pending until a fresh milestone-local plan 
       revision: 2,
       updated_at: 1,
     },
-    milestone_transition_pending: true,
   }))
 
   const advanced = memory.activateNextMilestone(key)
   assert.equal(advanced.changed, true)
   assert.equal(advanced.state.project_board.current_milestone.title, 'Reach Automation')
-  assert.equal(advanced.state.milestone_plan_pending, true)
+  assert.equal(advanced.state.project_board.transition_state, 'awaiting_milestone_plan')
   assert.equal(advanced.state.task_board.steps.length, 0)
 
   const proposal = {
@@ -683,7 +681,7 @@ test('activated next milestone stays pending until a fresh milestone-local plan 
     allowReplan: true,
     newMilestone: true,
   })
-  assert.equal(reconciled.state.milestone_plan_pending, false)
+  assert.equal(reconciled.state.project_board.transition_state, '')
   assert.equal(reconciled.state.task_board.steps.length, 2)
   assert.equal(reconciled.state.project_board.current_milestone.title, 'Reach Automation')
 })
@@ -744,10 +742,22 @@ test('hierarchy split transaction survives persistence and stays in model contex
 })
 
 
-test('milestone transition flags survive persistence', () => {
+test('legacy milestone pending flags migrate into the canonical project transition state', () => {
   const memory = new CanonicalTaskBoardMemory()
   memory.planByNpc.set('npc:airi', planState({
-    milestone_transition_pending: true,
+    project_board: {
+      kind: 'project_board_v1',
+      project_id: 'goal_test',
+      title: 'Long project',
+      status: 'active',
+      completed_milestones: [],
+      current_milestone: { title: 'Reach Automation', status: 'active' },
+      next_milestones: [],
+      development_direction: 'vertical',
+      transition_state: '',
+      revision: 1,
+      updated_at: 1,
+    },
     milestone_plan_pending: true,
   }))
 
@@ -756,8 +766,10 @@ test('milestone transition flags survive persistence', () => {
   restored.restore(snapshot)
   const state = restored.currentPlan('npc:airi')
 
-  assert.equal(state.milestone_transition_pending, true)
-  assert.equal(state.milestone_plan_pending, true)
+  assert.equal(state.project_board.transition_state, 'awaiting_milestone_plan')
+  assert.equal(state.milestone_transition_pending, undefined)
+  assert.equal(state.milestone_plan_pending, undefined)
+  assert.match(restored.planContext('npc:airi'), /\[MILESTONE_PLAN_TRANSITION\]/)
 })
 
 

@@ -375,7 +375,10 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     const pending = state.hierarchy_split_pending
       ? `\n[HIERARCHY_TRANSITION] A Jev split decision is durably pending. Do not continue the old flat Plan Tracker. Resolve the transition by proposing one bounded project.currentMilestone and a milestone-local plan before new world mutation.\n${JSON.stringify(state.hierarchy_split_pending)}`
       : ''
-    return `${plan}\n[PROJECT_STATE] Durable long-horizon hierarchy. Future milestones are tentative; the current Task Board remains the execution contract.\n${JSON.stringify(project)}${pending}`
+    const milestonePlanPending = project.transition_state === 'awaiting_milestone_plan'
+      ? '\n[MILESTONE_PLAN_TRANSITION] The current milestone is already activated, but its fresh milestone-local Task Board has not been committed yet. Plan only this current milestone; do not skip ahead or treat the empty Task Board as project completion.'
+      : ''
+    return `${plan}\n[PROJECT_STATE] Durable long-horizon hierarchy. Future milestones are tentative; the current Task Board remains the execution contract.\n${JSON.stringify(project)}${pending}${milestonePlanPending}`
   }
 
   currentPlan(key) {
@@ -424,8 +427,6 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
         state.persistent_runtime = undefined
         state.condition_wait = undefined
         state.project_board = transition.board
-        state.milestone_transition_pending = true
-        state.milestone_plan_pending = false
         state.plan = []
         state.current_step = 0
         state.revision = (state.revision ?? 0) + 1
@@ -449,8 +450,6 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     })
     if (!transition.changed) return { state, changed: false, reason: transition.reason }
     state.project_board = transition.board
-    state.milestone_transition_pending = false
-    state.milestone_plan_pending = true
     state.task_board = createTaskBoard([], 0, { goalId: state.goal_id, now })
     state.plan = []
     state.current_step = 0
@@ -474,8 +473,8 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
             .filter(item => item && typeof item.key === 'string')
             .map(item => [item.key, {
               hierarchy_split_pending: item?.state?.hierarchy_split_pending,
-              milestone_transition_pending: item?.state?.milestone_transition_pending === true,
-              milestone_plan_pending: item?.state?.milestone_plan_pending === true,
+              legacy_milestone_transition_pending: item?.state?.milestone_transition_pending === true,
+              legacy_milestone_plan_pending: item?.state?.milestone_plan_pending === true,
             }])
         : [],
     )
@@ -503,8 +502,26 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
         now: state.updated_at,
       })
       state.hierarchy_split_pending = safeHierarchySplitPending(hierarchyState?.hierarchy_split_pending)
-      state.milestone_transition_pending = hierarchyState?.milestone_transition_pending === true
-      state.milestone_plan_pending = hierarchyState?.milestone_plan_pending === true
+      if (hierarchyState?.legacy_milestone_transition_pending === true
+        && !state.project_board.current_milestone
+        && state.project_board.transition_state === '') {
+        state.project_board = updateProjectBoard(state.project_board, { transition_state: 'awaiting_next_milestone' }, {
+          goalId: state.goal_id,
+          objective: state.objective,
+          status: state.status,
+          now: state.updated_at,
+        })
+      }
+      if (hierarchyState?.legacy_milestone_plan_pending === true
+        && state.project_board.current_milestone
+        && state.project_board.transition_state === '') {
+        state.project_board = updateProjectBoard(state.project_board, { transition_state: 'awaiting_milestone_plan' }, {
+          goalId: state.goal_id,
+          objective: state.objective,
+          status: state.status,
+          now: state.updated_at,
+        })
+      }
       const stepContracts = persistedStepContracts.get(key)
       if (state.task_board && Array.isArray(state.task_board.steps) && stepContracts) {
         state.task_board.steps = state.task_board.steps.map(step => {
@@ -540,8 +557,12 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
       })
       state.plan = state.task_board.steps.map(step => step.description)
       state.current_step = state.task_board.active_index
-      state.milestone_transition_pending = false
-      state.milestone_plan_pending = false
+      state.project_board = updateProjectBoard(this.ensureProjectBoard(state), { transition_state: '' }, {
+        goalId: state.goal_id,
+        objective: state.objective,
+        status: state.status,
+        now,
+      })
       this.planByNpc.set(key, state)
       return { ...stateResult, state }
     }

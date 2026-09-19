@@ -1811,7 +1811,7 @@ function providerBlockerReason(plan) {
 function canonicalWorkRemains(state) {
   if (state?.status !== 'active') return false
   if (state?.hierarchy_split_pending) return true
-  if (state?.milestone_plan_pending === true && state?.project_board?.current_milestone) return true
+  if (state?.project_board?.transition_state === 'awaiting_milestone_plan' && state?.project_board?.current_milestone) return true
   const board = state?.task_board
   if (board?.kind !== 'task_board_lite' || !Array.isArray(board.steps) || board.steps.length === 0) return false
   return board.status === 'active' && (board.completed_count ?? 0) < board.steps.length

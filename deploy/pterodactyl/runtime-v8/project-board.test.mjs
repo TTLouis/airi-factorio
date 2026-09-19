@@ -148,5 +148,6 @@ test('next tentative milestone only activates from an awaiting transition', asyn
   assert.equal(advanced.changed, true)
   assert.equal(advanced.board.current_milestone.title, 'Reach Automation')
   assert.deepEqual(advanced.board.next_milestones.map(item => item.title), ['Establish electric power'])
+  assert.equal(advanced.board.transition_state, 'awaiting_milestone_plan')
   assert.equal(advanced.board.transition_state, '')
 })

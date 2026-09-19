@@ -2,6 +2,7 @@ const PROJECT_BOARD_NEXT_LIMIT = 3
 const PROJECT_BOARD_COMPLETED_LIMIT = 12
 const PROJECT_STATUSES = new Set(['active', 'blocked', 'paused', 'completed'])
 const DEVELOPMENT_DIRECTIONS = new Set(['vertical', 'horizontal', 'maintain', 'recover'])
+const PROJECT_TRANSITION_STATES = new Set(['', 'awaiting_next_milestone', 'awaiting_milestone_plan'])
 
 function clean(value, max = 500) {
   const text = String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
@@ -57,7 +58,7 @@ export function sanitizeProjectBoard(value, {
     development_direction: DEVELOPMENT_DIRECTIONS.has(source.development_direction)
       ? source.development_direction
       : '',
-    transition_state: source.transition_state === 'awaiting_next_milestone' ? 'awaiting_next_milestone' : '',
+    transition_state: PROJECT_TRANSITION_STATES.has(source.transition_state) ? source.transition_state : '',
     revision: Number.isSafeInteger(source.revision) && source.revision > 0 ? source.revision : 1,
     updated_at: Number.isFinite(source.updated_at) ? source.updated_at : now,
   }
@@ -136,7 +137,7 @@ export function activateNextMilestone(current, { now = Date.now(), goalId = '', 
       ...board,
       current_milestone: { ...next, status: 'active' },
       next_milestones: rest,
-      transition_state: '',
+      transition_state: 'awaiting_milestone_plan',
       revision: board.revision + 1,
       updated_at: now,
     }, { goalId, objective, status, now }),
