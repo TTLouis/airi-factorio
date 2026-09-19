@@ -78,7 +78,7 @@ The implementation order is intentionally conservative:
 2. **done in the experiment:** wire the taxonomy into post-step traces/diagnostics as shadow telemetry without changing authority;
 3. **implemented conservatively in the experiment:** Jev may suppress a post-step planner wake only when authoritative runtime work is healthy, granularity is `keep`, development is `maintain`, and the boundary is a successful completion; otherwise the existing planner path remains authoritative;
 4. **implemented as the next foundation:** add bounded durable Project/Milestone state above the existing Plan Tracker, without yet letting Jev invent or mutate milestones autonomously;
-5. **in progress:** Main LLM can now propose one bounded current milestone plus up to three tentative next milestones for genuinely long-horizon goals; ordinary unchanged-milestone continuations reuse durable [PROJECT_STATE] instead of rewriting the hierarchy. Jev-driven split/advance is still next;
+5. **partially active:** Main LLM can propose one bounded current milestone plus up to three tentative next milestones. Jev `granularity=split` on a successful post-step boundary now forces a milestone replan, supplies an explicit hierarchy instruction to the Main LLM, and authorizes replacement of the current milestone's Plan Tracker. Milestone `advance` is still pending;
 6. only then map Jev reasoning budgets into provider/model-specific reasoning controls.
 
 This preserves current completion authority and makes each behavior change independently testable.
@@ -1256,3 +1256,24 @@ The Main LLM now has an optional bounded hierarchy output for long-horizon plann
 The project goal/title itself is not writable by the Main LLM. It remains derived from the user's durable goal. Future milestones are capped at three and remain tentative. Project proposals are accepted on initial or strategic planning contexts, but ignored during bounded recovery/output-repair paths and ordinary completion continuation once a current milestone already exists.
 
 This is the first point where the long-horizon hierarchy becomes model-authored durable state rather than only a runtime shell. Jev still does not directly create milestone content.
+
+
+### Granularity-driven split path
+
+The first hierarchy mutation controlled by Jev is deliberately narrow:
+
+```text
+post-step completion boundary
+  ↓
+Jev granularity = split
+  ↓
+runtime forces planner replan
+  ↓
+Main LLM receives explicit hierarchy_split instruction
+  ↓
+Main LLM may replace currentMilestone + its Plan Tracker
+```
+
+Jev still does not author the replacement milestone. It only decides that the current scope is too broad. The Main LLM owns the new milestone wording and plan steps. Split-triggered replanning is allowed to replace the current canonical plan suffix while preserving grounded completed progress.
+
+`advance` is intentionally not implemented by treating the final Plan Tracker step as project completion. A separate milestone-completion/advance contract is required before the hierarchy can become the normal long-task control path.
