@@ -3358,9 +3358,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
     }
 
-    const routed = pendingAmendment
-      ? { route: 'fallback_planner', decision_called: false }
-      : await this.routePostStepDecision(receipt)
+    let routed
+    if (pendingAmendment) {
+      routed = { route: 'fallback_planner', decision_called: false }
+    }
+    else if (stepCompletion?.reason === 'checkpoint_split_recommended') {
+      routed = { route: 'replan', decision_called: false, source: 'step_checkpoint_normalizer' }
+      await this.traceEvent('planner.wake', {
+        source: 'step_checkpoint_normalizer',
+        route: 'replan',
+        reason: 'checkpoint_split_recommended',
+      })
+    }
+    else {
+      routed = await this.routePostStepDecision(receipt)
+    }
     if (routed.route === 'wait_runtime') return null
 
     this.reasoningTriggerSource = routed.route === 'continue_current'
