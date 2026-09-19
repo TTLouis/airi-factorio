@@ -14,7 +14,7 @@ const LEGACY_SOURCE_PIN = '78ef2acf788189981d82aa9e15e9c33b3dedb29c'
 // Immutable commit containing the audited installer payload. Channel eggs keep
 // this bootstrap immutable, then resolve SGLUNA_SOURCE_REF to an exact commit at
 // reinstall time and patch only the payload's AIRI_REF/revision assignments.
-const PAYLOAD_REF = '0644179762b2d1fbb7de8ca4ca3a261ee248ae99'
+const PAYLOAD_REF = 'a0e39161b69647c9c6669a7b225051457dc0df00'
 const CHANNELS = Object.freeze({
   main: {
     name: 'SGLuna Factorio Server (Main)',
