@@ -10,6 +10,7 @@ function fixture(limit = 2) {
   return {
     schema: 'swarm_coordination_snapshot_v1',
     tick: 600,
+    eventCursor: 'event-42',
     limit,
     counts: {
       missions: 5,
