@@ -1,6 +1,6 @@
 const NEXT_MILESTONE_LIMIT = 3
 const COMPLETED_MILESTONE_LIMIT = 12
-const BOARD_STATUSES = new Set(['active', 'blocked', 'paused', 'completed'])
+const BOARD_STATUSES = new Set(['active', 'blocked', 'paused', 'completed', 'terminated'])
 const DEVELOPMENT_DIRECTIONS = new Set(['vertical', 'horizontal', 'maintain', 'recover'])
 
 function clean(value, max = 500) {
