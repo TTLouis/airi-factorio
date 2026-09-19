@@ -21,7 +21,7 @@ function deployment() {
   }
 }
 
-function activeState({ inventoryMinimum = 10, boundary = 'checkpoint_here', includeCheckpoint = true } = {}) {
+function activeState({ inventoryMinimum = 10, boundary = 'checkpoint_here', relation = 'advances_current', includeCheckpoint = true } = {}) {
   const evidence = [{
     id: 'evidence_1',
     kind: 'deterministic_verification',
@@ -41,6 +41,7 @@ function activeState({ inventoryMinimum = 10, boundary = 'checkpoint_here', incl
       ref: 'checkpoint/step_1',
       summary: JSON.stringify({
         boundary,
+        relation,
         contract: {
           mode: 'all',
           source: 'operation_intent',
@@ -299,6 +300,61 @@ test('Jev split recommendation cannot itself advance canonical state', async () 
   assert.equal(result.verified, false)
   assert.equal(result.reason, 'checkpoint_split_recommended')
   assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 0)
+})
+
+
+test('post-step Jev exposes reanchor_plan as a first-class lightweight route', async () => {
+  const state = activeState({ boundary: 'keep_step_open', relation: 'belongs_to_later_step' })
+  const { agent } = agentWithState({
+    state,
+    decisionProvider: async (decisionState, questions) => {
+      assert.equal(decisionState.semantic_alignment.step_relation, 'belongs_to_later_step')
+      assert.equal(decisionState.semantic_alignment.admission_aligned, false)
+      assert.ok(questions.route.criteria.reanchor_plan)
+      return {
+        model: 'jev-latest',
+        provider: 'TypeSafe',
+        answers: {
+          route: {
+            type: 'choice',
+            choice: 'reanchor_plan',
+            confidence: 0.93,
+            probabilities: { reanchor_plan: 0.93, replan: 0.04, continue_current: 0.03 },
+          },
+        },
+        usage: { input_tokens: 50, output_tokens: 5, cost: 0.000002 },
+      }
+    },
+  })
+
+  const result = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0, queue_empty: true } })
+  assert.equal(result.route, 'reanchor_plan')
+  assert.equal(result.requested_route, 'reanchor_plan')
+})
+
+test('semantic drift cannot be downgraded to continue_current by post-step routing', async () => {
+  const state = activeState({ boundary: 'keep_step_open', relation: 'belongs_to_later_step' })
+  const { agent } = agentWithState({
+    state,
+    decisionProvider: async () => ({
+      model: 'jev-latest',
+      provider: 'TypeSafe',
+      answers: {
+        route: {
+          type: 'choice',
+          choice: 'continue_current',
+          confidence: 0.7,
+          probabilities: { continue_current: 0.7, reanchor_plan: 0.25, replan: 0.05 },
+        },
+      },
+      usage: { input_tokens: 50, output_tokens: 5, cost: 0.000002 },
+    }),
+  })
+
+  const result = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0, queue_empty: true } })
+  assert.equal(result.requested_route, 'continue_current')
+  assert.equal(result.route, 'reanchor_plan')
+  assert.equal(result.fallback_reason, 'semantic_alignment_requires_reanchor')
 })
 
 test('missing pre-admission checkpoint fails closed even with an authoritative batch receipt', async () => {

@@ -56,6 +56,19 @@ test('successful deterministic completion continuation uses low effort with thin
   assert.equal(message._airiProvider.reasoning_policy_reason, 'deterministic_completion')
 })
 
+test('Jev post-step reanchor stays compact and uses low reasoning', async () => {
+  const { seen, message } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: keep the same goal aligned' },
+    { role: 'user', content: COMPLETION },
+  ], { allowTools: true, triggerSource: 'post_step_reanchor' })
+
+  assert.equal(seen.body.reasoning_effort, 'low')
+  assert.deepEqual(seen.body.thinking, { type: 'enabled' })
+  assert.equal(seen.body.max_tokens, 1000)
+  assert.equal(message._airiProvider.reasoning_policy_reason, 'jev_post_step_reanchor')
+})
+
 test('Jev post-step replan overrides the compact completion path and uses high effort', async () => {
   const { seen, message } = await captureRequest([
     { role: 'system', content: 'system' },

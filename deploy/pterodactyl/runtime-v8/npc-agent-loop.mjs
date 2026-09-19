@@ -1305,6 +1305,7 @@ const INTERACTION_INTENTS = new Set([
 
 const POST_STEP_ROUTES = new Set([
   'continue_current',
+  'reanchor_plan',
   'replan',
   'wait_runtime',
   'fallback_planner',
@@ -1378,7 +1379,8 @@ function postStepDecisionQuestions() {
       instructions: 'After one authoritative Autorio completion or error boundary, choose the smallest safe planner transition. This is routing only; do not invent world facts, mutation success, or goal completion.',
       criteria: {
         continue_current: 'The canonical goal and active step are semantically aligned with the admitted work, so the main planner should continue compactly.',
-        replan: 'The completion evidence changes the remaining approach, or semantic_alignment shows the admitted/proposed work drifted from the active canonical step; wake the planner to realign or split the plan with higher reasoning.',
+        reanchor_plan: 'The user goal is still valid, but semantic_alignment shows the planner focus and canonical active step need a small alignment correction before more work. Preserve verified progress and re-anchor the plan without redesigning the whole goal.',
+        replan: 'The completion evidence materially changes the remaining approach or the current plan needs a broader structural reconsideration; wake the planner with higher reasoning.',
         wait_runtime: 'A persistent runtime controller is authoritatively active, healthy, and live, so waking the main planner now would only duplicate ongoing work.',
         fallback_planner: 'The evidence is ambiguous or outside this routing contract; use the existing safe main-planner continuation.',
       },
@@ -2922,6 +2924,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         appliedRoute = 'fallback_planner'
         fallbackReason = hierarchyGate.reason
       }
+      const semanticNeedsReanchor = state.semantic_alignment?.admission_aligned === false
+        && ['belongs_to_later_step', 'replan_needed', 'unrelated'].includes(state.semantic_alignment?.step_relation)
+      if (semanticNeedsReanchor && !['reanchor_plan', 'replan'].includes(appliedRoute)) {
+        appliedRoute = 'reanchor_plan'
+        fallbackReason = 'semantic_alignment_requires_reanchor'
+      }
       if (!hierarchyAction
         && state.boundary === 'completion'
         && ['vertical', 'horizontal', 'recover'].includes(hierarchyTelemetry.development)
@@ -2995,9 +3003,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           route: appliedRoute,
           reasoning_policy: appliedRoute === 'continue_current'
             ? 'low'
-            : appliedRoute === 'replan'
-              ? 'high'
-              : 'existing_fallback',
+            : appliedRoute === 'reanchor_plan'
+              ? 'low'
+              : appliedRoute === 'replan'
+                ? 'high'
+                : 'existing_fallback',
         })
       }
       return {
@@ -3535,9 +3545,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
             ? 'hierarchy_project_complete_candidate'
             : routed.route === 'continue_current'
               ? 'post_step_continue'
-              : routed.route === 'replan'
-                ? 'post_step_replan'
-                : null
+              : routed.route === 'reanchor_plan'
+                ? 'post_step_reanchor'
+                : routed.route === 'replan'
+                  ? 'post_step_replan'
+                  : null
+    if (routed.route === 'reanchor_plan') this.planUpdateReason = 'reanchor_plan'
     try {
       const hierarchyInstruction = routed.hierarchy_action === 'split_current_milestone'
         ? ' [HIERARCHY] Jev determined the current milestone is too broad. Preserve the user project goal and verified Plan Tracker progress, replace currentMilestone with a smaller bounded strategic outcome, keep at most three tentative nextMilestones, and make plan contain only executable/verifiable steps for the new current milestone.'
@@ -3593,9 +3606,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     this.reasoningTriggerSource = routed.route === 'continue_current'
       ? 'post_step_continue'
-      : routed.route === 'replan'
-        ? 'post_step_replan'
-        : null
+      : routed.route === 'reanchor_plan'
+        ? 'post_step_reanchor'
+        : routed.route === 'replan'
+          ? 'post_step_replan'
+          : null
     try {
       return await this.continueFromModMessage(
         `[MOD] Autorio operation error: ${cleanError}. Dependent queued operations may have been cancelled. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
