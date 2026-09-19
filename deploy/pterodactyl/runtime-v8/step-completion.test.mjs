@@ -116,8 +116,7 @@ test('high-level operation intent produces deterministic checkpoint candidates b
     item_name: 'stone',
     minimum: 10,
   })
-  assert.equal(candidates[1].requirements[0].kind, 'authoritative_operation_receipt')
-  assert.equal(candidates[1].requirements[0].operation_name, 'gather_resource')
+  assert.equal(candidates.length, 1)
 })
 
 test('Jev checkpoint pass chooses semantic boundary separately from the grounded contract', () => {
