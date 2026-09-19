@@ -105,9 +105,13 @@ export function validateRecoveryRoute(decision, {
   finalCompletionProven = false,
   observationBudgetAvailable = true,
   evidence = [],
+  failureClassHint = 'unknown',
 } = {}) {
   const runtime = authoritativeRuntimeState(world)
   const requested = RECOVERY_ROUTES.has(decision?.route) ? decision.route : 'fallback_runtime'
+  const hintedFailureClass = RECOVERY_FAILURE_CLASSES.has(failureClassHint) ? failureClassHint : 'unknown'
+  const providerControlPlaneFailure = hintedFailureClass === 'provider_format' || hintedFailureClass === 'provider_budget'
+  const safeNonBlockingRoute = runtime.idle ? 'pause_recoverable' : runtime.active ? 'wait_runtime' : 'fallback_runtime'
   let route = requested
   let rejection_reason = ''
 
@@ -127,8 +131,16 @@ export function validateRecoveryRoute(decision, {
     route = 'fallback_runtime'
     rejection_reason = 'targeted_observation_budget_exhausted'
   }
+  else if (route === 'propose_blocker' && providerControlPlaneFailure) {
+    route = safeNonBlockingRoute
+    rejection_reason = 'provider_failure_cannot_be_world_blocker'
+  }
+  else if (route === 'propose_blocker' && decision?.failure_class !== 'grounded_world_failure') {
+    route = safeNonBlockingRoute
+    rejection_reason = 'blocker_proposal_requires_grounded_world_failure'
+  }
   else if (route === 'propose_blocker' && !hasAuthoritativeBlockerEvidence(evidence)) {
-    route = runtime.idle ? 'pause_recoverable' : runtime.active ? 'wait_runtime' : 'fallback_runtime'
+    route = safeNonBlockingRoute
     rejection_reason = 'blocker_proposal_without_authoritative_evidence'
   }
 
