@@ -68,6 +68,40 @@ describe('in-game task board UI projection', () => {
     })
   })
 
+  it('sanitizes the long-horizon Project Board separately from Plan Tracker steps', () => {
+    const board = sanitize_task_board_ui_snapshot({
+      goal_id: 'goal_rocket',
+      objective: 'Launch a rocket',
+      project: {
+        kind: 'project_board_v1',
+        project_id: 'goal_rocket',
+        title: 'Launch a rocket',
+        status: 'active',
+        completed_milestones: [{ id: 'm0', title: 'Establish burner production', status: 'completed' }],
+        current_milestone: { id: 'm1', title: 'Reach Automation', status: 'active', completion_summary: 'Automation is researched.' },
+        next_milestones: [
+          { id: 'm2', title: 'Establish electric power', status: 'tentative' },
+          { id: 'm3', title: 'Automate red and green science', status: 'tentative' },
+        ],
+        development_direction: 'vertical',
+        transition_state: '',
+      },
+      status: 'active', blocker: '', pause_reason: '',
+      completed_count: 0, total_steps: 1, active_index: 0,
+      steps: [{ id: 'step_1', description: 'Produce science packs for Automation', status: 'active' }],
+      activity: [], wanted_items: [],
+    })
+    expect(board?.project).toMatchObject({
+      project_id: 'goal_rocket',
+      title: 'Launch a rocket',
+      development_direction: 'vertical',
+      completed_milestones: [{ title: 'Establish burner production' }],
+      current_milestone: { title: 'Reach Automation' },
+      next_milestones: [{ title: 'Establish electric power' }, { title: 'Automate red and green science' }],
+    })
+    expect(board?.steps[0].description).toBe('Produce science packs for Automation')
+  })
+
   it('bounds malformed optional UI detail fields instead of trusting them', () => {
     const board = sanitize_task_board_ui_snapshot({
       goal_id: 'goal', objective: 'test', status: 'active', blocker: '', pause_reason: '',
