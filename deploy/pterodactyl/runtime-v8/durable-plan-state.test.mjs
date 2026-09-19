@@ -1111,3 +1111,62 @@ test('structural hierarchy turns reject flat plans that omit the required milest
     operations: [{ name: 'wait', args: { ticks: 1 } }],
   })))
 })
+
+
+test('runtime accepts a semantic checkpoint proposal beside the strict plan surface', () => {
+  const agent = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    memory: new CanonicalTaskBoardMemory(),
+    npcId: 'airi',
+    systemPrompt: 'semantic checkpoint parse test',
+    stateFile: null,
+    traceFile: null,
+    decisionTraceFile: null,
+    provider: async () => { throw new Error('unused') },
+  })
+
+  const parsed = agent.parsePlanMessage({
+    content: JSON.stringify({
+      chatMessage: 'Gathering the remaining stone.',
+      checkpoint: {
+        mode: 'all',
+        requirements: [
+          { id: 'stone_total', kind: 'inventory_count', item_name: 'stone', minimum: 100 },
+        ],
+      },
+      plan: ['Ensure I have at least 100 stone'],
+      currentStep: 0,
+      operations: [{ name: 'gather_resource', args: { resource_name: 'stone', count: 40, search_radius: 512 } }],
+    }),
+  })
+
+  assert.equal(parsed.checkpoint.source, 'planner_semantic_checkpoint')
+  assert.equal(parsed.checkpoint.requirements[0].minimum, 100)
+  assert.equal(parsed.operations[0].args.count, 40)
+})
+
+test('runtime rejects unsupported planner checkpoint semantics instead of trusting prose-like predicates', () => {
+  const agent = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    memory: new CanonicalTaskBoardMemory(),
+    npcId: 'airi',
+    systemPrompt: 'semantic checkpoint rejection test',
+    stateFile: null,
+    traceFile: null,
+    decisionTraceFile: null,
+    provider: async () => { throw new Error('unused') },
+  })
+
+  assert.throws(() => agent.parsePlanMessage({
+    content: JSON.stringify({
+      chatMessage: 'Looks done.',
+      checkpoint: {
+        mode: 'all',
+        requirements: [{ id: 'guess', kind: 'natural_language', predicate: 'enough stone' }],
+      },
+      plan: ['Get enough stone'],
+      currentStep: 0,
+      operations: [{ name: 'gather_resource', args: { resource_name: 'stone', count: 40, search_radius: 512 } }],
+    }),
+  }), /runtime-supported semantic completion contract/i)
+})
