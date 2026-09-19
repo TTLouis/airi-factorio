@@ -106,24 +106,22 @@ test('Jev completion decision may only select runtime-supplied candidate contrac
 })
 
 
-test('high-level operation intent produces deterministic checkpoint candidates before execution', () => {
-  const candidates = completionCandidatesFromOperations([
-    { name: 'gather_resource', args: { resource_name: 'stone', count: 10, search_radius: 64 } },
-  ])
-  assert.equal(candidates[0].source, 'operation_intent')
-  assert.deepEqual(candidates[0].requirements[0], {
-    id: 'intent_1',
-    kind: 'inventory_count',
-    item_name: 'stone',
-    minimum: 10,
-  })
-  assert.equal(candidates.length, 1)
+test('quantity operations do not synthesize absolute semantic checkpoints from delta arguments', () => {
+  for (const operations of [
+    [{ name: 'gather_resource', args: { resource_name: 'stone', count: 40, search_radius: 64 } }],
+    [{ name: 'craft_item', args: { item_name: 'stone-furnace', count: 2 } }],
+    [{ name: 'supply_entity', args: { unit_number: 582, items: [{ item_name: 'coal', count: 5 }] } }],
+  ]) {
+    assert.deepEqual(completionCandidatesFromOperations(operations), [])
+  }
 })
 
 test('Jev checkpoint pass chooses semantic boundary separately from the grounded contract', () => {
-  const candidates = completionCandidatesFromOperations([
-    { name: 'craft_item', args: { item_name: 'stone-furnace', count: 2 } },
-  ])
+  const candidates = [{
+    mode: 'all',
+    source: 'planner_semantic_checkpoint',
+    requirements: [{ id: 'furnaces_total', kind: 'inventory_count', item_name: 'stone-furnace', minimum: 2 }],
+  }]
   const questions = stepCheckpointDecisionQuestions(candidates)
   assert.ok(questions.checkpoint_boundary.criteria.checkpoint_here)
   assert.ok(questions.checkpoint_boundary.criteria.keep_step_open)
@@ -161,9 +159,11 @@ test('step semantic relation admits only current-step progress or prerequisites'
   assert.equal(stepRelationAllowsAdmission('replan_needed'), false)
   assert.equal(stepRelationAllowsAdmission('unrelated'), false)
 
-  const candidates = completionCandidatesFromOperations([
-    { name: 'craft_item', args: { item_name: 'stone-furnace', count: 2 } },
-  ])
+  const candidates = [{
+    mode: 'all',
+    source: 'planner_semantic_checkpoint',
+    requirements: [{ id: 'furnaces_total', kind: 'inventory_count', item_name: 'stone-furnace', minimum: 2 }],
+  }]
   const drift = parseStepCheckpointDecision({
     answers: {
       contract: { type: 'choice', choice: 'candidate_1', confidence: 0.91 },
