@@ -205,6 +205,11 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     const incomingPlan = safePlan(plan.plan)
     const incomingStep = Number.isSafeInteger(plan.currentStep) ? plan.currentStep : 0
     const now = Date.now()
+    const requestedGoalId = cleanMemoryText(requestInfo?.goalId, 100)
+    const preservePreviousGoal = previous && previous.status !== 'completed'
+    const goalId = preservePreviousGoal
+      ? previous.goal_id
+      : (requestedGoalId || previous?.goal_id || `goal_${now.toString(36)}`)
     const runtime = safePersistentRuntime(persistentRuntime)
     const runtimeHealthy = runtime?.active === true && runtime.healthy === true && runtime.controller_live === true
 
@@ -224,7 +229,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
 
     if (hasOperations) {
       const state = {
-        goal_id: previous?.goal_id ?? `goal_${now.toString(36)}`,
+        goal_id: goalId,
         owner: cleanMemoryText(requestInfo?.sender ?? previous?.owner ?? 'unknown', 128),
         objective: cleanMemoryText(previous?.objective ?? requestInfo?.text ?? '', 1000),
         status: 'active',
@@ -246,7 +251,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     if (runtimeHealthy && incomingPlan.length > 0) {
       const state = {
         ...(previous ?? {}),
-        goal_id: previous?.goal_id ?? `goal_${now.toString(36)}`,
+        goal_id: goalId,
         owner: cleanMemoryText(requestInfo?.sender ?? previous?.owner ?? 'unknown', 128),
         objective: cleanMemoryText(previous?.objective ?? requestInfo?.text ?? '', 1000),
         status: 'active',
@@ -562,6 +567,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.planUpdateReason = 'request'
     this.strategicProjectState = undefined
     this.projectJevAdvisory = undefined
+    this.pendingGoalId = undefined
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
       ?? (process.env.NODE_TEST_CONTEXT ? null : path.resolve(process.cwd(), 'logs', 'airi-behavior.jsonl'))
@@ -746,6 +752,17 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     void this.traceEvent('request.cancelled', { reason })
     this.traceRequest = null
     return super.cancel()
+  }
+
+  async request(text, options = {}) {
+    const suppliedGoalId = cleanMemoryText(options?.goalId, 100)
+    this.pendingGoalId = suppliedGoalId || undefined
+    try {
+      return await super.request(text, options)
+    }
+    finally {
+      this.pendingGoalId = undefined
+    }
   }
 
   setStrategicProjectState(board) {
@@ -995,7 +1012,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         assistant: plan.chatMessage,
         operations: plan.operations,
       })
-      stateResult = this.memory.recordPlan?.(this.requestInfo.memoryKey, this.requestInfo, plan, {
+      const strategicRequestInfo = this.pendingGoalId
+        ? { ...this.requestInfo, goalId: this.pendingGoalId }
+        : this.requestInfo
+      stateResult = this.memory.recordPlan?.(this.requestInfo.memoryKey, strategicRequestInfo, plan, {
         continuation: this.continuations > 0,
         persistentRuntime,
       })
