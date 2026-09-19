@@ -3519,7 +3519,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.duplicateToolRounds = 0
     this.observationRecoveryRounds = 0
     this.observationOnlyRounds = 0
-    this.observationDecisionPressure = false
+    this.resetObservationDecisionState()
     this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
     this.planCategoryRetries = 0
