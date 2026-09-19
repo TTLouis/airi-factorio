@@ -410,7 +410,7 @@ test('hierarchy gate refuses runtime wait when Jev says strategic direction is n
   assert.equal(routed.hierarchy_gate.allow_runtime_continuation, false)
 })
 
-test('hierarchy gate refuses runtime wait when granularity says the current scope should split', async () => {
+test('granularity split becomes an explicit milestone replan request on a completion boundary', async () => {
   const { agent, memory } = makeAgent({
     decisionProvider: async () => postStepDecisionResponse('wait_runtime', {
       granularity: 'split',
@@ -431,8 +431,10 @@ test('hierarchy gate refuses runtime wait when granularity says the current scop
   )
 
   const routed = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0 } })
-  assert.equal(routed.route, 'fallback_planner')
-  assert.equal(routed.fallback_reason, 'granularity_requires_planner')
+  assert.equal(routed.requested_route, 'wait_runtime')
+  assert.equal(routed.route, 'replan')
+  assert.equal(routed.hierarchy_action, 'split_current_milestone')
+  assert.equal(routed.fallback_reason, 'hierarchy_split_requested')
 })
 
 test('idle Autorio plus Jev wait_runtime is rejected when no valid watcher exists', async () => {
