@@ -444,6 +444,7 @@ export class Session {
     this.npcName = 'AIRI'
     this.npcId = 'airi'
     this.projectJev = null
+    this.strategicGoalSequence = 0
   }
 
   updateNpcIdentity(status) {
@@ -556,6 +557,44 @@ export class Session {
     }
     this.refreshProjectJevAgentContext()
     return true
+  }
+
+  nextStrategicGoalId() {
+    this.strategicGoalSequence += 1
+    return `goal_${Date.now().toString(36)}_${this.strategicGoalSequence.toString(36)}`
+  }
+
+  async prepareProjectJevGoalForRequest(text) {
+    if (!this.projectJev) return undefined
+
+    let goalId
+    try {
+      const board = this.projectJev.currentBoard()
+      if (!board.goal_id) {
+        goalId = this.nextStrategicGoalId()
+        await this.projectJev.runtime.bindGoal({
+          goalId,
+          objective: uiText(text, 500),
+        })
+      }
+      else if (board.status === 'completed' || board.status === 'terminated') {
+        goalId = this.nextStrategicGoalId()
+        await this.projectJev.runtime.startNextGoal({
+          goalId,
+          objective: uiText(text, 500),
+        })
+      }
+      else {
+        goalId = board.goal_id
+      }
+    }
+    catch (error) {
+      this.log(`[Project Jev] Unable to prepare strategic goal identity; AIRI will continue with local goal identity: ${error instanceof Error ? error.message : error}`)
+      return undefined
+    }
+
+    await this.refreshProjectJevAdvisory({ poll: true })
+    return goalId
   }
 
   async syncProjectJevGoalFromPlan(state = this.currentPlanState()) {
@@ -783,8 +822,8 @@ export class Session {
       }
       await this.ensureAuthorization()
       await this.applyNavigationObstaclePolicy(text)
-      await this.refreshProjectJevAdvisory({ poll: true })
-      const result = await this.agent.request(text, { sender })
+      const goalId = await this.prepareProjectJevGoalForRequest(text)
+      const result = await this.agent.request(text, { sender, goalId })
       await this.syncTaskBoardUi()
       await this.syncProjectJevGoalFromPlan()
       await this.applyProjectJevPlannerProposal(result)
