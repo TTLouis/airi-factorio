@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  buildSwarmRecoveryCapsule,
   deterministicSwarmRecoveryPending,
   parseSwarmRecoveryDecision,
   shouldInvokeSwarmRecoveryJev,
@@ -127,4 +128,36 @@ test('failure hint never invents grounded world failure from a text error', () =
   assert.equal(swarmRecoveryFailureClassHint('finish=length output budget exhausted'), 'provider_budget')
   assert.equal(swarmRecoveryFailureClassHint('one fresh mutable fact is missing'), 'missing_fact')
   assert.equal(swarmRecoveryFailureClassHint('turret destroyed and everything is terrible'), 'unknown')
+})
+
+
+test('recovery capsule is shadow-only and suppresses Jev while reconciliation is pending', () => {
+  const capsule = buildSwarmRecoveryCapsule({
+    reason: 'invalid provider JSON',
+    reconciliationActions: [{
+      kind: 'release_claim',
+      claimId: 'claim-1',
+      workId: 'work-1',
+      reason: 'body_revision_changed',
+    }],
+    runtime: {
+      active: true,
+    },
+    outcome: {
+      state: 'progress',
+      authoritative: true,
+      reason: 'mission_progress',
+    },
+    observationBudgetAvailable: false,
+    blockerGrounded: false,
+  })
+
+  assert.equal(capsule.authority, 'shadow')
+  assert.deepEqual(capsule.effects, [])
+  assert.equal(capsule.deterministic_recovery_pending, true)
+  assert.equal(capsule.deterministic_recovery_actions, 1)
+  assert.equal(capsule.jev_eligible, false)
+  assert.equal(capsule.failure_class_hint, 'provider_format')
+  assert.equal(capsule.runtime.active, true)
+  assert.equal(capsule.observation_budget_available, false)
 })
