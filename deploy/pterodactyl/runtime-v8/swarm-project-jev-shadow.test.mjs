@@ -188,3 +188,31 @@ test('last telemetry is defensive-copied and cannot mutate controller state', as
   const second = controller.last()
   assert.equal(second.source_counts.missions, 1)
 })
+
+
+test('completed historical work does not make project Jev think runtime is active', () => {
+  const source = globalSnapshot()
+  source.counts.work = 25
+  source.counts.claims = 0
+  source.work = [
+    { id: 'work-20', status: 'completed', title: 'Historical work' },
+  ]
+  source.warnings = []
+  source.counts.activeWarnings = 0
+
+  const projected = buildProjectJevShadowSnapshot(source)
+  assert.equal(projected.runtime.active, false)
+  assert.equal(projected.runtime.reason, 'swarm_idle')
+})
+
+test('claimed or active sampled work remains authoritative runtime activity', () => {
+  const source = globalSnapshot()
+  source.counts.claims = 0
+  source.work = [
+    { id: 'work-live', status: 'active', title: 'Live work' },
+  ]
+
+  const projected = buildProjectJevShadowSnapshot(source)
+  assert.equal(projected.runtime.active, true)
+  assert.equal(projected.runtime.reason, 'swarm_active_warnings')
+})
