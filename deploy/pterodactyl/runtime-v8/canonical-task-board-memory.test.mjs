@@ -759,3 +759,29 @@ test('milestone transition flags survive persistence', () => {
   assert.equal(state.milestone_transition_pending, true)
   assert.equal(state.milestone_plan_pending, true)
 })
+
+
+test('initial project split transaction survives persistence', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.beginHierarchyGoal('npc:airi', {
+    sender: 'tester',
+    text: 'Reach Automation',
+  }, {
+    reasoning_budget: 'strategic',
+    planning_horizon: 'strategic',
+    observation_budget: 3,
+  })
+
+  const snapshot = memory.snapshot()
+  const restored = new CanonicalTaskBoardMemory()
+  restored.restore(snapshot)
+  const state = restored.currentPlan('npc:airi')
+
+  assert.equal(state.status, 'active')
+  assert.equal(state.objective, 'Reach Automation')
+  assert.equal(state.hierarchy_split_pending.kind, 'split_project_goal')
+  assert.equal(state.hierarchy_split_pending.reasoning_budget, 'strategic')
+  assert.equal(state.hierarchy_split_pending.planning_horizon, 'strategic')
+  assert.equal(state.hierarchy_split_pending.observation_budget, 3)
+  assert.match(restored.planContext('npc:airi'), /HIERARCHY_TRANSITION/)
+})
