@@ -245,3 +245,57 @@ test('shadow recovery capsule cannot bypass deterministic swarm reconciliation',
   assert.equal(context.recovery.failure_class_hint, 'provider_format')
   assert.equal(Object.hasOwn(context.recovery, 'must_not_escape'), false)
 })
+
+
+test('global coordination snapshot keeps authoritative totals while exposing bounded samples', () => {
+  const context = buildSwarmJevShadowContext({
+    schema: 'swarm_coordination_snapshot_v1',
+    counts: {
+      missions: 25,
+      objectives: 40,
+      projects: 18,
+      work: 70,
+      requests: 9,
+      claims: 4,
+      results: 66,
+      agents: 6,
+      actors: 6,
+      activeWarnings: 3,
+    },
+    missions: [{ id: 'mission-1', status: 'active', title: 'Mission 1' }],
+    objectives: [{ id: 'objective-1', status: 'active', description: 'Objective 1' }],
+    projects: [{ id: 'project-1', status: 'executing', title: 'Project 1' }],
+    work: [{ id: 'work-1', status: 'active', description: 'Work 1' }],
+    requests: [{ id: 'request-1', status: 'open', description: 'Need material' }],
+    warnings: [{ id: 'warning-1', kind: 'supply_shortage', description: 'Iron low', active: true }],
+    claims: [{ id: 'claim-1', state: 'active' }],
+    results: [{ id: 'result-1', status: 'success', summary: 'Survey finished' }],
+    agents: [{ id: 'agent-1', state: 'working' }],
+    actors: [{ id: 'actor-1', state: 'online' }],
+  })
+
+  assert.equal(context.counts.missions, 25)
+  assert.equal(context.counts.objectives, 40)
+  assert.equal(context.counts.work, 70)
+  assert.equal(context.counts.warnings, 3)
+  assert.equal(context.counts.results, 66)
+  assert.equal(context.counts.agents, 6)
+  assert.equal(context.missions.length, 1)
+  assert.equal(context.warnings[0].id, 'warning-1')
+  assert.equal(context.results[0].id, 'result-1')
+  assert.equal(context.agents[0].id, 'agent-1')
+})
+
+test('malformed external totals never replace observed sample counts', () => {
+  const context = buildSwarmJevShadowContext({
+    counts: {
+      missions: -1,
+      agents: 'many',
+    },
+    missions: [{ id: 'mission-1', status: 'active' }, { id: 'mission-2', status: 'active' }],
+    agents: [{ id: 'agent-1', state: 'available' }],
+  })
+
+  assert.equal(context.counts.missions, 2)
+  assert.equal(context.counts.agents, 1)
+})
