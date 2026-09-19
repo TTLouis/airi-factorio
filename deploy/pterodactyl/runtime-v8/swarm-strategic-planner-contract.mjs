@@ -53,6 +53,23 @@ export function evaluateStrategicPlannerProposal(store, rawProposal) {
     }
   }
 
+  if (['awaiting_project_replan', 'awaiting_project_review'].includes(board.transition_state)) {
+    return {
+      accepted: true,
+      reason: board.transition_state === 'awaiting_project_review'
+        ? 'resume_after_project_completion_review'
+        : 'replan_after_verified_milestone',
+      board,
+      proposal,
+      patch: {
+        current_milestone: proposal.current_milestone,
+        next_milestones: proposal.next_milestones,
+        development_direction: proposal.development_direction,
+        transition_state: '',
+      },
+    }
+  }
+
   return {
     accepted: true,
     reason: 'initialize_strategic_milestone',
@@ -62,6 +79,7 @@ export function evaluateStrategicPlannerProposal(store, rawProposal) {
       current_milestone: proposal.current_milestone,
       next_milestones: proposal.next_milestones,
       development_direction: proposal.development_direction,
+      transition_state: '',
     },
   }
 }
