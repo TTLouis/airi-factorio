@@ -3137,7 +3137,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
 
     const intent = routed.route.intent
-    const initialHierarchySplit = intent === 'new_goal' && routed.decision_shadow?.granularity === 'split'
+    const jevNewGoalAligned = intent === 'new_goal' && routed.decision_shadow?.intent === 'new_goal'
+    const initialHierarchySplit = jevNewGoalAligned && routed.decision_shadow?.granularity === 'split'
     await this.traceEvent('interaction.routed', {
       sender,
       text,
@@ -3155,6 +3156,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       hierarchy_initial_granularity: routed.decision_shadow?.granularity,
       hierarchy_initial_granularity_confidence: routed.decision_shadow?.granularity_confidence,
       hierarchy_initial_split: initialHierarchySplit,
+      hierarchy_initial_jev_aligned: jevNewGoalAligned,
       decision_shadow_status: routed.classifier_skipped
         ? 'classifier_skipped'
         : routed.decision_shadow
@@ -3237,7 +3239,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const previousReasoningBudget = this.reasoningBudgetOverride
     const previousObservationBudget = this.observationBudgetOverride
     const previousPlanningHorizon = this.planningHorizonOverride
-    if (intent === 'new_goal' && routed.decision_shadow) {
+    if (jevNewGoalAligned) {
       this.reasoningBudgetOverride = routed.decision_shadow.reasoning_budget ?? null
       this.observationBudgetOverride = Number.isSafeInteger(routed.decision_shadow.observation_budget) ? routed.decision_shadow.observation_budget : null
       this.planningHorizonOverride = routed.decision_shadow.planning_horizon ?? null
