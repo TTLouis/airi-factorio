@@ -443,3 +443,37 @@ test('Jev can select a semantic total checkpoint that differs from the next oper
   const summary = JSON.parse(stored.summary)
   assert.equal(summary.contract.requirements[0].minimum, 100)
 })
+
+
+test('checkpoint routing outage keeps useful admission open while withholding completion authority', async () => {
+  const state = activeState({ includeCheckpoint: false })
+  state.task_board.evidence = []
+  const { agent } = agentWithState({ state, decisionProvider: null })
+
+  const result = await agent.routeStepCheckpointDecision({
+    operations: [{ name: 'gather_resource', args: { resource_name: 'stone', count: 10, search_radius: 64 } }],
+  })
+
+  assert.equal(result.relation, 'advances_current')
+  assert.equal(result.boundary, 'keep_step_open')
+  assert.equal(result.contract.mode, 'semantic_unknown')
+  assert.equal(result.reason, 'decision_provider_unavailable')
+})
+
+test('checkpoint decision failure does not masquerade as semantic drift', async () => {
+  const state = activeState({ includeCheckpoint: false })
+  state.task_board.evidence = []
+  const { agent } = agentWithState({
+    state,
+    decisionProvider: async () => { throw new Error('jev temporarily unavailable') },
+  })
+
+  const result = await agent.routeStepCheckpointDecision({
+    operations: [{ name: 'craft_item', args: { item_name: 'stone-furnace', count: 1 } }],
+  })
+
+  assert.equal(result.relation, 'advances_current')
+  assert.equal(result.boundary, 'keep_step_open')
+  assert.equal(result.contract.mode, 'semantic_unknown')
+  assert.equal(result.reason, 'checkpoint_decision_failed')
+})
