@@ -7,6 +7,7 @@ import { authorizeStrategicMilestoneCompletion } from './swarm-strategic-transit
 import { readSwarmCoordinationSnapshot } from './swarm-coordination-snapshot.mjs'
 import { authorizeStrategicProjectCompletion } from './swarm-strategic-project-completion-gate.mjs'
 import { SwarmProjectJevMonitor } from './swarm-project-jev-monitor.mjs'
+import { runSwarmJevMilestoneTransitionDecision } from './swarm-jev-shadow-controller.mjs'
 
 export class SwarmProjectJevRuntime {
   constructor({
@@ -23,6 +24,7 @@ export class SwarmProjectJevRuntime {
     }
 
     this.rcon = rcon
+    this.decisionProvider = typeof decisionProvider === 'function' ? decisionProvider : undefined
     this.snapshotLimit = snapshotLimit
     this.store = new SwarmStrategicProjectStore({
       goalId,
@@ -131,7 +133,10 @@ export class SwarmProjectJevRuntime {
     }
 
     const result = this.store.completeCurrentMilestone({ verified: true })
-    if (result.changed) await this.persistence.save()
+    if (result.changed) {
+      await this.persistence.save()
+      this.monitor.resetBaseline()
+    }
     return {
       ...result,
       authorization,
@@ -143,6 +148,75 @@ export class SwarmProjectJevRuntime {
     const result = this.store.activateNextMilestone()
     if (result.changed) await this.persistence.save()
     return result
+  }
+
+  async transitionCompletedMilestone(outcomeSnapshot, {
+    providerOptions = {},
+  } = {}) {
+    const completed = await this.completeCurrentMilestone(outcomeSnapshot)
+    if (!completed.changed) {
+      return {
+        changed: false,
+        reason: completed.reason,
+        completion: completed,
+        board: this.store.current(),
+      }
+    }
+
+    const coordinationSnapshot = await readSwarmCoordinationSnapshot(this.rcon, {
+      limit: this.snapshotLimit,
+    })
+    const transitionDecision = await runSwarmJevMilestoneTransitionDecision({
+      decisionProvider: this.decisionProvider,
+      strategicBoard: this.store.current(),
+      coordinationSnapshot,
+      providerOptions,
+    })
+
+    let transition
+    if (transitionDecision.decision === 'advance_next') {
+      transition = this.store.activateNextMilestone()
+      if (!transition.changed) {
+        const board = this.store.update({
+          transition_state: 'awaiting_project_replan',
+        })
+        transition = {
+          changed: true,
+          reason: transition.reason || 'next_milestone_unavailable',
+          board,
+        }
+      }
+    }
+    else if (transitionDecision.decision === 'project_complete_candidate') {
+      transition = {
+        changed: true,
+        reason: 'project_completion_requires_planner_review',
+        board: this.store.update({
+          transition_state: 'awaiting_project_review',
+        }),
+      }
+    }
+    else {
+      transition = {
+        changed: true,
+        reason: 'verified_milestone_requires_project_replan',
+        board: this.store.update({
+          transition_state: 'awaiting_project_replan',
+        }),
+      }
+    }
+
+    await this.persistence.save()
+    this.monitor.resetBaseline()
+    return {
+      changed: true,
+      reason: transition.reason,
+      completion: completed,
+      transition,
+      transitionDecision,
+      board: this.store.current(),
+      coordination_tick: coordinationSnapshot.tick,
+    }
   }
 
   async completeProject({ jevDecision } = {}) {
