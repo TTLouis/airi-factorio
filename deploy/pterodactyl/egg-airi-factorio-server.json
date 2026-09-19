@@ -99,6 +99,56 @@
             "field_type": "text"
         },
         {
+            "name": "Jev Decision API Key",
+            "description": "Optional credential for the global Project Jev decision provider. Leave blank to keep Project Jev unavailable without blocking swarm runtime.",
+            "env_variable": "DECISION_PROVIDER_API_KEY",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        },
+        {
+            "name": "Jev Decision Provider URL",
+            "description": "Decision-provider endpoint used by Project Jev. Remote endpoints must use HTTPS.",
+            "env_variable": "DECISION_PROVIDER_API_URL",
+            "default_value": "https://api.typesafe.ai/v1/systemone",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|url|max:255",
+            "field_type": "text"
+        },
+        {
+            "name": "Jev Decision Model",
+            "description": "Model identifier used by the global Project Jev control plane.",
+            "env_variable": "DECISION_PROVIDER_MODEL",
+            "default_value": "jev-latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:200",
+            "field_type": "text"
+        },
+        {
+            "name": "Jev Decision Timeout (ms)",
+            "description": "Maximum time for one Project Jev decision request.",
+            "env_variable": "DECISION_PROVIDER_TIMEOUT_MS",
+            "default_value": "5000",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|between:100,30000",
+            "field_type": "text"
+        },
+        {
+            "name": "Max Jev Decisions Per Hour",
+            "description": "Persisted hourly request cap for the Project Jev decision provider, separate from the main AIRI provider budget.",
+            "env_variable": "MAX_DECISION_PROVIDER_REQUESTS_PER_HOUR",
+            "default_value": "180",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|between:1,1200",
+            "field_type": "text"
+        },
+        {
             "name": "Save File Name",
             "description": "Save under /saves. Leave blank to use the newest existing save or create airi-world.zip.",
             "env_variable": "SAVE_NAME",
