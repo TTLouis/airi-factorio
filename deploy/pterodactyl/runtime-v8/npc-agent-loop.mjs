@@ -3976,7 +3976,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.assertCurrent()
     if (!message || typeof message !== 'object') throw new AgentLoopError('Provider returned no message')
 
-    const plannerSubmission = plannerControlPayloadFromMessage(message)
+    const plannerSubmission = effectiveAllowTools ? plannerControlPayloadFromMessage(message) : undefined
     if (plannerSubmission) {
       await this.traceEvent('provider.plan_submission', {
         source: 'submitPlan',
