@@ -1,9 +1,26 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
+function taskBoardUiSource() {
+  const main = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  const constants = readFileSync(new URL('./task_board_ui_constants.ts', import.meta.url), 'utf8')
+  // UI constants moved into a namespace to preserve Factorio Lua local headroom.
+  // Normalize that namespace for source-architecture assertions while retaining
+  // the constants module so declaration/geometry checks still test real code.
+  return `${main.replaceAll('ui_constants.', '')}\n${constants}`
+}
+
+function taskBoardDebugSource() {
+  return [
+    readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8'),
+    readFileSync(new URL('./task_board_debug_render.ts', import.meta.url), 'utf8'),
+  ].join('\n')
+}
+
+
 describe('NPC console information architecture', () => {
-  const consoleSource = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
-  const debugSource = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+  const consoleSource = taskBoardUiSource()
+  const debugSource = taskBoardDebugSource()
   const projectsSource = readFileSync(new URL('./projects/project_window.ts', import.meta.url), 'utf8')
 
   it('keeps operational controls in the top row and puts New Task with Prompt SGLuna', () => {
