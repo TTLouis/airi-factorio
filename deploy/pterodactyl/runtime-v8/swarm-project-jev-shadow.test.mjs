@@ -10,6 +10,7 @@ function globalSnapshot() {
   return {
     schema: 'swarm_coordination_snapshot_v1',
     tick: 900,
+    eventCursor: 'event-42',
     limit: 12,
     counts: {
       missions: 1,
