@@ -97,3 +97,56 @@ test('derives stable milestone ids from milestone titles', () => {
   assert.equal(first.current_milestone.id, second.current_milestone.id)
   assert.equal(first.next_milestones[0].id, second.next_milestones[0].id)
 })
+
+
+test('verified milestone completion moves current milestone into bounded history', async () => {
+  const { completeCurrentMilestone } = await import('./project-board.mjs')
+  const current = sanitizeProjectBoard({
+    current_milestone: { title: 'Establish burner production' },
+    next_milestones: [{ title: 'Reach Automation' }],
+    development_direction: 'vertical',
+  }, { goalId: 'goal_1', objective: 'Launch a rocket', now: 10 })
+
+  const rejected = completeCurrentMilestone(current, {
+    verified: false,
+    goalId: 'goal_1',
+    objective: 'Launch a rocket',
+    now: 20,
+  })
+  assert.equal(rejected.changed, false)
+  assert.equal(rejected.board.current_milestone.title, 'Establish burner production')
+
+  const completed = completeCurrentMilestone(current, {
+    verified: true,
+    goalId: 'goal_1',
+    objective: 'Launch a rocket',
+    now: 30,
+  })
+  assert.equal(completed.changed, true)
+  assert.equal(completed.board.current_milestone, undefined)
+  assert.equal(completed.board.completed_milestones.at(-1).title, 'Establish burner production')
+  assert.equal(completed.board.transition_state, 'awaiting_next_milestone')
+})
+
+test('next tentative milestone only activates from an awaiting transition', async () => {
+  const { activateNextMilestone, completeCurrentMilestone } = await import('./project-board.mjs')
+  const current = sanitizeProjectBoard({
+    current_milestone: { title: 'Establish burner production' },
+    next_milestones: [{ title: 'Reach Automation' }, { title: 'Establish electric power' }],
+  }, { goalId: 'goal_1', objective: 'Launch a rocket', now: 10 })
+  const completed = completeCurrentMilestone(current, {
+    verified: true,
+    goalId: 'goal_1',
+    objective: 'Launch a rocket',
+    now: 20,
+  }).board
+  const advanced = activateNextMilestone(completed, {
+    goalId: 'goal_1',
+    objective: 'Launch a rocket',
+    now: 30,
+  })
+  assert.equal(advanced.changed, true)
+  assert.equal(advanced.board.current_milestone.title, 'Reach Automation')
+  assert.deepEqual(advanced.board.next_milestones.map(item => item.title), ['Establish electric power'])
+  assert.equal(advanced.board.transition_state, '')
+})
