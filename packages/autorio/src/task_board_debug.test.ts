@@ -93,6 +93,58 @@ describe('task board debug and UI freshness helpers', () => {
     expect(debug.step_admission_alignment).toBe('reanchor_required')
   })
 
+  it('bounds second-layer provider diagnostics and keeps missing or malformed fields unknown', () => {
+    const debug = sanitize_debug_snapshot({
+      response_id: '  resp-123\nprovider  ',
+      response_bytes: 2048,
+      tool_call_count: 3,
+      content_utf8_bytes: 512,
+      content_non_ascii_chars: 7,
+      content_replacement_chars: 1,
+      normalized_content_chars: 490,
+      structured_content: {
+        json_valid: true,
+        plan_valid: false,
+        error: 'schema\n'.repeat(80),
+      },
+    })
+
+    expect(debug.response_id).toBe('resp-123 provider')
+    expect(debug.response_bytes).toBe(2048)
+    expect(debug.tool_call_count).toBe(3)
+    expect(debug.content_utf8_bytes).toBe(512)
+    expect(debug.content_non_ascii_chars).toBe(7)
+    expect(debug.content_replacement_chars).toBe(1)
+    expect(debug.normalized_content_chars).toBe(490)
+    expect(debug.structured_content?.json_valid).toBe(true)
+    expect(debug.structured_content?.plan_valid).toBe(false)
+    expect(debug.structured_content?.error.includes('\n')).toBe(false)
+    expect((debug.structured_content?.error.length ?? 0) <= 300).toBe(true)
+
+    const missing = sanitize_debug_snapshot({})
+    expect(missing.response_id).toBeUndefined()
+    expect(missing.response_bytes).toBeUndefined()
+    expect(missing.tool_call_count).toBeUndefined()
+    expect(missing.structured_content).toBeUndefined()
+
+    const malformed = sanitize_debug_snapshot({
+      response_id: { secret: 'do not stringify arbitrary objects into the debug UI' },
+      response_bytes: -1,
+      tool_call_count: 1.5,
+      content_utf8_bytes: Number.NaN,
+      content_non_ascii_chars: Number.POSITIVE_INFINITY,
+      normalized_content_chars: 2147483648,
+      structured_content: { json_valid: 'yes', plan_valid: 1, error: { raw: 'not text' } },
+    })
+    expect(malformed.response_id).toBeUndefined()
+    expect(malformed.response_bytes).toBeUndefined()
+    expect(malformed.tool_call_count).toBeUndefined()
+    expect(malformed.content_utf8_bytes).toBeUndefined()
+    expect(malformed.content_non_ascii_chars).toBeUndefined()
+    expect(malformed.normalized_content_chars).toBeUndefined()
+    expect(malformed.structured_content).toBeUndefined()
+  })
+
   it('uses concise follow captions', () => {
     expect(follow_button_caption(false)).toBe('FOLLOW')
     expect(follow_button_caption(true)).toBe('FOLLOWING')

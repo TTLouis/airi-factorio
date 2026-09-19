@@ -47,6 +47,12 @@ declare const storage: {
   airi_task_board_debug_activity_view?: Record<number, { follow: boolean, behind: boolean, seen_key?: string }>
 }
 
+export interface TaskBoardUiStructuredContentDebug {
+  json_valid?: boolean
+  plan_valid?: boolean
+  error: string
+}
+
 export interface TaskBoardUiDebugSnapshot {
   request_id: string
   turn: number
@@ -55,6 +61,14 @@ export interface TaskBoardUiDebugSnapshot {
   provider_latency_ms: number
   provider_diagnostic_code: string
   provider_finish_reason: string
+  response_id?: string
+  response_bytes?: number
+  tool_call_count?: number
+  content_utf8_bytes?: number
+  content_non_ascii_chars?: number
+  content_replacement_chars?: number
+  normalized_content_chars?: number
+  structured_content?: TaskBoardUiStructuredContentDebug
   provider_capability_profile: string
   requested_token_field: string
   requested_output_cap: number
@@ -147,6 +161,20 @@ function clean_text(value: unknown, max = 500) {
   return clean.length <= max ? clean : `${clean.slice(0, math.max(0, max - 1))}…`
 }
 function integer(value: unknown, fallback = 0) { return typeof value === 'number' && value === math.floor(value) && value >= 0 ? value : fallback }
+function optional_integer(value: unknown) { return typeof value === 'number' && value === math.floor(value) && value >= 0 && value <= 2147483647 ? value : undefined }
+function optional_text(value: unknown, max: number) {
+  if (typeof value !== 'string') return undefined
+  const clean = clean_text(value, max)
+  return clean.length > 0 ? clean : undefined
+}
+function sanitize_structured_content(value: any): TaskBoardUiStructuredContentDebug | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const json_valid = typeof value.json_valid === 'boolean' ? value.json_valid : undefined
+  const plan_valid = typeof value.plan_valid === 'boolean' ? value.plan_valid : undefined
+  const error = optional_text(value.error, 300) ?? ''
+  if (json_valid === undefined && plan_valid === undefined && error.length === 0) return undefined
+  return { json_valid, plan_valid, error }
+}
 function valid_version(value: unknown) { return typeof value === 'number' && value === math.floor(value) && value >= 0 }
 
 export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
@@ -159,6 +187,14 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     provider_latency_ms: integer(debug.provider_latency_ms),
     provider_diagnostic_code: clean_text(debug.provider_diagnostic_code, 160),
     provider_finish_reason: clean_text(debug.provider_finish_reason, 80),
+    response_id: optional_text(debug.response_id, 160),
+    response_bytes: optional_integer(debug.response_bytes),
+    tool_call_count: optional_integer(debug.tool_call_count),
+    content_utf8_bytes: optional_integer(debug.content_utf8_bytes),
+    content_non_ascii_chars: optional_integer(debug.content_non_ascii_chars),
+    content_replacement_chars: optional_integer(debug.content_replacement_chars),
+    normalized_content_chars: optional_integer(debug.normalized_content_chars),
+    structured_content: sanitize_structured_content(debug.structured_content),
     provider_capability_profile: clean_text(debug.provider_capability_profile, 40),
     requested_token_field: clean_text(debug.requested_token_field, 40),
     requested_output_cap: integer(debug.requested_output_cap),

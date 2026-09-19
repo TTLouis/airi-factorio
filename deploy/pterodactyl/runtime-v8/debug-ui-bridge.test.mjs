@@ -46,7 +46,19 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
       reported_reasoning_tokens: 700,
       usage_complete: true,
       cap_enforcement_anomaly: false,
+      response_id: 'resp-round-4',
+      response_bytes: 2048,
+      tool_call_count: 0,
       content_chars: 0,
+      content_utf8_bytes: 0,
+      content_non_ascii_chars: 0,
+      content_replacement_chars: 0,
+      normalized_content_chars: 0,
+      structured_content: {
+        json_valid: false,
+        plan_valid: false,
+        error: 'empty\ncontent',
+      },
       reasoning_content_chars: 8241,
     },
   }, debug, {
@@ -71,7 +83,15 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
   assert.equal(debug.usage_complete, 1)
   assert.equal(debug.cap_enforcement_anomaly, 0)
   assert.equal(debug.recovery_result, 'response_received')
+  assert.equal(debug.response_id, 'resp-round-4')
+  assert.equal(debug.response_bytes, 2048)
+  assert.equal(debug.tool_call_count, 0)
   assert.equal(debug.content_chars, 0)
+  assert.equal(debug.content_utf8_bytes, 0)
+  assert.equal(debug.content_non_ascii_chars, 0)
+  assert.equal(debug.content_replacement_chars, 0)
+  assert.equal(debug.normalized_content_chars, 0)
+  assert.deepEqual(debug.structured_content, { json_valid: false, plan_valid: false, error: 'empty content' })
   assert.equal(debug.reasoning_content_chars, 8241)
   assert.equal(debug.input_units, 13982)
   assert.equal(debug.cached_input_units, 13568)
@@ -90,13 +110,58 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
   debug = liveAgentDebugEvent('provider.request', { round: 5, recovery_attempt: 0 }, debug)
   assert.equal(debug.reasoning_effort, 'none')
   assert.equal(debug.reasoning_policy_reason, 'strict_recovery')
+  assert.equal(debug.response_id, 'resp-round-4')
+  assert.deepEqual(debug.structured_content, { json_valid: false, plan_valid: false, error: 'empty content' })
 
   // Tool-driven UI refreshes also preserve the same completed-round policy.
   debug = liveAgentDebugEvent('tool.result', { name: 'getActorStatus' }, debug)
   assert.equal(debug.reasoning_effort, 'none')
   assert.equal(debug.reasoning_policy_reason, 'strict_recovery')
+  assert.equal(debug.response_id, 'resp-round-4')
+  assert.equal(debug.response_bytes, 2048)
   assert.equal(debug.last_tool, 'getActorStatus')
   assert.equal(debug.last_event, 'tool.result')
+})
+
+test('live debug bridge drops malformed second-layer metrics instead of reusing stale round data', () => {
+  let debug = liveAgentDebugEvent('provider.response', {
+    round: 1,
+    provider: {
+      model: 'test-model',
+      response_id: 'resp-valid',
+      response_bytes: 100,
+      tool_call_count: 1,
+      content_utf8_bytes: 50,
+      content_non_ascii_chars: 2,
+      content_replacement_chars: 0,
+      normalized_content_chars: 48,
+      structured_content: { json_valid: true, plan_valid: true },
+    },
+  })
+
+  debug = liveAgentDebugEvent('provider.response', {
+    round: 2,
+    provider: {
+      model: 'test-model',
+      response_id: { raw: 'not a string' },
+      response_bytes: -1,
+      tool_call_count: 1.5,
+      content_utf8_bytes: Number.NaN,
+      content_non_ascii_chars: Number.POSITIVE_INFINITY,
+      content_replacement_chars: -2,
+      normalized_content_chars: 2.25,
+      structured_content: { json_valid: 'yes', plan_valid: 1, error: { raw: 'not text' } },
+    },
+  }, debug)
+
+  assert.equal(debug.response_id, undefined)
+  assert.equal(debug.response_bytes, undefined)
+  assert.equal(debug.tool_call_count, undefined)
+  assert.equal(debug.content_utf8_bytes, undefined)
+  assert.equal(debug.content_non_ascii_chars, undefined)
+  assert.equal(debug.content_replacement_chars, undefined)
+  assert.equal(debug.normalized_content_chars, undefined)
+  assert.equal(debug.structured_content, undefined)
 })
 
 test('Jev economics accumulate across interactions and planner attribution stays explicit', () => {
@@ -247,6 +312,10 @@ test('starting a new request resets cumulative and latest-round debug usage', ()
     latest_round_cached_input_units: 90,
     latest_round_output_units: 20,
     latest_round_total_units: 140,
+    response_id: 'old-response',
+    response_bytes: 4096,
+    tool_call_count: 2,
+    structured_content: { json_valid: true, plan_valid: false, error: 'old schema error' },
     reasoning_effort: 'max',
     reasoning_policy_reason: 'repeated_failure',
   }
@@ -271,6 +340,10 @@ test('starting a new request resets cumulative and latest-round debug usage', ()
   assert.equal(debug.latest_round_cached_input_units, 0)
   assert.equal(debug.latest_round_output_units, 0)
   assert.equal(debug.latest_round_total_units, 0)
+  assert.equal(debug.response_id, undefined)
+  assert.equal(debug.response_bytes, undefined)
+  assert.equal(debug.tool_call_count, undefined)
+  assert.equal(debug.structured_content, undefined)
   assert.equal(debug.reasoning_effort, '')
   assert.equal(debug.reasoning_policy_reason, '')
 })
@@ -291,7 +364,15 @@ test('request failure snapshot wins over transient debug state and remains displ
           model: 'deepseek-flash',
           finish_reason: 'length',
           diagnostic_code: 'provider_output_truncated_empty_content',
+          response_id: 'resp-final',
+          response_bytes: 3333,
+          tool_call_count: 0,
           content_chars: 0,
+          content_utf8_bytes: 0,
+          content_non_ascii_chars: 0,
+          content_replacement_chars: 0,
+          normalized_content_chars: 0,
+          structured_content: { json_valid: false, plan_valid: false, error: 'empty content' },
           reasoning_content_chars: 9172,
         },
       },
@@ -317,7 +398,13 @@ test('request failure snapshot wins over transient debug state and remains displ
   assert.equal(debug.provider_latency_ms, 10639)
   assert.equal(debug.provider_diagnostic_code, 'provider_output_truncated_empty_content')
   assert.equal(debug.provider_finish_reason, 'length')
+  assert.equal(debug.response_id, 'resp-final')
+  assert.equal(debug.response_bytes, 3333)
+  assert.equal(debug.tool_call_count, 0)
   assert.equal(debug.content_chars, 0)
+  assert.equal(debug.content_utf8_bytes, 0)
+  assert.equal(debug.normalized_content_chars, 0)
+  assert.deepEqual(debug.structured_content, { json_valid: false, plan_valid: false, error: 'empty content' })
   assert.equal(debug.reasoning_content_chars, 9172)
   assert.equal(debug.last_tool, 'getEntityGeometry')
   assert.equal(debug.actor_id, 27)
@@ -330,6 +417,9 @@ test('request failure snapshot wins over transient debug state and remains displ
   assert.equal(debug.request_id, 'req-final')
   assert.equal(debug.provider_diagnostic_code, 'provider_output_truncated_empty_content')
   assert.equal(debug.provider_finish_reason, 'length')
+  assert.equal(debug.response_id, 'resp-final')
+  assert.equal(debug.response_bytes, 3333)
+  assert.deepEqual(debug.structured_content, { json_valid: false, plan_valid: false, error: 'empty content' })
   assert.equal(debug.reasoning_content_chars, 9172)
   assert.equal(debug.last_error, 'Provider response recovery exhausted after 3 attempts: Invalid provider content JSON')
 })
@@ -365,7 +455,15 @@ test('task board UI snapshot includes live debug diagnostics', () => {
       provider_finish_reason: 'length',
       reasoning_effort: 'max',
       reasoning_policy_reason: 'repeated_failure',
+      response_id: 'resp-ui',
+      response_bytes: 7654,
+      tool_call_count: 1,
       content_chars: 0,
+      content_utf8_bytes: 42,
+      content_non_ascii_chars: 9,
+      content_replacement_chars: 1,
+      normalized_content_chars: 38,
+      structured_content: { json_valid: true, plan_valid: false, error: 'missing plan' },
       reasoning_content_chars: 8123,
       input_units: 100,
       cached_input_units: 80,
@@ -392,7 +490,15 @@ test('task board UI snapshot includes live debug diagnostics', () => {
   assert.equal(snapshot.debug.provider_finish_reason, 'length')
   assert.equal(snapshot.debug.reasoning_effort, 'max')
   assert.equal(snapshot.debug.reasoning_policy_reason, 'repeated_failure')
+  assert.equal(snapshot.debug.response_id, 'resp-ui')
+  assert.equal(snapshot.debug.response_bytes, 7654)
+  assert.equal(snapshot.debug.tool_call_count, 1)
   assert.equal(snapshot.debug.content_chars, 0)
+  assert.equal(snapshot.debug.content_utf8_bytes, 42)
+  assert.equal(snapshot.debug.content_non_ascii_chars, 9)
+  assert.equal(snapshot.debug.content_replacement_chars, 1)
+  assert.equal(snapshot.debug.normalized_content_chars, 38)
+  assert.deepEqual(snapshot.debug.structured_content, { json_valid: true, plan_valid: false, error: 'missing plan' })
   assert.equal(snapshot.debug.reasoning_content_chars, 8123)
   assert.equal(snapshot.debug.input_units, 100)
   assert.equal(snapshot.debug.cached_input_units, 80)

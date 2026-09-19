@@ -534,6 +534,29 @@ function debugInteger(value) {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0
 }
 
+function debugOptionalInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+function debugOptionalText(value, max) {
+  if (typeof value !== 'string') return undefined
+  const text = uiText(value, max)
+  return text || undefined
+}
+
+function debugStructuredContent(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const jsonValid = typeof value.json_valid === 'boolean' ? value.json_valid : undefined
+  const planValid = typeof value.plan_valid === 'boolean' ? value.plan_valid : undefined
+  const error = debugOptionalText(value.error, 300)
+  if (jsonValid === undefined && planValid === undefined && error === undefined) return undefined
+  return {
+    ...(jsonValid === undefined ? {} : { json_valid: jsonValid }),
+    ...(planValid === undefined ? {} : { plan_valid: planValid }),
+    ...(error === undefined ? {} : { error }),
+  }
+}
+
 function emptyAgentDebug(fallback = {}) {
   return {
     request_id: uiText(fallback.request_id, 120),
@@ -737,6 +760,14 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
     debug.cap_enforcement_anomaly = provider?.cap_enforcement_anomaly === true ? 1 : 0
     debug.reasoning_effort = uiText(provider?.reasoning_effort ?? debug.reasoning_effort, 32)
     debug.reasoning_policy_reason = uiText(provider?.reasoning_policy_reason ?? debug.reasoning_policy_reason, 80)
+    debug.response_id = debugOptionalText(provider?.response_id, 160)
+    debug.response_bytes = debugOptionalInteger(provider?.response_bytes)
+    debug.tool_call_count = debugOptionalInteger(provider?.tool_call_count)
+    debug.content_utf8_bytes = debugOptionalInteger(provider?.content_utf8_bytes)
+    debug.content_non_ascii_chars = debugOptionalInteger(provider?.content_non_ascii_chars)
+    debug.content_replacement_chars = debugOptionalInteger(provider?.content_replacement_chars)
+    debug.normalized_content_chars = debugOptionalInteger(provider?.normalized_content_chars)
+    debug.structured_content = debugStructuredContent(provider?.structured_content)
     debug.content_chars = debugInteger(provider?.content_chars ?? debug.content_chars)
     debug.reasoning_content_chars = debugInteger(provider?.reasoning_content_chars ?? debug.reasoning_content_chars)
     const diagnostic = uiText(provider?.diagnostic_code, 160)

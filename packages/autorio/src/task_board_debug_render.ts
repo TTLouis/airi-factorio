@@ -43,6 +43,16 @@ function integer(value: unknown, fallback = 0) {
   return typeof value === 'number' && value === math.floor(value) && value >= 0 ? value : fallback
 }
 
+function optional_metric(value: number | undefined) {
+  return value === undefined ? '—' : `${integer(value)}`
+}
+
+function validity(value: boolean | undefined) {
+  if (value === true) return 'valid'
+  if (value === false) return 'invalid'
+  return 'unknown'
+}
+
 function destroy_debug_popout(player: LuaPlayer) {
   const existing = player.gui.screen[DEBUG_ROOT_NAME]
   const location = existing?.valid ? existing.location : undefined
@@ -147,6 +157,23 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const detail = clean_text(board?.agent.detail, 300)
   const provider = clean_text(debug.provider_model, 160)
   const latency = integer(debug.provider_latency_ms)
+  const response_id = clean_text(debug.response_id, 160)
+  const has_response_metrics = debug.response_bytes !== undefined || debug.tool_call_count !== undefined
+  const response_metrics = has_response_metrics
+    ? `${optional_metric(debug.response_bytes)} bytes · ${optional_metric(debug.tool_call_count)} tool calls`
+    : '—'
+  const has_content_shape = debug.content_utf8_bytes !== undefined
+    || debug.content_non_ascii_chars !== undefined
+    || debug.content_replacement_chars !== undefined
+    || debug.normalized_content_chars !== undefined
+  const content_shape = has_content_shape
+    ? `utf8 ${optional_metric(debug.content_utf8_bytes)} bytes · non-ascii ${optional_metric(debug.content_non_ascii_chars)} · replacement ${optional_metric(debug.content_replacement_chars)} · normalized ${optional_metric(debug.normalized_content_chars)} chars`
+    : '—'
+  const structured = debug.structured_content
+  const structured_content = structured === undefined
+    ? '—'
+    : `json ${validity(structured.json_valid)} · plan ${validity(structured.plan_valid)}`
+  const structured_error = clean_text(structured?.error, 300)
   const tokens = integer(debug.total_units) > 0 ? `${integer(debug.input_units)} in / ${integer(debug.cached_input_units)} cached / ${integer(debug.output_units)} out / ${integer(debug.total_units)} total` : '—'
   const latest_round_tokens = integer(debug.latest_round_total_units) > 0
     ? `round ${integer(debug.latest_round_provider_round) + 1} · ${integer(debug.latest_round_input_units)} in / ${integer(debug.latest_round_cached_input_units)} cached / ${integer(debug.latest_round_output_units)} out / ${integer(debug.latest_round_total_units)} total`
@@ -184,7 +211,12 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_debug_step_rows(runtime_table, debug)
   add_compact_row(runtime_table, 'Provider diag', clean_text(debug.provider_diagnostic_code, 160) || '—')
   add_compact_row(runtime_table, 'Finish', clean_text(debug.provider_finish_reason, 80) || '—')
+  add_compact_row(runtime_table, 'Response id', response_id || '—')
+  add_compact_row(runtime_table, 'Response bytes · tools', response_metrics)
   add_compact_row(runtime_table, 'Content chars', `${integer(debug.content_chars)}`)
+  add_compact_row(runtime_table, 'Content shape', content_shape)
+  add_compact_row(runtime_table, 'Structured content', structured_content)
+  add_compact_row(runtime_table, 'Structured error', structured_error || '—')
   add_compact_row(runtime_table, 'Reasoning chars', `${integer(debug.reasoning_content_chars)}`)
   add_compact_row(runtime_table, 'Reasoning tokens', integer(debug.reported_reasoning_tokens) > 0 ? `${integer(debug.reported_reasoning_tokens)}` : 'unknown')
   add_compact_row(runtime_table, 'Requested reasoning', `${clean_text(debug.requested_reasoning_effort, 32) || 'not sent'} · thinking ${clean_text(debug.requested_thinking_mode, 32) || 'not sent'}`)
