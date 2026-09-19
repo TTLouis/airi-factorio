@@ -40,6 +40,35 @@ export class SwarmStrategicProjectStore {
     return this.board ? structuredClone(this.board) : this.ensure()
   }
 
+  startNextGoal({
+    goalId,
+    objective,
+  } = {}) {
+    const nextGoalId = clean(goalId, 100)
+    const nextObjective = clean(objective, 500)
+    if (!nextGoalId) throw new Error('Strategic project next goal requires goal identity')
+    if (!nextObjective) throw new Error('Strategic project next goal requires objective')
+
+    const current = this.current()
+    if (current.goal_id && current.status !== 'completed') {
+      throw new Error('Strategic project next goal requires completed prior goal')
+    }
+    if (current.goal_id && current.goal_id === nextGoalId) {
+      throw new Error('Strategic project next goal identity must differ from completed goal')
+    }
+
+    this.goalId = nextGoalId
+    this.objective = nextObjective
+    this.status = 'active'
+    this.board = sanitizeStrategicProjectBoard(undefined, {
+      goalId: this.goalId,
+      objective: this.objective,
+      status: 'active',
+      now: this.now(),
+    })
+    return structuredClone(this.board)
+  }
+
   bindGoal({
     goalId,
     objective,
