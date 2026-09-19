@@ -265,8 +265,23 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
   }
 
   restore(snapshot) {
+    const persistedProjects = new Map(
+      Array.isArray(snapshot?.plans)
+        ? snapshot.plans
+            .filter(item => item && typeof item.key === 'string')
+            .map(item => [item.key, item?.state?.project_board])
+        : [],
+    )
     super.restore(snapshot)
-    for (const state of this.planByNpc.values()) this.ensureProjectBoard(state)
+    for (const [key, state] of this.planByNpc.entries()) {
+      state.project_board = sanitizeProjectBoard(persistedProjects.get(key), {
+        goalId: state.goal_id,
+        objective: state.objective,
+        status: state.status,
+        now: state.updated_at,
+      })
+      this.planByNpc.set(key, state)
+    }
   }
 
   reconcileTaskBoard(key, previousBoard, plan, stateResult, options = {}) {
