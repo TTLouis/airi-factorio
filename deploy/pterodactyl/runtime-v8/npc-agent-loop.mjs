@@ -2851,7 +2851,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       // is stable, and Jev classifies the next strategic move as maintain.
       // Split/vertical/horizontal/recover remain planner-owned; budget/horizon
       // fields are still telemetry only.
-      if (hierarchyGate.allow_runtime_continuation && decision.route === 'continue_current') {
+      if (state.boundary === 'completion' && hierarchyTelemetry.granularity === 'split') {
+        appliedRoute = 'replan'
+        fallbackReason = 'hierarchy_split_requested'
+      }
+      else if (hierarchyGate.allow_runtime_continuation && decision.route === 'continue_current') {
         appliedRoute = 'wait_runtime'
         fallbackReason = 'hierarchy_maintain_authoritative_runtime'
       }
@@ -2939,6 +2943,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         runtime_reason: runtimeReason,
         decision,
         hierarchy_gate: hierarchyGate,
+        hierarchy_action: hierarchyTelemetry.granularity === 'split' && state.boundary === 'completion'
+          ? 'split_current_milestone'
+          : undefined,
         fallback_reason: fallbackReason,
         decision_called: true,
       }
@@ -3440,14 +3447,19 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     if (routed.route === 'wait_runtime') return null
 
-    this.reasoningTriggerSource = routed.route === 'continue_current'
-      ? 'post_step_continue'
-      : routed.route === 'replan'
-        ? 'post_step_replan'
-        : null
+    this.reasoningTriggerSource = routed.hierarchy_action === 'split_current_milestone'
+      ? 'hierarchy_split'
+      : routed.route === 'continue_current'
+        ? 'post_step_continue'
+        : routed.route === 'replan'
+          ? 'post_step_replan'
+          : null
     try {
+      const hierarchyInstruction = routed.hierarchy_action === 'split_current_milestone'
+        ? ' [HIERARCHY] Jev determined the current milestone is too broad. Preserve the user project goal and verified Plan Tracker progress, replace currentMilestone with a smaller bounded strategic outcome, keep at most three tentative nextMilestones, and make plan contain only executable/verifiable steps for the new current milestone.'
+        : ''
       const result = await this.continueFromModMessage(
-        `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
+        `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}${hierarchyInstruction}`,
         'factorio.completion_continuation',
       )
       if (pendingAmendment) this.pendingInteractionAmendment = null
@@ -4271,7 +4283,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         && !this.genericRecoveryDecisionActive
         && !this.outputBudgetRecoveryGuard
         && (!previousState?.project_board?.current_milestone
-          || ['new_goal', 'request', 'amend_current', 'failure', 'reanchor_plan'].includes(this.planUpdateReason))
+          || ['new_goal', 'request', 'amend_current', 'failure', 'reanchor_plan'].includes(this.planUpdateReason)
+          || triggerSource === 'hierarchy_split')
       if (projectProposalAllowed) {
         const projectBoard = this.memory.updateProjectBoard?.(this.requestInfo.memoryKey, plan.project)
         if (projectBoard && stateResult?.state) {
