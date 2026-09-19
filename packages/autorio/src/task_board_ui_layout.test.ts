@@ -2,6 +2,23 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { step_caption, task_board_game_time, task_board_gui_height, task_board_preview_min_height, task_board_tracker_heights } from './task_board_ui'
 
+function taskBoardUiSource() {
+  const main = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  const constants = readFileSync(new URL('./task_board_ui_constants.ts', import.meta.url), 'utf8')
+  // UI constants moved into a namespace to preserve Factorio Lua local headroom.
+  // Normalize that namespace for source-architecture assertions while retaining
+  // the constants module so declaration/geometry checks still test real code.
+  return `${main.replaceAll('ui_constants.', '')}\n${constants}`
+}
+
+function taskBoardDebugSource() {
+  return [
+    readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8'),
+    readFileSync(new URL('./task_board_debug_render.ts', import.meta.url), 'utf8'),
+  ].join('\n')
+}
+
+
 describe('SGLuna NPC console compact tracker layout', () => {
   it('formats deterministic Factorio game time for tracker activity', () => {
     expect(task_board_game_time(0)).toBe('00:00:00')
@@ -10,7 +27,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
   })
 
   it('keeps prompt SGLuna on the left half and gives the world preview a zoomable camera', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('section.style.width = LEFT_COLUMN_WIDTH')
     expect(source).toContain('field.style.width = PROMPT_FIELD_WIDTH')
 
@@ -46,7 +63,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
   })
 
   it('spends the main tracker height on plan steps and leaves execution activity to Debug', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('fixed_height: 560,')
     expect(source).not.toContain('const CONSOLE_FIXED_HEIGHT')
     expect(source).toContain('task_board_tracker_heights(player_gui_height(player), board === undefined ? 0 : math.min(board.steps.length, MAX_STEPS))')
@@ -62,7 +79,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
   })
 
   it('spends the left column width on the panel that wraps text, not on the button grid', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('const CONTROLS_SECTION_WIDTH = 264')
     expect(source).toContain('const STATUS_SECTION_WIDTH = LEFT_COLUMN_WIDTH - COLUMN_SPACING - CONTROLS_SECTION_WIDTH')
     expect(source).toContain('const STATUS_VALUE_WIDTH = STATUS_SECTION_WIDTH - 2 * SECTION_PADDING - KEY_COLUMN_WIDTH - 12')
@@ -84,7 +101,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
   })
 
   it('gives every control the same size and aligns controls in a two-column grid', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('const COMPACT_BUTTON_WIDTH = (CONTROLS_SECTION_WIDTH - 2 * SECTION_PADDING - COMPACT_BUTTON_SPACING) / 2')
     expect(source).toContain('function compact_button(button: LuaGuiElement)')
     expect(source).not.toContain('COMPACT_TASK_BUTTON_WIDTH')
@@ -103,7 +120,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
   })
 
   it('keeps the large inventory beside a wanted/equipped sidebar below the world preview', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const build_columns = source.split('function build_columns(')[1]?.split('function refresh_columns(')[0] ?? ''
     const preview_index = build_columns.indexOf('render_world_preview(right, runtime, player)')
     const resources_index = build_columns.indexOf("right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' })")
@@ -129,7 +146,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
   })
 
   it('refreshes the world preview in place so dragging zoom is never cancelled', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('function refresh_world_preview(')
     expect(source).toContain('const resources = right[RIGHT_RESOURCES_NAME]')
     expect(source).toContain('if (!refresh_world_preview(right, runtime, player) || !resources?.valid) {')
@@ -144,7 +161,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
   })
 
   it('uses compact controls with a plan-only main tracker and keeps timestamped activity as retained history', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('function compact_button(')
     expect(source).toContain("'Plan Tracker'")
     expect(source).toContain('function render_tracker(')
@@ -157,7 +174,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
     expect(source).not.toContain('render_steps(left, board)')
     expect(source).not.toContain('render_activity(left, board)')
 
-    const debug_source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+    const debug_source = taskBoardDebugSource()
     expect(debug_source).toContain("caption: 'Execution Activity'")
     expect(debug_source).toContain('activity_state.activity_history()')
   })
@@ -166,7 +183,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
   // tracker still retains its old activity controls invisibly for rolling-save
   // compatibility, while the visible execution feed now belongs to Debug.
   it('keeps the retained feed controls structurally stable while moving visible activity to Debug', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const tracker = source.split('function render_tracker(')[1]?.split('function refresh_tracker(')[0] ?? ''
     expect(tracker).toContain('const activity_header = header.add(')
     expect(tracker).not.toContain('const activity_header = body.add(')
@@ -175,7 +192,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
     expect(source).toContain('const activity_header = header[TRACKER.activity_header]')
     expect(source).toContain('activity_header.visible = false')
 
-    const debug_source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+    const debug_source = taskBoardDebugSource()
     expect(debug_source).toContain('activity_state.style_feed_button(header.add(')
     expect(debug_source).toContain("caption: 'Execution Activity'")
     expect(debug_source).not.toContain("style: 'mini_button'")
@@ -187,7 +204,7 @@ describe('SGLuna NPC console compact tracker layout', () => {
 
   // The button is a live readout of which model is answering, not a static icon.
   it('dresses the mod-GUI button with the current provider avatar', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('button.sprite = provider_ui.provider_button_sprite(player.index, BUTTON_SPRITE)')
     expect(source).toContain("button.tooltip = provider_ui.provider_button_tooltip('SGLuna NPC Console')")
     expect(source).toContain('provider_ui.remember_provider_model(stamped.debug?.provider_model)')
