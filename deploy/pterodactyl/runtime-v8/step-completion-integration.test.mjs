@@ -174,7 +174,7 @@ function agentWithState({ state = activeState(), stone = 10, decisionProvider = 
   return { agent, memory }
 }
 
-test('Jev normalizes a checkpoint from high-level gather intent before execution', async () => {
+test('quantity operation without an explicit semantic checkpoint fails closed before completion', async () => {
   const state = activeState({ includeCheckpoint: false })
   state.task_board.evidence = []
   let calls = 0
@@ -184,11 +184,33 @@ test('Jev normalizes a checkpoint from high-level gather intent before execution
       calls++
       assert.equal(decisionState.contract, 'step_checkpoint_normalizer')
       assert.equal(decisionState.proposed_operations[0].name, 'gather_resource')
-      assert.equal(decisionState.proposed_operations[0].args.resource_name, 'stone')
-      assert.ok(questions.checkpoint_boundary.criteria.checkpoint_here)
-      assert.ok(questions.step_relation.criteria.advances_current)
-      assert.ok(questions.step_relation.criteria.belongs_to_later_step)
-      return checkpointDecision()
+      assert.equal(decisionState.proposed_checkpoint, undefined)
+      assert.equal(questions.contract.criteria.candidate_1, undefined)
+      return {
+        model: 'jev-latest',
+        provider: 'TypeSafe',
+        answers: {
+          contract: {
+            type: 'choice',
+            choice: 'semantic_unknown',
+            confidence: 0.96,
+            probabilities: { semantic_unknown: 0.96, runtime_supported_unknown: 0.04 },
+          },
+          compound_step: { type: 'noul', noul: 0.1 },
+          step_relation: {
+            type: 'choice',
+            choice: 'advances_current',
+            confidence: 0.95,
+            probabilities: { advances_current: 0.95, prerequisite_for_current: 0.01, belongs_to_later_step: 0.01, replan_needed: 0.02, unrelated: 0.01 },
+          },
+          checkpoint_boundary: {
+            type: 'choice',
+            choice: 'checkpoint_here',
+            confidence: 0.9,
+            probabilities: { checkpoint_here: 0.9, keep_step_open: 0.05, split_recommended: 0.05 },
+          },
+        },
+      }
     },
   })
 
@@ -197,15 +219,13 @@ test('Jev normalizes a checkpoint from high-level gather intent before execution
   })
 
   assert.equal(calls, 1)
-  assert.equal(result.boundary, 'checkpoint_here')
-  assert.equal(result.relation, 'advances_current')
+  assert.equal(result.boundary, 'keep_step_open')
+  assert.equal(result.contract.mode, 'semantic_unknown')
   const checkpoint = memory.planByNpc.get('npc:airi').task_board.evidence.find(item => item.kind === 'step_checkpoint_contract')
   assert.ok(checkpoint)
   const summary = JSON.parse(checkpoint.summary)
-  assert.equal(summary.contract.requirements[0].kind, 'inventory_count')
-  assert.equal(summary.contract.requirements[0].item_name, 'stone')
-  assert.equal(summary.contract.requirements[0].minimum, 10)
-  assert.equal(summary.relation, 'advances_current')
+  assert.equal(summary.contract.mode, 'semantic_unknown')
+  assert.equal(summary.boundary, 'keep_step_open')
 })
 
 test('Jev flags a later-step batch before admission while allowing a current-step prerequisite', async () => {
