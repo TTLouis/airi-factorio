@@ -10,6 +10,7 @@ import {
   get_skill_definition,
   handle_skill_export_click,
   list_skill_definitions,
+  MAX_DYNAMIC_SKILL_DEFINITIONS,
   serialize_skill_json,
   skill_export_relative_directory,
 } from './skills'
@@ -131,6 +132,41 @@ describe('curated basic skill library', () => {
 })
 
 describe('learned skill record and export', () => {
+
+
+  it('bounds dynamic skill registry growth without blocking updates to existing definitions', () => {
+    for (let index = 0; index < MAX_DYNAMIC_SKILL_DEFINITIONS; index++) {
+      create_skill_candidate(candidate({
+        id: `dynamic-skill-${index}`,
+        name: `Dynamic Skill ${index}`,
+        source: {
+          kind: 'completed_goal',
+          goal_id: `goal-${index}`,
+          entity_unit_numbers: [],
+          recipe_ids: [],
+          evidence_refs: [`goal:${index}`],
+        },
+      }))
+    }
+
+    expect(list_skill_definitions()).toHaveLength(MAX_DYNAMIC_SKILL_DEFINITIONS)
+
+    expect(() => create_skill_candidate(candidate({
+      id: 'dynamic-skill-overflow',
+      name: 'Dynamic Skill Overflow',
+    }))).toThrow(/dynamic capacity reached/i)
+
+    const updated = create_skill_candidate(candidate({
+      id: 'dynamic-skill-0',
+      name: 'Updated Dynamic Skill 0',
+      revision: 2,
+    }))
+    expect(updated.name).toBe('Updated Dynamic Skill 0')
+    expect(get_skill_definition('dynamic-skill-0')?.revision).toBe(2)
+
+    expect(ensure_basic_skill_definitions()).toEqual({ added: 10, total: 10 })
+    expect(list_skill_definitions()).toHaveLength(MAX_DYNAMIC_SKILL_DEFINITIONS + 10)
+  })
   it('creates a versioned candidate without promoting observation to verification', () => {
     const skill = create_skill_candidate(candidate({ status: 'observed', stage: 'example' }))
     expect(skill.schema_version).toBe(1)

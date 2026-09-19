@@ -16,6 +16,7 @@ import type { SkillConstraintPredicate } from './skill_constraint_predicates'
 export type { SkillConstraintPredicate } from './skill_constraint_predicates'
 
 export const SKILL_SCHEMA_VERSION = 1
+export const MAX_DYNAMIC_SKILL_DEFINITIONS = 256
 
 export type SkillKind = 'production' | 'logistics' | 'construction' | 'utility' | 'custom'
 export type SkillStatus = 'observed' | 'candidate' | 'verified' | 'deprecated'
@@ -497,6 +498,30 @@ function ensure_definitions() {
   return storage.airi_skill_definitions
 }
 
+function is_basic_skill_id(id: string) {
+  for (const raw of BASIC_SKILL_DEFINITIONS) if (raw.id === id) return true
+  return false
+}
+
+function dynamic_skill_definition_count(registry: Record<string, SkillDefinition>) {
+  let count = 0
+  for (const id in registry) if (!is_basic_skill_id(id)) count++
+  return count
+}
+
+function store_dynamic_skill_definition(skill: SkillDefinition) {
+  const registry = ensure_definitions()
+  if (
+    registry[skill.id] === undefined
+    && !is_basic_skill_id(skill.id)
+    && dynamic_skill_definition_count(registry) >= MAX_DYNAMIC_SKILL_DEFINITIONS
+  ) {
+    throw new Error(`skill registry dynamic capacity reached (${MAX_DYNAMIC_SKILL_DEFINITIONS}); archive or reuse an existing skill id before creating another definition`)
+  }
+  registry[skill.id] = skill
+  return skill
+}
+
 export function ensure_basic_skill_definitions() {
   const registry = ensure_definitions()
   let added = 0
@@ -566,15 +591,13 @@ function exports_state() {
 
 export function put_skill_definition(value: any) {
   const skill = canonicalize_skill_definition(value)
-  ensure_definitions()[skill.id] = skill
-  return skill
+  return store_dynamic_skill_definition(skill)
 }
 
 export function put_untrusted_skill_definition(value: any) {
   const skill = canonicalize_skill_definition(value)
   if (skill.status === 'verified') throw new Error('verified skill promotion requires the live runtime verifier; caller-supplied verified definitions are not trusted')
-  ensure_definitions()[skill.id] = skill
-  return skill
+  return store_dynamic_skill_definition(skill)
 }
 
 export function create_skill_candidate(value: any) {
