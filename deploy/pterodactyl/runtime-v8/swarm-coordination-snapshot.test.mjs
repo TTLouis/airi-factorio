@@ -21,7 +21,7 @@ function fixture(limit = 2) {
       results: 6,
       agents: 2,
       actors: 2,
-      openWork: 1,
+      openWork: 0,
       executingWork: 1,
       blockedWork: 0,
       openRequests: 1,
