@@ -2,6 +2,7 @@ import path from 'node:path'
 
 import { SwarmProjectJevProcess } from './swarm-project-jev-process.mjs'
 import { SwarmProjectJevRuntime } from './swarm-project-jev-runtime.mjs'
+import { createSwarmJevDecisionProvider } from './swarm-jev-provider.mjs'
 
 export function createSwarmProjectJevControlPlane({
   rcon,
@@ -14,6 +15,8 @@ export function createSwarmProjectJevControlPlane({
   objective = '',
   now = () => Date.now(),
   log = () => {},
+  env = process.env,
+  fetchImpl = fetch,
 } = {}) {
   if (!rcon || typeof rcon.command !== 'function') {
     throw new TypeError('Swarm Project Jev control plane requires shared RCON')
@@ -26,9 +29,17 @@ export function createSwarmProjectJevControlPlane({
     ? stateFile
     : path.join(root, '.airi', 'swarm-strategic-project.json')
 
+  const resolvedDecisionProvider = typeof decisionProvider === 'function'
+    ? decisionProvider
+    : createSwarmJevDecisionProvider({
+        budgetFile: path.join(path.dirname(resolvedStateFile), 'decision-provider-budget.json'),
+        env,
+        fetchImpl,
+      })
+
   const runtime = new SwarmProjectJevRuntime({
     rcon,
-    decisionProvider,
+    decisionProvider: resolvedDecisionProvider,
     stateFile: resolvedStateFile,
     snapshotLimit,
     goalId,
@@ -46,6 +57,7 @@ export function createSwarmProjectJevControlPlane({
     runtime,
     process,
     stateFile: resolvedStateFile,
+    decisionProviderConfigured: typeof resolvedDecisionProvider === 'function',
 
     async start() {
       return process.start()
