@@ -131,3 +131,39 @@ test('unsupported durable schema is rejected by the global store restore gate', 
   const persistence = new SwarmStrategicProjectPersistence({ filename, store })
   await assert.rejects(() => persistence.load(), /Unsupported strategic project store snapshot/)
 })
+
+
+test('a failed durable write does not poison later strategic project saves', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'swarm-project-recovery-'))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const blockedParent = path.join(dir, 'blocked-parent')
+  await fsp.writeFile(blockedParent, 'not a directory', 'utf8')
+  const filename = path.join(blockedParent, 'strategic-project.json')
+
+  const store = new SwarmStrategicProjectStore({
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+  })
+  const persistence = new SwarmStrategicProjectPersistence({ filename, store })
+
+  store.update({
+    current_milestone: { title: 'Bootstrap power' },
+  })
+  await assert.rejects(() => persistence.save())
+  await assert.rejects(() => persistence.flush())
+
+  await fsp.rm(blockedParent)
+  await fsp.mkdir(blockedParent)
+
+  store.update({
+    development_direction: 'vertical',
+  })
+  await persistence.save()
+  await persistence.flush()
+
+  const disk = JSON.parse(await fsp.readFile(filename, 'utf8'))
+  assert.equal(disk.board.current_milestone.title, 'Bootstrap power')
+  assert.equal(disk.board.development_direction, 'vertical')
+  assert.equal(disk.board.revision, store.current().revision)
+})
