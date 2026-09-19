@@ -374,7 +374,10 @@ export async function executeUiControl(session, event) {
     await terminatePlan(session, 'ui_terminate')
     await stopWorldWork(session)
     if (session.projectJev) {
-      try { await session.projectJev.runtime.terminateProject() }
+      try {
+        await session.projectJev.runtime.terminateProject()
+        session.refreshProjectJevAgentContext()
+      }
       catch (error) { session.log(`[Project Jev] Strategic terminate failed without blocking UI terminate: ${error instanceof Error ? error.message : error}`) }
     }
     await session.clearTaskBoardUi()
@@ -528,6 +531,11 @@ export class Session {
     return this.agent.memory.currentPlan(key)
   }
 
+  refreshProjectJevAgentContext() {
+    if (typeof this.agent?.setStrategicProjectState !== 'function') return
+    this.agent.setStrategicProjectState(this.projectJev?.currentBoard())
+  }
+
   async syncProjectJevGoalFromPlan(state = this.currentPlanState()) {
     if (!this.projectJev || !state || typeof state !== 'object') return false
     const goalId = uiText(state.goal_id, 100)
@@ -536,21 +544,47 @@ export class Session {
 
     try {
       const board = this.projectJev.currentBoard()
+      let changed = false
       if (!board.goal_id) {
         await this.projectJev.runtime.bindGoal({ goalId, objective })
-        return true
+        changed = true
       }
-      if (board.goal_id === goalId) return false
-      if (board.status === 'completed' || board.status === 'terminated') {
+      else if (board.goal_id === goalId) {
+        changed = false
+      }
+      else if (board.status === 'completed' || board.status === 'terminated') {
         await this.projectJev.runtime.startNextGoal({ goalId, objective })
-        return true
+        changed = true
+      }
+      else {
+        this.log(`[Project Jev] Deferred goal switch ${board.goal_id} -> ${goalId}; prior strategic goal is still ${board.status}`)
       }
 
-      this.log(`[Project Jev] Deferred goal switch ${board.goal_id} -> ${goalId}; prior strategic goal is still ${board.status}`)
-      return false
+      this.refreshProjectJevAgentContext()
+      return changed
     }
     catch (error) {
       this.log(`[Project Jev] Goal sync failed without blocking AIRI: ${error instanceof Error ? error.message : error}`)
+      return false
+    }
+  }
+
+  async applyProjectJevPlannerProposal(result) {
+    if (!this.projectJev || !result?.strategicProjectProposal) return false
+    try {
+      const admission = await this.projectJev.runtime.applyPlannerProposal(result.strategicProjectProposal)
+      this.refreshProjectJevAgentContext()
+      if (!admission.accepted) {
+        this.log(`[Project Jev] Planner strategic proposal rejected: ${admission.reason}`)
+        return false
+      }
+      if (admission.changed) {
+        this.log(`[Project Jev] Planner strategic proposal committed: ${admission.reason}`)
+      }
+      return admission.changed === true
+    }
+    catch (error) {
+      this.log(`[Project Jev] Planner strategic proposal failed without blocking AIRI: ${error instanceof Error ? error.message : error}`)
       return false
     }
   }
@@ -730,6 +764,7 @@ export class Session {
       const result = await this.agent.request(text, { sender })
       await this.syncTaskBoardUi()
       await this.syncProjectJevGoalFromPlan()
+      await this.applyProjectJevPlannerProposal(result)
       if (result?.chatMessage) await this.printChat(result.chatMessage)
     }, { reportError: true })
     return true
@@ -788,6 +823,8 @@ export class Session {
         if (!this.agent.active) return
         const result = await this.agent.completed()
         await this.syncTaskBoardUi()
+        await this.syncProjectJevGoalFromPlan()
+        await this.applyProjectJevPlannerProposal(result)
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
       return
@@ -805,6 +842,8 @@ export class Session {
         if (!this.agent.active) return
         const result = typeof this.agent.failed === 'function' ? await this.agent.failed(autorioError[1]) : null
         await this.syncTaskBoardUi()
+        await this.syncProjectJevGoalFromPlan()
+        await this.applyProjectJevPlannerProposal(result)
         if (result?.chatMessage) await this.printChat(result.chatMessage)
       }, { reportError: true })
     }
