@@ -641,11 +641,15 @@ export const toolDefinitions = [
   constructionPlanValidationDefinition,
   constructionIntentDefinition,
   researchPathDefinition,
+]
+
+export const providerToolDefinitions = [
+  ...toolDefinitions,
   ...plannerControlToolDefinitions,
 ]
+
 export function isObservationToolName(name) {
   return typeof name === 'string'
-    && !isPlannerControlToolName(name)
     && toolDefinitions.some(tool => tool?.type === 'function' && tool.function?.name === name)
 }
 
