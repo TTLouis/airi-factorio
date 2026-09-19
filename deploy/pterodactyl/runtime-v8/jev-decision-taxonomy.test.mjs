@@ -19,6 +19,7 @@ test('exposes separate bounded Jev decision families', () => {
     completion: ['incomplete', 'progress', 'completed', 'invalidated'],
     routing: ['wait_runtime', 'continue_runtime', 'wake_planner'],
     reasoning_budget: ['micro', 'normal', 'deep', 'strategic'],
+    milestone_transition: ['advance_next', 'replan_project', 'project_complete_candidate'],
   })
 })
 
@@ -142,4 +143,19 @@ test('runtime gate only skips the planner for maintain+keep on an authoritative 
   assert.equal(hierarchyRuntimeGate({ granularity: 'keep', development: 'vertical' }, { runtimeHealthy: true }).allow_runtime_continuation, false)
   assert.equal(hierarchyRuntimeGate({ granularity: 'keep', development: 'maintain' }, { runtimeHealthy: false }).allow_runtime_continuation, false)
   assert.equal(hierarchyRuntimeGate({ granularity: 'keep', development: 'maintain' }, { runtimeHealthy: true, boundary: 'failure' }).allow_runtime_continuation, false)
+})
+
+
+test('milestone transition decision never grants Jev project-completion authority', async () => {
+  const { milestoneTransitionDecisionQuestions, parseMilestoneTransitionDecision } = await import('./jev-decision-taxonomy.mjs')
+  const question = milestoneTransitionDecisionQuestions().milestone_transition
+  assert.match(question.instructions, /authoritatively verified complete/i)
+  assert.match(question.instructions, /Do not claim project completion yourself/i)
+  const parsed = parseMilestoneTransitionDecision({
+    answers: {
+      milestone_transition: { choice: 'advance_next', confidence: 0.88 },
+    },
+  })
+  assert.equal(parsed.decision, 'advance_next')
+  assert.equal(parseMilestoneTransitionDecision({ answers: {} }).decision, 'replan_project')
 })
