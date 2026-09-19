@@ -299,7 +299,7 @@ test('duplicate completed receipt cannot advance a second canonical step', () =>
   assert.equal(state.task_board.evidence.filter(item => item.kind === 'deterministic_verification' && item.ref === 'batch_7').length, 1)
 })
 
-test('verified final step records proof but leaves whole-goal closure to the existing completion continuation', () => {
+test('verified final step closes the durable goal without requiring provider prose', () => {
   const finalBoard = board()
   finalBoard.active_index = 4
   finalBoard.active_step_id = 'step_5'
@@ -313,11 +313,11 @@ test('verified final step records proof but leaves whole-goal closure to the exi
   }))
 
   const nextBoard = memory.recordBoardEvidence('npc:airi', completedReceipt({ taskTypes: ['attacking'] }))
-  const state = memory.currentPlan('npc:airi')
+  const stored = memory.planByNpc.get('npc:airi')
 
   assert.equal(nextBoard.active_index, 4)
-  assert.equal(nextBoard.status, 'active')
-  assert.equal(state.status, 'active')
+  assert.equal(nextBoard.status, 'completed')
+  assert.equal(stored.status, 'completed')
   assert.equal(nextBoard.evidence.some(item => item.kind === 'deterministic_verification' && item.ref === 'batch_7'), true)
 })
 
@@ -346,7 +346,11 @@ test('whole-goal completion returns the final completed receipt but retires it b
     operations: [],
   }
 
-  const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'Build early automation' }, completion, { continuation: true })
+  const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'Build early automation' }, completion, {
+    continuation: true,
+    verifiedCompletion: true,
+    completionEvidence: [{ kind: 'deterministic_verification', ref: 'batch_final', summary: '{"verdict":"verified_complete"}' }],
+  })
   const reconciled = memory.reconcileTaskBoard(key, board(), completion, recorded)
 
   assert.equal(reconciled.state.status, 'completed')
@@ -446,10 +450,38 @@ test('completed prefix stays completed when a later placement recovery blocks', 
   const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'Place a chest nearby' }, blockedPlan, { continuation: true })
   const reconciled = memory.reconcileTaskBoard(key, placementBoard, blockedPlan, recorded, { previousState: previous })
 
-  assert.equal(reconciled.state.status, 'blocked')
+  assert.equal(reconciled.state.status, 'active')
   assert.equal(reconciled.state.task_board.completed_count, 1)
   assert.equal(reconciled.state.task_board.active_index, 1)
   assert.equal(reconciled.state.task_board.steps[0].status, 'completed')
-  assert.equal(reconciled.state.task_board.steps[1].status, 'blocked')
+  assert.equal(reconciled.state.task_board.steps[1].status, 'active')
   assert.equal(reconciled.state.task_board.steps[2].status, 'pending')
+})
+
+
+test('provider currentStep proposal alone cannot increase canonical completed_count', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const key = 'npc:airi'
+  const initial = board()
+  initial.active_index = 1
+  initial.active_step_id = 'step_2'
+  initial.completed_count = 1
+  initial.steps = initial.steps.map((step, index) => ({ ...step, status: index < 1 ? 'completed' : index === 1 ? 'active' : 'pending' }))
+  memory.planByNpc.set(key, planState({
+    task_board: initial,
+    plan: initial.steps.map(step => step.description),
+    current_step: 1,
+    last_mutation_verified: true,
+  }))
+  const proposal = {
+    chatMessage: 'I think later steps are done.',
+    plan: initial.steps.map(step => step.description),
+    currentStep: 4,
+    operations: [],
+  }
+  const previous = memory.currentPlan(key)
+  const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'continue' }, proposal, { continuation: true })
+  const reconciled = memory.reconcileTaskBoard(key, initial, proposal, recorded, { previousState: previous })
+  assert.equal(reconciled.state.task_board.active_index, 1)
+  assert.equal(reconciled.state.task_board.completed_count, 1)
 })

@@ -194,12 +194,10 @@ export function canonicalContinuationPlan(previousBoard, plan, { allowReplan = f
   }
 
   if (allowReplan) return plan
-  const nextIndex = matched >= currentIndex ? matched : currentIndex
-
   return {
     ...plan,
-    plan: canonical,
-    currentStep: nextIndex,
+    plan: allowReplan ? plan.plan : canonical,
+    currentStep: currentIndex,
   }
 }
 
@@ -234,41 +232,8 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
 
   reconcileTaskBoard(key, previousBoard, plan, stateResult, options = {}) {
     const truthState = options.previousState ?? stateResult?.state
-    if (stateHasUnverifiedTransferIntent(truthState) && attemptedLaterCanonicalStep(previousBoard, plan)) {
-      const currentIndex = Number.isSafeInteger(previousBoard?.active_index) ? previousBoard.active_index : 0
-      const canonical = Array.isArray(previousBoard?.steps)
-        ? previousBoard.steps.map(step => String(step?.description ?? '')).filter(Boolean)
-        : []
-      const now = Date.now()
-      const frozen = {
-        ...truthState,
-        status: 'blocked',
-        task_board: setTaskBoardStatus(previousBoard, 'blocked', {
-          blocker: truthState?.blocker || 'unverified_transfer_step',
-          now,
-        }),
-        plan: canonical,
-        current_step: currentIndex,
-        blocker: truthState?.blocker || 'unverified_transfer_step',
-        revision: (truthState?.revision ?? 0) + 1,
-        updated_at: now,
-      }
-      this.planByNpc.set(key, frozen)
-      return {
-        ...(stateResult ?? {}),
-        state: frozen,
-        blockedByHarness: true,
-        changed: true,
-        blocker: frozen.blocker,
-      }
-    }
-
     const guarded = canonicalContinuationPlan(previousBoard, plan, { ...options, previousState: truthState })
     const result = super.reconcileTaskBoard(key, previousBoard, guarded, stateResult, options)
-    // Return the completed state to the caller for the final response/receipt,
-    // but clear it from the current durable slot before UI sync and persistence.
-    // Conversation memory still retains the user/assistant exchange for follow-up
-    // references without making the finished goal steerable.
     if (result?.state?.status === 'completed') this.planByNpc.delete(key)
     return result
   }
@@ -280,14 +245,13 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
 
     if (evidence?.kind === 'operation_error_receipt' && stateHasUnverifiedTransferIntent(state)) {
       const reason = transferFailureReason(evidence)
-      state.status = 'blocked'
-      state.blocker = `transfer_failed:${reason}`
-      state.pause_reason = ''
-      state.task_board = setTaskBoardStatus(boardAfterReceipt, 'blocked', { blocker: state.blocker, now: Date.now() })
-      state.revision += 1
-      state.updated_at = Date.now()
-      this.planByNpc.set(key, state)
-      return state.task_board
+      return this.applyOutcomeAuthority(key, {
+        kind: 'world_blocked',
+        source: 'autorio',
+        reason_code: `transfer_failed:${reason}`,
+        candidate_blocker: `transfer_failed:${reason}`,
+        evidence: [evidence],
+      }).state?.task_board ?? boardAfterReceipt
     }
 
     if (state.status !== 'active' || boardAfterReceipt.status !== 'active') return boardAfterReceipt
@@ -322,11 +286,13 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
 
     const currentIndex = Number.isSafeInteger(verifiedBoard.active_index) ? verifiedBoard.active_index : 0
     if (currentIndex >= verifiedBoard.steps.length - 1) {
-      // Keep final goal completion conservative. The deterministic evidence is
-      // attached to the last step, but the existing completion continuation is
-      // still responsible for closing the whole user goal. This prevents a
-      // provider continuation from reopening an already-completed durable goal.
-      return verifiedBoard
+      const verificationEvidence = [...(verifiedBoard.evidence ?? [])].reverse().find(item => item?.kind === 'deterministic_verification' && item?.ref === ref)
+      return this.applyOutcomeAuthority(key, {
+        kind: 'verified_complete',
+        source: 'deterministic_runtime',
+        reason_code: 'verified_final_step',
+        evidence: verificationEvidence ? [verificationEvidence] : [],
+      }).state?.task_board ?? verifiedBoard
     }
 
     const canonical = verifiedBoard.steps.map(step => String(step?.description ?? '')).filter(Boolean)
@@ -338,7 +304,7 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
       state: current,
       blockedByHarness: false,
       changed: true,
-    }, { allowReplan: false })
+    }, { allowReplan: false, authoritativeAdvance: true })
     const next = stateResult?.state
     if (!next) return verifiedBoard
     next.status = 'active'

@@ -10,6 +10,7 @@ import {
   taskBoardProgress,
 } from './common.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
+import { isLifecycleMetaStep, normalizeCanonicalPlan, validateOutcomeCandidate } from './outcome-authority.mjs'
 import { isObservationToolName, renderOperation, renderOperationPreflight, toolCommand } from './structured-policy.mjs'
 
 export { AgentLoopError }
@@ -253,7 +254,7 @@ function sanitizeTraceValue(value, key = '') {
 }
 
 function safePlan(plan) {
-  return Array.isArray(plan) ? plan.slice(0, 30).map(step => cleanMemoryText(step, 500)) : []
+  return normalizeCanonicalPlan(plan).plan
 }
 
 function currentPlanStep(plan, currentStep) {
@@ -482,7 +483,70 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return state
   }
 
-  recordPlan(key, requestInfo, plan, { continuation = false, persistentRuntime, durableOperations = [], exactTargetAudit = [] } = {}) {
+  applyOutcomeAuthority(key, candidate, { world = {}, chatMessage = '' } = {}) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    const decision = validateOutcomeCandidate(candidate, { world })
+    if (!state || !decision.accepted) return { state, decision, changed: false }
+
+    const now = Date.now()
+    const previousStatus = state.status
+    let board = this.ensureTaskBoard(state)
+    const evidence = Array.isArray(candidate?.evidence) ? candidate.evidence : []
+    for (const item of evidence) {
+      if (!item || typeof item !== 'object') continue
+      const duplicate = (board?.evidence ?? []).some(existing => existing?.kind === item.kind && item.ref && existing?.ref === item.ref)
+      if (!duplicate) board = addTaskBoardEvidence(board, { ...item, now: Number.isFinite(item.now) ? item.now : now })
+    }
+
+    if (decision.durable_status === 'blocked') {
+      state.status = 'blocked'
+      state.admission_status = undefined
+      state.blocker = cleanMemoryText(decision.blocker || candidate?.candidate_blocker || decision.reason_code, 500)
+      state.pause_reason = ''
+      state.persistent_runtime = undefined
+      board = setTaskBoardStatus(board, 'blocked', { blocker: state.blocker, now })
+    }
+    else if (decision.durable_status === 'paused') {
+      state.status = 'paused'
+      state.blocker = ''
+      state.pause_reason = cleanMemoryText(decision.pause_reason || decision.reason_code, 300)
+      state.persistent_runtime = undefined
+      board = setTaskBoardStatus(board, 'paused', { pauseReason: state.pause_reason, now })
+    }
+    else if (decision.durable_status === 'completed') {
+      state.status = 'completed'
+      state.admission_status = undefined
+      state.blocker = ''
+      state.pause_reason = ''
+      state.persistent_runtime = undefined
+      board = setTaskBoardStatus(board, 'completed', { now })
+      state.plan = []
+      state.current_step = 0
+    }
+    else if (decision.durable_status === 'active' && state.status === 'active') {
+      state.blocker = ''
+      state.pause_reason = ''
+      board = setTaskBoardStatus(board, 'active', { now })
+    }
+
+    if (chatMessage) state.last_chat_message = cleanMemoryText(chatMessage, 2000)
+    state.task_board = board
+    if (previousStatus !== state.status) {
+      state.history = [...(state.history ?? []), {
+        revision: state.revision,
+        status: previousStatus,
+        current_step: state.current_step,
+        step: currentPlanStep(state.plan, state.current_step),
+        chat: state.last_chat_message,
+      }].slice(-PLAN_HISTORY_LIMIT)
+    }
+    state.revision = (state.revision ?? 0) + 1
+    state.updated_at = now
+    this.planByNpc.set(key, state)
+    return { state, decision, changed: previousStatus !== state.status || evidence.length > 0 }
+  }
+
+  recordPlan(key, requestInfo, plan, { continuation = false, persistentRuntime, durableOperations = [], exactTargetAudit = [], verifiedCompletion = false, completionEvidence = [] } = {}) {
     const previous = this.planByNpc.get(key)
     const hasOperations = plan.operations.length > 0
     const incomingDurableOperations = (Array.isArray(durableOperations) ? durableOperations : []).slice(0, 16).map(operation => sanitizeDurableModelValue(operation))
@@ -490,13 +554,14 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       ...(Array.isArray(previous?.exact_target_audit) ? previous.exact_target_audit : []),
       ...(Array.isArray(exactTargetAudit) ? exactTargetAudit : []),
     ].slice(-32)
-    const incomingPlan = safePlan(plan.plan)
-    const incomingStep = Number.isSafeInteger(plan.currentStep) ? plan.currentStep : 0
+    const normalized = normalizeCanonicalPlan(plan.plan, plan.currentStep)
+    const incomingPlan = normalized.plan
+    const incomingStep = normalized.currentStep
     const now = Date.now()
     const runtime = safePersistentRuntime(persistentRuntime)
     const runtimeHealthy = runtime?.active === true && runtime.healthy === true && runtime.controller_live === true
 
-    if (!hasOperations && !continuation && !runtimeHealthy) {
+    if (!hasOperations && !continuation && !runtimeHealthy && !verifiedCompletion) {
       return { state: previous, blockedByHarness: false, changed: false }
     }
 
@@ -563,56 +628,32 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
 
     if (!previous) return { state: undefined, blockedByHarness: false, changed: false }
 
-    if (incomingPlan.length > 0) {
-      const preserveBlockedMutation = previous.status === 'blocked'
-        && previous.last_mutation_verified !== true
-        && Array.isArray(previous.last_operations)
-        && previous.last_operations.length > 0
-      const state = {
-        ...previous,
-        status: 'blocked',
-        admission_status: preserveBlockedMutation ? previous.admission_status : undefined,
-        blocker: preserveBlockedMutation && previous.blocker
-          ? previous.blocker
-          : 'no_autorio_operation_for_remaining_plan',
-        pause_reason: '',
-        persistent_runtime: runtime,
-        plan: incomingPlan,
-        current_step: incomingStep,
-        revision: previous.revision + 1,
-        last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
-        last_operations: preserveBlockedMutation ? previous.last_operations : [],
-        durable_last_operations: preserveBlockedMutation ? modelFacingLastOperations(previous) : [],
-        exact_target_audit: mergedExactTargetAudit,
-        updated_at: now,
-        history,
-      }
-      this.planByNpc.set(key, state)
-      return { state, blockedByHarness: true, changed: true }
-    }
-
     const state = {
       ...previous,
-      status: 'completed',
-      admission_status: undefined,
-      blocker: '',
-      pause_reason: '',
-      persistent_runtime: undefined,
-      plan: [],
-      current_step: 0,
-      revision: previous.revision + 1,
+      plan: incomingPlan.length > 0 ? incomingPlan : previous.plan,
+      current_step: incomingPlan.length > 0 ? incomingStep : previous.current_step,
       last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
-      last_operations: [],
       durable_last_operations: [],
       exact_target_audit: mergedExactTargetAudit,
       updated_at: now,
       history,
     }
     this.planByNpc.set(key, state)
-    return { state, blockedByHarness: false, changed: true }
+
+    if (verifiedCompletion) {
+      const reduced = this.applyOutcomeAuthority(key, {
+        kind: 'verified_complete',
+        source: 'deterministic_runtime',
+        reason_code: 'verified_final_step',
+        evidence: completionEvidence,
+      }, { chatMessage: plan.chatMessage })
+      return { state: reduced.state, blockedByHarness: false, changed: reduced.changed, outcomeDecision: reduced.decision }
+    }
+
+    return { state, blockedByHarness: false, changed: incomingPlan.length > 0 }
   }
 
-  reconcileTaskBoard(key, previousBoard, plan, stateResult, { allowReplan = false } = {}) {
+  reconcileTaskBoard(key, previousBoard, plan, stateResult, { allowReplan = false, authoritativeAdvance = false } = {}) {
     const state = stateResult?.state
     if (!state) return stateResult
     const now = state.updated_at ?? Date.now()
@@ -624,7 +665,10 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       board = setTaskBoardStatus(board, 'completed', { now })
     }
     else {
-      board = reconcileTaskBoard(board, plan.plan, plan.currentStep, { now, allowReplan })
+      const proposedStep = authoritativeAdvance
+        ? plan.currentStep
+        : (Number.isSafeInteger(board?.active_index) ? board.active_index : state.current_step)
+      board = reconcileTaskBoard(board, plan.plan, proposedStep, { now, allowReplan })
       board = setTaskBoardStatus(board, state.status, {
         blocker: state.blocker,
         pauseReason: state.pause_reason,
@@ -655,21 +699,19 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
   setAdmissionState(key, admissionStatus, { blocker = '', evidence } = {}) {
     const state = key ? this.planByNpc.get(key) : undefined
     if (!state) return undefined
-    const now = Date.now()
     state.admission_status = admissionStatus
-    if (admissionStatus === 'admission_failed') {
-      state.status = 'blocked'
-      state.blocker = cleanMemoryText(blocker || 'operation_admission_failed', 500)
-      state.pause_reason = ''
-      let board = this.ensureTaskBoard(state)
-      board = setTaskBoardStatus(board, 'blocked', { blocker: state.blocker, now })
-      if (evidence) board = addTaskBoardEvidence(board, { ...evidence, now })
-      state.task_board = board
-    }
     state.revision += 1
-    state.updated_at = now
+    state.updated_at = Date.now()
     this.planByNpc.set(key, state)
-    return state
+    if (admissionStatus !== 'admission_failed') return state
+
+    return this.applyOutcomeAuthority(key, {
+      kind: 'world_blocked',
+      source: 'deterministic_runtime',
+      reason_code: blocker || 'operation_admission_failed',
+      candidate_blocker: blocker || 'operation_admission_failed',
+      evidence: evidence ? [evidence] : [],
+    }).state
   }
 
   beginActionOmissionRecovery(key, requestInfo, plan) {
@@ -725,59 +767,33 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
   }
 
   blockRemainingPlan(key, { blocker, reason = '', chatMessage = '', evidenceKind = 'lifecycle_blocker' } = {}) {
-    const state = key ? this.planByNpc.get(key) : undefined
-    if (!state) return undefined
-    const now = Date.now()
-    const code = cleanMemoryText(blocker || 'action_omission_after_repair', 500)
-    state.status = 'blocked'
-    state.admission_status = undefined
-    state.blocker = code
-    state.pause_reason = ''
-    state.persistent_runtime = undefined
-    if (chatMessage) state.last_chat_message = cleanMemoryText(chatMessage, 2000)
-    let board = setTaskBoardStatus(this.ensureTaskBoard(state), 'blocked', { blocker: code, now })
-    if (reason) {
-      board = addTaskBoardEvidence(board, {
-        kind: evidenceKind,
-        ref: `${state.goal_id}/${code}`,
-        summary: JSON.stringify({
-          blocker: code,
-          reason: sanitizeDurableModelText(reason, 1200),
-          semantics: 'No world mutation was synthesized by the harness.',
-        }),
-        now,
-      })
-    }
-    state.task_board = board
-    state.revision += 1
-    state.updated_at = now
-    this.planByNpc.set(key, state)
-    return state
+    const evidence = reason
+      ? [{
+          kind: evidenceKind,
+          ref: `${this.planByNpc.get(key)?.goal_id ?? 'goal'}/${cleanMemoryText(blocker || 'blocker', 120)}`,
+          summary: JSON.stringify({ blocker, reason: sanitizeDurableModelText(reason, 1200) }),
+        }]
+      : []
+    return this.applyOutcomeAuthority(key, {
+      kind: 'world_blocked',
+      source: evidenceKind === 'provider_blocker' ? 'main_planner' : 'deterministic_runtime',
+      reason_code: blocker || 'candidate_world_blocker',
+      candidate_blocker: blocker || 'candidate_world_blocker',
+      evidence,
+    }, { chatMessage }).state
   }
 
   pausePlan(key, reason = 'cancelled') {
-    const previous = key ? this.planByNpc.get(key) : undefined
-    if (!previous || previous.status === 'completed') return previous
-    const state = {
-      ...previous,
-      status: 'paused',
-      blocker: '',
-      pause_reason: cleanMemoryText(reason, 300),
-      persistent_runtime: undefined,
-      revision: previous.revision + 1,
-      updated_at: Date.now(),
-      history: [...previous.history, {
-        revision: previous.revision,
-        status: previous.status,
-        current_step: previous.current_step,
-        step: currentPlanStep(previous.plan, previous.current_step),
-        chat: previous.last_chat_message,
-      }].slice(-PLAN_HISTORY_LIMIT),
-    }
-    const board = this.ensureTaskBoard(previous)
-    state.task_board = setTaskBoardStatus(board, 'paused', { pauseReason: state.pause_reason, now: state.updated_at })
-    this.planByNpc.set(key, state)
-    return state
+    return this.applyOutcomeAuthority(key, {
+      kind: 'cancelled',
+      source: 'server_lifecycle',
+      reason_code: reason,
+      metadata: {
+        server_authoritative: true,
+        transition: 'paused',
+        pause_reason: reason,
+      },
+    }).state
   }
 
   maxTurnId() {
@@ -1447,20 +1463,7 @@ function finalStepCanCloseFromFreshObservation(state) {
 }
 
 function terminalControlOnlyPlanStep(value) {
-  const text = cleanMemoryText(value, 120).toLowerCase().replace(/[.!]+$/g, '').trim()
-  return text === 'stop'
-    || text === 'done'
-    || text === 'finish'
-    || text === 'finished'
-    || text === 'complete'
-    || text === 'completed'
-    || text === 'report completion'
-    || text === 'report completion to player'
-    || text === 'report completion to the player'
-    || text === 'report completion to user'
-    || text === 'report completion to the user'
-    || text === 'report completion to requester'
-    || text === 'report completion to the requester'
+  return isLifecycleMetaStep(value)
 }
 
 function verifiedFinalCompletion(plan, state, triggerSource, { freshObservation = false } = {}) {
@@ -2486,7 +2489,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const raw = String(await this.rcon.command(toolCommand('getTaskStatus', {}))).slice(0, 16000)
       this.recordPlacementReceipt(raw)
       const evidence = receiptEvidence(raw, this.planUpdateReason === 'failure' ? 'failed' : 'completed')
-      if (this.memory.recordBoardEvidence?.(this.activePlanKey(), evidence)) await this.persistState()
+      const taskBoard = this.memory.recordBoardEvidence?.(this.activePlanKey(), evidence)
+      if (taskBoard) await this.persistState()
       const view = taskStatusDecisionView(raw)
       const providerStatus = taskStatusDelta(this.lastTaskStatusView, view)
       this.lastTaskStatusView = view
@@ -2498,7 +2502,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         raw_chars: raw.length,
         task_status: providerStatus,
       })
-      return { raw, view, providerStatus }
+      return { raw, view, providerStatus, taskBoard: visibleTaskBoard(taskBoard) }
     }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -2577,6 +2581,38 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return null
     }
     this.lastHandledRuntimeReceipt.completion = receiptKey
+
+    if (!pendingAmendment && receipt.taskBoard?.status === 'completed') {
+      this.active = false
+      await this.traceEvent('outcome.validated', {
+        kind: 'verified_complete',
+        source: 'deterministic_runtime',
+        reason_code: 'verified_final_step',
+        task_board: receipt.taskBoard,
+      })
+      await this.traceEvent('planner.skipped', {
+        source: 'outcome_authority',
+        route: 'deterministic_close',
+      })
+      await this.traceEvent('request.completed', {
+        chat_message: 'The requested goal is verified complete.',
+        outcome: 'verified_complete',
+        task_board: receipt.taskBoard,
+        usage: this.traceRequest?.usage,
+      })
+      this.traceRequest = null
+      return {
+        chatMessage: 'The requested goal is verified complete.',
+        plan: [],
+        currentStep: 0,
+        operations: [],
+        epoch: this.epoch?.epoch,
+        actorId: this.epoch?.actor_id,
+        goalId: receipt.taskBoard.goal_id,
+        goalStatus: 'completed',
+        taskBoard: receipt.taskBoard,
+      }
+    }
 
     const routed = pendingAmendment
       ? { route: 'fallback_planner', decision_called: false }
@@ -2827,6 +2863,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   parsePlanMessage(message) {
     const plan = super.parsePlanMessage(message)
+    const normalizedPlan = normalizeCanonicalPlan(plan.plan, plan.currentStep)
+    plan.plan = normalizedPlan.plan
+    plan.currentStep = normalizedPlan.currentStep
     for (const operation of plan.operations) {
       if (!EXACT_ENTITY_TARGET_OPERATIONS.has(operation.name)) continue
       const unitNumber = operation.args?.unit_number
@@ -3120,8 +3159,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         operations: [],
         epoch: before.epoch,
         actorId: before.actor_id,
-        blocked: true,
-        blocker: { class: blocker, reason },
       }
     }
 
@@ -3136,23 +3173,59 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       assistant: plan.chatMessage,
       operations: [],
     })
-    state = this.memory.blockRemainingPlan?.(this.requestInfo.memoryKey, {
-      blocker,
-      reason,
-      chatMessage: plan.chatMessage,
-      evidenceKind,
-    }) ?? state
-    await this.persistState()
-    await this.traceEvent('plan.persisted', {
-      lifecycle: 'blocked',
-      blocker,
-      goal_id: state?.goal_id,
-      task_board: visibleTaskBoard(state?.task_board),
+
+    const blockerCandidate = {
+      kind: 'world_blocked',
+      source: evidenceKind === 'provider_blocker' ? 'main_planner' : 'action_omission_repair',
+      reason_code: blocker,
+      candidate_blocker: blocker,
+      evidence: reason ? [{ kind: evidenceKind, ref: `${state?.goal_id ?? 'goal'}/candidate_blocker`, summary: cleanMemoryText(reason, 1200) }] : [],
+    }
+    await this.traceEvent('outcome.candidate', blockerCandidate)
+    const blockerDecision = this.memory.applyOutcomeAuthority?.(this.requestInfo.memoryKey, blockerCandidate, { chatMessage: plan.chatMessage })
+    await this.traceEvent(blockerDecision?.decision?.accepted ? 'outcome.validated' : 'outcome.rejected', {
+      ...blockerDecision?.decision,
+      candidate_blocker: blocker,
     })
+
+    if (!blockerDecision?.decision?.accepted) {
+      const runtime = await this.readInteractionTaskStatus()
+      const persistentRuntime = await this.persistentRuntimeStatus()
+      const failureCandidate = {
+        kind: 'recoverable_provider_failure',
+        source: evidenceKind === 'provider_blocker' ? 'main_planner' : 'action_omission_repair',
+        reason_code: blocker || 'provider_recovery_failed',
+        evidence: [],
+      }
+      await this.traceEvent('outcome.candidate', failureCandidate)
+      const reduced = this.memory.applyOutcomeAuthority?.(this.requestInfo.memoryKey, failureCandidate, {
+        world: {
+          ...runtime,
+          persistent_runtime: persistentRuntime,
+          persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
+        },
+        chatMessage: plan.chatMessage,
+      })
+      state = reduced?.state ?? state
+      await this.traceEvent(reduced?.decision?.accepted ? 'outcome.validated' : 'outcome.rejected', reduced?.decision ?? failureCandidate)
+      if (reduced?.changed) {
+        await this.traceEvent('task_state.transition', {
+          status: state?.status,
+          blocker: state?.blocker,
+          pause_reason: state?.pause_reason,
+          task_board: visibleTaskBoard(state?.task_board),
+        })
+      }
+    }
+    else {
+      state = blockerDecision.state ?? state
+    }
+
+    await this.persistState()
     this.active = false
     await this.traceEvent('request.completed', {
       chat_message: plan.chatMessage,
-      outcome: 'blocked_no_operation',
+      outcome: state?.status === 'blocked' ? 'world_blocked' : 'recoverable_provider_failure',
       task_board: visibleTaskBoard(state?.task_board),
       usage: this.traceRequest?.usage,
     })
@@ -3160,16 +3233,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.clearActionOmissionRecovery()
     const visibleReason = providerBlockerReason(plan) || cleanMemoryText(reason, 800) || blocker
     return {
-      chatMessage: `[Plan blocked] ${visibleReason}`,
+      chatMessage: state?.status === 'blocked'
+        ? `[Plan blocked] ${visibleReason}`
+        : `[Plan paused for recoverable provider failure] ${visibleReason}`,
       plan: state?.plan ?? plan.plan,
       currentStep: state?.current_step ?? plan.currentStep,
       operations: [],
       epoch: before.epoch,
       actorId: before.actor_id,
       goalId: state?.goal_id,
-      goalStatus: state?.status ?? 'blocked',
+      goalStatus: state?.status,
       taskBoard: visibleTaskBoard(state?.task_board),
-      blocker: { class: blocker, reason: cleanMemoryText(reason, 1200) },
+      blocker: state?.status === 'blocked' ? { class: blocker, reason: cleanMemoryText(reason, 1200) } : undefined,
     }
   }
 
@@ -3295,11 +3370,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         assistant: plan.chatMessage,
         operations: durableOperations,
       })
+      const completionEvidence = finalCompletionVerified
+        ? [
+            ...[...(previousState?.task_board?.evidence ?? [])].reverse().filter(item => item?.kind === 'deterministic_verification').slice(0, 1),
+            ...(this.freshObservationSinceContinuation
+              ? [{ kind: 'verified_world_state', ref: `${this.traceRequest?.id ?? 'request'}/fresh_observation`, summary: 'Fresh authoritative observation plus the canonical completion guard satisfied the final step.' }]
+              : []),
+          ].slice(0, 2)
+        : []
       stateResult = this.memory.recordPlan?.(this.requestInfo.memoryKey, this.requestInfo, durablePlan, {
         continuation: this.continuations > 0,
         persistentRuntime,
         durableOperations,
         exactTargetAudit,
+        verifiedCompletion: finalCompletionVerified,
+        completionEvidence,
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
         allowReplan: this.planUpdateReason === 'failure',
