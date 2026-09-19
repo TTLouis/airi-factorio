@@ -88,7 +88,7 @@ export function evaluateStrategicProjectCompletionFacts(board, coordinationSnaps
       counts,
     }
   }
-  if (board.transition_state !== 'awaiting_next_milestone') {
+  if (!['awaiting_next_milestone', 'awaiting_project_review'].includes(board.transition_state)) {
     return {
       ready: false,
       reason: 'final_milestone_transition_not_verified',
