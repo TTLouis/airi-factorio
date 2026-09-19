@@ -1,5 +1,7 @@
+import type { LuaEntity } from 'factorio:runtime'
 import { create_actor_remote_interface, get_controlled_actor } from './actors/actor_controller'
-import { remember_entity_reference } from './entity_reference'
+import type { ControlledActor } from './actors/types'
+import { remember_entity_reference, resolve_exact_entity } from './entity_reference'
 import { create_placement_candidate_set, type PlacementCandidateRequest } from './placement_candidates'
 import { compact_spatial_summary } from './spatial_semantics'
 import { get_actor_inventory_items } from './utils/inventory'

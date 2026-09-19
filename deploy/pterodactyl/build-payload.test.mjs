@@ -8,7 +8,7 @@ import { buildArtifacts, channelInstaller, installerLoader, verifyGeneratedArtif
 
 const here = dirname(fileURLToPath(import.meta.url))
 const PAYLOAD_REF = '0644179762b2d1fbb7de8ca4ca3a261ee248ae99'
-const PAYLOAD_SHA256 = 'bd7f293f2e6ab81b303dc1905c623ea27b75e60b1b1e9552241e62043ffbe211'
+const PAYLOAD_SHA256 = 'ed5fad54087a92bf8a13e5cedf6b5600349a8931a036662306afd5ae0337bc67'
 const source = Buffer.from(`#!/usr/bin/env bash
 AIRI_REF="0123456789abcdef0123456789abcdef01234567"
 REVISION="test"
