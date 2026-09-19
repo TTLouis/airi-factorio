@@ -160,7 +160,7 @@ function agentFor(intent, {
             },
             reasoning_budget: { type: 'choice', choice: decisionGranularity === 'split' ? 'strategic' : 'normal', confidence: 0.85 },
             planning_horizon: { type: 'choice', choice: decisionGranularity === 'split' ? 'strategic' : 'checkpoint', confidence: 0.84 },
-            observation_budget: { type: 'number', number: decisionGranularity === 'split' ? 3 : 1, confidence: 0.83 },
+            observation_budget: { type: 'score', score: decisionGranularity === 'split' ? 3 : 1, confidence: 0.83 },
           },
           usage: {
             input_tokens: 120,
@@ -240,7 +240,7 @@ test('Jev shadow disagreement is observed without changing the active interactio
   assert.equal(decisionCalls[0].questions.granularity.type, 'choice')
   assert.equal(decisionCalls[0].questions.reasoning_budget.type, 'choice')
   assert.equal(decisionCalls[0].questions.planning_horizon.type, 'choice')
-  assert.equal(decisionCalls[0].questions.observation_budget.type, 'number')
+  assert.equal(decisionCalls[0].questions.observation_budget.type, 'score')
   assert.ok(decisionCalls[0].context.signal instanceof AbortSignal)
   assert.equal(rcon.cancelCount, 0)
 })
