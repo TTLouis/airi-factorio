@@ -1659,8 +1659,10 @@ function providerBlockerReason(plan) {
 }
 
 function canonicalWorkRemains(state) {
+  if (state?.status !== 'active') return false
+  if (state?.milestone_plan_pending === true && state?.project_board?.current_milestone) return true
   const board = state?.task_board
-  if (state?.status !== 'active' || board?.kind !== 'task_board_lite' || !Array.isArray(board.steps) || board.steps.length === 0) return false
+  if (board?.kind !== 'task_board_lite' || !Array.isArray(board.steps) || board.steps.length === 0) return false
   return board.status === 'active' && (board.completed_count ?? 0) < board.steps.length
 }
 
