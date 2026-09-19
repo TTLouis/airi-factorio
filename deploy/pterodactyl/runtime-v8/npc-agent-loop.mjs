@@ -4456,7 +4456,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           || ['new_goal', 'request', 'amend_current', 'failure', 'reanchor_plan'].includes(this.planUpdateReason)
           || ['hierarchy_split', 'hierarchy_advance', 'hierarchy_replan_project', 'hierarchy_project_complete_candidate'].includes(triggerSource))
       if (projectProposalAllowed) {
-        const projectBoard = this.memory.updateProjectBoard?.(this.requestInfo.memoryKey, plan.project)
+        const preserveCurrentMilestone = triggerSource === 'hierarchy_advance'
+        const projectBoard = this.memory.updateProjectBoard?.(
+          this.requestInfo.memoryKey,
+          plan.project,
+          { preserveCurrentMilestone },
+        )
         if (projectBoard && stateResult?.state) {
           stateResult = { ...stateResult, state: this.memory.currentPlan?.(this.requestInfo.memoryKey) ?? stateResult.state }
           await this.traceEvent('project.updated', {
