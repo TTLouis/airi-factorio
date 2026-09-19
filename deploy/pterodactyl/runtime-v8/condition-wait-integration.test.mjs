@@ -119,12 +119,23 @@ class ConditionRcon {
   }
 }
 
-function postStepDecisionResponse(route = 'wait_runtime') {
+function postStepDecisionResponse(route = 'wait_runtime', {
+  granularity = 'keep',
+  development = 'maintain',
+  reasoningBudget = 'normal',
+  planningHorizon = 'checkpoint',
+  observationBudget = 0,
+} = {}) {
   return {
     model: 'jev-latest',
     provider: 'TypeSafe',
     answers: {
       route: { type: 'choice', choice: route, confidence: 0.95 },
+      granularity: { type: 'choice', choice: granularity, confidence: 0.9 },
+      development: { type: 'choice', choice: development, confidence: 0.9 },
+      reasoning_budget: { type: 'choice', choice: reasoningBudget, confidence: 0.8 },
+      planning_horizon: { type: 'choice', choice: planningHorizon, confidence: 0.8 },
+      observation_budget: { type: 'number', number: observationBudget, confidence: 0.8 },
     },
     usage: { input_tokens: 40, output_tokens: 4, cost: 0.000002 },
   }
@@ -340,6 +351,88 @@ test('post-step Jev wait_runtime accepts idle Autorio only after deterministic w
   assert.equal(routed.route, 'wait_runtime')
   assert.equal(routed.runtime_reason, 'condition_wait_active')
   assert.equal(mainCalls(), 0)
+})
+
+
+test('hierarchy gate converts continue_current into runtime wait only for maintain+keep with healthy deterministic progress', async () => {
+  const { agent, memory } = makeAgent({
+    decisionProvider: async () => postStepDecisionResponse('continue_current', {
+      granularity: 'keep',
+      development: 'maintain',
+      reasoningBudget: 'micro',
+      observationBudget: 0,
+    }),
+  })
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.condition_wait = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    {
+      goalId: durable.goal_id,
+      stepId: durable.task_board.active_step_id,
+      actorId: agent.epoch.actor_id,
+      actorEpoch: agent.epoch.epoch,
+      mode: 'passive_progress',
+      maxChecks: 10,
+    },
+  )
+
+  const routed = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0 } })
+  assert.equal(routed.requested_route, 'continue_current')
+  assert.equal(routed.route, 'wait_runtime')
+  assert.equal(routed.fallback_reason, 'hierarchy_maintain_authoritative_runtime')
+  assert.equal(routed.hierarchy_gate.allow_runtime_continuation, true)
+})
+
+test('hierarchy gate refuses runtime wait when Jev says strategic direction is not maintain', async () => {
+  const { agent, memory } = makeAgent({
+    decisionProvider: async () => postStepDecisionResponse('wait_runtime', {
+      granularity: 'keep',
+      development: 'vertical',
+    }),
+  })
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.condition_wait = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    {
+      goalId: durable.goal_id,
+      stepId: durable.task_board.active_step_id,
+      actorId: agent.epoch.actor_id,
+      actorEpoch: agent.epoch.epoch,
+      mode: 'passive_progress',
+      maxChecks: 10,
+    },
+  )
+
+  const routed = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0 } })
+  assert.equal(routed.requested_route, 'wait_runtime')
+  assert.equal(routed.route, 'fallback_planner')
+  assert.equal(routed.fallback_reason, 'development_requires_planner')
+  assert.equal(routed.hierarchy_gate.allow_runtime_continuation, false)
+})
+
+test('hierarchy gate refuses runtime wait when granularity says the current scope should split', async () => {
+  const { agent, memory } = makeAgent({
+    decisionProvider: async () => postStepDecisionResponse('wait_runtime', {
+      granularity: 'split',
+      development: 'maintain',
+    }),
+  })
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.condition_wait = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    {
+      goalId: durable.goal_id,
+      stepId: durable.task_board.active_step_id,
+      actorId: agent.epoch.actor_id,
+      actorEpoch: agent.epoch.epoch,
+      mode: 'passive_progress',
+      maxChecks: 10,
+    },
+  )
+
+  const routed = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0 } })
+  assert.equal(routed.route, 'fallback_planner')
+  assert.equal(routed.fallback_reason, 'granularity_requires_planner')
 })
 
 test('idle Autorio plus Jev wait_runtime is rejected when no valid watcher exists', async () => {

@@ -14,6 +14,7 @@ import {
   decisionEnvelopeQuestions,
   developmentDecisionQuestions,
   granularityDecisionQuestions,
+  hierarchyRuntimeGate,
   parseHierarchyTelemetry,
 } from './jev-decision-taxonomy.mjs'
 import { isLifecycleMetaStep, normalizeCanonicalPlan, validateOutcomeCandidate } from './outcome-authority.mjs'
@@ -2835,9 +2836,27 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
       let appliedRoute = decision.route
       let fallbackReason = ''
-      if (decision.route === 'wait_runtime' && !runtimeHealthy) {
+      const hierarchyGate = hierarchyRuntimeGate(hierarchyTelemetry, {
+        runtimeHealthy,
+        boundary: state.boundary,
+      })
+
+      // Phase 3: hierarchy may only suppress a planner wake in the narrow case
+      // where authoritative runtime work is already active, the semantic scope
+      // is stable, and Jev classifies the next strategic move as maintain.
+      // Split/vertical/horizontal/recover remain planner-owned; budget/horizon
+      // fields are still telemetry only.
+      if (hierarchyGate.allow_runtime_continuation && decision.route === 'continue_current') {
+        appliedRoute = 'wait_runtime'
+        fallbackReason = 'hierarchy_maintain_authoritative_runtime'
+      }
+      else if (decision.route === 'wait_runtime' && !runtimeHealthy) {
         appliedRoute = 'fallback_planner'
         fallbackReason = 'wait_runtime_without_authoritative_active_runtime'
+      }
+      else if (decision.route === 'wait_runtime' && !hierarchyGate.allow_runtime_continuation) {
+        appliedRoute = 'fallback_planner'
+        fallbackReason = hierarchyGate.reason
       }
 
       await this.decisionTraceEvent('decision.response', {
@@ -2850,7 +2869,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         route: decision.route,
         confidence: decision.confidence,
         hierarchy_telemetry: hierarchyTelemetry,
-        hierarchy_shadow_only: true,
+        hierarchy_runtime_gate: hierarchyGate,
+        hierarchy_budget_shadow_only: true,
         latency_ms,
         input_units: Number.isFinite(decision.usage?.input_tokens) ? Math.max(0, Math.trunc(decision.usage.input_tokens)) : 0,
         output_units: Number.isFinite(decision.usage?.output_tokens) ? Math.max(0, Math.trunc(decision.usage.output_tokens)) : 0,
@@ -2866,6 +2886,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         fallback_reason: fallbackReason,
         runtime_healthy: runtimeHealthy,
         runtime_reason: runtimeReason,
+        hierarchy_runtime_gate: hierarchyGate,
       })
       await this.traceEvent('post_step.routed', {
         mode: 'active',
@@ -2881,7 +2902,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           route: decision.route,
           confidence: decision.confidence,
           hierarchy: hierarchyTelemetry,
-          hierarchy_shadow_only: true,
+          hierarchy_runtime_gate: hierarchyGate,
+          hierarchy_budget_shadow_only: true,
           usage: decision.usage,
         },
         decision_latency_ms: latency_ms,
@@ -2911,6 +2933,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         runtime: persistentRuntime,
         runtime_reason: runtimeReason,
         decision,
+        hierarchy_gate: hierarchyGate,
         fallback_reason: fallbackReason,
         decision_called: true,
       }

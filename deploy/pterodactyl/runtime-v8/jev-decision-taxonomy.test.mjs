@@ -9,6 +9,7 @@ import {
   parseDecisionEnvelope,
   parseDecisionFamily,
   parseHierarchyTelemetry,
+  hierarchyRuntimeGate,
 } from './jev-decision-taxonomy.mjs'
 
 test('exposes separate bounded Jev decision families', () => {
@@ -125,4 +126,20 @@ test('parses hierarchy telemetry independently from routing authority', () => {
     planning_horizon: 'strategic',
     observation_budget: 4,
   })
+})
+
+test('runtime gate only skips the planner for maintain+keep on an authoritative completion runtime', () => {
+  assert.deepEqual(
+    hierarchyRuntimeGate({ granularity: 'keep', development: 'maintain' }, { runtimeHealthy: true, boundary: 'completion' }),
+    {
+      allow_runtime_continuation: true,
+      reason: 'maintain_with_authoritative_runtime',
+      granularity: 'keep',
+      development: 'maintain',
+    },
+  )
+  assert.equal(hierarchyRuntimeGate({ granularity: 'split', development: 'maintain' }, { runtimeHealthy: true }).allow_runtime_continuation, false)
+  assert.equal(hierarchyRuntimeGate({ granularity: 'keep', development: 'vertical' }, { runtimeHealthy: true }).allow_runtime_continuation, false)
+  assert.equal(hierarchyRuntimeGate({ granularity: 'keep', development: 'maintain' }, { runtimeHealthy: false }).allow_runtime_continuation, false)
+  assert.equal(hierarchyRuntimeGate({ granularity: 'keep', development: 'maintain' }, { runtimeHealthy: true, boundary: 'failure' }).allow_runtime_continuation, false)
 })

@@ -170,3 +170,21 @@ export function parseDecisionEnvelope(response) {
     usage: routing.usage,
   }
 }
+
+export function hierarchyRuntimeGate(hierarchy, { runtimeHealthy = false, boundary = 'completion' } = {}) {
+  const granularity = FAMILY_CHOICES.granularity.includes(hierarchy?.granularity) ? hierarchy.granularity : 'keep'
+  const development = FAMILY_CHOICES.development.includes(hierarchy?.development) ? hierarchy.development : 'maintain'
+  if (boundary !== 'completion') {
+    return { allow_runtime_continuation: false, reason: 'non_completion_boundary', granularity, development }
+  }
+  if (runtimeHealthy !== true) {
+    return { allow_runtime_continuation: false, reason: 'no_authoritative_active_runtime', granularity, development }
+  }
+  if (granularity !== 'keep') {
+    return { allow_runtime_continuation: false, reason: 'granularity_requires_planner', granularity, development }
+  }
+  if (development !== 'maintain') {
+    return { allow_runtime_continuation: false, reason: 'development_requires_planner', granularity, development }
+  }
+  return { allow_runtime_continuation: true, reason: 'maintain_with_authoritative_runtime', granularity, development }
+}

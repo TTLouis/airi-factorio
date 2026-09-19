@@ -76,7 +76,7 @@ The implementation order is intentionally conservative:
 
 1. define and test the decision taxonomy;
 2. **done in the experiment:** wire the taxonomy into post-step traces/diagnostics as shadow telemetry without changing authority;
-3. let Jev gate planner wake/sleep for already-supported deterministic wait/continue cases;
+3. **implemented conservatively in the experiment:** Jev may suppress a post-step planner wake only when authoritative runtime work is healthy, granularity is `keep`, development is `maintain`, and the boundary is a successful completion; otherwise the existing planner path remains authoritative;
 4. add milestone/project durable state above the existing Plan Tracker;
 5. add granularity-driven milestone decomposition;
 6. only then map Jev reasoning budgets into provider/model-specific reasoning controls.
@@ -1046,3 +1046,9 @@ conversation LLM
 ```
 
 If this split works, SGLuna should feel more autonomous and more natural at the same time: fewer brittle policy branches in the harness, fewer unnecessary expensive planner turns, and a cleaner separation between "thinking", "deciding where to think", "talking", and "doing".
+
+### Phase 3 runtime gate
+
+The hierarchy telemetry now has one deliberately narrow behavioral effect. After a successful post-step boundary, a Jev `continue_current` may be converted to `wait_runtime` only when deterministic runtime work is authoritatively healthy and Jev also says `granularity=keep` plus `development=maintain`. A requested `wait_runtime` is rejected back to the planner when Jev simultaneously says the scope should split or the development direction is vertical/horizontal/recover. Failure boundaries never gain this shortcut.
+
+This is intentionally not yet milestone decomposition or reasoning-budget control. `reasoning_budget`, `planning_horizon`, and `observation_budget` remain diagnostic/shadow fields.
