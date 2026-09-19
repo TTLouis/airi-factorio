@@ -10,6 +10,7 @@ import {
   taskBoardProgress,
 } from './common.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
+import { parseProjectProposal } from './project-board.mjs'
 import {
   decisionEnvelopeQuestions,
   developmentDecisionQuestions,
@@ -61,6 +62,10 @@ The Pterodactyl harness may provide a [PLAN_STATE] message. It is harness-owned 
 The task_board field is the canonical single-NPC Task Board Lite. Its stable step ids, statuses, completed count, evidence, and revision are harness-owned. Your plan/currentStep fields are proposals only. currentStep is a proposed focus, not evidence that earlier work completed, and it cannot by itself advance active_index or completed_count. Only grounded runtime authority advances canonical progress. If you intentionally replan, preserve already-completed intent instead of treating currentStep as proof that work happened.
 
 For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
+
+For a genuinely long-horizon goal, you may add one optional root field named project beside chatMessage/plan/currentStep/operations. project must be {"currentMilestone":{"title":"...","completionSummary":"..."},"nextMilestones":[{"title":"...","completionSummary":"..."}],"developmentDirection":"vertical|horizontal|maintain|recover"}. Keep exactly one current milestone and at most three tentative next milestones. The user goal itself is harness-owned and must not be rewritten in project. currentMilestone is a bounded strategic outcome above the Plan Tracker; plan contains only the steps for that current milestone. For short tasks, omit project. During ordinary continuation of an unchanged milestone, prefer omitting project and reuse [PROJECT_STATE] instead of restating or reshuffling future milestones.
+
+Vertical means removing a blocker on the active milestone's critical path. Horizontal means strengthening an already-viable capability for throughput, resilience, logistics, buffers, or future scale. Do not classify by building type or research type alone.
 
 Plan entries must represent goal-bearing Factorio work or verification. Do not add terminal lifecycle/meta steps such as "Stop", "Done", "Finish", or "Report completion"; stopping after the verified goal is represented by returning plan: [], currentStep: 0, operations: [].
 
@@ -3682,7 +3687,20 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   parsePlanMessage(message) {
-    const plan = super.parsePlanMessage(message)
+    let project
+    let baseMessage = message
+    if (typeof message?.content === 'string') {
+      let raw
+      try { raw = JSON.parse(message.content) }
+      catch {}
+      if (raw && typeof raw === 'object' && !Array.isArray(raw) && Object.prototype.hasOwnProperty.call(raw, 'project')) {
+        project = parseProjectProposal(raw.project)
+        const { project: _project, ...base } = raw
+        baseMessage = { ...message, content: JSON.stringify(base) }
+      }
+    }
+    const plan = super.parsePlanMessage(baseMessage)
+    if (project) plan.project = project
     const normalizedPlan = normalizeCanonicalPlan(plan.plan, plan.currentStep)
     plan.plan = normalizedPlan.plan
     plan.currentStep = normalizedPlan.currentStep
@@ -4084,6 +4102,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       plan: plan.plan,
       current_step: plan.currentStep,
       operations,
+      ...(plan.project ? { project: plan.project } : {}),
     })
 
     const before = await this.assertCurrent()
@@ -4247,6 +4266,31 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason),
         previousState,
       }) ?? stateResult
+      const projectProposalAllowed = Boolean(plan.project)
+        && !this.actionOmissionRepairActive
+        && !this.genericRecoveryDecisionActive
+        && !this.outputBudgetRecoveryGuard
+        && (!previousState?.project_board?.current_milestone
+          || ['new_goal', 'request', 'amend_current', 'failure', 'reanchor_plan'].includes(this.planUpdateReason))
+      if (projectProposalAllowed) {
+        const projectBoard = this.memory.updateProjectBoard?.(this.requestInfo.memoryKey, plan.project)
+        if (projectBoard && stateResult?.state) {
+          stateResult = { ...stateResult, state: this.memory.currentPlan?.(this.requestInfo.memoryKey) ?? stateResult.state }
+          await this.traceEvent('project.updated', {
+            project_id: projectBoard.project_id,
+            current_milestone: projectBoard.current_milestone,
+            next_milestones: projectBoard.next_milestones,
+            development_direction: projectBoard.development_direction,
+            source: 'main_planner',
+          })
+        }
+      }
+      else if (plan.project) {
+        await this.traceEvent('project.proposal_ignored', {
+          reason: 'hierarchy_change_not_authorized_in_this_planner_context',
+          trigger_source: triggerSource,
+        })
+      }
       if (commands.length > 0 && stateResult?.state && stateResult?.blockedByHarness !== true) {
         const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'admitting')
         if (state) stateResult = { ...stateResult, state }
