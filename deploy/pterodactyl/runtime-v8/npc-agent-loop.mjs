@@ -1720,6 +1720,18 @@ function verifiedFinalCompletion(plan, state, triggerSource, { freshObservation 
   return freshObservation === true && finalStepCanCloseFromFreshObservation(state)
 }
 
+function activeStepEvidence(board, limit = 4) {
+  const activeStepId = board?.active_step_id
+  if (!activeStepId) return []
+  return (Array.isArray(board?.evidence) ? board.evidence : [])
+    .filter(item => item?.step_id === activeStepId)
+    .slice(-Math.max(1, limit))
+}
+
+function providerControlPlaneBlocker(value) {
+  return /invalid provider content json|provider_output_budget_exhausted|provider strict recovery|provider_action_omission_repair_failed|provider_jev_recovery_route_failed/i.test(String(value ?? ''))
+}
+
 function actionOmissionRecoveryCapsule(state, runtimeStatus) {
   const board = state?.task_board
   const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : state?.current_step ?? 0
@@ -1743,7 +1755,7 @@ function actionOmissionRecoveryCapsule(state, runtimeStatus) {
       completed_count: Number.isSafeInteger(board?.completed_count) ? board.completed_count : 0,
       total_steps: Array.isArray(board?.steps) ? board.steps.length : 0,
     },
-    authoritative_evidence: (Array.isArray(board?.evidence) ? board.evidence : []).slice(-4).map(item => sanitizeDurableModelValue(item)),
+    authoritative_evidence: activeStepEvidence(board).map(item => sanitizeDurableModelValue(item)),
     runtime: sanitizeDurableModelValue(runtimeStatus ?? state?.persistent_runtime),
     durable_locators: modelFacingEntityReferences(state).slice(-4),
     reason: 'action_omission_recovery',
@@ -3144,9 +3156,26 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const sender = options.sender ?? 'unknown'
     this.lastMemoryKey = `npc:${this.npcId}`
     const memoryKey = this.activePlanKey()
-    const planBefore = this.memory.currentPlan?.(memoryKey)
+    let planBefore = this.memory.currentPlan?.(memoryKey)
     const taskStatus = await this.readInteractionTaskStatus()
     const healthyRuntime = interactionRuntimeHealthy(taskStatus)
+
+    // Upgrade safety: older builds could persist a provider/control-plane
+    // failure as durable WORLD_BLOCKED. That is not Factorio truth. Demote it
+    // before interaction routing while preserving the verified Task Board.
+    if (planBefore?.status === 'blocked' && providerControlPlaneBlocker(planBefore.blocker)) {
+      const recovered = this.memory.applyOutcomeAuthority?.(memoryKey, {
+        kind: 'recoverable_provider_failure',
+        source: 'state_upgrade',
+        reason_code: /budget/i.test(planBefore.blocker) ? 'provider_budget' : 'provider_format',
+      }, {
+        world: taskStatus,
+      })
+      if (recovered?.decision?.accepted) {
+        planBefore = recovered.state
+        await this.persistState()
+      }
+    }
     let routed
     if (!this.interactionProvider) {
       routed = {
@@ -3927,7 +3956,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
     }
 
-    if (effectiveAllowTools && !omissionRepair && effectiveRecoveryAttempt === 0 && !this.outputBudgetRecoveryUsed && providerOutputBudgetExhausted(message)) {
+    // Scope output-budget recovery to this provider decision rather than the
+    // entire human request. The recursive retry is recoveryAttempt=1, so it
+    // cannot re-enter here; a later independent planner decision still gets
+    // its own single bounded recovery.
+    if (effectiveAllowTools && !omissionRepair && effectiveRecoveryAttempt === 0 && providerOutputBudgetExhausted(message)) {
       this.outputBudgetRecoveryUsed = true
       const state = this.memory.currentPlan?.(this.activePlanKey())
       this.outputBudgetRecoveryGuard = {
@@ -3970,6 +4003,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   parsePlanMessage(message) {
+    if (providerOutputBudgetExhausted(message)) {
+      const error = new AgentLoopError('provider_output_budget_exhausted: provider response exhausted its output budget before emitting valid plan content')
+      error.failureClass = 'provider_budget'
+      error.code = 'provider_output_budget_exhausted'
+      throw error
+    }
     let project
     let checkpoint
     let baseMessage = message
@@ -4754,7 +4793,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
             const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'preflight_rejected')
             if (state) stateResult = { ...(stateResult ?? {}), state }
             this.memory.recordBoardEvidence?.(this.requestInfo.memoryKey, {
-              kind: 'operation_preflight_rejection',
+              kind: 'operation_preflight_recoverable',
               ref: `${this.traceRequest?.id ?? 'request'}/bootstrap_dependency_unresolved`,
               summary: JSON.stringify({
                 code: 'bootstrap_dependency_unresolved',
@@ -4786,7 +4825,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
             const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'preflight_rejected')
             if (state) stateResult = { ...(stateResult ?? {}), state }
             this.memory.recordBoardEvidence?.(this.requestInfo.memoryKey, {
-              kind: 'operation_preflight_rejection',
+              kind: 'operation_preflight_recoverable',
               ref: `${this.traceRequest?.id ?? 'request'}/stale_exact_target`,
               summary: JSON.stringify({
                 code: 'stale_exact_target',
@@ -4814,7 +4853,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           })
           return this.runTurn()
         }
-        stateResult = await this.markAdmissionFailure(stateResult, operations, error, 'operation_preflight_rejection')
+        stateResult = await this.markAdmissionFailure(stateResult, operations, error, 'operation_preflight_blocker')
         await this.traceEvent('operations.preflight_rejected', {
           failure_class: 'deterministic_preflight',
           reason: error instanceof Error ? error.message : String(error),
@@ -4929,7 +4968,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const runtime = await this.readInteractionTaskStatus()
     const persistentRuntime = await this.persistentRuntimeStatus()
     const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
-    const evidence = (Array.isArray(board?.evidence) ? board.evidence : []).slice(-4)
+    const evidence = activeStepEvidence(board)
     const finalIndex = Array.isArray(board?.steps) ? board.steps.length - 1 : -1
     const finalCompletionProven = latestDeterministicCompletionEvidence(planState)
       && Number.isSafeInteger(activeIndex)
@@ -5054,6 +5093,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         observationBudgetAvailable: this.actionOmissionObservationUsed !== true
           && (!Number.isSafeInteger(this.observationBudgetRemaining) || this.observationBudgetRemaining > 0),
         evidence,
+        failureClassHint: failureClass,
       })
       const result = {
         route: validated.route,
@@ -5292,7 +5332,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     if (routed.route === 'propose_blocker') {
       const state = this.memory.currentPlan?.(this.activePlanKey())
-      const evidence = (Array.isArray(state?.task_board?.evidence) ? state.task_board.evidence : []).slice(-4)
+      const evidence = activeStepEvidence(state?.task_board)
       const candidate = cleanMemoryText(reasonText, 500)
       const reduced = this.memory.applyOutcomeAuthority?.(this.activePlanKey(), {
         kind: 'world_blocked',
