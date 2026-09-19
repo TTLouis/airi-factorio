@@ -137,10 +137,19 @@ export function decisionEnvelopeQuestions() {
       },
     },
     observation_budget: {
-      type: 'number',
-      instructions: 'Maximum count of independent targeted read-only observations justified before the planner must act, block truthfully, or return for another control decision. Use 0 when current grounded evidence is enough. Runtime will clamp and enforce this budget.',
-      min: 0,
-      max: 8,
+      type: 'score',
+      instructions: 'Maximum count of independent targeted read-only observations justified before the planner must act, block truthfully, or return for another control decision. Choose the exact integer allowance from 0 through 8. Use 0 when current grounded evidence is enough. Runtime will clamp and enforce this budget.',
+      criteria: [
+        '0 additional targeted observations',
+        '1 additional targeted observation',
+        '2 additional targeted observations',
+        '3 additional targeted observations',
+        '4 additional targeted observations',
+        '5 additional targeted observations',
+        '6 additional targeted observations',
+        '7 additional targeted observations',
+        '8 additional targeted observations',
+      ],
     },
   }
 }
@@ -173,7 +182,11 @@ export function parseHierarchyTelemetry(response) {
     reasoning_budget: reasoning.decision,
     reasoning_confidence: reasoning.confidence,
     planning_horizon: PLANNING_HORIZONS.has(horizon) ? horizon : 'checkpoint',
-    observation_budget: boundedInteger(response?.answers?.observation_budget?.number, 0, 8),
+    observation_budget: boundedInteger(
+      response?.answers?.observation_budget?.score ?? response?.answers?.observation_budget?.number,
+      0,
+      8,
+    ),
   }
 }
 
