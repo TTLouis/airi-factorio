@@ -16,7 +16,9 @@ function clampConfidence(value) {
 }
 
 function boundedInteger(value, fallback = 0, maximum = 8) {
-  return Number.isSafeInteger(value) ? Math.max(0, Math.min(maximum, value)) : fallback
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.min(maximum, Math.round(value)))
+    : fallback
 }
 
 function choiceOf(response, key) {
