@@ -135,8 +135,14 @@ export function configuration(raw = {}, env = process.env) {
   return config
 }
 
-export function factorioVisibilityDiagnostics(factorio = { username: '', token: '', public: false }) {
-  if (factorio?.public === true) return ['Factorio visibility: PUBLIC']
+export function factorioVisibilityDiagnostics(factorio = { username: '', token: '', public: false }, chatPlayers = { mode: 'disabled', names: [] }) {
+  if (factorio?.public === true) {
+    const diagnostics = ['Factorio visibility: PUBLIC']
+    if (chatPlayers?.mode === 'all') {
+      diagnostics.push('SECURITY WARNING: public Factorio listing with chat=all allows every player to issue !luna/!airi commands; configure SGLUNA_CHAT_PLAYERS=none or an explicit allowlist.')
+    }
+    return diagnostics
+  }
   return ['Factorio visibility: PRIVATE/HIDDEN', 'No Factorio listing credentials supplied']
 }
 
@@ -2306,7 +2312,7 @@ async function main() {
   log(describeRelease(manifest))
   if (migratedConfig.migratedFromLegacy) log('Migrated legacy airi-config.json into canonical sgluna-config.json; the legacy file is no longer authoritative.')
   for (const message of deploymentCompatibilityWarnings(process.env)) log(`Compatibility warning: ${message}`)
-  for (const message of factorioVisibilityDiagnostics(config.factorio)) log(message)
+  for (const message of factorioVisibilityDiagnostics(config.factorio, config.chatPlayers)) log(message)
   log(`Client mod download: ${path.join(root, 'client-mods', 'autorio_0.1.0.zip')}`)
   log(`User Factorio mod directory: ${path.join(root, 'mods')}`)
   log(`Managed runtime mod directory: ${path.join(root, '.airi', 'run-*', 'mods')} (internal; do not edit)`)

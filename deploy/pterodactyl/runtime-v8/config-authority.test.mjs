@@ -5,7 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { prepareServerSettings } from './game-files.mjs'
-import { configuration, migrateCanonicalConfig, Session } from './supervisor.mjs'
+import { configuration, factorioVisibilityDiagnostics, migrateCanonicalConfig, Session } from './supervisor.mjs'
 
 async function temp(t) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-config-authority-'))
@@ -250,4 +250,34 @@ test('Factorio Egg credentials are rewritten into the exact launched server-sett
   })
   const secondArgs = secondSession.gameArgs(40002)
   assert.equal(secondArgs[secondArgs.indexOf('--server-settings') + 1], settingsAfterRestart)
+})
+
+
+test('public Factorio visibility warns when legacy chat authority still allows everyone', () => {
+  assert.deepEqual(
+    factorioVisibilityDiagnostics(
+      { username: 'public-user', token: 'secret-token', public: true },
+      { mode: 'all', names: [] },
+    ),
+    [
+      'Factorio visibility: PUBLIC',
+      'SECURITY WARNING: public Factorio listing with chat=all allows every player to issue !luna/!airi commands; configure SGLUNA_CHAT_PLAYERS=none or an explicit allowlist.',
+    ],
+  )
+
+  assert.deepEqual(
+    factorioVisibilityDiagnostics(
+      { username: 'public-user', token: 'secret-token', public: true },
+      { mode: 'allowlist', names: ['Alice'] },
+    ),
+    ['Factorio visibility: PUBLIC'],
+  )
+
+  assert.deepEqual(
+    factorioVisibilityDiagnostics(
+      { username: '', token: '', public: false },
+      { mode: 'all', names: [] },
+    ),
+    ['Factorio visibility: PRIVATE/HIDDEN', 'No Factorio listing credentials supplied'],
+  )
 })
