@@ -75,6 +75,13 @@ export class SwarmProjectJevRuntime {
     return board
   }
 
+  async startNextGoal(goal) {
+    await this.initialize()
+    const board = this.store.startNextGoal(goal)
+    await this.persistence.save()
+    return board
+  }
+
   async applyPlannerProposal(proposal) {
     await this.initialize()
     const result = applyStrategicPlannerProposal(this.store, proposal)
