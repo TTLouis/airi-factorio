@@ -586,3 +586,18 @@ test('new broad goal carries Jev semantic budgets into the first planner call', 
   assert.equal(agent.observationBudgetOverride, null)
   assert.equal(agent.planningHorizonOverride, null)
 })
+
+
+test('shadow intent disagreement cannot force hierarchy split or planner budgets', async () => {
+  const { agent, calls } = agentFor('new_goal', {
+    running: false,
+    withPlan: false,
+    decisionIntent: 'status_query',
+    decisionGranularity: 'split',
+  })
+
+  await agent.request('Launch a rocket from this fresh start.', { sender: 'tester' })
+  const plannerCall = calls.find(call => call.interactionRouter !== true)
+  assert.equal(plannerCall.triggerSource, 'new_goal')
+  assert.equal(plannerCall.reasoningBudget, undefined)
+})
