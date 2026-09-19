@@ -89,3 +89,25 @@ test('targeted observation is bounded to one admission', () => {
   assert.equal(rejected.route, 'fallback_runtime')
   assert.equal(rejected.rejection_reason, 'targeted_observation_budget_exhausted')
 })
+
+
+test('provider control-plane failures cannot route to propose_blocker even with blocker evidence', () => {
+  const decision = parseRecoveryDecision(response('propose_blocker', 'provider_format'))
+  const validated = validateRecoveryRoute(decision, {
+    world: { task_state: 'idle', queue_length: 0 },
+    failureClassHint: 'provider_format',
+    evidence: [{ kind: 'operation_preflight_blocker', summary: 'unrelated world evidence' }],
+  })
+  assert.equal(validated.route, 'pause_recoverable')
+  assert.equal(validated.rejection_reason, 'provider_failure_cannot_be_world_blocker')
+})
+
+test('propose_blocker requires grounded-world-failure classification as well as evidence', () => {
+  const decision = parseRecoveryDecision(response('propose_blocker', 'semantic_replan'))
+  const validated = validateRecoveryRoute(decision, {
+    world: { task_state: 'idle', queue_length: 0 },
+    evidence: [{ kind: 'operation_error_receipt', summary: 'authoritative receipt' }],
+  })
+  assert.equal(validated.route, 'pause_recoverable')
+  assert.equal(validated.rejection_reason, 'blocker_proposal_requires_grounded_world_failure')
+})
