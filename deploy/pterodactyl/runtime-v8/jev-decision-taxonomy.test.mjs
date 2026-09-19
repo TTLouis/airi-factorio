@@ -160,3 +160,13 @@ test('milestone transition decision never grants Jev project-completion authorit
   assert.equal(parsed.decision, 'advance_next')
   assert.equal(parseMilestoneTransitionDecision({ answers: {} }).decision, 'replan_project')
 })
+
+
+test('observation budget rounds fractional score output instead of collapsing to zero', () => {
+  const parsed = parseHierarchyTelemetry({
+    answers: {
+      observation_budget: { score: 3.6 },
+    },
+  })
+  assert.equal(parsed.observation_budget, 4)
+})
