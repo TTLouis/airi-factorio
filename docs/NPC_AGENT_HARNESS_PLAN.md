@@ -151,6 +151,18 @@ Build these on top of validated map and actor primitives. Avoid creating a secon
 
 Swarm work remains a separate layer. Single-NPC ownership, receipts, exact actor identity, map operations, and deterministic planning should be solid before swarm coordination becomes part of the main baseline.
 
+## Hierarchical long-horizon autonomy
+
+The next autonomy layer is being designed around a fixed hierarchy:
+
+```text
+Project / Goal → Milestone → Plan Step → Operation
+```
+
+The Project Board will carry rolling-horizon strategic intent while the existing Plan Tracker remains the current execution contract. Jev is expected to judge task granularity, development direction (vertical / horizontal / maintain / recover), completion, wait-vs-wake routing, and semantic reasoning budget without becoming a second gameplay planner.
+
+The design, terminology, authority boundaries, proposed V1, and non-goals are documented in [HIERARCHICAL_AUTONOMY_ARCHITECTURE.md](./HIERARCHICAL_AUTONOMY_ARCHITECTURE.md).
+
 ## What is not required for the next main promotion
 
 The next promotion does **not** require:
