@@ -1479,3 +1479,69 @@ only runtime closes the step
 ```
 
 The checkpoint system should therefore evolve away from "choose one of the latest operation-derived candidates" toward durable semantic step contracts. This is the next root-level completion-semantics work; it should not be papered over by allowing later-step actions or by parsing chat prose as completion authority.
+
+
+## Root-level corrections after the first real hierarchy trace
+
+The first real long-task hierarchy trace exposed three coupled architectural problems. They are now treated as invariants rather than individual error strings.
+
+### Observation is a phase, not an error
+
+A bounded observation allowance belongs to the planner control state machine:
+
+```text
+OBSERVE → allowance exhausted → DECIDE (tools closed) → COMMIT
+```
+
+Exhausting the allowance no longer throws a synthetic failure into generic recovery. The same planner turn is forced into a no-tools decision phase. This prevents normal budget use from becoming `pause_recoverable`.
+
+### Structural hierarchy decisions are durable transactions
+
+Both initial broad-goal split and post-step milestone split are persisted **before** the Main LLM is asked to realize them. Provider failure, server restart, or an interrupted request therefore cannot silently restore the old flat plan.
+
+A pending split remains canonical work until a valid `project.currentMilestone` plus milestone-local Plan Tracker is committed. Supervisor idle-error handling must preserve, not pause, such structural transactions.
+
+### Semantic checkpoint is separate from operation amount
+
+Operation parameters are not semantic completion contracts. In particular, quantity-like operations such as `gather_resource(count=40)` or `craft_item(count=2)` describe the next mutation amount, not the total world-state threshold that proves the active step complete.
+
+The planner may now propose an explicit runtime-supported `checkpoint` contract. Jev judges whether that contract is the right semantic boundary; runtime validates the contract shape and evaluates the predicate from authoritative world state.
+
+Example:
+
+```json
+{
+  "checkpoint": {
+    "mode": "all",
+    "requirements": [
+      {
+        "id": "stone_total",
+        "kind": "inventory_count",
+        "item_name": "stone",
+        "minimum": 100
+      }
+    ]
+  },
+  "operations": [
+    {
+      "name": "gather_resource",
+      "args": {"resource_name": "stone", "count": 40, "search_radius": 512}
+    }
+  ]
+}
+```
+
+If the actor already holds 62 stone, the operation may correctly gather 40 while the semantic checkpoint remains `stone >= 100`. Runtime no longer synthesizes `stone >= 40` from the operation argument.
+
+For quantity/delta mutations, absence of a safe semantic checkpoint fails closed: Jev may keep the step open or request a split/replan, but action receipt alone is not promoted to semantic completion proof.
+
+### Planning horizon is now active context
+
+`planning_horizon` is no longer only debug telemetry. The runtime supplies the chosen horizon to the next Main LLM decision as a harness envelope:
+
+- `immediate`: next concrete action only;
+- `checkpoint`: plan only to the active verification boundary;
+- `subgoal`: plan only the current milestone/subgoal;
+- `strategic`: choose/revise bounded milestone direction while keeping future milestones tentative.
+
+It still does not grant permission to rewrite verified history or the durable user goal.
