@@ -4,6 +4,7 @@ import {
 } from './jev-decision-taxonomy.mjs'
 import { sanitizeStrategicProjectBoard } from './strategic-project-board.mjs'
 import { evaluateSwarmOutcomeSnapshot } from './swarm-outcome-verdict.mjs'
+import { summarizeSwarmConditionWait } from './swarm-condition-wait.mjs'
 
 const MAX_ITEMS = 12
 const MAX_TEXT = 240
@@ -35,12 +36,16 @@ export function swarmJevShadowQuestions() {
 
 export function buildSwarmJevShadowContext(snapshot = {}) {
   const missionSource = Array.isArray(snapshot.missions) ? snapshot.missions : []
+  const objectiveSource = Array.isArray(snapshot.objectives) ? snapshot.objectives : []
+  const projectSource = Array.isArray(snapshot.projects) ? snapshot.projects : []
   const requestSource = Array.isArray(snapshot.requests) ? snapshot.requests : []
   const workSource = Array.isArray(snapshot.work) ? snapshot.work : []
   const claimSource = Array.isArray(snapshot.claims) ? snapshot.claims : []
   const actorSource = Array.isArray(snapshot.actors) ? snapshot.actors : []
   const evidenceSource = Array.isArray(snapshot.evidence) ? snapshot.evidence : []
   const missions = boundedList(missionSource)
+  const objectives = boundedList(objectiveSource)
+  const projects = boundedList(projectSource)
   const requests = boundedList(requestSource)
   const work = boundedList(workSource)
   const claims = boundedList(claimSource)
@@ -62,6 +67,13 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
         strategicMilestoneVerification: outcomeSource.strategicMilestoneVerification,
       })
     : undefined
+  const conditionWait = summarizeSwarmConditionWait(snapshot.conditionWait, {
+    missions: missionSource,
+    objectives: objectiveSource,
+    projects: projectSource,
+    requests: requestSource,
+    work: workSource,
+  })
 
   return {
     schema: 'swarm_jev_shadow_v1',
@@ -86,8 +98,11 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
         }
       : undefined,
     outcome_verdict: outcomeVerdict,
+    condition_wait: conditionWait,
     counts: {
       missions: missionSource.length,
+      objectives: objectiveSource.length,
+      projects: projectSource.length,
       requests: requestSource.length,
       work: workSource.length,
       claims: claimSource.length,
@@ -95,6 +110,8 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
       evidence: evidenceSource.length,
     },
     missions: summarizeRecords(missions),
+    objectives: summarizeRecords(objectives),
+    projects: summarizeRecords(projects),
     requests: summarizeRecords(requests),
     work: summarizeRecords(work),
     claims: summarizeRecords(claims, ['id', 'claimId']),
