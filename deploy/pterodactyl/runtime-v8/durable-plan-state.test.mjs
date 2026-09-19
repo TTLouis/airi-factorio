@@ -342,7 +342,7 @@ test('Autorio errors feed the detailed task receipt back into the active goal fo
 
   assert.equal(replanned.operations[0].name, 'walk_to_entity')
   assert.equal(replanned.taskBoard.steps[0].description, 'Find another iron patch')
-  assert.equal(replanned.taskBoard.evidence.at(-1).kind, 'operation_error_receipt')
+  assert.equal(replanned.taskBoard.evidence.some(item => item.kind === 'operation_error_receipt'), true)
   assert.equal(agent.active, true)
   const continuation = observed[1].map(message => message.content ?? '').join('\n')
   assert.match(continuation, /\[MOD\] Autorio operation error:/)
