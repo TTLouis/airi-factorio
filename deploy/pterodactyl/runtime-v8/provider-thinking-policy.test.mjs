@@ -8,6 +8,7 @@ import { providerRequest, selectReasoningPolicy } from './provider.mjs'
 
 const VALID_PLAN = JSON.stringify({ chatMessage: '', plan: [], currentStep: 0, operations: [] })
 const COMPLETION = '[MOD] Autorio operation batch completed. Detailed task receipt: {"task_state":"completed"}'
+const FAILURE = '[MOD] Autorio operation error: placement failed. Dependent queued operations may have been cancelled. Detailed task receipt: {"task_state":"idle","queue_length":0}'
 
 function response(model = 'deepseek-flash') {
   return new Response(JSON.stringify({
@@ -67,6 +68,18 @@ test('Jev post-step replan overrides the compact completion path and uses high e
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
   assert.equal(seen.body.max_tokens, 4000)
   assert.equal(message._airiProvider.reasoning_policy_reason, 'jev_post_step_replan')
+})
+
+test('Jev post-step continue overrides an error boundary to low reasoning', async () => {
+  const { seen, message } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: keep building' },
+    { role: 'user', content: FAILURE },
+  ], { allowTools: true, triggerSource: 'post_step_continue' })
+
+  assert.equal(seen.body.reasoning_effort, 'low')
+  assert.deepEqual(seen.body.thinking, { type: 'enabled' })
+  assert.equal(message._airiProvider.reasoning_policy_reason, 'jev_post_step_continue')
 })
 
 test('new ordinary DeepSeek goal uses high effort only when lifecycle routing marks it new_goal', async () => {

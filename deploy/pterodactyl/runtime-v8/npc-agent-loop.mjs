@@ -1169,7 +1169,7 @@ function postStepDecisionQuestions() {
   return {
     route: {
       type: 'choice',
-      instructions: 'After one authoritative Autorio batch completion, choose the smallest safe planner transition. This is routing only; do not invent world facts or declare completion.',
+      instructions: 'After one authoritative Autorio completion or error boundary, choose the smallest safe planner transition. This is routing only; do not invent world facts, mutation success, or goal completion.',
       criteria: {
         continue_current: 'The canonical goal still looks semantically on track and the main planner should continue compactly.',
         replan: 'The completion evidence materially changes the remaining approach or suggests the main planner should reconsider the next action with higher reasoning.',
@@ -1956,33 +1956,78 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
-  async routePostStepDecision(receipt) {
+  async routePostStepDecision(receipt, { boundary = 'completion', failure = '' } = {}) {
     if (!this.interactionDecisionProvider) return { route: 'fallback_planner', decision_called: false }
 
     const generation = this.generation
     const current = await this.assertCurrent()
     const persistentRuntime = await this.persistentRuntimeStatus()
-    const runtimeHealthy = persistentRuntimeHealthy(persistentRuntime)
+    const autorioStatus = receipt?.view && typeof receipt.view === 'object'
+      ? receipt.view
+      : (receipt?.providerStatus && typeof receipt.providerStatus === 'object' ? receipt.providerStatus : {})
+    const autorioRuntimeHealthy = interactionRuntimeHealthy(autorioStatus)
+    const persistentControllerHealthy = persistentRuntimeHealthy(persistentRuntime)
+    const runtimeHealthy = autorioRuntimeHealthy || persistentControllerHealthy
+    const runtimeReason = autorioRuntimeHealthy
+      ? 'autorio_active_work'
+      : persistentControllerHealthy
+        ? 'persistent_controller_active'
+        : ''
     const planState = this.memory.currentPlan?.(this.activePlanKey())
     const board = planState?.task_board
+    const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
+    const skills = this.loadedSkillContext instanceof Map
+      ? [...this.loadedSkillContext.values()].slice(-SKILL_CONTEXT_MAX_SKILLS).map(skill => ({
+          id: typeof skill?.id === 'string' ? cleanMemoryText(skill.id, 80) : undefined,
+          name: typeof skill?.name === 'string' ? cleanMemoryText(skill.name, 160) : undefined,
+          revision: Number.isSafeInteger(skill?.revision) ? skill.revision : undefined,
+          stage: typeof skill?.stage === 'string' ? cleanMemoryText(skill.stage, 80) : undefined,
+          status: typeof skill?.status === 'string' ? cleanMemoryText(skill.status, 80) : undefined,
+          summary: typeof skill?.summary === 'string' ? cleanMemoryText(skill.summary, 1000) : undefined,
+        }))
+      : []
     const state = {
+      reason: 'post_step_planner_gate',
       phase: 'post_step',
-      current_goal: planState
+      boundary: boundary === 'failure' ? 'failure' : 'completion',
+      goal: planState
         ? {
             goal_id: sanitizeDurableModelText(planState.goal_id, 100),
             objective: sanitizeDurableModelText(planState.objective, 500),
             status: planState.status,
-            active_step_index: Number.isSafeInteger(board?.active_index) ? board.active_index : undefined,
-            active_step: Number.isSafeInteger(board?.active_index)
-              ? sanitizeDurableModelText(board?.steps?.[board.active_index]?.description, 300)
-              : undefined,
-            completed_count: Number.isSafeInteger(board?.completed_count) ? board.completed_count : undefined,
-            total_steps: Number.isSafeInteger(board?.total_steps) ? board.total_steps : undefined,
           }
         : null,
-      completion_receipt: sanitizeDurableModelValue(receipt?.providerStatus ?? {}),
+      task_board: board
+        ? {
+            active_index: activeIndex,
+            active_step: activeIndex !== undefined
+              ? sanitizeDurableModelText(board?.steps?.[activeIndex]?.description, 300)
+              : undefined,
+            completed_count: Number.isSafeInteger(board?.completed_count) ? board.completed_count : undefined,
+            total_steps: Number.isSafeInteger(board?.total_steps)
+              ? board.total_steps
+              : (Array.isArray(board?.steps) ? board.steps.length : undefined),
+            blocker: cleanMemoryText(board?.blocker, 300),
+            pause_reason: cleanMemoryText(board?.pause_reason, 300),
+          }
+        : null,
+      autorio: {
+        task_state: typeof autorioStatus?.task_state === 'string' ? cleanMemoryText(autorioStatus.task_state, 64) : undefined,
+        queue_length: Number.isSafeInteger(autorioStatus?.queue_length) ? autorioStatus.queue_length : undefined,
+        last_completed_batch: sanitizeDurableModelValue(autorioStatus?.last_completed_batch),
+        last_cancelled_batch: sanitizeDurableModelValue(autorioStatus?.last_cancelled_batch),
+        latest_basic_operation_result: sanitizeDurableModelValue(autorioStatus?.basic_operation?.last_result),
+      },
+      deterministic_evidence: (Array.isArray(board?.evidence) ? board.evidence : [])
+        .slice(-4)
+        .map(item => sanitizeDurableModelValue(item)),
+      ...(planState?.dependency_context
+        ? { dependency_context: sanitizeDurableModelValue(planState.dependency_context) }
+        : {}),
+      ...(skills.length > 0 ? { skills } : {}),
       persistent_runtime: sanitizeDurableModelValue(persistentRuntime),
-      persistent_runtime_healthy: runtimeHealthy,
+      persistent_runtime_healthy: persistentControllerHealthy,
+      ...(failure ? { failure: cleanMemoryText(failure, 1200) } : {}),
     }
     const questions = postStepDecisionQuestions()
     const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
@@ -1993,11 +2038,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     await this.decisionTraceEvent('decision.request', {
       decision_id: decisionId,
-      contract: 'post_step_route',
+      contract: 'post_step_planner_gate',
       mode: 'active',
+      boundary: state.boundary,
       question_ids: Object.keys(questions),
       runtime_healthy: runtimeHealthy,
-      canonical_step: Number.isSafeInteger(board?.active_index) ? board.active_index : undefined,
+      runtime_reason: runtimeReason,
+      canonical_step: activeIndex,
     })
 
     try {
@@ -2016,13 +2063,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       let fallbackReason = ''
       if (decision.route === 'wait_runtime' && !runtimeHealthy) {
         appliedRoute = 'fallback_planner'
-        fallbackReason = 'wait_runtime_without_authoritative_healthy_persistent_runtime'
+        fallbackReason = 'wait_runtime_without_authoritative_active_runtime'
       }
 
       await this.decisionTraceEvent('decision.response', {
         decision_id: decisionId,
-        contract: 'post_step_route',
+        contract: 'post_step_planner_gate',
         mode: 'active',
+        boundary: state.boundary,
         provider: decision.provider,
         model: decision.model,
         route: decision.route,
@@ -2034,19 +2082,23 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
       await this.decisionTraceEvent('decision.route_applied', {
         decision_id: decisionId,
-        contract: 'post_step_route',
+        contract: 'post_step_planner_gate',
         mode: 'active',
+        boundary: state.boundary,
         requested_route: decision.route,
         applied_route: appliedRoute,
         fallback_reason: fallbackReason,
         runtime_healthy: runtimeHealthy,
+        runtime_reason: runtimeReason,
       })
       await this.traceEvent('post_step.routed', {
         mode: 'active',
+        boundary: state.boundary,
         route: decision.route,
         applied_route: appliedRoute,
         fallback_reason: fallbackReason,
         runtime_healthy: runtimeHealthy,
+        runtime_reason: runtimeReason,
         decision: {
           provider: decision.provider,
           model: decision.model,
@@ -2058,15 +2110,28 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
 
       if (appliedRoute === 'wait_runtime') {
-        await this.traceEvent('planner.skipped', { source: 'decision_provider', route: appliedRoute })
+        await this.traceEvent('planner.skipped', {
+          source: 'decision_provider',
+          route: appliedRoute,
+          authoritative_runtime_reason: runtimeReason,
+        })
       }
       else {
-        await this.traceEvent('planner.wake', { source: 'decision_provider', route: appliedRoute })
+        await this.traceEvent('planner.wake', {
+          source: 'decision_provider',
+          route: appliedRoute,
+          reasoning_policy: appliedRoute === 'continue_current'
+            ? 'low'
+            : appliedRoute === 'replan'
+              ? 'high'
+              : 'existing_fallback',
+        })
       }
       return {
         route: appliedRoute,
         requested_route: decision.route,
         runtime: persistentRuntime,
+        runtime_reason: runtimeReason,
         decision,
         fallback_reason: fallbackReason,
         decision_called: true,
@@ -2080,26 +2145,30 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
       await this.decisionTraceEvent('decision.fallback', {
         decision_id: decisionId,
-        contract: 'post_step_route',
+        contract: 'post_step_planner_gate',
         mode: 'active',
+        boundary: state.boundary,
         fallback_target: 'main_planner',
         reason: message,
         latency_ms,
       })
       await this.traceEvent('post_step.routed', {
         mode: 'active',
+        boundary: state.boundary,
         route: 'fallback_planner',
         applied_route: 'fallback_planner',
         fallback_reason: message,
         runtime_healthy: runtimeHealthy,
+        runtime_reason: runtimeReason,
         decision_latency_ms: latency_ms,
       })
       await this.traceEvent('planner.wake', {
         source: 'decision_provider',
         route: 'fallback_planner',
         fallback_reason: message,
+        reasoning_policy: 'existing_fallback',
       })
-      return { route: 'fallback_planner', runtime: persistentRuntime, error: message, decision_called: true }
+      return { route: 'fallback_planner', runtime: persistentRuntime, runtime_reason: runtimeReason, error: message, decision_called: true }
     }
     finally {
       if (this.postStepDecisionAbort === controller) this.postStepDecisionAbort = null
@@ -2509,7 +2578,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (routed.route === 'wait_runtime') return null
 
     this.reasoningTriggerSource = routed.route === 'continue_current'
-      ? 'continue_current'
+      ? 'post_step_continue'
       : routed.route === 'replan'
         ? 'post_step_replan'
         : null
@@ -2544,10 +2613,27 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return null
     }
     this.lastHandledRuntimeReceipt.failure = receiptKey
-    return this.continueFromModMessage(
-      `[MOD] Autorio operation error: ${cleanError}. Dependent queued operations may have been cancelled. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
-      'factorio.error_continuation',
-    )
+
+    const routed = await this.routePostStepDecision(receipt, {
+      boundary: 'failure',
+      failure: cleanError,
+    })
+    if (routed.route === 'wait_runtime') return null
+
+    this.reasoningTriggerSource = routed.route === 'continue_current'
+      ? 'post_step_continue'
+      : routed.route === 'replan'
+        ? 'post_step_replan'
+        : null
+    try {
+      return await this.continueFromModMessage(
+        `[MOD] Autorio operation error: ${cleanError}. Dependent queued operations may have been cancelled. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
+        'factorio.error_continuation',
+      )
+    }
+    finally {
+      this.reasoningTriggerSource = null
+    }
   }
 
   cancel(reason = 'cancelled') {

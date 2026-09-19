@@ -70,6 +70,9 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   if (options.triggerSource === 'new_goal') {
     return { effort: 'high', reason: 'new_goal' }
   }
+  if (options.triggerSource === 'post_step_continue') {
+    return { effort: 'low', reason: 'jev_post_step_continue' }
+  }
   if (options.triggerSource === 'post_step_replan') {
     return { effort: 'high', reason: 'jev_post_step_replan' }
   }
