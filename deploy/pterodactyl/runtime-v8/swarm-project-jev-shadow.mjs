@@ -10,20 +10,65 @@ function strategicRevision(board) {
   return Number.isSafeInteger(board?.revision) && board.revision > 0 ? board.revision : 0
 }
 
-function decisionKey(snapshot, strategicBoard) {
-  const parts = [
-    snapshot?.tick ?? 0,
-    strategicRevision(strategicBoard),
-    snapshot?.counts?.missions ?? 0,
-    snapshot?.counts?.objectives ?? 0,
-    snapshot?.counts?.projects ?? 0,
-    snapshot?.counts?.work ?? 0,
-    snapshot?.counts?.requests ?? 0,
-    snapshot?.counts?.claims ?? 0,
-    snapshot?.counts?.results ?? 0,
-    snapshot?.counts?.activeWarnings ?? 0,
-  ]
-  return parts.join(':')
+function recordKey(records) {
+  return (Array.isArray(records) ? records : []).map(record => [
+    record?.id ?? '',
+    record?.revision ?? '',
+    record?.status ?? '',
+    record?.state ?? '',
+    record?.updatedTick ?? '',
+    record?.lastProgressTick ?? '',
+    record?.tick ?? '',
+    record?.active ?? '',
+    record?.resolvedTick ?? '',
+  ].join('@')).join('|')
+}
+
+function decisionKey(snapshot, {
+  strategicBoard,
+  conditionWait,
+  outcome,
+  recovery,
+} = {}) {
+  return JSON.stringify({
+    strategic_revision: strategicRevision(strategicBoard),
+    counts: snapshot?.counts ?? {},
+    missions: recordKey(snapshot?.missions),
+    objectives: recordKey(snapshot?.objectives),
+    projects: recordKey(snapshot?.projects),
+    work: recordKey(snapshot?.work),
+    requests: recordKey(snapshot?.requests),
+    warnings: recordKey(snapshot?.warnings),
+    claims: recordKey(snapshot?.claims),
+    results: recordKey(snapshot?.results),
+    agents: recordKey(snapshot?.agents),
+    actors: recordKey(snapshot?.actors),
+    condition_wait: conditionWait
+      ? {
+          id: conditionWait.id,
+          state: conditionWait.state,
+          checks: conditionWait.checks,
+          updated_tick: conditionWait.updated_tick,
+        }
+      : undefined,
+    outcome: outcome
+      ? {
+          state: outcome.state,
+          authoritative: outcome.authoritative === true,
+          reason: outcome.reason,
+        }
+      : undefined,
+    recovery: recovery
+      ? {
+          reason: recovery.reason,
+          observationBudgetAvailable: recovery.observationBudgetAvailable,
+          blockerGrounded: recovery.blockerGrounded,
+          reconciliationActions: Array.isArray(recovery.reconciliationActions)
+            ? recovery.reconciliationActions.length
+            : 0,
+        }
+      : undefined,
+  })
 }
 
 export function buildProjectJevShadowSnapshot(globalSnapshot, {
@@ -41,12 +86,16 @@ export function buildProjectJevShadowSnapshot(globalSnapshot, {
     conditionWait,
     outcome,
     recovery,
+    counts: structuredClone(globalSnapshot.counts),
     missions: globalSnapshot.missions,
     objectives: globalSnapshot.objectives,
     projects: globalSnapshot.projects,
     work: globalSnapshot.work,
     requests: globalSnapshot.requests,
+    warnings: globalSnapshot.warnings,
     claims: globalSnapshot.claims,
+    results: globalSnapshot.results,
+    agents: globalSnapshot.agents,
     actors: globalSnapshot.actors,
     evidence: globalSnapshot.results.map(result => ({
       kind: 'result',
@@ -102,7 +151,15 @@ export class SwarmProjectJevShadowController {
     const globalSnapshot = await readSwarmCoordinationSnapshot(this.rcon, {
       limit: this.snapshotLimit,
     })
-    const key = decisionKey(globalSnapshot, options.strategicBoard)
+    const key = decisionKey(globalSnapshot, options)
+    if (options.force !== true && key === this.lastDecisionKey && this.lastTelemetry) {
+      const reused = structuredClone(this.lastTelemetry)
+      reused.source_tick = globalSnapshot.tick
+      reused.reused = true
+      this.lastTelemetry = structuredClone(reused)
+      return reused
+    }
+
     const snapshot = buildProjectJevShadowSnapshot(globalSnapshot, options)
 
     const telemetry = await runSwarmJevShadowDecision({
@@ -120,6 +177,7 @@ export class SwarmProjectJevShadowController {
       source_schema: globalSnapshot.schema,
       source_counts: structuredClone(globalSnapshot.counts),
       decision_key: key,
+      reused: false,
       decision: telemetry,
     }
 
