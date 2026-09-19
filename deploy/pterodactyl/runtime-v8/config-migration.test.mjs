@@ -14,6 +14,8 @@ async function temp(t) {
 
 test('a fresh SGLuna config uses explicit non-provider placeholders', () => {
   const next = migrateConfig({}, {})
+  assert.equal(next.chatPlayers, 'none')
+  assert.equal(SGLUNA_CONFIG_DEFAULTS.chatPlayers, 'none')
   assert.equal(next.providerUrl, 'https://provider.invalid/v1')
   assert.equal(next.model, 'replace-me')
   assert.equal(next.providerUrl, SGLUNA_CONFIG_DEFAULTS.providerUrl)
@@ -182,4 +184,10 @@ test('SGLUNA deployment env wins over AIRI compatibility env during config migra
   })
   assert.equal(next.actorMode, 'npc')
   assert.equal(next.chatPlayers, 'Primary')
+})
+
+
+test('explicit legacy blank chat authority remains compatibility-all instead of being silently migrated', () => {
+  const next = migrateConfig({ chatPlayers: '' }, {})
+  assert.equal(next.chatPlayers, '')
 })

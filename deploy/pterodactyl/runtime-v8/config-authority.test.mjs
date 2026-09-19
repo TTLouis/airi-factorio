@@ -281,3 +281,15 @@ test('public Factorio visibility warns when legacy chat authority still allows e
     ['Factorio visibility: PRIVATE/HIDDEN', 'No Factorio listing credentials supplied'],
   )
 })
+
+
+test('fresh effective config denies chat commands while an explicit legacy blank remains compatibility-all', () => {
+  const baseEnv = {
+    SGLUNA_ACTOR_MODE: 'npc',
+    OPENAI_API_KEY: fixtureSecret('fresh-provider-key'),
+    OPENAI_MODEL: 'fresh-model',
+    OPENAI_API_BASEURL: 'https://fresh.example.test/v1',
+  }
+  assert.deepEqual(configuration({}, baseEnv).chatPlayers, { mode: 'disabled', names: [] })
+  assert.deepEqual(configuration({ chatPlayers: '' }, baseEnv).chatPlayers, { mode: 'all', names: [] })
+})

@@ -104,7 +104,7 @@ export function configuration(raw = {}, env = process.env) {
   const actorMode = preferredEnv(env, 'SGLUNA_ACTOR_MODE', 'AIRI_ACTOR_MODE', raw.actorMode ?? 'npc')
   check(actorMode === 'npc', 'This v8 egg currently supports SGLUNA_ACTOR_MODE=npc only')
 
-  const chatPlayersSource = chatPlayersValue(env, raw, '')
+  const chatPlayersSource = chatPlayersValue(env, raw, 'none')
 
   const factorioUsername = cleanString(env.FACTORIO_USERNAME ?? '', 'FACTORIO_USERNAME', 128)
   const factorioToken = cleanString(env.FACTORIO_TOKEN ?? '', 'FACTORIO_TOKEN', 128)
@@ -148,7 +148,7 @@ export function factorioVisibilityDiagnostics(factorio = { username: '', token: 
 
 export const SGLUNA_CONFIG_DEFAULTS = {
   actorMode: 'npc',
-  chatPlayers: '',
+  chatPlayers: 'none',
   providerUrl: 'https://provider.invalid/v1',
   providerProfile: 'auto',
   model: 'replace-me',
