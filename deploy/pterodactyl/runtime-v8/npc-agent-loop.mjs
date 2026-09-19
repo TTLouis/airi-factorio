@@ -3818,8 +3818,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     const controller = new AbortController()
     this.providerAbort = controller
-    const providerMessages = providerMessagesOverride ?? this.providerMessages()
+    let providerMessages = providerMessagesOverride ?? this.providerMessages()
     const triggerSource = this.reasoningTriggerSource ?? this.planUpdateReason
+    if (providerMessagesOverride === undefined && this.planningHorizonOverride) {
+      const horizonGuidance = {
+        immediate: 'Choose only the next concrete action needed from current grounded state.',
+        checkpoint: 'Plan only far enough to reach and verify the active semantic checkpoint.',
+        subgoal: 'Plan only the bounded current milestone/subgoal; do not flatten later milestones into this Plan Tracker.',
+        strategic: 'Choose or revise bounded milestone direction, but keep execution plan scoped to the current milestone and keep future milestones tentative.',
+      }[this.planningHorizonOverride]
+      const envelope = `[DECISION_ENVELOPE] planning_horizon=${this.planningHorizonOverride}; observation_budget_remaining=${Number.isSafeInteger(this.observationBudgetRemaining) ? this.observationBudgetRemaining : 'runtime-default'}. ${horizonGuidance ?? ''}`
+      providerMessages = [...providerMessages, { role: 'user', content: envelope }]
+    }
     const startedAt = Date.now()
     if (recoveryAttempt > 0 && this.traceRequest) {
       this.traceRequest.recovery = {
@@ -4426,6 +4436,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       current_step: plan.currentStep,
       operations,
       ...(plan.project ? { project: plan.project } : {}),
+      ...(plan.checkpoint ? { checkpoint: plan.checkpoint } : {}),
     })
 
     const before = await this.assertCurrent()
@@ -4586,7 +4597,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         completionEvidence,
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
-        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason) || ['hierarchy_split', 'hierarchy_collapse', 'hierarchy_advance', 'hierarchy_replan_project', 'hierarchy_project_complete_candidate'].includes(triggerSource),
+        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason) || ['hierarchy_initial_split', 'hierarchy_split', 'hierarchy_collapse', 'hierarchy_advance', 'hierarchy_replan_project', 'hierarchy_project_complete_candidate'].includes(triggerSource),
         newMilestone: ['hierarchy_advance', 'hierarchy_replan_project'].includes(triggerSource)
           || (triggerSource === 'hierarchy_project_complete_candidate' && durablePlan.plan.length > 0),
         previousState,
