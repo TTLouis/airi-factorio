@@ -1756,6 +1756,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.reasoningTriggerSource = null
     this.reasoningBudgetOverride = null
     this.observationBudgetOverride = null
+    this.observationBudgetRemaining = null
     this.planningHorizonOverride = null
     this.persistQueue = Promise.resolve()
     this.traceRequest = null
@@ -3238,10 +3239,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.reasoningTriggerSource = initialHierarchySplit ? 'hierarchy_initial_split' : null
     const previousReasoningBudget = this.reasoningBudgetOverride
     const previousObservationBudget = this.observationBudgetOverride
+    const previousObservationBudgetRemaining = this.observationBudgetRemaining
     const previousPlanningHorizon = this.planningHorizonOverride
     if (jevNewGoalAligned) {
       this.reasoningBudgetOverride = routed.decision_shadow.reasoning_budget ?? null
       this.observationBudgetOverride = Number.isSafeInteger(routed.decision_shadow.observation_budget) ? routed.decision_shadow.observation_budget : null
+      this.observationBudgetRemaining = this.observationBudgetOverride
       this.planningHorizonOverride = routed.decision_shadow.planning_horizon ?? null
     }
     this.lastTaskStatusView = null
@@ -3294,6 +3297,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     finally {
       this.reasoningBudgetOverride = previousReasoningBudget
       this.observationBudgetOverride = previousObservationBudget
+      this.observationBudgetRemaining = previousObservationBudgetRemaining
       this.planningHorizonOverride = previousPlanningHorizon
     }
   }
@@ -3583,9 +3587,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (routed.route === 'reanchor_plan') this.planUpdateReason = 'reanchor_plan'
     const previousReasoningBudget = this.reasoningBudgetOverride
     const previousObservationBudget = this.observationBudgetOverride
+    const previousObservationBudgetRemaining = this.observationBudgetRemaining
     const previousPlanningHorizon = this.planningHorizonOverride
     this.reasoningBudgetOverride = routed.hierarchy?.reasoning_budget ?? null
     this.observationBudgetOverride = Number.isSafeInteger(routed.hierarchy?.observation_budget) ? routed.hierarchy.observation_budget : null
+    this.observationBudgetRemaining = this.observationBudgetOverride
     this.planningHorizonOverride = routed.hierarchy?.planning_horizon ?? null
     try {
       const hierarchyInstruction = routed.hierarchy_action === 'split_current_milestone'
@@ -3614,6 +3620,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.reasoningTriggerSource = null
       this.reasoningBudgetOverride = previousReasoningBudget
       this.observationBudgetOverride = previousObservationBudget
+      this.observationBudgetRemaining = previousObservationBudgetRemaining
       this.planningHorizonOverride = previousPlanningHorizon
     }
   }
@@ -3652,9 +3659,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           : null
     const previousReasoningBudget = this.reasoningBudgetOverride
     const previousObservationBudget = this.observationBudgetOverride
+    const previousObservationBudgetRemaining = this.observationBudgetRemaining
     const previousPlanningHorizon = this.planningHorizonOverride
     this.reasoningBudgetOverride = routed.hierarchy?.reasoning_budget ?? null
     this.observationBudgetOverride = Number.isSafeInteger(routed.hierarchy?.observation_budget) ? routed.hierarchy.observation_budget : null
+    this.observationBudgetRemaining = this.observationBudgetOverride
     this.planningHorizonOverride = routed.hierarchy?.planning_horizon ?? null
     try {
       return await this.continueFromModMessage(
@@ -3666,6 +3675,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.reasoningTriggerSource = null
       this.reasoningBudgetOverride = previousReasoningBudget
       this.observationBudgetOverride = previousObservationBudget
+      this.observationBudgetRemaining = previousObservationBudgetRemaining
       this.planningHorizonOverride = previousPlanningHorizon
     }
   }
@@ -3959,7 +3969,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   observationDecisionPressureBudget() {
-    if (Number.isSafeInteger(this.observationBudgetOverride)) return Math.max(0, Math.min(8, this.observationBudgetOverride))
+    if (Number.isSafeInteger(this.observationBudgetRemaining)) return Math.max(0, Math.min(8, this.observationBudgetRemaining))
     return super.observationDecisionPressureBudget()
   }
 
@@ -3986,6 +3996,28 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     const cachedBefore = prepared.map(entry => this.toolCache.has(entry.signature))
     const staticCachedBefore = prepared.map(entry => entry.tool.function.name === 'getPrototypeDetails' && this.staticPrototypeCache.has(entry.signature))
+    const freshRequestedCount = prepared.reduce(
+      (total, _entry, index) => total + (cachedBefore[index] !== true && staticCachedBefore[index] !== true ? 1 : 0),
+      0,
+    )
+    if (!this.actionOmissionRepairActive && Number.isSafeInteger(this.observationBudgetRemaining) && freshRequestedCount > this.observationBudgetRemaining) {
+      const reason = `Jev observation budget has ${this.observationBudgetRemaining} fresh call(s) remaining, but the provider requested ${freshRequestedCount} fresh observation(s).`
+      this.messages.push({
+        role: 'user',
+        content: `[HARNESS] ${reason} No observation from this batch was executed. Reuse existing grounded evidence and act, or report the exact still-missing fact/blocker.`,
+      })
+      this.observationDecisionPressure = true
+      this.observationDecisionPressureRemaining = 0
+      await this.recoveryDiagnostic({
+        failure_class: 'observation_no_progress',
+        reason_code: 'jev_observation_budget_exhausted',
+        reason,
+        retry: 1,
+        retry_limit: 1,
+        tools_enabled: false,
+      })
+      return
+    }
     for (let index = 0; index < prepared.length; index++) {
       const entry = prepared[index]
       if (this.traceRequest?.usage) {
@@ -4011,6 +4043,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       throw error
     }
     const results = this.messages.slice(beforeCount + 1).filter(item => item.role === 'tool')
+    if (!this.actionOmissionRepairActive && Number.isSafeInteger(this.observationBudgetRemaining) && freshRequestedCount > 0) {
+      this.observationBudgetRemaining = Math.max(0, this.observationBudgetRemaining - freshRequestedCount)
+      if (this.observationBudgetRemaining === 0) {
+        this.messages.push({
+          role: 'user',
+          content: '[HARNESS] Jev observation budget is exhausted for this decision. Reuse the evidence already collected and return the next executable action or a truthful blocker; do not request another read-only observation.',
+        })
+      }
+    }
     const freshResultObserved = results.some((_, index) => cachedBefore[index] !== true && staticCachedBefore[index] !== true)
     if (freshResultObserved) this.freshObservationSinceContinuation = true
     if (this.outputBudgetRecoveryGuard && freshResultObserved) {
