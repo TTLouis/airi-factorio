@@ -966,6 +966,7 @@ export function taskBoardUiSnapshot(state, live) {
     return {
       goal_id: '',
       objective: uiText(live.objective, 500),
+      project: undefined,
       status: 'idle',
       blocker: '',
       blocker_summary: '',
@@ -985,9 +986,30 @@ export function taskBoardUiSnapshot(state, live) {
   }
   const blocker = formatTaskCondition(board.blocker, 'blocker')
   const pauseReason = formatTaskCondition(board.pause_reason, 'pause')
+  const project = state?.project_board?.kind === 'project_board_v1'
+    ? {
+        kind: 'project_board_v1',
+        project_id: uiText(state.project_board.project_id, 100),
+        title: uiText(state.project_board.title, 500),
+        status: uiText(state.project_board.status, 32),
+        current_milestone: state.project_board.current_milestone
+          ? {
+              id: uiText(state.project_board.current_milestone.id, 100),
+              title: uiText(state.project_board.current_milestone.title, 500),
+              completion_summary: uiText(state.project_board.current_milestone.completion_summary, 800),
+            }
+          : undefined,
+        next_milestones: (Array.isArray(state.project_board.next_milestones) ? state.project_board.next_milestones : []).slice(0, 3).map(item => ({
+          id: uiText(item?.id, 100),
+          title: uiText(item?.title, 500),
+        })),
+        development_direction: uiText(state.project_board.development_direction, 32),
+      }
+    : undefined
   return {
     goal_id: String(board.goal_id ?? state.goal_id ?? '').slice(0, 100),
     objective: String(state.objective ?? '').slice(0, 500),
+    project,
     status: board.status,
     blocker: blocker.raw,
     blocker_summary: blocker.summary,

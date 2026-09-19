@@ -1,5 +1,6 @@
 import { NpcDialogueMemory } from './npc-agent-loop.mjs'
 import { setTaskBoardStatus } from './common.mjs'
+import { sanitizeProjectBoard, updateProjectBoard } from './project-board.mjs'
 
 const STRICT_TASKS_BY_OPERATION = new Map([
   ['walk_to_entity', ['walking_to_entity']],
@@ -196,6 +197,33 @@ export function canonicalContinuationPlan(previousBoard, plan, { allowReplan = f
 }
 
 export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
+  ensureProjectBoard(state) {
+    if (!state) return undefined
+    state.project_board = sanitizeProjectBoard(state.project_board, {
+      goalId: state.goal_id,
+      objective: state.objective,
+      status: state.status,
+      now: state.updated_at,
+    })
+    return state.project_board
+  }
+
+  updateProjectBoard(key, patch = {}) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state) return undefined
+    const now = Date.now()
+    state.project_board = updateProjectBoard(this.ensureProjectBoard(state), patch, {
+      goalId: state.goal_id,
+      objective: state.objective,
+      status: state.status,
+      now,
+    })
+    state.revision = (state.revision ?? 0) + 1
+    state.updated_at = now
+    this.planByNpc.set(key, state)
+    return state.project_board
+  }
+
   retireCompletedPlan(key) {
     const state = key ? this.planByNpc.get(key) : undefined
     if (!state || state.status !== 'completed') return state
@@ -208,12 +236,16 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     if (!state) {
       return '[PLAN_STATE] No active durable goal. Completed goals are retired from the current task slot and remain only in bounded dialogue history. Do not resume or steer a completed goal merely because the human says continue; a new actionable instruction must start a new goal.'
     }
-    return super.planContext(key)
+    const plan = super.planContext(key)
+    const project = this.ensureProjectBoard(state)
+    return `${plan}\n[PROJECT_STATE] Durable long-horizon hierarchy. Future milestones are tentative; the current Task Board remains the execution contract.\n${JSON.stringify(project)}`
   }
 
   currentPlan(key) {
     this.retireCompletedPlan(key)
-    return super.currentPlan(key)
+    const state = super.currentPlan(key)
+    this.ensureProjectBoard(state)
+    return state
   }
 
   recordPlan(key, requestInfo, plan, options = {}) {
@@ -221,7 +253,20 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     // still contain one from a previous runtime version, so retire it before a
     // new request can accidentally inherit its goal_id/objective.
     this.retireCompletedPlan(key)
-    return super.recordPlan(key, requestInfo, plan, options)
+    const result = super.recordPlan(key, requestInfo, plan, options)
+    if (result?.state) this.ensureProjectBoard(result.state)
+    return result
+  }
+
+  applyOutcomeAuthority(key, candidate, options = {}) {
+    const result = super.applyOutcomeAuthority(key, candidate, options)
+    if (result?.state) this.ensureProjectBoard(result.state)
+    return result
+  }
+
+  restore(snapshot) {
+    super.restore(snapshot)
+    for (const state of this.planByNpc.values()) this.ensureProjectBoard(state)
   }
 
   reconcileTaskBoard(key, previousBoard, plan, stateResult, options = {}) {

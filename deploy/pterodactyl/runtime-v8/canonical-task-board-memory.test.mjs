@@ -537,3 +537,32 @@ test('replan keeps every unverified remaining step even when proposed currentSte
   assert.equal(replanned.steps[0].status, 'active')
   assert.equal(replanned.steps[1].status, 'pending')
 })
+
+
+test('canonical memory persists project and milestone hierarchy across restore', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', planState())
+  memory.updateProjectBoard('npc:airi', {
+    current_milestone: { id: 'bootstrap', title: 'Establish burner production', completion_summary: 'Stable early production is available.' },
+    next_milestones: [{ id: 'automation', title: 'Reach Automation' }, { id: 'power', title: 'Establish electric power' }],
+    development_direction: 'vertical',
+  })
+  const snapshot = memory.snapshot()
+  const restored = new CanonicalTaskBoardMemory()
+  restored.restore(snapshot)
+  const state = restored.currentPlan('npc:airi')
+  assert.equal(state.project_board.project_id, 'goal_1')
+  assert.equal(state.project_board.title, 'Build early automation')
+  assert.equal(state.project_board.current_milestone.title, 'Establish burner production')
+  assert.deepEqual(state.project_board.next_milestones.map(item => item.title), ['Reach Automation', 'Establish electric power'])
+  assert.equal(state.project_board.development_direction, 'vertical')
+  assert.match(restored.planContext('npc:airi'), /\[PROJECT_STATE\]/)
+})
+
+test('project status follows durable goal lifecycle authority', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', planState())
+  memory.currentPlan('npc:airi')
+  memory.pausePlan('npc:airi', 'user_pause')
+  assert.equal(memory.planByNpc.get('npc:airi').project_board.status, 'paused')
+})

@@ -454,3 +454,39 @@ test('active Jev post-step routing is tracked separately from interaction shadow
   assert.equal(debug.decision_planner_replan_high_wakes_total, 0)
   assert.equal(debug.decision_planner_fallback_wakes_total, 1)
 })
+
+
+test('task board UI snapshot projects durable project hierarchy separately from plan steps', () => {
+  const state = {
+    goal_id: 'goal-rocket',
+    objective: 'Launch a rocket',
+    project_board: {
+      kind: 'project_board_v1',
+      project_id: 'goal-rocket',
+      title: 'Launch a rocket',
+      status: 'active',
+      current_milestone: { id: 'bootstrap', title: 'Establish burner production', status: 'active', completion_summary: 'Stable early production exists.' },
+      next_milestones: [{ id: 'automation', title: 'Reach Automation', status: 'tentative' }],
+      development_direction: 'vertical',
+      revision: 2,
+      updated_at: 123,
+    },
+    task_board: {
+      kind: 'task_board_lite',
+      goal_id: 'goal-rocket',
+      status: 'active',
+      blocker: '',
+      pause_reason: '',
+      completed_count: 0,
+      total_steps: 1,
+      active_index: 0,
+      steps: [{ id: 'step-1', description: 'Gather stone for the first furnaces', status: 'active' }],
+    },
+  }
+  const snapshot = taskBoardUiSnapshot(state, { phase: 'thinking', activity: [], debug: {} })
+  assert.equal(snapshot.project.title, 'Launch a rocket')
+  assert.equal(snapshot.project.current_milestone.title, 'Establish burner production')
+  assert.equal(snapshot.project.development_direction, 'vertical')
+  assert.deepEqual(snapshot.project.next_milestones.map(item => item.title), ['Reach Automation'])
+  assert.equal(snapshot.steps[0].description, 'Gather stone for the first furnaces')
+})

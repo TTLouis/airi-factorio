@@ -77,7 +77,7 @@ The implementation order is intentionally conservative:
 1. define and test the decision taxonomy;
 2. **done in the experiment:** wire the taxonomy into post-step traces/diagnostics as shadow telemetry without changing authority;
 3. **implemented conservatively in the experiment:** Jev may suppress a post-step planner wake only when authoritative runtime work is healthy, granularity is `keep`, development is `maintain`, and the boundary is a successful completion; otherwise the existing planner path remains authoritative;
-4. add milestone/project durable state above the existing Plan Tracker;
+4. **implemented as the next foundation:** add bounded durable Project/Milestone state above the existing Plan Tracker, without yet letting Jev invent or mutate milestones autonomously;
 5. add granularity-driven milestone decomposition;
 6. only then map Jev reasoning budgets into provider/model-specific reasoning controls.
 
@@ -1053,11 +1053,23 @@ The hierarchy telemetry now has one deliberately narrow behavioral effect. After
 
 This is intentionally not yet milestone decomposition or reasoning-budget control. `reasoning_budget`, `planning_horizon`, and `observation_budget` remain diagnostic/shadow fields.
 
-## Promotion criteria: when this experiment can graduate
+## Promotion criteria: when Jev's hierarchy becomes the real long-horizon control model
 
-The Jev hierarchy work should remain experimental until it proves that it improves long-horizon autonomy without weakening completion authority, runtime safety, or planner coherence.
+In this document, **promotion does not mean merging the branch**. It means the Jev experiment stops treating Project/Milestone hierarchy as telemetry or a sidecar and actually uses the long-horizon model as the normal control structure for long tasks:
 
-Promotion should be considered only after the following gates are satisfied on a frozen candidate SHA.
+```text
+Project / Goal
+    ↓
+Milestone
+    ↓
+Plan Step
+    ↓
+Operation
+```
+
+The branch may remain `experiment/jev-agent-architecture` while this promotion happens. Merge readiness is a later, separate gate.
+
+Jev hierarchy should be considered promoted only when long tasks are durably represented and routed through Project → Milestone → Plan Step rather than being flattened directly into one Plan Tracker list. The gates below define when that architectural switch is safe.
 
 ### 1. Decision quality is observable and stable
 
@@ -1189,29 +1201,33 @@ Track at minimum:
 
 No single numeric threshold is required initially, but promotion should require a clear reduction in unnecessary planner calls without an increase in stalled work or semantic completion errors.
 
-### 9. Promotion sequence
+### 9. Hierarchy-promotion sequence
 
-Recommended graduation path:
+Recommended architectural graduation inside the Jev branch:
 
 ```text
-experiment/jev-agent-architecture
+taxonomy only
   ↓
-freeze candidate SHA
+shadow hierarchy telemetry
   ↓
-unit + integration + provider-contract tests
+safe hierarchy routing gates
   ↓
-deterministic Factorio harness
+durable Project/Milestone state
   ↓
-real-provider long-task E2E
+Main LLM writes bounded milestone structure
   ↓
-compare traces against pre-Jev baseline
+Jev decides keep/split/advance around that structure
   ↓
-merge into feat/npc-transition-work
+Project → Milestone → Plan Step becomes the normal long-task path
   ↓
-observe integration branch
+long-task E2E validates the hierarchy
   ↓
-only later consider main promotion
+HIERARCHY PROMOTED
 ```
 
-The experiment should not be merged simply because the code is feature-complete. It should be merged when the control-layer behavior is demonstrably safer or more efficient than the previous path under real long-running tasks.
+Only after the hierarchy is promoted and validated should branch-merging be evaluated separately.
+
+### 10. Separate branch-merge gate
+
+Merging `experiment/jev-agent-architecture` into `feat/npc-transition-work` is not what "promotion" means here. Merge readiness still requires a frozen candidate SHA, tests, deterministic harness runs, real-provider E2E, and trace comparison against the pre-Jev baseline.
 
