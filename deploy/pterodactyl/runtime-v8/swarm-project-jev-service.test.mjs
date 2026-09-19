@@ -190,3 +190,94 @@ test('shadow service contains snapshot/controller failures and remains reusable'
   assert.equal(recovered.authority, 'shadow')
   assert.equal(recovered.trigger_sequence, 2)
 })
+
+
+test('preloaded trigger uses observeSnapshot without a second world read', async () => {
+  let observeCalls = 0
+  let observeSnapshotCalls = 0
+  const controller = {
+    async observe() {
+      observeCalls += 1
+      throw new Error('observe should not run for preloaded snapshot')
+    },
+    async observeSnapshot(snapshot) {
+      observeSnapshotCalls += 1
+      return {
+        authority: 'shadow',
+        effects: [],
+        scope: 'swarm_global',
+        source_tick: snapshot.tick,
+      }
+    },
+  }
+  const service = new SwarmProjectJevShadowService({ controller })
+
+  const result = await service.trigger('coordination_event', {
+    snapshot: {
+      schema: 'swarm_coordination_snapshot_v1',
+      tick: 200,
+    },
+  })
+
+  assert.equal(observeCalls, 0)
+  assert.equal(observeSnapshotCalls, 1)
+  assert.equal(result.source_tick, 200)
+})
+
+test('in-flight trigger queue keeps only the latest preloaded snapshot for follow-up', async () => {
+  let call = 0
+  let releaseFirst
+  let firstStarted
+  const blocked = new Promise(resolve => { releaseFirst = resolve })
+  const started = new Promise(resolve => { firstStarted = resolve })
+  const seenTicks = []
+
+  const controller = {
+    async observeSnapshot(snapshot) {
+      call += 1
+      seenTicks.push(snapshot.tick)
+      if (call === 1) {
+        firstStarted()
+        await blocked
+      }
+      return {
+        authority: 'shadow',
+        effects: [],
+        scope: 'swarm_global',
+        source_tick: snapshot.tick,
+      }
+    },
+    async observe() {
+      throw new Error('fresh read path should not be used')
+    },
+  }
+
+  const service = new SwarmProjectJevShadowService({ controller })
+  const first = service.trigger('initial', {
+    snapshot: {
+      schema: 'swarm_coordination_snapshot_v1',
+      tick: 100,
+    },
+  })
+  await started
+
+  service.trigger('middle', {
+    snapshot: {
+      schema: 'swarm_coordination_snapshot_v1',
+      tick: 200,
+    },
+  })
+  service.trigger('latest', {
+    snapshot: {
+      schema: 'swarm_coordination_snapshot_v1',
+      tick: 300,
+    },
+  })
+
+  releaseFirst()
+  const result = await first
+
+  assert.deepEqual(seenTicks, [100, 300])
+  assert.equal(result.source_tick, 300)
+  assert.deepEqual(result.trigger_reasons, ['middle', 'latest'])
+})
