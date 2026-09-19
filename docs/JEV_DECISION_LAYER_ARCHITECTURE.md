@@ -1375,3 +1375,107 @@ The current audit has already found and hardened these cases:
 - **Unused `collapse` taxonomy branch:** `granularity=collapse` now has an explicit bounded replan path that simplifies the unverified current scope while preserving active milestone identity and verified history.
 
 These fixes are regression targets, not one-off patches. Future hierarchy changes should add tests for the failure mode that motivated each guard.
+
+
+## Root-cause analysis: observation pressure must not be recovery
+
+The 2026-09-19 long-task trace for `至少完成一个科研瓶的全自动化` exposed a control-plane bug rather than a Factorio-strategy failure.
+
+Observed sequence:
+
+```text
+flat seven-step plan
+↓
+step 1 verified complete
+↓
+Jev: granularity = split
+↓
+hierarchy planner wakes
+↓
+bounded observation allowance is consumed
+↓
+old agent loop throws an AgentLoopError
+↓
+generic/Jev recovery interprets the normal budget boundary as a failure
+↓
+pause_recoverable
+↓
+Project Board remains without a current milestone
+```
+
+That architecture is wrong. Observation-budget exhaustion is a **normal planner state transition**, not a provider failure, world failure, or recovery event.
+
+The base agent loop now follows an explicit observation-to-decision state machine:
+
+```text
+OBSERVE
+  fresh observations consume the bounded allowance
+        ↓
+allowance reaches zero / final batch would exceed it
+        ↓
+DECIDE
+  tools are disabled
+  existing grounded evidence is preserved
+  the same planner turn must now return a strict plan/action/blocker
+        ↓
+COMMIT
+```
+
+Normal observation closure no longer routes through `recoverPlan()`. Recovery remains reserved for actual failures such as malformed provider output, repeated invalid tool calls, runtime/world failure, or an exhausted provider repair path.
+
+This separation is an architectural invariant. Future budget controls must close capabilities directly rather than manufacturing an exception and asking the recovery router to infer why it happened.
+
+## Hierarchy split is a durable transaction
+
+The same trace showed a second architectural weakness: Jev requested a hierarchy split, but if the planner was interrupted before writing `project.currentMilestone`, the old flat Task Board could remain the only durable plan.
+
+A Jev `split_current_milestone` decision is now transactional:
+
+```text
+Jev split approved
+↓
+persist hierarchy_split_pending + semantic budgets
+↓
+planner must produce bounded project.currentMilestone + milestone-local plan
+↓
+project update commits
+↓
+clear hierarchy_split_pending
+```
+
+If the provider, server, or request is interrupted between those points, the pending transaction survives persistence. A later `continue` resumes `hierarchy_split` with the saved reasoning/observation/horizon envelope. It must not silently continue the pre-split flat plan.
+
+This establishes a general rule for future hierarchy transitions:
+
+> A structural Jev decision that changes plan granularity must be represented as durable state before waking the Main LLM; it cannot exist only in an in-memory trigger string.
+
+## Remaining structural issue from the trace: step semantics
+
+The same task trace also exposed an independent semantic problem:
+
+```text
+active step: "采集石头资源"
+planner chat intent: target 100+
+world inventory later: 102 stone
+Task Board: step still active
+planner proposes crafting furnaces
+Jev: proposed operation belongs_to_later_step
+```
+
+The current runtime now rejects a later-step mutation before world execution and re-anchors the planner, so the old trace's silent Task Board/action divergence is no longer admissible.
+
+However, rejection alone is not the final architecture. A vague plan label such as `采集石头资源` does not durably encode the semantic outcome `inventory_count(stone) >= 100`. Operation-intent candidates are useful evidence, but they must not be the only source of step meaning.
+
+The target architecture remains:
+
+```text
+Jev judges the semantic checkpoint / whether the step needs split
+↓
+a runtime-supported structured condition represents that checkpoint
+↓
+runtime validates the condition shape and evaluates it against authoritative world state
+↓
+only runtime closes the step
+```
+
+The checkpoint system should therefore evolve away from "choose one of the latest operation-derived candidates" toward durable semantic step contracts. This is the next root-level completion-semantics work; it should not be papered over by allowing later-step actions or by parsing chat prose as completion authority.
