@@ -373,5 +373,5 @@ test('hierarchy collapse always uses the full planner path even with a micro sem
     reasoningBudget: 'micro',
   })
   assert.equal(seen.body.reasoning_effort, 'low')
-  assert.equal(seen.body.max_tokens, 2000)
+  assert.equal(seen.body.max_tokens, 4000)
 })
