@@ -12,6 +12,15 @@ export function evaluateStrategicPlannerProposal(store, rawProposal) {
   const proposal = parseStrategicProjectProposal(rawProposal)
   const board = store.current()
 
+  if (board.status !== 'active') {
+    return {
+      accepted: false,
+      reason: 'strategic_board_not_active',
+      board,
+      proposal,
+    }
+  }
+
   if (board.current_milestone) {
     if (!sameMilestoneIntent(board.current_milestone, proposal.current_milestone)) {
       return {
