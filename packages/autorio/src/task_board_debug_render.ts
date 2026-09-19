@@ -17,9 +17,13 @@ import type { TaskBoardUiDebugSnapshot } from './task_board_debug'
 
 const DEBUG_ROOT_NAME = 'airi_task_board_debug_panel'
 const DEBUG_BODY_NAME = 'airi_task_board_debug_body'
-const DEBUG_WIDTH = 720
-const DEBUG_KEY_WIDTH = 118
+const DEBUG_WIDTH = 1040
+const DEBUG_KEY_WIDTH = 132
+const DEBUG_BODY_INNER_WIDTH = DEBUG_WIDTH - 20
+const DEBUG_COLUMN_GAP = 16
+const DEBUG_COLUMN_WIDTH = math.floor((DEBUG_BODY_INNER_WIDTH - DEBUG_COLUMN_GAP) / 2)
 const DEBUG_VALUE_WIDTH = DEBUG_WIDTH - DEBUG_KEY_WIDTH - 54
+const DEBUG_COLUMN_VALUE_WIDTH = DEBUG_COLUMN_WIDTH - DEBUG_KEY_WIDTH - 34
 const DEBUG_ACTIVITY = {
   section: 'airi_task_board_debug_activity_section',
   header: 'airi_task_board_debug_activity_header',
@@ -45,9 +49,12 @@ function destroy_debug_popout(player: LuaPlayer) {
   if (existing?.valid) existing.destroy()
   return location
 }
-function add_row(table: LuaGuiElement, key: string, value: string) {
+function add_row(table: LuaGuiElement, key: string, value: string, value_width = DEBUG_VALUE_WIDTH) {
   const left = table.add({ type: 'label', caption: key, style: 'semibold_label' }); left.style.minimal_width = DEBUG_KEY_WIDTH
-  const right = gui_text.literal_gui_text(table.add({ type: 'label', caption: value.length > 0 ? value : '—' })); right.style.single_line = false; right.style.maximal_width = DEBUG_VALUE_WIDTH
+  const right = gui_text.literal_gui_text(table.add({ type: 'label', caption: value.length > 0 ? value : '—' })); right.style.single_line = false; right.style.maximal_width = value_width
+}
+function add_compact_row(table: LuaGuiElement, key: string, value: string) {
+  add_row(table, key, value, DEBUG_COLUMN_VALUE_WIDTH)
 }
 function sync_age(synced_tick: number | undefined) {
   if (synced_tick === undefined) return 'never'
@@ -96,18 +103,18 @@ function add_debug_decision_rows(table: LuaGuiElement, debug: TaskBoardUiDebugSn
   const decision_planner_high = integer(debug.decision_planner_replan_high_wakes_total)
   const decision_planner_fallback = integer(debug.decision_planner_fallback_wakes_total)
 
-  add_row(table, 'Decision provider', decision_model.length > 0 ? `${decision_provider || 'decision'} · ${decision_model}` : '—')
-  add_row(table, 'Decision shadow', decision_shadow.length > 0 ? `${decision_shadow} · ${decision_confidence}% · active ${decision_active || 'unknown'} · conflict ${decision_conflict}%` : '—')
-  add_row(table, 'Jev ACTIVE post-step', decision_post_step.length > 0 ? `${decision_post_step}${decision_post_step_applied.length > 0 && decision_post_step_applied !== decision_post_step ? ` → ${decision_post_step_applied}` : ''} · ${decision_post_step_confidence}% · ${decision_post_step_latency} ms${decision_post_step_fallback.length > 0 ? ` · ${decision_post_step_fallback}` : ''}` : '—')
-  add_row(table, 'Jev hierarchy · gate', decision_granularity.length > 0 || decision_development.length > 0 || decision_reasoning_budget.length > 0
+  add_compact_row(table, 'Decision provider', decision_model.length > 0 ? `${decision_provider || 'decision'} · ${decision_model}` : '—')
+  add_compact_row(table, 'Decision shadow', decision_shadow.length > 0 ? `${decision_shadow} · ${decision_confidence}% · active ${decision_active || 'unknown'} · conflict ${decision_conflict}%` : '—')
+  add_compact_row(table, 'Jev ACTIVE post-step', decision_post_step.length > 0 ? `${decision_post_step}${decision_post_step_applied.length > 0 && decision_post_step_applied !== decision_post_step ? ` → ${decision_post_step_applied}` : ''} · ${decision_post_step_confidence}% · ${decision_post_step_latency} ms${decision_post_step_fallback.length > 0 ? ` · ${decision_post_step_fallback}` : ''}` : '—')
+  add_compact_row(table, 'Jev hierarchy · gate', decision_granularity.length > 0 || decision_development.length > 0 || decision_reasoning_budget.length > 0
     ? `granularity ${decision_granularity || '—'} ${decision_granularity_confidence}% · development ${decision_development || '—'} ${decision_development_confidence}% · budget(shadow) ${decision_reasoning_budget || '—'} ${decision_reasoning_confidence}% · horizon(shadow) ${decision_planning_horizon || '—'} · observations(shadow) ${decision_observation_budget}`
     : '—')
-  add_row(table, 'Jev milestone transition', decision_milestone_transition.length > 0
+  add_compact_row(table, 'Jev milestone transition', decision_milestone_transition.length > 0
     ? `${decision_milestone_transition} · ${decision_milestone_transition_confidence}%${decision_hierarchy_action.length > 0 ? ` → ${decision_hierarchy_action}` : ''}`
     : '—')
-  add_row(table, 'Decision usage', decision_shadow.length > 0 || decision_post_step.length > 0 ? `${decision_input} in / ${decision_output} out · ${decision_latency || decision_post_step_latency} ms${decision_cost > 0 ? ` · ${decision_cost} µUSD` : ''}` : '—')
-  add_row(table, 'Decision totals', decision_calls_total > 0 ? `${decision_calls_total} calls · ${decision_input_total} in / ${decision_output_total} out${decision_cost_total > 0 ? ` · ${decision_cost_total} µUSD` : ''} · shadow ${decision_matches} match / ${decision_mismatches} differ` : '—')
-  add_row(table, 'Planner routing · Jev', decision_post_step_calls > 0 || decision_planner_skips > 0 || decision_planner_wakes > 0 ? `${decision_planner_skips} skips / ${decision_planner_low} continue / ${decision_planner_reanchor} reanchor / ${decision_planner_high} replan / ${decision_planner_fallback} fallback · ${decision_post_step_calls} decisions` : 'not active yet')
+  add_compact_row(table, 'Decision usage', decision_shadow.length > 0 || decision_post_step.length > 0 ? `${decision_input} in / ${decision_output} out · ${decision_latency || decision_post_step_latency} ms${decision_cost > 0 ? ` · ${decision_cost} µUSD` : ''}` : '—')
+  add_compact_row(table, 'Decision totals', decision_calls_total > 0 ? `${decision_calls_total} calls · ${decision_input_total} in / ${decision_output_total} out${decision_cost_total > 0 ? ` · ${decision_cost_total} µUSD` : ''} · shadow ${decision_matches} match / ${decision_mismatches} differ` : '—')
+  add_compact_row(table, 'Planner routing · Jev', decision_post_step_calls > 0 || decision_planner_skips > 0 || decision_planner_wakes > 0 ? `${decision_planner_skips} skips / ${decision_planner_low} continue / ${decision_planner_reanchor} reanchor / ${decision_planner_high} replan / ${decision_planner_fallback} fallback · ${decision_post_step_calls} decisions` : 'not active yet')
 }
 
 function add_debug_step_rows(table: LuaGuiElement, debug: TaskBoardUiDebugSnapshot) {
@@ -120,18 +127,17 @@ function add_debug_step_rows(table: LuaGuiElement, debug: TaskBoardUiDebugSnapsh
   const runtime_condition = clean_text(debug.runtime_condition, 300)
   const runtime_condition_state = clean_text(debug.runtime_condition_state, 80)
 
-  add_row(table, 'Step relation', step_relation.length > 0 ? step_relation.split('_').join(' ').toUpperCase() : '—')
-  add_row(table, 'Step checkpoint', step_checkpoint_boundary.length > 0 ? step_checkpoint_boundary.split('_').join(' ').toUpperCase() : '—')
-  add_row(table, 'Step admission', step_admission_alignment.length > 0 ? step_admission_alignment.split('_').join(' ').toUpperCase() : '—')
-  add_row(table, 'Completion proof', step_completion_contract.length > 0 || step_completion_status.length > 0 ? `${step_completion_contract.length > 0 ? step_completion_contract : 'semantic_unknown'} · ${step_completion_status.length > 0 ? step_completion_status : 'unknown'}${step_completion_evidence.length > 0 ? ` · ${step_completion_evidence}` : ''}` : '—')
-  add_row(table, 'Runtime wait', runtime_condition.length > 0 || runtime_condition_state.length > 0 ? `${runtime_condition_state.length > 0 ? runtime_condition_state : 'unknown'} · ${runtime_condition.length > 0 ? runtime_condition : '—'}` : '—')
+  add_compact_row(table, 'Step relation', step_relation.length > 0 ? step_relation.split('_').join(' ').toUpperCase() : '—')
+  add_compact_row(table, 'Step checkpoint', step_checkpoint_boundary.length > 0 ? step_checkpoint_boundary.split('_').join(' ').toUpperCase() : '—')
+  add_compact_row(table, 'Step admission', step_admission_alignment.length > 0 ? step_admission_alignment.split('_').join(' ').toUpperCase() : '—')
+  add_compact_row(table, 'Completion proof', step_completion_contract.length > 0 || step_completion_status.length > 0 ? `${step_completion_contract.length > 0 ? step_completion_contract : 'semantic_unknown'} · ${step_completion_status.length > 0 ? step_completion_status : 'unknown'}${step_completion_evidence.length > 0 ? ` · ${step_completion_evidence}` : ''}` : '—')
+  add_compact_row(table, 'Runtime wait', runtime_condition.length > 0 || runtime_condition_state.length > 0 ? `${runtime_condition_state.length > 0 ? runtime_condition_state : 'unknown'} · ${runtime_condition.length > 0 ? runtime_condition : '—'}` : '—')
 }
 
 function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_tick: number | undefined) {
   body.clear()
   const note = body.add({ type: 'label', caption: 'Structured runtime diagnostics only — no hidden chain-of-thought or secrets are exposed.' })
   note.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }; note.style.single_line = false
-  const table = body.add({ type: 'table', column_count: 2 }); table.style.horizontal_spacing = 12; table.style.vertical_spacing = 5
   const debug = sanitize_debug_snapshot(board?.debug)
   const follow = runtime?.follow
   const world = runtime?.world_task
@@ -150,33 +156,49 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const follow_text = follow?.active ? `active · ${clean_text(follow.target_player, 128) || 'target'}${typeof follow.current_distance === 'number' ? ` · ${math.floor(follow.current_distance * 10) / 10} tiles` : ''}` : 'inactive'
   const reply = latest_ai_reply(board)
 
-  add_row(table, 'AI phase', detail.length > 0 ? `${phase} · ${detail}` : phase)
-  add_row(table, 'Goal', board?.status ? `${String(board.status).toUpperCase()} · ${clean_text(board.objective, 300) || clean_text(board.goal_id, 120)}` : 'none')
-  add_row(table, 'AI reply', reply || '—')
-  add_row(table, 'Plan step', step)
-  add_row(table, 'Request', clean_text(debug.request_id, 120) || '—')
-  add_row(table, 'Turn', integer(debug.turn) > 0 ? `${integer(debug.turn)}` : '—')
-  add_row(table, 'Provider', provider.length > 0 ? `${provider} · round ${integer(debug.provider_round) + 1}` : '—')
-  add_row(table, 'Reasoning effort · latest round', clean_text(debug.reasoning_effort, 32) || '—')
-  add_row(table, 'Policy reason · latest round', clean_text(debug.reasoning_policy_reason, 80) || '—')
-  add_row(table, 'Latency', latency > 0 ? `${latency} ms` : '—')
-  add_row(table, 'Tokens · request cumulative', tokens)
-  add_row(table, 'Latest completed round', latest_round_tokens)
-  add_debug_decision_rows(table, debug)
-  add_debug_step_rows(table, debug)
-  add_row(table, 'Provider diag', clean_text(debug.provider_diagnostic_code, 160) || '—')
-  add_row(table, 'Finish', clean_text(debug.provider_finish_reason, 80) || '—')
-  add_row(table, 'Content chars', `${integer(debug.content_chars)}`)
-  add_row(table, 'Reasoning chars', `${integer(debug.reasoning_content_chars)}`)
-  add_row(table, 'Last tool', clean_text(debug.last_tool, 120) || '—')
-  add_row(table, 'Last event', clean_text(debug.last_event, 120) || '—')
-  add_row(table, 'Recovery', integer(debug.recovery_attempt) > 0 ? `attempt ${integer(debug.recovery_attempt)}` : 'none')
-  add_row(table, 'Actor', actor)
-  add_row(table, 'World task', world_text)
-  add_row(table, 'Follow', follow_text)
-  add_row(table, 'UI sync', `gen ${version.generation} · rev ${version.revision} · age ${sync_age(synced_tick)}`)
-  if (clean_text(debug.decision_error, 300).length > 0) add_row(table, 'Decision error', clean_text(debug.decision_error, 300))
-  if (clean_text(debug.last_error, 500).length > 0) add_row(table, 'Last error', clean_text(debug.last_error, 500))
+  const overview = body.add({ type: 'table', column_count: 2 }); overview.style.width = DEBUG_BODY_INNER_WIDTH; overview.style.horizontal_spacing = 12; overview.style.vertical_spacing = 5
+  add_row(overview, 'AI phase', detail.length > 0 ? `${phase} · ${detail}` : phase)
+  add_row(overview, 'Goal', board?.status ? `${String(board.status).toUpperCase()} · ${clean_text(board.objective, 300) || clean_text(board.goal_id, 120)}` : 'none')
+  add_row(overview, 'AI reply', reply || '—')
+  add_row(overview, 'Plan step', step)
+  add_row(overview, 'Request', clean_text(debug.request_id, 120) || '—')
+  add_row(overview, 'Turn', integer(debug.turn) > 0 ? `${integer(debug.turn)}` : '—')
+
+  const columns = body.add({ type: 'flow', direction: 'horizontal' }); columns.style.width = DEBUG_BODY_INNER_WIDTH; columns.style.horizontal_spacing = DEBUG_COLUMN_GAP; columns.style.vertical_align = 'top'
+  const decision_column = columns.add({ type: 'flow', direction: 'vertical' }); decision_column.style.width = DEBUG_COLUMN_WIDTH; decision_column.style.vertical_spacing = 4
+  decision_column.add({ type: 'label', caption: 'LLM / Jev / Decision', style: 'semibold_label' })
+  const decision_table = decision_column.add({ type: 'table', column_count: 2 }); decision_table.style.width = DEBUG_COLUMN_WIDTH; decision_table.style.horizontal_spacing = 12; decision_table.style.vertical_spacing = 5
+  add_compact_row(decision_table, 'Provider', provider.length > 0 ? `${provider} · round ${integer(debug.provider_round) + 1}` : '—')
+  add_compact_row(decision_table, 'Reasoning effort · latest round', clean_text(debug.reasoning_effort, 32) || '—')
+  add_compact_row(decision_table, 'Policy reason · latest round', clean_text(debug.reasoning_policy_reason, 80) || '—')
+  add_compact_row(decision_table, 'Latency', latency > 0 ? `${latency} ms` : '—')
+  add_compact_row(decision_table, 'Tokens · request cumulative', tokens)
+  add_compact_row(decision_table, 'Latest completed round', latest_round_tokens)
+  add_debug_decision_rows(decision_table, debug)
+
+  const runtime_column = columns.add({ type: 'flow', direction: 'vertical' }); runtime_column.style.width = DEBUG_COLUMN_WIDTH; runtime_column.style.vertical_spacing = 4
+  runtime_column.add({ type: 'label', caption: 'Step / Runtime', style: 'semibold_label' })
+  const runtime_table = runtime_column.add({ type: 'table', column_count: 2 }); runtime_table.style.width = DEBUG_COLUMN_WIDTH; runtime_table.style.horizontal_spacing = 12; runtime_table.style.vertical_spacing = 5
+  add_debug_step_rows(runtime_table, debug)
+  add_compact_row(runtime_table, 'Provider diag', clean_text(debug.provider_diagnostic_code, 160) || '—')
+  add_compact_row(runtime_table, 'Finish', clean_text(debug.provider_finish_reason, 80) || '—')
+  add_compact_row(runtime_table, 'Content chars', `${integer(debug.content_chars)}`)
+  add_compact_row(runtime_table, 'Reasoning chars', `${integer(debug.reasoning_content_chars)}`)
+  add_compact_row(runtime_table, 'Last tool', clean_text(debug.last_tool, 120) || '—')
+  add_compact_row(runtime_table, 'Last event', clean_text(debug.last_event, 120) || '—')
+  add_compact_row(runtime_table, 'Recovery', integer(debug.recovery_attempt) > 0 ? `attempt ${integer(debug.recovery_attempt)}` : 'none')
+  add_compact_row(runtime_table, 'Actor', actor)
+  add_compact_row(runtime_table, 'World task', world_text)
+  add_compact_row(runtime_table, 'Follow', follow_text)
+  add_compact_row(runtime_table, 'UI sync', `gen ${version.generation} · rev ${version.revision} · age ${sync_age(synced_tick)}`)
+
+  const decision_error = clean_text(debug.decision_error, 300)
+  const last_error = clean_text(debug.last_error, 500)
+  if (decision_error.length > 0 || last_error.length > 0) {
+    const errors = body.add({ type: 'table', column_count: 2 }); errors.style.width = DEBUG_BODY_INNER_WIDTH; errors.style.horizontal_spacing = 12; errors.style.vertical_spacing = 5
+    if (decision_error.length > 0) add_row(errors, 'Decision error', decision_error)
+    if (last_error.length > 0) add_row(errors, 'Last error', last_error)
+  }
 }
 
 function build_debug_activity(root: LuaGuiElement) {
