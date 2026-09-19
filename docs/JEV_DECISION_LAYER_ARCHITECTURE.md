@@ -78,7 +78,7 @@ The implementation order is intentionally conservative:
 2. **done in the experiment:** wire the taxonomy into post-step traces/diagnostics as shadow telemetry without changing authority;
 3. **implemented conservatively in the experiment:** Jev may suppress a post-step planner wake only when authoritative runtime work is healthy, granularity is `keep`, development is `maintain`, and the boundary is a successful completion; otherwise the existing planner path remains authoritative;
 4. **implemented as the next foundation:** add bounded durable Project/Milestone state above the existing Plan Tracker, without yet letting Jev invent or mutate milestones autonomously;
-5. **partially active:** Main LLM can propose one bounded current milestone plus up to three tentative next milestones. Jev `granularity=split` on a successful post-step boundary now forces a milestone replan, supplies an explicit hierarchy instruction to the Main LLM, and authorizes replacement of the current milestone's Plan Tracker. Milestone `advance` is still pending;
+5. **active foundation:** Main LLM can propose one bounded current milestone plus up to three tentative next milestones. Jev `granularity=split` can force bounded milestone replanning. When the final Plan Tracker step is authoritatively verified, runtime now closes the milestone without closing the user project; Jev then chooses `advance_next | replan_project | project_complete_candidate`. Advancing activates the tentative next milestone but still wakes the Main LLM to create its fresh Plan Tracker;
 6. only then map Jev reasoning budgets into provider/model-specific reasoning controls.
 
 This preserves current completion authority and makes each behavior change independently testable.
@@ -1277,3 +1277,31 @@ Main LLM may replace currentMilestone + its Plan Tracker
 Jev still does not author the replacement milestone. It only decides that the current scope is too broad. The Main LLM owns the new milestone wording and plan steps. Split-triggered replanning is allowed to replace the current canonical plan suffix while preserving grounded completed progress.
 
 `advance` is intentionally not implemented by treating the final Plan Tracker step as project completion. A separate milestone-completion/advance contract is required before the hierarchy can become the normal long-task control path.
+
+
+### Verified milestone completion and advance
+
+Long-horizon projects no longer treat the final step of a milestone-local Plan Tracker as automatic completion of the entire user goal.
+
+The transition is:
+
+```text
+final Plan Tracker step
+  ↓
+runtime/Outcome Authority verifies the step
+  ↓
+current milestone moves to completed_milestones
+  ↓
+Project remains ACTIVE
+  ↓
+Jev milestone_transition
+  ├─ advance_next
+  ├─ replan_project
+  └─ project_complete_candidate
+```
+
+`advance_next` may activate the first tentative milestone, but it never reuses the old milestone's Plan Tracker. The Main LLM is woken to author a fresh bounded plan for the newly active milestone.
+
+`project_complete_candidate` is intentionally only a candidate. Jev cannot complete the user-level project. The Main LLM/runtime must still verify the actual project goal from authoritative evidence.
+
+The in-game console now has a separate **Project Board** above **Plan Tracker**. Project Board shows the user-level project, active milestone, development direction, verified milestone count, and up to three tentative upcoming milestones. Plan Tracker remains the current execution contract.
