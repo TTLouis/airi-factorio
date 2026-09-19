@@ -526,10 +526,26 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     const previousStatus = state.status
     let board = this.ensureTaskBoard(state)
     const evidence = Array.isArray(candidate?.evidence) ? candidate.evidence : []
+    let newEvidenceCount = 0
     for (const item of evidence) {
       if (!item || typeof item !== 'object') continue
       const duplicate = (board?.evidence ?? []).some(existing => existing?.kind === item.kind && item.ref && existing?.ref === item.ref)
-      if (!duplicate) board = addTaskBoardEvidence(board, { ...item, now: Number.isFinite(item.now) ? item.now : now })
+      if (!duplicate) {
+        board = addTaskBoardEvidence(board, { ...item, now: Number.isFinite(item.now) ? item.now : now })
+        newEvidenceCount++
+      }
+    }
+    if (decision.durable_status === 'completed'
+      && candidate?.metadata?.scope === 'step'
+      && evidence.length > 0
+      && newEvidenceCount === 0) {
+      state.task_board = board
+      this.planByNpc.set(key, state)
+      return {
+        state,
+        decision: { ...decision, accepted: false, rejection_reason: 'duplicate_completion_evidence' },
+        changed: false,
+      }
     }
 
     if (decision.durable_status === 'blocked') {

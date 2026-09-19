@@ -696,7 +696,15 @@ export function taskBoardProgress(board) {
 
 export function sanitizeTaskBoard(value, { fallbackPlan = [], fallbackCurrentStep = 0, goalId = '', now = Date.now() } = {}) {
   if (!value || value.kind !== 'task_board_lite' || !Array.isArray(value.steps)) {
-    return createTaskBoard(fallbackPlan, fallbackCurrentStep, { goalId, now })
+    // Legacy persisted plan state used current_step as harness-owned canonical
+    // progress. Preserve that verified prefix only while migrating old state.
+    // New planner currentStep enters through createTaskBoard/recordPlan as
+    // proposed focus and never gains this authority.
+    let migrated = createTaskBoard(fallbackPlan, fallbackCurrentStep, { goalId, now })
+    if (Number.isSafeInteger(fallbackCurrentStep) && fallbackCurrentStep > 0) {
+      migrated = applyTaskBoardStatuses(migrated, clampTaskBoardIndex(fallbackCurrentStep, migrated.steps.length))
+    }
+    return migrated
   }
   const descriptions = value.steps.slice(0, TASK_BOARD_MAX_STEPS).map(step => taskBoardText(step?.description, 500)).filter(Boolean)
   let board = createTaskBoard(descriptions, value.active_index, { goalId: value.goal_id ?? goalId, now: Number.isFinite(value.created_at) ? value.created_at : now })

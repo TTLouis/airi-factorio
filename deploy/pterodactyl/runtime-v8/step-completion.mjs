@@ -171,7 +171,8 @@ export function conditionFromRequirement(requirement) {
   const normalized = boundedRequirement(requirement, 0)
   if (!normalized) return undefined
   if (!['inventory_count', 'entity_inventory_count', 'entity_exists', 'entity_state'].includes(normalized.kind)) return undefined
-  return normalized
+  const { id: _requirementId, ...condition } = normalized
+  return condition
 }
 
 export function makeConditionWait(requirement, {

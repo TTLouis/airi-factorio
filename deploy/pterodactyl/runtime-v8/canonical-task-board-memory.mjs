@@ -2,7 +2,6 @@ import { NpcDialogueMemory } from './npc-agent-loop.mjs'
 import { setTaskBoardStatus } from './common.mjs'
 
 const STRICT_TASKS_BY_OPERATION = new Map([
-  ['wait', ['waiting']],
   ['walk_to_entity', ['walking_to_entity']],
   ['walk_to_entity_exact', ['walking_to_entity']],
   ['walk_to_player', ['walking_to_entity']],
