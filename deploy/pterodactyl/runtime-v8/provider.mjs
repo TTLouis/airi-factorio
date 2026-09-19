@@ -138,8 +138,20 @@ export async function providerRequest(config, messages, options = {}) {
 
   const actualFetch = options.fetchImpl ?? fetch
   const actualEndpoint = providerEndpoint(config.base)
+  const semanticBudgetNeedsFullPlanner = ['normal', 'deep', 'strategic'].includes(options.reasoningBudget)
+  const structuralHierarchyTrigger = [
+    'hierarchy_split',
+    'hierarchy_advance',
+    'hierarchy_replan_project',
+    'hierarchy_project_complete_candidate',
+  ].includes(options.triggerSource)
   const compactPath = options.recoveryKind === 'output_budget_exhaustion'
-    || (completionContinuation(messages, options) && options.triggerSource !== 'post_step_replan')
+    || (
+      completionContinuation(messages, options)
+      && options.triggerSource !== 'post_step_replan'
+      && !semanticBudgetNeedsFullPlanner
+      && !structuralHierarchyTrigger
+    )
   const callerPatch = options.requestBodyPatch && typeof options.requestBodyPatch === 'object' && !Array.isArray(options.requestBodyPatch)
     ? options.requestBodyPatch
     : {}
