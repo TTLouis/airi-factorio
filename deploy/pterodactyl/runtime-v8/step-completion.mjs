@@ -143,6 +143,11 @@ const EXPLICIT_SEMANTIC_CHECKPOINT_OPERATIONS = new Set([
   'move_items_with_player',
 ])
 
+export function requiresExplicitSemanticCheckpoint(operations = []) {
+  const bounded = Array.isArray(operations) ? operations.slice(0, 16) : []
+  return bounded.some(operation => EXPLICIT_SEMANTIC_CHECKPOINT_OPERATIONS.has(clean(operation?.name, 100)))
+}
+
 function operationReceiptRequirement(operation, index) {
   if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return undefined
   const name = clean(operation.name, 100)
@@ -159,7 +164,7 @@ export function completionCandidatesFromOperations(operations = []) {
   // would only prove that the action ran, not that the semantic target is true.
   // These operations therefore require an explicit planner semantic checkpoint
   // that Jev judges and runtime verifies.
-  if (bounded.some(operation => EXPLICIT_SEMANTIC_CHECKPOINT_OPERATIONS.has(clean(operation?.name, 100)))) return []
+  if (requiresExplicitSemanticCheckpoint(bounded)) return []
 
   const receiptRequirements = bounded.map(operationReceiptRequirement).filter(Boolean)
   if (receiptRequirements.length === 0) return []
