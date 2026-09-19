@@ -32,6 +32,7 @@ function decisionKey(snapshot, {
 } = {}) {
   return JSON.stringify({
     strategic_revision: strategicRevision(strategicBoard),
+    event_cursor: typeof snapshot?.eventCursor === 'string' ? snapshot.eventCursor : '',
     counts: snapshot?.counts ?? {},
     missions: recordKey(snapshot?.missions),
     objectives: recordKey(snapshot?.objectives),
@@ -104,14 +105,14 @@ export function buildProjectJevShadowSnapshot(globalSnapshot, {
     })),
     runtime: (() => {
       const sampledActiveWork = globalSnapshot.work.some(item => item?.status === 'claimed' || item?.status === 'active')
-      const active = globalSnapshot.counts.claims > 0 || sampledActiveWork
+      const active = globalSnapshot.counts.activeClaims > 0 || sampledActiveWork
       return {
         healthy: true,
         active,
         blocked: globalSnapshot.counts.activeWarnings > 0,
         reason: globalSnapshot.counts.activeWarnings > 0
           ? 'swarm_active_warnings'
-          : globalSnapshot.counts.claims > 0
+          : globalSnapshot.counts.activeClaims > 0
             ? 'swarm_active_claims'
             : sampledActiveWork
               ? 'swarm_sampled_active_work'
@@ -121,6 +122,7 @@ export function buildProjectJevShadowSnapshot(globalSnapshot, {
     global: {
       schema: globalSnapshot.schema,
       tick: globalSnapshot.tick,
+      event_cursor: globalSnapshot.eventCursor,
       counts: structuredClone(globalSnapshot.counts),
       warnings: structuredClone(globalSnapshot.warnings),
       agents: structuredClone(globalSnapshot.agents),
