@@ -14,10 +14,12 @@ import { isLifecycleMetaStep, normalizeCanonicalPlan, validateOutcomeCandidate }
 import { parseRecoveryDecision, recoveryDecisionQuestions, recoveryFailureClassHint, validateRecoveryRoute } from './recovery-route.mjs'
 import {
   applyConditionObservation,
+  completionCandidatesFromOperations,
   evaluateCompletionContract,
   makeConditionWait,
-  parseStepCompletionDecision,
-  stepCompletionDecisionQuestions,
+  parseStepCheckpointDecision,
+  sanitizeStepCompletionContract,
+  stepCheckpointDecisionQuestions,
 } from './step-completion.mjs'
 import { isObservationToolName, renderOperation, renderOperationPreflight, runtimeConditionCommand, toolCommand } from './structured-policy.mjs'
 
@@ -326,6 +328,29 @@ function safeConditionWait(value) {
     registered_at: Number.isFinite(value.registered_at) ? value.registered_at : Date.now(),
     updated_at: Number.isFinite(value.updated_at) ? value.updated_at : Date.now(),
   }
+}
+
+function persistedStepCheckpoint(board, stepId) {
+  if (!board || !stepId || !Array.isArray(board.evidence)) return undefined
+  for (let index = board.evidence.length - 1; index >= 0; index--) {
+    const item = board.evidence[index]
+    if (item?.kind !== 'step_checkpoint_contract' || item?.step_id !== stepId || typeof item.summary !== 'string') continue
+    try {
+      const parsed = JSON.parse(item.summary)
+      const contract = sanitizeStepCompletionContract(parsed?.contract)
+      return {
+        contract,
+        boundary: ['checkpoint_here', 'keep_step_open', 'split_recommended'].includes(parsed?.boundary)
+          ? parsed.boundary
+          : 'keep_step_open',
+        compound_probability: parsed?.compound_probability,
+        provider: parsed?.provider,
+        model: parsed?.model,
+      }
+    }
+    catch {}
+  }
+  return undefined
 }
 
 function conditionWaitLifecycleMatches(wait, deployment) {
