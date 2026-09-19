@@ -68,9 +68,15 @@ export class SwarmProjectJevRuntime {
     return promise
   }
 
-  async bindGoal(goal) {
+  async bindGoal(goal = {}) {
     await this.initialize()
-    const board = this.store.bindGoal(goal)
+    if (goal?.status !== undefined && goal.status !== 'active') {
+      throw new Error('Project Jev runtime cannot set strategic lifecycle status through bindGoal')
+    }
+    const board = this.store.bindGoal({
+      ...goal,
+      status: 'active',
+    })
     await this.persistence.save()
     return board
   }
