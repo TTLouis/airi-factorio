@@ -179,6 +179,8 @@ export class SwarmProjectJevShadowController {
       scope: 'swarm_global',
       source_tick: globalSnapshot.tick,
       source_event_cursor: globalSnapshot.eventCursor,
+      source_goal_id: typeof options?.strategicBoard?.goal_id === 'string' ? options.strategicBoard.goal_id : '',
+      source_project_revision: strategicRevision(options?.strategicBoard),
       source_schema: globalSnapshot.schema,
       source_counts: structuredClone(globalSnapshot.counts),
       decision_key: key,
