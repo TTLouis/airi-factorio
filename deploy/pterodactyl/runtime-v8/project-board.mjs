@@ -130,6 +130,7 @@ export function completeCurrentMilestone(current, { verified = false, now = Date
 export function activateNextMilestone(current, { now = Date.now(), goalId = '', objective = '', status = 'active' } = {}) {
   const board = sanitizeProjectBoard(current, { goalId, objective, status, now })
   if (board.current_milestone) return { board, changed: false, reason: 'current_milestone_still_active' }
+  if (board.transition_state !== 'awaiting_next_milestone') return { board, changed: false, reason: 'not_awaiting_next_milestone' }
   const [next, ...rest] = board.next_milestones
   if (!next) return { board, changed: false, reason: 'no_tentative_next_milestone' }
   return {

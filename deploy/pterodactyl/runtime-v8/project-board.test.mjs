@@ -149,5 +149,23 @@ test('next tentative milestone only activates from an awaiting transition', asyn
   assert.equal(advanced.board.current_milestone.title, 'Reach Automation')
   assert.deepEqual(advanced.board.next_milestones.map(item => item.title), ['Establish electric power'])
   assert.equal(advanced.board.transition_state, 'awaiting_milestone_plan')
-  assert.equal(advanced.board.transition_state, '')
+})
+
+
+test('tentative milestone activation rejects states that are not awaiting verified transition', async () => {
+  const { activateNextMilestone } = await import('./project-board.mjs')
+  const idle = sanitizeProjectBoard({
+    current_milestone: undefined,
+    next_milestones: [{ title: 'Reach Automation' }],
+    transition_state: '',
+  }, { goalId: 'goal_guard', objective: 'Launch a rocket', now: 10 })
+  const rejected = activateNextMilestone(idle, {
+    goalId: 'goal_guard',
+    objective: 'Launch a rocket',
+    now: 20,
+  })
+  assert.equal(rejected.changed, false)
+  assert.equal(rejected.reason, 'not_awaiting_next_milestone')
+  assert.equal(rejected.board.current_milestone, undefined)
+  assert.equal(rejected.board.next_milestones[0].title, 'Reach Automation')
 })
