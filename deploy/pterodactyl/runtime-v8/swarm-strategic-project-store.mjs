@@ -50,8 +50,8 @@ export class SwarmStrategicProjectStore {
     if (!nextObjective) throw new Error('Strategic project next goal requires objective')
 
     const current = this.current()
-    if (current.goal_id && current.status !== 'completed') {
-      throw new Error('Strategic project next goal requires completed prior goal')
+    if (current.goal_id && !['completed', 'terminated'].includes(current.status)) {
+      throw new Error('Strategic project next goal requires terminal prior goal')
     }
     if (current.goal_id && current.goal_id === nextGoalId) {
       throw new Error('Strategic project next goal identity must differ from completed goal')
@@ -122,6 +122,48 @@ export class SwarmStrategicProjectStore {
     return {
       ...transition,
       board: structuredClone(transition.board),
+    }
+  }
+
+  terminateGoal() {
+    const current = this.ensure()
+    if (current.status === 'terminated') {
+      return {
+        board: current,
+        changed: false,
+        reason: 'project_already_terminated',
+      }
+    }
+    if (current.status === 'completed') {
+      return {
+        board: current,
+        changed: false,
+        reason: 'completed_project_cannot_terminate',
+      }
+    }
+
+    const now = this.now()
+    this.status = 'terminated'
+    this.board = sanitizeStrategicProjectBoard({
+      ...current,
+      status: 'terminated',
+      current_milestone: undefined,
+      next_milestones: [],
+      transition_state: '',
+      development_direction: '',
+      revision: current.revision + 1,
+      updated_at: now,
+    }, {
+      goalId: this.goalId,
+      objective: this.objective,
+      status: 'terminated',
+      now,
+    })
+
+    return {
+      board: structuredClone(this.board),
+      changed: true,
+      reason: 'project_terminated',
     }
   }
 
