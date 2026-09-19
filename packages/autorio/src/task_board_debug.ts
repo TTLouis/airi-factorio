@@ -841,7 +841,7 @@ const debug_render = (() => {
     // available to Projects without adding another Task Board click handler.
     titlebar.add({ type: 'sprite-button', name: DEBUG_BUTTON_NAME, sprite: 'utility/close', style: 'frame_action_button', tooltip: 'Close SGLuna Debug' })
     const body = root.add({ type: 'flow', name: DEBUG_BODY_NAME, direction: 'vertical' }); body.style.width = DEBUG_WIDTH; body.style.padding = 10; body.style.vertical_spacing = 8
-    debug_render.fill_debug_body(body, board, runtime, synced_tick)
+    fill_debug_body(body, board, runtime, synced_tick)
     build_debug_activity(root)
     refresh_debug_activity(root, player, true)
     root.bring_to_front()
@@ -866,7 +866,7 @@ export function render_debug_popout(player: LuaPlayer, console_open: boolean, bo
   if (!debug_ui_is_open(player.index)) { debug_render.destroy_debug_popout(player); return }
   const root = player.gui.screen[DEBUG_ROOT_NAME]; const body = root?.valid ? root[DEBUG_BODY_NAME] : undefined
   if (body?.valid && root?.valid) {
-    fill_debug_body(body, board, runtime, synced_tick)
+    debug_render.fill_debug_body(body, board, runtime, synced_tick)
     if (!debug_render.refresh_debug_activity(root, player)) { debug_render.build_debug_activity(root); debug_render.refresh_debug_activity(root, player, true) }
     return
   }
