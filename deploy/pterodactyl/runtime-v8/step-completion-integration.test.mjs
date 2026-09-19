@@ -236,6 +236,11 @@ test('Jev flags a later-step batch before admission while allowing a current-ste
     decisionProvider: async () => checkpointDecision('candidate_1', 'keep_step_open', 0.94, 'belongs_to_later_step'),
   })
   const drift = await driftAgent.routeStepCheckpointDecision({
+    checkpoint: {
+      mode: 'all',
+      source: 'planner_semantic_checkpoint',
+      requirements: [{ id: 'furnaces_total', kind: 'inventory_count', item_name: 'stone-furnace', minimum: 2 }],
+    },
     operations: [{ name: 'craft_item', args: { item_name: 'stone-furnace', count: 2 } }],
   })
   assert.equal(drift.relation, 'belongs_to_later_step')
@@ -250,6 +255,11 @@ test('Jev flags a later-step batch before admission while allowing a current-ste
     decisionProvider: async () => checkpointDecision('candidate_1', 'keep_step_open', 0.94, 'prerequisite_for_current'),
   })
   const prereq = await prereqAgent.routeStepCheckpointDecision({
+    checkpoint: {
+      mode: 'all',
+      source: 'planner_semantic_checkpoint',
+      requirements: [{ id: 'furnace_total', kind: 'inventory_count', item_name: 'stone-furnace', minimum: 1 }],
+    },
     operations: [{ name: 'craft_item', args: { item_name: 'stone-furnace', count: 1 } }],
   })
   assert.equal(prereq.relation, 'prerequisite_for_current')
@@ -271,6 +281,11 @@ test('compound Jev assessment cannot accept a one-requirement checkpoint as step
   })
 
   const result = await agent.routeStepCheckpointDecision({
+    checkpoint: {
+      mode: 'all',
+      source: 'planner_semantic_checkpoint',
+      requirements: [{ id: 'stone_total', kind: 'inventory_count', item_name: 'stone', minimum: 10 }],
+    },
     operations: [{ name: 'gather_resource', args: { resource_name: 'stone', count: 10, search_radius: 64 } }],
   })
 
