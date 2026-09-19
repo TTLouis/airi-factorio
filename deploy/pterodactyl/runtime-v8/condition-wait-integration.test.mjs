@@ -622,18 +622,31 @@ test('granularity collapse wakes bounded simplification instead of silently beha
 })
 
 
-test('adaptive observation-pressure completion enters no-more-observation repair', async () => {
+test('adaptive observation-pressure completion forces a no-tools planner decision instead of pausing', async () => {
+  let decisionCalls = 0
+  let providerOptions
   const { agent } = makeAgent({
-    decisionProvider: async () => decisionResponse('pause_recoverable'),
+    decisionProvider: async () => {
+      decisionCalls++
+      return decisionResponse('pause_recoverable')
+    },
+    provider: async (_messages, options) => {
+      providerOptions = options
+      throw new Error('forced decision test stop')
+    },
   })
 
-  const result = await agent.recoverPlan(
-    agent.generation,
-    new Error('The targeted observation budget allowed by decision pressure is complete. Stop observing. Reuse the live evidence already collected and return the next executable action, or a truthful blocker naming the still-missing fact.'),
-    1,
+  await assert.rejects(
+    agent.recoverPlan(
+      agent.generation,
+      new Error('The targeted observation budget allowed by decision pressure is complete. Stop observing. Reuse the live evidence already collected and return the next executable action, or a truthful blocker naming the still-missing fact.'),
+      1,
+    ),
+    /forced decision test stop/,
   )
 
-  assert.equal(result.goalStatus, 'paused')
+  assert.equal(decisionCalls, 0)
+  assert.equal(providerOptions.allowTools, false)
   assert.equal(agent.actionOmissionRepairActive, true)
   assert.equal(agent.actionOmissionObservationUsed, true)
   assert.equal(agent.actionOmissionForceNoTools, true)
