@@ -2503,7 +2503,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     ]
     const questions = stepCheckpointDecisionQuestions(candidates)
     if (!this.interactionDecisionProvider) {
-      return { boundary: 'keep_step_open', relation: 'replan_needed', state: planState, reason: 'decision_provider_unavailable' }
+      // Jev is advisory for semantic admission safety, not a hard dependency for
+      // performing otherwise-valid useful work. If the decision layer is
+      // unavailable, fail closed on completion proof but fail open on admission:
+      // keep the step open and allow the batch to proceed without inventing a
+      // checkpoint or advancing canonical progress.
+      return {
+        boundary: 'keep_step_open',
+        relation: 'advances_current',
+        contract: { mode: 'semantic_unknown', requirements: [], confidence: 0 },
+        state: planState,
+        reason: 'decision_provider_unavailable',
+      }
     }
 
     const current = await this.assertCurrent()
@@ -2630,7 +2641,17 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         reason: message,
         latency_ms: Date.now() - startedAt,
       })
-      return { boundary: 'keep_step_open', relation: 'replan_needed', state: planState, reason: 'checkpoint_decision_failed' }
+      // A Jev/decision-provider outage must not manufacture semantic drift.
+      // Preserve safety by withholding completion authority while allowing the
+      // already-validated operation batch to continue. Explicit Jev decisions
+      // such as belongs_to_later_step/replan_needed still block admission above.
+      return {
+        boundary: 'keep_step_open',
+        relation: 'advances_current',
+        contract: { mode: 'semantic_unknown', requirements: [], confidence: 0 },
+        state: planState,
+        reason: 'checkpoint_decision_failed',
+      }
     }
     finally {
       controller.abort()
