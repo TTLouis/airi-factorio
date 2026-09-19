@@ -32,12 +32,18 @@ export function swarmJevShadowQuestions() {
 }
 
 export function buildSwarmJevShadowContext(snapshot = {}) {
-  const missions = boundedList(snapshot.missions)
-  const requests = boundedList(snapshot.requests)
-  const work = boundedList(snapshot.work)
-  const claims = boundedList(snapshot.claims)
-  const actors = boundedList(snapshot.actors)
-  const evidence = boundedList(snapshot.evidence)
+  const missionSource = Array.isArray(snapshot.missions) ? snapshot.missions : []
+  const requestSource = Array.isArray(snapshot.requests) ? snapshot.requests : []
+  const workSource = Array.isArray(snapshot.work) ? snapshot.work : []
+  const claimSource = Array.isArray(snapshot.claims) ? snapshot.claims : []
+  const actorSource = Array.isArray(snapshot.actors) ? snapshot.actors : []
+  const evidenceSource = Array.isArray(snapshot.evidence) ? snapshot.evidence : []
+  const missions = boundedList(missionSource)
+  const requests = boundedList(requestSource)
+  const work = boundedList(workSource)
+  const claims = boundedList(claimSource)
+  const actors = boundedList(actorSource)
+  const evidence = boundedList(evidenceSource)
 
   return {
     schema: 'swarm_jev_shadow_v1',
@@ -51,12 +57,12 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
         }
       : undefined,
     counts: {
-      missions: missions.length,
-      requests: requests.length,
-      work: work.length,
-      claims: claims.length,
-      actors: actors.length,
-      evidence: evidence.length,
+      missions: missionSource.length,
+      requests: requestSource.length,
+      work: workSource.length,
+      claims: claimSource.length,
+      actors: actorSource.length,
+      evidence: evidenceSource.length,
     },
     missions: summarizeRecords(missions),
     requests: summarizeRecords(requests),
