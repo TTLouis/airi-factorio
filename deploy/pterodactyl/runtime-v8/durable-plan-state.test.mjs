@@ -1079,3 +1079,35 @@ test('ordinary short-task responses remain backward compatible without project h
   assert.equal(parsed.project, undefined)
   assert.equal(parsed.plan[0], 'Gather 20 stone')
 })
+
+
+test('structural hierarchy turns reject flat plans that omit the required milestone proposal', () => {
+  const agent = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    memory: new CanonicalTaskBoardMemory(),
+    npcId: 'airi',
+    systemPrompt: 'hierarchy structural contract test',
+    stateFile: null,
+    traceFile: null,
+    decisionTraceFile: null,
+    provider: async () => { throw new Error('unused') },
+  })
+
+  for (const triggerSource of ['hierarchy_initial_split', 'hierarchy_split', 'hierarchy_replan_project']) {
+    agent.reasoningTriggerSource = triggerSource
+    assert.throws(() => agent.parsePlanMessage(planMessage({
+      chatMessage: 'Trying a flat plan.',
+      plan: ['Do a broad amount of work'],
+      currentStep: 0,
+      operations: [{ name: 'wait', args: { ticks: 1 } }],
+    })), /requires a bounded project\.currentMilestone proposal/i)
+  }
+
+  agent.reasoningTriggerSource = 'hierarchy_advance'
+  assert.doesNotThrow(() => agent.parsePlanMessage(planMessage({
+    chatMessage: 'Planning the already activated milestone.',
+    plan: ['Build the milestone-local plan'],
+    currentStep: 0,
+    operations: [{ name: 'wait', args: { ticks: 1 } }],
+  })))
+})
