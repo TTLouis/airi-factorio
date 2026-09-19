@@ -411,6 +411,7 @@ test('hierarchy gate refuses runtime wait when Jev says strategic direction is n
   assert.equal(routed.requested_route, 'wait_runtime')
   assert.equal(routed.route, 'fallback_planner')
   assert.equal(routed.fallback_reason, 'development_requires_planner')
+  assert.equal(routed.hierarchy_action, 'development_vertical')
   assert.equal(routed.hierarchy_gate.allow_runtime_continuation, false)
 })
 
