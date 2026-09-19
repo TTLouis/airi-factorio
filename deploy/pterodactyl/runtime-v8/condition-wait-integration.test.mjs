@@ -623,15 +623,13 @@ test('verified milestone transition can activate the next tentative milestone bu
     revision: 2,
     updated_at: Date.now(),
   }
-  durable.milestone_transition_pending = true
-
   const routed = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0 } })
   assert.equal(routed.route, 'replan')
   assert.equal(routed.hierarchy_action, 'advance_next_milestone')
   assert.equal(routed.fallback_reason, 'verified_milestone_complete_advance_next')
   const advanced = memory.planByNpc.get('npc:airi')
   assert.equal(advanced.project_board.current_milestone.title, 'Reach Automation')
-  assert.equal(advanced.project_board.transition_state, '')
+  assert.equal(advanced.project_board.transition_state, 'awaiting_milestone_plan')
   assert.equal(advanced.task_board.total_steps, 0)
 })
 
