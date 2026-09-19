@@ -189,3 +189,23 @@ test('tools-disabled recovery does not advertise submitPlan', async () => {
   await providerRequest(config, messages, { fetchImpl: successfulFetch(captured), allowTools: false, recoveryAttempt: 1 })
   assert.equal('tools' in captured[0], false)
 })
+
+
+test('provider diagnostics distinguish invalid content JSON from plan-schema failure', async () => {
+  const invalidJson = await providerRequest(config, messages, {
+    fetchImpl: contentFetch('not json'),
+    allowTools: false,
+    recoveryAttempt: 1,
+  })
+  assert.equal(invalidJson._airiProvider.diagnostic_code, 'provider_content_invalid_json')
+  assert.equal(invalidJson._airiProvider.structured_content.json_valid, false)
+
+  const invalidPlan = await providerRequest(config, messages, {
+    fetchImpl: contentFetch('{"foo":"bar"}'),
+    allowTools: false,
+    recoveryAttempt: 1,
+  })
+  assert.equal(invalidPlan._airiProvider.diagnostic_code, 'provider_content_schema_invalid')
+  assert.equal(invalidPlan._airiProvider.structured_content.json_valid, true)
+  assert.equal(invalidPlan._airiProvider.structured_content.plan_valid, false)
+})

@@ -199,3 +199,31 @@ test('response trace reports malformed provider HTTP JSON without recording its 
   assert.equal(errorRow.response_first_nonspace, '{')
   assert.equal(Object.hasOwn(errorRow, 'response_preview'), false)
 })
+
+
+test('response trace reports a missing provider response body explicitly', async t => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-provider-missing-body-'))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  const promptTraceFile = path.join(dir, 'airi-prompts.jsonl')
+  const fetchImpl = async () => new Response(null, { status: 200 })
+
+  await assert.rejects(
+    providerRequest(config, [
+      { role: 'system', content: 'Return strict JSON.' },
+      { role: 'user', content: '[CHAT] TTLouis: test missing provider body' },
+    ], {
+      fetchImpl,
+      allowTools: false,
+      round: 1,
+      requestId: 'req-missing-provider-body',
+      promptTraceFile,
+    }),
+    /Provider returned no response body/,
+  )
+
+  const rows = await readTrace(promptTraceFile)
+  const errorRow = rows.find(row => row.event === 'provider.response_error')
+  assert.ok(errorRow)
+  assert.equal(errorRow.diagnostic_code, 'provider_missing_response_body')
+  assert.equal(errorRow.http_status, 200)
+})

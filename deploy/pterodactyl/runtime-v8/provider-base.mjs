@@ -885,7 +885,13 @@ export async function providerRequest(config, messages, {
       }, traceOptions)
       throw new DeploymentError(`Provider HTTP ${response.status}; request will not be retried automatically`)
     }
-    check(response.body, 'Provider returned no response body')
+    if (!response.body) {
+      await traceProviderResult('provider.response_error', {
+        diagnostic_code: 'provider_missing_response_body',
+        http_status: response.status,
+      }, traceOptions)
+      throw new DeploymentError('Provider returned no response body')
+    }
     const reader = response.body.getReader()
     const chunks = []
     let bytes = 0
@@ -958,6 +964,8 @@ export async function providerRequest(config, messages, {
       : safetyFinish
         ? 'provider_safety_blocked'
         : (rawShape.content_chars === 0 && toolCallCount === 0 ? 'provider_empty_content' : 'ok')
+    if (diagnosticCode === 'ok' && structured?.json_valid === false) diagnosticCode = 'provider_content_invalid_json'
+    else if (diagnosticCode === 'ok' && structured?.json_valid === true && structured?.plan_valid === false) diagnosticCode = 'provider_content_schema_invalid'
     if (capEnforcementAnomaly && diagnosticCode === 'ok') diagnosticCode = 'provider_output_cap_ignored'
     const providerDiagnostics = {
       response_id: typeof data?.id === 'string' ? data.id : undefined,
