@@ -23,9 +23,15 @@ export const RECOVERY_ROUTES = new Set([
   'fallback_runtime',
 ])
 
+export const RECOVERY_SEMANTIC_SCOPES = new Set([
+  'keep_target',
+  'reanchor_target',
+  'split_milestone',
+])
+
 export function recoveryFailureClassHint(reason) {
   const text = String(reason ?? '')
-  if (/finish=length|output budget|provider_output_budget_exhausted/i.test(text)) return 'provider_budget'
+  if (/finish=length|output budget|provider_(?:turn_output_cap_exceeded|output_budget(?:_recovery)?_(?:exhausted|budget_unavailable))/i.test(text)) return 'provider_budget'
   if (/provider_safety_blocked|content_filter|safety block/i.test(text)) return 'provider_safety'
   if (/invalid provider|invalid json|strict json|malformed|parse/i.test(text)) return 'provider_format'
   if (/observation|missing fact|exact entity requires live observation/i.test(text)) return 'missing_fact'
@@ -64,6 +70,15 @@ export function recoveryDecisionQuestions() {
         fallback_runtime: 'Use the existing safe runtime fallback.',
       },
     },
+    semantic_scope: {
+      type: 'choice',
+      instructions: 'At a provider-budget boundary, decide whether the durable semantic scope itself still fits. This never proves completion and never advances a milestone; it only controls the next planner handoff.',
+      criteria: {
+        keep_target: 'Keep the current milestone and active semantic target; only renew the planner budget/context.',
+        reanchor_target: 'Keep the current milestone, but let the next planner re-anchor the active target/step from authoritative state.',
+        split_milestone: 'The current milestone is too broad for another bounded planner generation; persist a hierarchy split transaction before waking the planner.',
+      },
+    },
     world_failure_supported: {
       type: 'noul',
       instructions: 'Do the supplied authoritative facts support a real world blocker?',
@@ -90,9 +105,11 @@ export function parseRecoveryDecision(response) {
     const value = response?.answers?.[key]?.noul
     return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : undefined
   }
+  const semanticScope = response?.answers?.semantic_scope?.choice
   return {
     failure_class: failure.choice,
     route: route.choice,
+    semantic_scope: RECOVERY_SEMANTIC_SCOPES.has(semanticScope) ? semanticScope : 'keep_target',
     confidence,
     world_failure_supported: noul('world_failure_supported'),
     need_fresh_observation: noul('need_fresh_observation'),

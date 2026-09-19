@@ -1858,6 +1858,37 @@ function actionOmissionRecoveryCapsule(state, runtimeStatus) {
   return `[ACTION_OMISSION_RECOVERY] Compact recovery capsule. It intentionally omits unrelated dialogue and historical tool results.\n${JSON.stringify(capsule)}`
 }
 
+function providerBudgetHandoffCapsule(state, runtimeStatus, reason, semanticScope = 'keep_target') {
+  const board = state?.task_board
+  const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : state?.current_step ?? 0
+  const capsule = {
+    goal: state
+      ? {
+          goal_id: sanitizeDurableModelText(state.goal_id, 100),
+          objective: sanitizeDurableModelText(state.objective, 1000),
+          status: state.status,
+        }
+      : null,
+    project: state?.project_board ? sanitizeDurableModelValue(state.project_board) : null,
+    task_board: board ? modelFacingTaskBoard(board) : null,
+    active_target: sanitizeDurableModelText(board?.steps?.[activeIndex]?.description ?? currentPlanStep(state?.plan, activeIndex), 500),
+    authoritative_evidence: activeStepEvidence(board).map(item => sanitizeDurableModelValue(item)),
+    runtime: sanitizeDurableModelValue(runtimeStatus ?? state?.persistent_runtime),
+    durable_locators: modelFacingEntityReferences(state).slice(-4),
+    provider_budget: {
+      semantic_scope: semanticScope,
+      reason: cleanMemoryText(reason, 1200),
+    },
+    contract: {
+      completion_authority: 'unchanged',
+      milestone_completion: 'provider budget exhaustion is not completion evidence',
+      verified_prefix: 'preserve every completed milestone and verified Task Board step',
+      next_turn: 'resume from this bounded capsule; re-observe mutable world facts when needed before mutation',
+    },
+  }
+  return `[PROVIDER_BUDGET_HANDOFF] Fresh planner generation after a provider-budget boundary. The user goal and durable verified prefix continue; the exhausted provider generation does not pause, complete, or advance the project by itself.\n${JSON.stringify(capsule)}`
+}
+
 export class NpcAgentLoop extends BaseNpcAgentLoop {
   constructor(options) {
     const memory = options.memory ?? new NpcDialogueMemory()
@@ -1871,6 +1902,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.maxProviderOutputUnits = Number.isSafeInteger(options.maxProviderOutputUnits) ? options.maxProviderOutputUnits : 20000
     if (this.maxProviderOutputUnits < 1000 || this.maxProviderOutputUnits > 200000) {
       throw new AgentLoopError('maxProviderOutputUnits must be an integer from 1000 to 200000')
+    }
+    this.maxProviderBudgetHandoffs = Number.isSafeInteger(options.maxProviderBudgetHandoffs) ? options.maxProviderBudgetHandoffs : 4
+    if (this.maxProviderBudgetHandoffs < 1 || this.maxProviderBudgetHandoffs > 16) {
+      throw new AgentLoopError('maxProviderBudgetHandoffs must be an integer from 1 to 16')
     }
     this.interactionProvider = typeof options.interactionProvider === 'function' ? options.interactionProvider : null
     this.interactionDecisionProvider = typeof options.interactionDecisionProvider === 'function' ? options.interactionDecisionProvider : null
@@ -1897,6 +1932,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
+    this.providerBudgetGeneration = 0
+    this.providerBudgetGenerationOutputUnits = 0
+    this.providerBudgetHandoffCount = 0
     this.actionOmissionRepairActive = false
     this.actionOmissionObservationUsed = false
     this.actionOmissionForceNoTools = false
@@ -3497,6 +3535,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
+    this.providerBudgetGeneration = 1
+    this.providerBudgetGenerationOutputUnits = 0
+    this.providerBudgetHandoffCount = 0
     const resumeActionOmission = intent === 'continue_current'
       && planBefore?.status === 'active'
       && planBefore?.admission_status === 'action_omission_repair'
@@ -4069,8 +4110,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
       const usage = normalizedProviderUsage(message?._airiProvider?.usage)
       accumulateProviderUsage(this.traceRequest?.usage, usage)
+      if (Number.isSafeInteger(usage?.output_units)) this.providerBudgetGenerationOutputUnits += usage.output_units
       const aggregateOutputUnits = this.traceRequest?.usage?.output_units
-      const turnOutputCapExceeded = Number.isSafeInteger(aggregateOutputUnits) && aggregateOutputUnits > this.maxProviderOutputUnits
+      const generationOutputUnits = this.providerBudgetGenerationOutputUnits
+      const turnOutputCapExceeded = Number.isSafeInteger(generationOutputUnits) && generationOutputUnits > this.maxProviderOutputUnits
       const responseTrace = {
         kind: 'response',
         round,
@@ -4083,14 +4126,22 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         usage,
         provider: compactProviderMetadata(message?._airiProvider),
         turn_output_cap: this.maxProviderOutputUnits,
-        turn_output_units: Number.isSafeInteger(aggregateOutputUnits) ? aggregateOutputUnits : undefined,
+        turn_output_units: Number.isSafeInteger(generationOutputUnits) ? generationOutputUnits : undefined,
+        budget_generation: this.providerBudgetGeneration,
+        request_output_units: Number.isSafeInteger(aggregateOutputUnits) ? aggregateOutputUnits : undefined,
       }
       if (responseTrace.provider) responseTrace.provider.usage_complete = usage?.usage_complete === true
       if (this.traceRequest) this.traceRequest.last_provider_event = responseTrace
       await this.traceEvent('provider.response', responseTrace)
       if (turnOutputCapExceeded) {
-        await this.traceEvent('budget.output_units_exceeded', { output_units: aggregateOutputUnits, output_cap: this.maxProviderOutputUnits, provider_calls: this.traceRequest?.usage?.provider_calls })
-        const capError = new AgentLoopError(`provider_turn_output_cap_exceeded: ${aggregateOutputUnits} > ${this.maxProviderOutputUnits}`)
+        await this.traceEvent('budget.output_units_exceeded', {
+          output_units: generationOutputUnits,
+          request_output_units: aggregateOutputUnits,
+          output_cap: this.maxProviderOutputUnits,
+          budget_generation: this.providerBudgetGeneration,
+          provider_calls: this.traceRequest?.usage?.provider_calls,
+        })
+        const capError = new AgentLoopError(`provider_turn_output_cap_exceeded: generation ${this.providerBudgetGeneration} used ${generationOutputUnits} > ${this.maxProviderOutputUnits}`)
         capError.failureClass = 'provider_budget'
         capError.code = 'provider_turn_output_cap_exceeded'
         throw capError
@@ -5290,7 +5341,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     if (!this.interactionDecisionProvider) {
       const result = {
-        route: conditionValidation.healthy ? 'wait_runtime' : 'fallback_runtime',
+        route: conditionValidation.healthy ? 'wait_runtime' : failureClass === 'provider_budget' ? 'pause_recoverable' : 'fallback_runtime',
         failure_class: failureClass,
         runtime,
         persistentRuntime,
@@ -5466,7 +5517,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         decision_latency_ms: Date.now() - startedAt,
       })
       const result = {
-        route: conditionValidation.healthy ? 'wait_runtime' : 'fallback_runtime',
+        route: conditionValidation.healthy ? 'wait_runtime' : failureClass === 'provider_budget' ? 'pause_recoverable' : 'fallback_runtime',
         failure_class: failureClass,
         runtime,
         persistentRuntime,
@@ -5494,34 +5545,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (this.traceRequest) this.traceRequest.recovery = recovery
     await this.traceEvent('replan.started', recovery)
 
-    const terminalProviderBudgetFailure = /provider_output_budget_recovery_(?:exhausted|budget_unavailable)|provider_turn_output_cap_exceeded/i.test(reasonText)
-    if (terminalProviderBudgetFailure) {
-      const key = this.activePlanKey()
-      const existing = this.memory.currentPlan?.(key)
-      if (existing) {
-        const runtime = await this.readInteractionTaskStatus()
-        const reduced = this.memory.applyOutcomeAuthority?.(key, { kind: 'recoverable_provider_failure', source: 'main_planner', reason_code: 'provider_budget' }, { world: runtime })
-        if (reduced?.decision?.accepted) {
-          this.memory.setProviderRecovery?.(key, undefined)
-          await this.persistState()
-          const paused = reduced.state?.status === 'paused'
-          if (paused) this.active = false
-          await this.traceEvent('planner.skipped', { source: 'output_budget_recovery', contract: 'exactly_once_output_budget_recovery', route: paused ? 'pause_recoverable' : 'runtime_remains_authoritative', reason_code: 'provider_budget' })
-          return {
-            chatMessage: paused ? 'The provider exhausted the bounded recovery path; the canonical task was paused without replaying world mutations.' : 'The provider exhausted the bounded recovery path, but authoritative Autorio work is still active and was left untouched.',
-            plan: reduced.state?.plan ?? [],
-            currentStep: reduced.state?.current_step ?? 0,
-            operations: [],
-            epoch: this.epoch?.epoch,
-            actorId: this.epoch?.actor_id,
-            goalId: reduced.state?.goal_id,
-            goalStatus: reduced.state?.status,
-            taskBoard: visibleTaskBoard(reduced.state?.task_board),
-            persistentRuntime: reduced.state?.persistent_runtime,
-          }
-        }
-      }
-    }
+    const providerBudgetFailure = recoveryFailureClassHint(reasonText) === 'provider_budget'
 
     const observationDecisionComplete = /(?:single targeted observation allowed|targeted observation budget allowed) by decision pressure is complete/i.test(reasonText)
     const currentState = this.memory.currentPlan?.(this.activePlanKey())
@@ -5599,8 +5623,31 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
     }
 
+    const plannerRecoveryRoutes = ['retry_compact', 'continue_low', 'replan_high', 'targeted_observation']
+    if (providerBudgetFailure
+      && this.providerBudgetHandoffCount >= this.maxProviderBudgetHandoffs
+      && plannerRecoveryRoutes.includes(routed.route)) {
+      const runtimeActive = interactionRuntimeHealthy(routed.runtime)
+        || persistentRuntimeHealthy(routed.persistentRuntime)
+        || routed.conditionWaitHealthy === true
+      routed = {
+        ...routed,
+        route: runtimeActive ? 'wait_runtime' : 'pause_recoverable',
+        rejection_reason: 'provider_budget_handoff_limit_reached',
+      }
+      await this.traceEvent('budget.handoff_limit_reached', {
+        handoff_count: this.providerBudgetHandoffCount,
+        handoff_limit: this.maxProviderBudgetHandoffs,
+        fallback_route: routed.route,
+      })
+    }
+
     if (routed.route === 'wait_runtime') {
       const state = this.memory.currentPlan?.(this.activePlanKey())
+      if (providerBudgetFailure) {
+        this.memory.setProviderRecovery?.(this.activePlanKey(), undefined)
+        await this.persistState()
+      }
       await this.traceEvent('planner.skipped', {
         source: 'decision_provider',
         contract: 'recovery_route',
@@ -5621,6 +5668,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
 
     if (routed.route === 'pause_recoverable') {
+      if (providerBudgetFailure) this.memory.setProviderRecovery?.(this.activePlanKey(), undefined)
       const reduced = this.memory.applyOutcomeAuthority?.(this.activePlanKey(), {
         kind: 'recoverable_provider_failure',
         source: 'jev',
@@ -5689,7 +5737,76 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
     }
 
-    if (['retry_compact', 'continue_low', 'replan_high', 'targeted_observation'].includes(routed.route)) {
+    if (providerBudgetFailure && plannerRecoveryRoutes.includes(routed.route)) {
+      const semanticScope = routed.decision?.semantic_scope ?? 'keep_target'
+      const key = this.activePlanKey()
+      if (semanticScope === 'split_milestone') {
+        const pending = this.memory.markHierarchySplitPending?.(key, {
+          reason_code: 'provider_budget_handoff_split',
+        })
+        if (pending) {
+          await this.persistState()
+          await this.traceEvent('hierarchy.transition_pending', {
+            kind: pending.kind,
+            reason_code: pending.reason_code,
+            source: 'provider_budget_handoff',
+          })
+        }
+      }
+
+      this.providerBudgetHandoffCount++
+      this.providerBudgetGeneration = Math.max(1, this.providerBudgetGeneration) + 1
+      this.providerBudgetGenerationOutputUnits = 0
+      this.outputBudgetRecoveryGuard = null
+      this.outputBudgetRecoveryUsed = false
+      this.memory.setProviderRecovery?.(key, undefined)
+      await this.persistState()
+      await this.traceEvent('budget.generation_started', {
+        generation: this.providerBudgetGeneration,
+        handoff_count: this.providerBudgetHandoffCount,
+        semantic_scope: semanticScope,
+        route: routed.route,
+      })
+
+      const previousTrigger = this.reasoningTriggerSource
+      const previousReasoningBudget = this.reasoningBudgetOverride
+      this.reasoningTriggerSource = semanticScope === 'split_milestone'
+        ? 'hierarchy_split'
+        : semanticScope === 'reanchor_target'
+          ? 'post_step_reanchor'
+          : routed.route === 'replan_high'
+            ? 'recovery_replan_high'
+            : 'recovery_continue_low'
+      this.reasoningBudgetOverride = null
+      const state = this.memory.currentPlan?.(key)
+      const capsule = providerBudgetHandoffCapsule(
+        state,
+        routed.runtime ?? routed.persistentRuntime,
+        reasonText,
+        semanticScope,
+      )
+      this.messages = [
+        { role: 'system', content: this.systemPrompt },
+        { role: 'user', content: capsule },
+      ]
+      await this.traceEvent('planner.wake', {
+        source: 'decision_provider',
+        contract: 'provider_budget_handoff',
+        route: routed.route,
+        semantic_scope: semanticScope,
+        budget_generation: this.providerBudgetGeneration,
+        reasoning_policy: semanticScope === 'split_milestone' || routed.route === 'replan_high' ? 'high' : 'low',
+      })
+      try {
+        return await this.runTurn()
+      }
+      finally {
+        this.reasoningTriggerSource = previousTrigger
+        this.reasoningBudgetOverride = previousReasoningBudget
+      }
+    }
+
+    if (plannerRecoveryRoutes.includes(routed.route)) {
       const previousTrigger = this.reasoningTriggerSource
       const previousReasoningBudget = this.reasoningBudgetOverride
       this.reasoningTriggerSource = routed.route === 'replan_high' ? 'recovery_replan_high' : 'recovery_continue_low'

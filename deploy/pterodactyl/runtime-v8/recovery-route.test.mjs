@@ -8,13 +8,14 @@ import {
   validateRecoveryRoute,
 } from './recovery-route.mjs'
 
-function response(route, failure = 'unknown') {
+function response(route, failure = 'unknown', semanticScope = 'keep_target') {
   return {
     model: 'jev-latest',
     provider: 'TypeSafe',
     answers: {
       failure_class: { type: 'choice', choice: failure, confidence: 0.91 },
       next_recovery: { type: 'choice', choice: route, confidence: 0.93 },
+      semantic_scope: { type: 'choice', choice: semanticScope, confidence: 0.92 },
       world_failure_supported: { type: 'noul', noul: 0.1 },
       need_fresh_observation: { type: 'noul', noul: 0.2 },
       need_semantic_replan: { type: 'noul', noul: 0.3 },
@@ -27,6 +28,7 @@ test('recovery_route contract is bounded and exposes all required routing questi
   assert.deepEqual(Object.keys(recoveryDecisionQuestions()), [
     'failure_class',
     'next_recovery',
+    'semantic_scope',
     'world_failure_supported',
     'need_fresh_observation',
     'need_semantic_replan',
@@ -34,12 +36,15 @@ test('recovery_route contract is bounded and exposes all required routing questi
   const parsed = parseRecoveryDecision(response('retry_compact', 'provider_format'))
   assert.equal(parsed.failure_class, 'provider_format')
   assert.equal(parsed.route, 'retry_compact')
+  assert.equal(parsed.semantic_scope, 'keep_target')
   assert.equal(parsed.confidence, 0.93)
 })
 
 test('failure hint separates provider format and budget failures from world failure', () => {
   assert.equal(recoveryFailureClassHint('invalid provider JSON'), 'provider_format')
   assert.equal(recoveryFailureClassHint('finish=length output budget exhausted'), 'provider_budget')
+  assert.equal(recoveryFailureClassHint('provider_output_budget_recovery_exhausted'), 'provider_budget')
+  assert.equal(recoveryFailureClassHint('provider_turn_output_cap_exceeded: generation 2 used 4001 > 4000'), 'provider_budget')
   assert.equal(recoveryFailureClassHint('provider_safety_blocked content_filter'), 'provider_safety')
   assert.equal(recoveryFailureClassHint('one targeted observation is missing'), 'missing_fact')
   assert.equal(recoveryFailureClassHint('unexpected failure'), 'unknown')
@@ -121,4 +126,10 @@ test('provider safety failures cannot re-enter ordinary main-provider retry rout
   })
   assert.equal(validated.route, 'pause_recoverable')
   assert.equal(validated.rejection_reason, 'provider_safety_is_terminal_for_main_provider')
+})
+
+
+test('provider-budget semantic scope can request a target re-anchor or milestone split without implying completion', () => {
+  assert.equal(parseRecoveryDecision(response('continue_low', 'provider_budget', 'reanchor_target')).semantic_scope, 'reanchor_target')
+  assert.equal(parseRecoveryDecision(response('replan_high', 'provider_budget', 'split_milestone')).semantic_scope, 'split_milestone')
 })

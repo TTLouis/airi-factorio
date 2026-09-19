@@ -79,11 +79,21 @@ function exhaustedMessage() {
   return message
 }
 
-function makeAgent({ provider, rcon = new FakeRcon(), reserve = async () => ({}) } = {}) {
+function makeAgent({
+  provider,
+  rcon = new FakeRcon(),
+  reserve = async () => ({}),
+  interactionDecisionProvider,
+  maxProviderOutputUnits,
+  maxProviderBudgetHandoffs,
+} = {}) {
   return new NpcAgentLoop({
     rcon,
     provider,
     reserve,
+    interactionDecisionProvider,
+    maxProviderOutputUnits,
+    maxProviderBudgetHandoffs,
     memory: new CanonicalTaskBoardMemory(),
     systemPrompt: 'NPC output-budget recovery test prompt',
     stateFile: null,
@@ -518,4 +528,81 @@ test('each independent provider decision gets one bounded output-budget recovery
     undefined,
     'output_budget_exhaustion',
   ])
+})
+
+
+test('terminal provider budget becomes a Jev-directed fresh planner generation instead of pausing the project', async () => {
+  const calls = []
+  const decisions = []
+  const rcon = new FakeRcon()
+  const canonical = ['Wait for the machine cycle', 'Inspect the result']
+  const agent = makeAgent({
+    rcon,
+    maxProviderOutputUnits: 3000,
+    interactionDecisionProvider: async (state, questions) => {
+      decisions.push({ state, questions })
+      assert.equal(state.failure.class, 'provider_budget')
+      assert.equal(state.task.active_step, canonical[0])
+      assert.ok(questions.semantic_scope)
+      return {
+        model: 'jev-latest',
+        provider: 'TypeSafe',
+        answers: {
+          failure_class: { type: 'choice', choice: 'provider_budget', confidence: 0.99 },
+          next_recovery: { type: 'choice', choice: 'continue_low', confidence: 0.96 },
+          semantic_scope: { type: 'choice', choice: 'reanchor_target', confidence: 0.94 },
+          world_failure_supported: { type: 'noul', noul: 0.01 },
+          need_fresh_observation: { type: 'noul', noul: 0.1 },
+          need_semantic_replan: { type: 'noul', noul: 0.4 },
+        },
+        usage: { input_tokens: 40, output_tokens: 8, cost: 0 },
+      }
+    },
+    provider: async (messages, context) => {
+      calls.push({ messages, context })
+      if (calls.length === 1) {
+        return planMessage({
+          chatMessage: 'Waiting first.',
+          plan: canonical,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 60 } }],
+        })
+      }
+      if (calls.length === 2 || calls.length === 3) return exhaustedMessage()
+
+      assert.equal(context.triggerSource, 'post_step_reanchor')
+      assert.equal(context.recoveryKind, undefined)
+      assert.match(messages.at(-1).content, /\[PROVIDER_BUDGET_HANDOFF\]/)
+      assert.match(messages.at(-1).content, /reanchor_target/)
+      const message = planMessage({
+        chatMessage: 'Re-anchored the same target with a fresh planner budget.',
+        plan: canonical,
+        currentStep: 0,
+        operations: [{ name: 'wait', args: { ticks: 1 } }],
+      })
+      Object.defineProperty(message, '_airiProvider', {
+        enumerable: false,
+        value: {
+          diagnostic_code: 'provider_ok',
+          output_budget_exhausted: false,
+          finish_reason: 'stop',
+          usage: { prompt_tokens: 120, completion_tokens: 200, total_tokens: 320 },
+        },
+      })
+      return message
+    },
+  })
+
+  await agent.request('run a long bounded task without stopping on planner budget rollover', { sender: 'TTLouis' })
+  const result = await agent.completed()
+
+  assert.equal(decisions.length, 1)
+  assert.equal(calls.length, 4)
+  assert.equal(result.goalStatus, 'active')
+  assert.notEqual(result.goalStatus, 'paused')
+  assert.equal(agent.providerBudgetGeneration, 2)
+  assert.equal(agent.providerBudgetGenerationOutputUnits, 200)
+  assert.equal(agent.traceRequest.usage.output_units, 4200)
+  assert.equal(agent.providerBudgetHandoffCount, 1)
+  assert.equal(agent.memory.currentPlan('npc:airi').provider_recovery, undefined)
 })
