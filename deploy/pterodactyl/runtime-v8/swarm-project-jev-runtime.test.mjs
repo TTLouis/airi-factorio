@@ -1,0 +1,219 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
+import { SwarmProjectJevRuntime } from './swarm-project-jev-runtime.mjs'
+
+function coordinationFixture() {
+  return {
+    schema: 'swarm_coordination_snapshot_v1',
+    tick: 500,
+    limit: 12,
+    counts: {
+      missions: 1,
+      objectives: 1,
+      projects: 1,
+      work: 1,
+      requests: 0,
+      claims: 0,
+      results: 0,
+      agents: 2,
+      actors: 2,
+      activeWarnings: 0,
+    },
+    missions: [{ id: 'mission-1', status: 'active', title: 'Bootstrap' }],
+    objectives: [{ id: 'objective-1', status: 'active', description: 'Power' }],
+    projects: [{ id: 'project-1', status: 'executing', title: 'Steam power' }],
+    work: [{ id: 'work-1', status: 'open', title: 'Build boilers' }],
+    requests: [],
+    warnings: [],
+    claims: [],
+    results: [],
+    agents: [{ id: 'agent-1', state: 'available' }, { id: 'agent-2', state: 'available' }],
+    actors: [{ id: 'actor-1', state: 'online' }, { id: 'actor-2', state: 'online' }],
+  }
+}
+
+async function tempStateFile() {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'swarm-project-jev-runtime-'))
+  return {
+    dir,
+    filename: path.join(dir, 'strategic-project.json'),
+  }
+}
+
+test('runtime loads one durable global project board and feeds it to project Jev shadow', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const rcon = {
+    async command() {
+      return JSON.stringify(coordinationFixture())
+    },
+  }
+  let calls = 0
+  const runtime = new SwarmProjectJevRuntime({
+    rcon,
+    stateFile: filename,
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+    decisionProvider: async (state) => {
+      calls += 1
+      assert.equal(state.strategic_project_board.goal_id, 'goal-rocket')
+      assert.equal(state.strategic_project_board.title, 'Launch a rocket')
+      return {
+        answers: {
+          routing: { choice: 'wake_planner', confidence: 0.7 },
+          granularity: { choice: 'split', confidence: 0.8 },
+          development: { choice: 'vertical', confidence: 0.9 },
+        },
+      }
+    },
+  })
+
+  const initialized = await runtime.initialize()
+  assert.equal(initialized.loaded, false)
+
+  const telemetry = await runtime.trigger('mission_updated')
+  assert.equal(calls, 1)
+  assert.equal(telemetry.scope, 'swarm_global')
+  assert.equal(telemetry.authority, 'shadow')
+  assert.deepEqual(telemetry.effects, [])
+  assert.equal(telemetry.decision.decision.granularity, 'split')
+})
+
+test('explicit planner-side board updates persist and survive runtime reconstruction', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const makeRcon = () => ({
+    async command() {
+      return JSON.stringify(coordinationFixture())
+    },
+  })
+
+  const first = new SwarmProjectJevRuntime({
+    rcon: makeRcon(),
+    stateFile: filename,
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+  })
+  await first.initialize()
+  await first.updateBoard({
+    current_milestone: { title: 'Automate red science' },
+    next_milestones: [{ title: 'Automate green science' }],
+    development_direction: 'vertical',
+  })
+  await first.flush()
+
+  const second = new SwarmProjectJevRuntime({
+    rcon: makeRcon(),
+    stateFile: filename,
+  })
+  const loaded = await second.initialize()
+
+  assert.equal(loaded.loaded, true)
+  assert.equal(second.currentBoard().goal_id, 'goal-rocket')
+  assert.equal(second.currentBoard().current_milestone.title, 'Automate red science')
+  assert.equal(second.currentBoard().development_direction, 'vertical')
+})
+
+test('Jev telemetry alone cannot mutate the durable strategic project board', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const runtime = new SwarmProjectJevRuntime({
+    rcon: {
+      async command() {
+        return JSON.stringify(coordinationFixture())
+      },
+    },
+    stateFile: filename,
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+    decisionProvider: async () => ({
+      answers: {
+        routing: { choice: 'wake_planner', confidence: 1 },
+        granularity: { choice: 'split', confidence: 1 },
+        development: { choice: 'horizontal', confidence: 1 },
+        reasoning_budget: { choice: 'strategic', confidence: 1 },
+        planning_horizon: { choice: 'strategic' },
+        observation_budget: { score: 8 },
+      },
+    }),
+  })
+
+  await runtime.initialize()
+  const before = runtime.currentBoard()
+  const telemetry = await runtime.trigger('strategic_review')
+  const after = runtime.currentBoard()
+
+  assert.equal(telemetry.decision.decision.granularity, 'split')
+  assert.equal(telemetry.decision.decision.development, 'horizontal')
+  assert.deepEqual(after, before)
+})
+
+test('milestone completion through runtime still requires explicit verified authority', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const runtime = new SwarmProjectJevRuntime({
+    rcon: {
+      async command() {
+        return JSON.stringify(coordinationFixture())
+      },
+    },
+    stateFile: filename,
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+  })
+
+  await runtime.updateBoard({
+    current_milestone: { title: 'Bootstrap power' },
+    next_milestones: [{ title: 'Automate science' }],
+  })
+
+  const rejected = await runtime.completeCurrentMilestone({ verified: false })
+  assert.equal(rejected.changed, false)
+  assert.equal(runtime.currentBoard().current_milestone.title, 'Bootstrap power')
+
+  const accepted = await runtime.completeCurrentMilestone({ verified: true })
+  assert.equal(accepted.changed, true)
+  assert.equal(runtime.currentBoard().transition_state, 'awaiting_next_milestone')
+})
+
+test('initialize is coalesced so concurrent callers load durable state once', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const runtime = new SwarmProjectJevRuntime({
+    rcon: {
+      async command() {
+        return JSON.stringify(coordinationFixture())
+      },
+    },
+    stateFile: filename,
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+  })
+
+  let loads = 0
+  const originalLoad = runtime.persistence.load.bind(runtime.persistence)
+  runtime.persistence.load = async () => {
+    loads += 1
+    return originalLoad()
+  }
+
+  const [a, b, c] = await Promise.all([
+    runtime.initialize(),
+    runtime.initialize(),
+    runtime.initialize(),
+  ])
+
+  assert.equal(loads, 1)
+  assert.equal(a.board.goal_id, 'goal-rocket')
+  assert.equal(b.board.goal_id, 'goal-rocket')
+  assert.equal(c.board.goal_id, 'goal-rocket')
+})
