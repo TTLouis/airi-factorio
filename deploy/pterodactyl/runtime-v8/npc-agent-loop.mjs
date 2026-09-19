@@ -26,6 +26,7 @@ import { parseRecoveryDecision, recoveryDecisionQuestions, recoveryFailureClassH
 import {
   applyConditionObservation,
   completionCandidatesFromOperations,
+  completionContractSupported,
   evaluateCompletionContract,
   makeConditionWait,
   parseStepCheckpointDecision,
@@ -84,6 +85,8 @@ For a multi-step request, keep the plan stable enough that the harness can track
 For a genuinely long-horizon goal, you may add one optional root field named project beside chatMessage/plan/currentStep/operations. project must be {"currentMilestone":{"title":"...","completionSummary":"..."},"nextMilestones":[{"title":"...","completionSummary":"..."}],"developmentDirection":"vertical|horizontal|maintain|recover"}. Keep exactly one current milestone and at most three tentative next milestones. The user goal itself is harness-owned and must not be rewritten in project. currentMilestone is a bounded strategic outcome above the Plan Tracker; plan contains only the steps for that current milestone. For short tasks, omit project. During ordinary continuation of an unchanged milestone, prefer omitting project and reuse [PROJECT_STATE] instead of restating or reshuffling future milestones.
 
 Vertical means removing a blocker on the active milestone's critical path. Horizontal means strengthening an already-viable capability for throughput, resilience, logistics, buffers, or future scale. Do not classify by building type or research type alone.
+
+For the active Plan Tracker step, you may add one optional root field named checkpoint beside project/chatMessage/plan/currentStep/operations. checkpoint is a semantic completion proposal for Jev to judge and runtime to verify, not a claim that the step is already done. It must use a runtime-supported contract: {"mode":"all|any","requirements":[...]} with requirement kinds inventory_count, entity_inventory_count, entity_exists, entity_state, authoritative_operation_receipt, or runtime_controller_state. Prefer world-state outcomes over action occurrence. Example: if the step means "have 100 stone" and the next operation only gathers 40 more because 62 are already held, checkpoint must say inventory_count stone >= 100, not >= 40. The operation batch describes what to do next; checkpoint describes what would prove the semantic step complete. Jev may keep the step open or request a split even when you propose a checkpoint, and runtime remains completion authority. Omit checkpoint when no safe deterministic predicate represents the step.
 
 Plan entries must represent goal-bearing Factorio work or verification. Do not add terminal lifecycle/meta steps such as "Stop", "Done", "Finish", or "Report completion"; stopping after the verified goal is represented by returning plan: [], currentStep: 0, operations: [].
 
@@ -2464,7 +2467,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return { ...existing, state: planState, reused: true }
     }
 
-    const candidates = completionCandidatesFromOperations(plan.operations)
+    const candidates = [
+      ...(completionContractSupported(plan.checkpoint) ? [{ ...plan.checkpoint, source: 'planner_semantic_checkpoint' }] : []),
+      ...completionCandidatesFromOperations(plan.operations),
+    ]
     const questions = stepCheckpointDecisionQuestions(candidates)
     if (!this.interactionDecisionProvider) {
       return { boundary: 'keep_step_open', relation: 'replan_needed', state: planState, reason: 'decision_provider_unavailable' }
@@ -2487,6 +2493,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         name: cleanMemoryText(operation?.name, 100),
         args: sanitizeDurableModelValue(operation?.args),
       })),
+      proposed_checkpoint: completionContractSupported(plan.checkpoint)
+        ? sanitizeDurableModelValue(plan.checkpoint)
+        : undefined,
       remaining_steps: (Array.isArray(board?.steps) ? board.steps : [])
         .slice(activeIndex, activeIndex + 6)
         .map(item => ({
@@ -3950,19 +3959,33 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   parsePlanMessage(message) {
     let project
+    let checkpoint
     let baseMessage = message
     if (typeof message?.content === 'string') {
       let raw
       try { raw = JSON.parse(message.content) }
       catch {}
-      if (raw && typeof raw === 'object' && !Array.isArray(raw) && Object.prototype.hasOwnProperty.call(raw, 'project')) {
-        project = parseProjectProposal(raw.project)
-        const { project: _project, ...base } = raw
-        baseMessage = { ...message, content: JSON.stringify(base) }
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        if (Object.prototype.hasOwnProperty.call(raw, 'project')) project = parseProjectProposal(raw.project)
+        if (Object.prototype.hasOwnProperty.call(raw, 'checkpoint')) {
+          checkpoint = sanitizeStepCompletionContract(raw.checkpoint)
+          if (!completionContractSupported(checkpoint)) {
+            const error = new AgentLoopError('checkpoint must be a runtime-supported semantic completion contract or be omitted')
+            error.failureClass = 'plan_category'
+            error.code = 'invalid_semantic_checkpoint'
+            throw error
+          }
+          checkpoint = { ...checkpoint, source: 'planner_semantic_checkpoint' }
+        }
+        if (project || checkpoint) {
+          const { project: _project, checkpoint: _checkpoint, ...base } = raw
+          baseMessage = { ...message, content: JSON.stringify(base) }
+        }
       }
     }
     const plan = super.parsePlanMessage(baseMessage)
     if (project) plan.project = project
+    if (checkpoint) plan.checkpoint = checkpoint
     const normalizedPlan = normalizeCanonicalPlan(plan.plan, plan.currentStep)
     const triggerSource = this.reasoningTriggerSource ?? this.planUpdateReason
     const structuralHierarchyRequiresProject = [
