@@ -465,10 +465,11 @@ describe('in-game task board UI projection', () => {
   })
 
   it('labels request-cumulative and latest completed round token usage separately', () => {
-    const source = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
-    expect(source).toContain("add_row(table, 'Tokens · request cumulative', tokens)")
-    expect(source).toContain("add_row(table, 'Latest completed round', latest_round_tokens)")
-    expect(source).toContain('latest_round_cached_input_units')
+    const model = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
+    const render = readFileSync(new URL('./task_board_debug_render.ts', import.meta.url), 'utf8')
+    expect(render).toContain("add_compact_row(decision_table, 'Tokens · request cumulative', tokens)")
+    expect(render).toContain("add_compact_row(decision_table, 'Latest completed round', latest_round_tokens)")
+    expect(model).toContain('latest_round_cached_input_units')
   })
 
   it('removes activity hover state and handlers while preserving scroll pause and explicit LIVE resume', () => {
