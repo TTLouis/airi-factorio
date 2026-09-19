@@ -36,6 +36,8 @@ Vertical means removing a blocker on the active milestone critical path. Horizon
 
 An empty operations array normally means no new Autorio world action will happen after your reply. Never claim that a finite action is continuing when neither a new operation nor a live persistent runtime mode exists. Persistent controllers such as follow are different: if a read-only status tool proves the controller is active, healthy, and live, operations: [] may accurately describe that background mode without submitting a duplicate operation. When the whole requested goal is actually verified complete, return plan: [], currentStep: 0, operations: [], and say it is complete.
 
+A [PROJECT_JEV] message is a bounded global strategic advisory from Jev. It may recommend granularity (keep/split/collapse), development direction (vertical/horizontal/maintain/recover), routing, reasoning budget, planning horizon, and observation budget. Treat it as hierarchy guidance, not world-state evidence or mutation authority. When it recommends split, choose the actual smaller currentMilestone yourself. When it recommends vertical/horizontal/recover, choose concrete Factorio work consistent with the authoritative world state and [PROJECT_STATE]. Runtime admission still decides whether any project proposal may commit.
+
 Before a non-empty operation batch, chatMessage should tell the human what concrete current plan step AIRI is about to attempt. [MOD] completion/error messages may include a detailed getTaskStatus snapshot. Use that receipt plus any needed read-only verification to advance, replan, complete, or report a blocker.
 `.trim()
 
@@ -559,6 +561,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.traceRequestSequence = 0
     this.planUpdateReason = 'request'
     this.strategicProjectState = undefined
+    this.projectJevAdvisory = undefined
     this.turnSequence = Math.max(this.turnSequence, memory.maxTurnId?.() ?? 0)
     const traceFile = options.traceFile ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
       ?? (process.env.NODE_TEST_CONTEXT ? null : path.resolve(process.cwd(), 'logs', 'airi-behavior.jsonl'))
@@ -774,13 +777,45 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
+  setProjectJevAdvisory(telemetry) {
+    const decision = telemetry?.decision?.decision
+    if (!decision || typeof decision !== 'object') {
+      this.projectJevAdvisory = undefined
+      return
+    }
+
+    this.projectJevAdvisory = {
+      source_tick: Number.isSafeInteger(telemetry?.source_tick) ? telemetry.source_tick : undefined,
+      source_event_cursor: cleanMemoryText(telemetry?.source_event_cursor, 160),
+      reused: telemetry?.reused === true,
+      status: cleanMemoryText(telemetry?.decision?.status, 64),
+      routing: cleanMemoryText(decision.routing, 32),
+      routing_confidence: Number.isFinite(decision.routing_confidence) ? decision.routing_confidence : 0,
+      granularity: cleanMemoryText(decision.granularity, 32),
+      granularity_confidence: Number.isFinite(decision.granularity_confidence) ? decision.granularity_confidence : 0,
+      development: cleanMemoryText(decision.development, 32),
+      development_confidence: Number.isFinite(decision.development_confidence) ? decision.development_confidence : 0,
+      reasoning_budget: cleanMemoryText(decision.reasoning_budget, 32),
+      planning_horizon: cleanMemoryText(decision.planning_horizon, 32),
+      observation_budget: Number.isSafeInteger(decision.observation_budget) ? decision.observation_budget : 0,
+    }
+  }
+
   providerMessages() {
     const messages = super.providerMessages()
-    if (!this.strategicProjectState) return messages
-    messages.splice(1, 0, {
-      role: 'user',
-      content: `[PROJECT_STATE] Harness-owned global strategic project state. It is read-only context; propose changes only through the optional project field and do not rewrite goal_id or title.\n${JSON.stringify(this.strategicProjectState)}`,
-    })
+    let insertAt = 1
+    if (this.strategicProjectState) {
+      messages.splice(insertAt++, 0, {
+        role: 'user',
+        content: `[PROJECT_STATE] Harness-owned global strategic project state. It is read-only context; propose changes only through the optional project field and do not rewrite goal_id or title.\n${JSON.stringify(this.strategicProjectState)}`,
+      })
+    }
+    if (this.projectJevAdvisory) {
+      messages.splice(insertAt, 0, {
+        role: 'user',
+        content: `[PROJECT_JEV] Global strategic advisory only; runtime/world evidence remains authoritative. Use this to shape the next bounded planner decision without treating it as proof that any action or milestone completed.\n${JSON.stringify(this.projectJevAdvisory)}`,
+      })
+    }
     return messages
   }
 
