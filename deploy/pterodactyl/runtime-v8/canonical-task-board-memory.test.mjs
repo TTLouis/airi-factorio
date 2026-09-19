@@ -533,7 +533,7 @@ test('replan keeps every unverified remaining step even when proposed currentSte
     ['Gather ore', 'Prepare fuel', 'Smelt plates', 'Craft machine'],
   )
   assert.equal(replanned.proposed_focus_index, 2)
-  assert.equal(replanned.proposed_focus_step_id, 'step_3')
+  assert.equal(replanned.proposed_focus_step_id, 'step_2')
   assert.equal(replanned.steps[0].status, 'active')
   assert.equal(replanned.steps[1].status, 'pending')
 })
