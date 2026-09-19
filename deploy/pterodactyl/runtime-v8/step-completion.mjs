@@ -107,6 +107,138 @@ export function completionContractSupported(contract) {
   return normalized.mode !== 'semantic_unknown' && normalized.requirements.length > 0
 }
 
+
+const RECEIPT_SAFE_OPERATION_NAMES = new Set([
+  'walk_to_entity',
+  'walk_to_entity_exact',
+  'walk_to_player',
+  'mine_entity',
+  'mine_entity_exact',
+  'gather_resource',
+  'harvest_product',
+  'clear_construction_area',
+  'place_entity',
+  'place_candidate',
+  'execute_construction_plan',
+  'move_items',
+  'move_items_exact',
+  'move_items_with_player',
+  'supply_entity',
+  'set_machine_recipe',
+  'craft_item',
+  'attack_nearest_enemy',
+  'clear_enemy_area',
+])
+
+function operationIntentRequirement(operation, index) {
+  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return undefined
+  const name = clean(operation.name, 100)
+  const args = operation.args && typeof operation.args === 'object' && !Array.isArray(operation.args)
+    ? operation.args
+    : {}
+
+  if (name === 'gather_resource' || name === 'harvest_product') {
+    const itemName = clean(name === 'gather_resource' ? args.resource_name : args.product_name, 160)
+    const minimum = positiveInteger(args.count)
+    if (itemName && minimum) {
+      return { id: `intent_${index + 1}`, kind: 'inventory_count', item_name: itemName, minimum }
+    }
+  }
+
+  if (name === 'craft_item') {
+    const itemName = clean(args.item_name, 160)
+    const minimum = positiveInteger(args.count)
+    if (itemName && minimum) {
+      return { id: `intent_${index + 1}`, kind: 'inventory_count', item_name: itemName, minimum }
+    }
+  }
+
+  if (name === 'supply_entity') {
+    const unitNumber = positiveInteger(args.unit_number)
+    const items = Array.isArray(args.items) ? args.items : []
+    if (unitNumber && items.length === 1) {
+      const itemName = clean(items[0]?.item_name, 160)
+      const minimum = positiveInteger(items[0]?.count)
+      if (itemName && minimum) {
+        return { id: `intent_${index + 1}`, kind: 'entity_inventory_count', unit_number: unitNumber, item_name: itemName, minimum }
+      }
+    }
+  }
+
+  if (name === 'move_items_exact' && args.to_entity === true) {
+    const unitNumber = positiveInteger(args.unit_number)
+    const itemName = clean(args.item_name, 160)
+    const minimum = positiveInteger(args.max_count)
+    if (unitNumber && itemName && minimum) {
+      return { id: `intent_${index + 1}`, kind: 'entity_inventory_count', unit_number: unitNumber, item_name: itemName, minimum }
+    }
+  }
+
+  if (RECEIPT_SAFE_OPERATION_NAMES.has(name)) {
+    return { id: `intent_${index + 1}`, kind: 'authoritative_operation_receipt', operation_name: name }
+  }
+  return undefined
+}
+
+export function completionCandidatesFromOperations(operations = []) {
+  const bounded = Array.isArray(operations) ? operations.slice(0, 8) : []
+  const intentRequirements = bounded.map(operationIntentRequirement).filter(Boolean)
+  const candidates = []
+
+  if (intentRequirements.length > 0) {
+    candidates.push({
+      mode: 'all',
+      source: 'operation_intent',
+      requirements: intentRequirements,
+    })
+  }
+
+  const receiptRequirements = bounded
+    .map((operation, index) => {
+      const name = clean(operation?.name, 100)
+      return RECEIPT_SAFE_OPERATION_NAMES.has(name)
+        ? { id: `receipt_${index + 1}`, kind: 'authoritative_operation_receipt', operation_name: name }
+        : undefined
+    })
+    .filter(Boolean)
+  if (receiptRequirements.length > 0) {
+    candidates.push({
+      mode: 'all',
+      source: 'operation_receipt',
+      requirements: receiptRequirements,
+    })
+  }
+
+  return candidates
+}
+
+export function stepCheckpointDecisionQuestions(candidates = []) {
+  const base = stepCompletionDecisionQuestions(candidates)
+  return {
+    ...base,
+    checkpoint_boundary: {
+      type: 'choice',
+      instructions: 'Judge the semantic boundary before execution. Decide whether the proposed operation batch lands on a useful deterministic checkpoint for this canonical step, whether the step should remain open after the batch, or whether the semantic step should be split/replanned before treating this batch as its completion boundary.',
+      criteria: {
+        checkpoint_here: 'The supplied grounded contract is a good checkpoint for this semantic step. Runtime may close the step only after the contract is deterministically satisfied.',
+        keep_step_open: 'The operation batch is useful progress, but it is not a sufficient semantic boundary. Keep the current canonical step open after the batch.',
+        split_recommended: 'The canonical step is too compound or ambiguous for the proposed batch/contract boundary. Recommend a planner replan/split rather than pretending this batch closes the step.',
+      },
+    },
+  }
+}
+
+export function parseStepCheckpointDecision(response, candidates = []) {
+  const normalized = parseStepCompletionDecision(response, candidates)
+  const boundary = response?.answers?.checkpoint_boundary?.choice
+  return {
+    ...normalized,
+    boundary: ['checkpoint_here', 'keep_step_open', 'split_recommended'].includes(boundary)
+      ? boundary
+      : 'keep_step_open',
+  }
+}
+
 export function stepCompletionDecisionQuestions(candidates = []) {
   const normalized = candidates
     .slice(0, 8)
