@@ -40,6 +40,19 @@ export class SwarmProjectJevMonitor {
       limit: this.snapshotLimit,
     })
     const board = this.strategicBoard()
+
+    if (!board?.goal_id || board.status !== 'active') {
+      this.previousSnapshot = structuredClone(snapshot)
+      this.previousBoard = board ? structuredClone(board) : undefined
+      return {
+        triggered: false,
+        reasons: [],
+        reason: board?.goal_id ? 'strategic_board_inactive' : 'no_strategic_goal',
+        source_tick: snapshot.tick,
+        source_event_cursor: snapshot.eventCursor,
+      }
+    }
+
     const policy = projectJevTriggerReasons(
       this.previousSnapshot,
       snapshot,
