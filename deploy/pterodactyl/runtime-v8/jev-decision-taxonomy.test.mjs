@@ -46,9 +46,10 @@ test('decision envelope separates wake routing, reasoning, horizon, and observat
   assert.equal(questions.routing.type, 'choice')
   assert.equal(questions.reasoning_budget.type, 'choice')
   assert.equal(questions.planning_horizon.type, 'choice')
-  assert.equal(questions.observation_budget.type, 'number')
+  assert.equal(questions.observation_budget.type, 'score')
   assert.match(questions.reasoning_budget.instructions, /Do not scale budget merely because the overall user goal is long/i)
   assert.match(questions.observation_budget.instructions, /targeted read-only observations/i)
+  assert.equal(questions.observation_budget.criteria.length, 9)
 })
 
 test('parses valid decisions and clamps confidence and observation budget', () => {
@@ -58,7 +59,7 @@ test('parses valid decisions and clamps confidence and observation budget', () =
       routing: { choice: 'wake_planner', confidence: 0.82 },
       reasoning_budget: { choice: 'deep', confidence: 0.71 },
       planning_horizon: { choice: 'subgoal' },
-      observation_budget: { number: 20 },
+      observation_budget: { score: 20 },
     },
     model: 'jev-test',
     provider: 'jev',
@@ -90,7 +91,7 @@ test('uses conservative fallbacks for invalid Jev output', () => {
       routing: { choice: 'teleport' },
       reasoning_budget: { choice: 'infinite' },
       planning_horizon: { choice: 'whole_game' },
-      observation_budget: { number: -3 },
+      observation_budget: { score: -3 },
     },
   }
   assert.equal(parseDecisionFamily(response, 'granularity', 'keep').decision, 'keep')
@@ -114,7 +115,7 @@ test('parses hierarchy telemetry independently from routing authority', () => {
       development: { choice: 'vertical', confidence: 0.84 },
       reasoning_budget: { choice: 'strategic', confidence: 0.77 },
       planning_horizon: { choice: 'strategic' },
-      observation_budget: { number: 4 },
+      observation_budget: { score: 4 },
     },
   }
   assert.deepEqual(parseHierarchyTelemetry(response), {
