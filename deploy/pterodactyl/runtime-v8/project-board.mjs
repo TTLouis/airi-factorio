@@ -7,12 +7,22 @@ function clean(value, max = 500) {
   return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
 }
 
+function milestoneId(title) {
+  let hash = 2166136261
+  for (let index = 0; index < title.length; index++) {
+    hash ^= title.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'milestone'
+  return `milestone_${slug}_${(hash >>> 0).toString(36)}`
+}
+
 function milestone(value, status) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const title = clean(value.title, 500)
   if (!title) return undefined
   return {
-    id: clean(value.id, 100) || undefined,
+    id: clean(value.id, 100) || milestoneId(title),
     title,
     status,
     completion_summary: clean(value.completion_summary, 800) || undefined,
