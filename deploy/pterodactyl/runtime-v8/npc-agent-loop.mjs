@@ -3077,6 +3077,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   async commitPlan(plan) {
+    const triggerSource = this.reasoningTriggerSource ?? this.planUpdateReason
     const commands = plan.operations.map(renderOperation)
     const operations = plan.operations.map((operation, index) => ({
       trace_operation_id: `${this.traceRequest?.id ?? 'request'}/op_${index + 1}`,
