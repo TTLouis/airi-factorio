@@ -164,3 +164,22 @@ test('next milestone cannot activate merely because current milestone is absent'
   assert.equal(advanced.board.current_milestone.title, 'Reach Automation')
   assert.equal(advanced.board.transition_state, '')
 })
+
+
+test('metadata updates preserve an existing blocked or paused board status', () => {
+  const blocked = sanitizeStrategicProjectBoard({
+    status: 'blocked',
+    current_milestone: { title: 'Restore power' },
+  }, { goalId: 'goal_1', objective: 'Launch a rocket', status: 'blocked', now: 10 })
+
+  const updated = updateStrategicProjectBoard(blocked, {
+    development_direction: 'recover',
+  }, {
+    goalId: 'goal_1',
+    objective: 'Launch a rocket',
+    now: 20,
+  })
+
+  assert.equal(updated.status, 'blocked')
+  assert.equal(updated.development_direction, 'recover')
+})
