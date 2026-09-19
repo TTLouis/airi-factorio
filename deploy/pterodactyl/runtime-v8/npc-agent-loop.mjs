@@ -843,7 +843,17 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     let raw
     try { raw = JSON.parse(message.content) }
     catch { return super.parsePlanMessage(message) }
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.project === undefined) {
+
+    const initialSplitRequired = this.projectJevAdvisory?.granularity === 'split'
+      && !this.strategicProjectState?.current_milestone
+
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return super.parsePlanMessage(message)
+    }
+    if (raw.project === undefined) {
+      if (initialSplitRequired) {
+        throw new AgentLoopError('Project Jev requires this long-horizon goal to be split into a bounded project.currentMilestone before executable Task Board steps are admitted')
+      }
       return super.parsePlanMessage(message)
     }
 
