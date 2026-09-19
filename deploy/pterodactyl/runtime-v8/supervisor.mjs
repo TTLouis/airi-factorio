@@ -373,7 +373,10 @@ export async function executeUiControl(session, event) {
   if (event.action === 'terminate') {
     await terminatePlan(session, 'ui_terminate')
     await stopWorldWork(session)
-    if (session.projectJev) await session.projectJev.runtime.terminateProject()
+    if (session.projectJev) {
+      try { await session.projectJev.runtime.terminateProject() }
+      catch (error) { session.log(`[Project Jev] Strategic terminate failed without blocking UI terminate: ${error instanceof Error ? error.message : error}`) }
+    }
     await session.clearTaskBoardUi()
     await session.printChat('Terminated the current AIRI goal. Its durable plan was discarded and will not resume.')
     return true
@@ -531,19 +534,25 @@ export class Session {
     const objective = uiText(state.objective, 500)
     if (!goalId || !objective) return false
 
-    const board = this.projectJev.currentBoard()
-    if (!board.goal_id) {
-      await this.projectJev.runtime.bindGoal({ goalId, objective })
-      return true
-    }
-    if (board.goal_id === goalId) return false
-    if (board.status === 'completed' || board.status === 'terminated') {
-      await this.projectJev.runtime.startNextGoal({ goalId, objective })
-      return true
-    }
+    try {
+      const board = this.projectJev.currentBoard()
+      if (!board.goal_id) {
+        await this.projectJev.runtime.bindGoal({ goalId, objective })
+        return true
+      }
+      if (board.goal_id === goalId) return false
+      if (board.status === 'completed' || board.status === 'terminated') {
+        await this.projectJev.runtime.startNextGoal({ goalId, objective })
+        return true
+      }
 
-    this.log(`[Project Jev] Deferred goal switch ${board.goal_id} -> ${goalId}; prior strategic goal is still ${board.status}`)
-    return false
+      this.log(`[Project Jev] Deferred goal switch ${board.goal_id} -> ${goalId}; prior strategic goal is still ${board.status}`)
+      return false
+    }
+    catch (error) {
+      this.log(`[Project Jev] Goal sync failed without blocking AIRI: ${error instanceof Error ? error.message : error}`)
+      return false
+    }
   }
 
   async clearTaskBoardUi() {
@@ -640,21 +649,27 @@ export class Session {
     await this.agent.loadPersistentState()
     await this.syncTaskBoardUi()
 
-    this.projectJev = createSwarmProjectJevControlPlane({
-      rcon: this.rcon,
-      root: this.root,
-      snapshotLimit: 12,
-      pollIntervalMs: 2000,
-      log: message => this.log(`[Project Jev] ${redact(secrets, message)}`),
-    })
-    await this.projectJev.runtime.initialize()
-    await this.syncProjectJevGoalFromPlan()
-    if (this.projectJev.decisionProviderConfigured) {
-      await this.projectJev.start()
-      this.log('[Project Jev] Global strategic shadow monitor started')
+    try {
+      this.projectJev = createSwarmProjectJevControlPlane({
+        rcon: this.rcon,
+        root: this.root,
+        snapshotLimit: 12,
+        pollIntervalMs: 2000,
+        log: message => this.log(`[Project Jev] ${redact(secrets, message)}`),
+      })
+      await this.projectJev.runtime.initialize()
+      await this.syncProjectJevGoalFromPlan()
+      if (this.projectJev.decisionProviderConfigured) {
+        await this.projectJev.start()
+        this.log('[Project Jev] Global strategic shadow monitor started')
+      }
+      else {
+        this.log('[Project Jev] Decision provider not configured; durable strategic state remains available but shadow monitor is disabled')
+      }
     }
-    else {
-      this.log('[Project Jev] Decision provider not configured; durable strategic state remains available but shadow monitor is disabled')
+    catch (error) {
+      this.log(`[Project Jev] Sidecar initialization failed; AIRI will continue without Project Jev: ${error instanceof Error ? error.message : error}`)
+      this.projectJev = null
     }
 
     this.ready = true
