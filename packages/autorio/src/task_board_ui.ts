@@ -329,7 +329,7 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
     conversation.push({
       id: text(entry?.id || `message_${index + 1}`, 120),
       role,
-      sender: text(entry?.sender || (role === 'assistant' ? 'AIRI' : 'Player'), 128),
+      sender: text(entry?.sender || (role === 'assistant' ? 'NPC' : 'Player'), 128),
       text: line,
     })
   }
@@ -554,7 +554,7 @@ function runtime_snapshot(): TaskBoardUiRuntimeSnapshot {
   const guns = character?.valid ? inventory_items(character.get_inventory(defines.inventory.character_guns)) : []
   const ammo = character?.valid ? inventory_items(character.get_inventory(defines.inventory.character_ammo)) : []
   const preview: TaskBoardUiWorldPreview | undefined = actor?.is_valid ? { position: actor.position, surface_index: actor.surface.index, entity: character?.valid ? character : undefined } : undefined
-  return { actor_name: text(identity?.name ?? 'AIRI', 128), actor_kind: text(identity?.kind ?? '', 64), inventory: inventory.slice(0, MAX_INVENTORY_ITEMS), guns, ammo, follow: read_follow_status(), preview, world_task: read_world_task() }
+  return { actor_name: text(identity?.name ?? 'NPC', 128), actor_kind: text(identity?.kind ?? '', 64), inventory: inventory.slice(0, MAX_INVENTORY_ITEMS), guns, ammo, follow: read_follow_status(), preview, world_task: read_world_task() }
 }
 function emit_control(player: LuaPlayer, action: TaskBoardUiControlAction) { enqueue_ui_input({ kind: 'control', version: 1, action, player_index: player.index, player_name: player.name, tick: game.tick }) }
 function emit_resume(player: LuaPlayer) { enqueue_ui_input({ kind: 'prompt', version: 1, player_index: player.index, player_name: player.name, text: 'continue', tick: game.tick }) }
@@ -621,7 +621,7 @@ function render_status_panel(parent: LuaGuiElement, board: TaskBoardUiSnapshot |
   const { header, body } = create_section(parent, 'Status', STATUS_SECTION_WIDTH, undefined, false)
   const overall = overall_state(board, synced_tick); add_status_badge(header, overall.tone, overall.caption)
   const table = create_key_value_table(body)
-  add_key_value(table, 'NPC', runtime.actor_name || 'AIRI', { width: STATUS_VALUE_WIDTH })
+  add_key_value(table, 'NPC', runtime.actor_name || 'NPC', { width: STATUS_VALUE_WIDTH })
   const freshness = task_board_sync_freshness(synced_tick, game.tick)
   const phase = board?.agent.phase ?? 'idle'; const detail = board?.agent.detail ?? ''
   const live_caption = detail.length > 0 ? `${agent_caption(phase)} · ${text(detail, 90)}` : agent_caption(phase)
@@ -998,17 +998,18 @@ function render_resource_sidebar(parent: LuaGuiElement, board: TaskBoardUiSnapsh
   add_equipped_row('GUN', runtime.guns)
   add_equipped_row('AMMO', runtime.ammo)
 }
-function render_prompt(parent: LuaGuiElement, player: LuaPlayer) {
+function render_prompt(parent: LuaGuiElement, player: LuaPlayer, runtime: TaskBoardUiRuntimeSnapshot) {
+  const actor_name = runtime.actor_name || 'NPC'
   const section = parent.add({ type: 'frame', name: PROMPT_SECTION_NAME, direction: 'vertical', style: 'inside_shallow_frame' }); section.style.width = LEFT_COLUMN_WIDTH; section.style.horizontally_stretchable = false
   const header = section.add({ type: 'frame', direction: 'horizontal', style: 'subheader_frame' }); header.style.horizontally_stretchable = true; header.style.vertical_align = 'center'
-  header.add({ type: 'label', caption: 'Prompt SGLuna', style: 'subheader_caption_label' })
+  header.add({ type: 'label', caption: `Prompt ${actor_name}`, style: 'subheader_caption_label' })
   const header_spacer = header.add({ type: 'empty-widget' }); header_spacer.style.horizontally_stretchable = true
   const pending = LIFECYCLE.current(player.index)
   const new_task = compact_button(header.add({ type: 'button', name: NEW_TASK_BUTTON_NAME, caption: 'NEW TASK', style: 'dialog_button', tooltip: pending === undefined ? "Stop current work and clear this NPC's conversation and durable plan. Learned skills and Factorio world state are kept." : `Waiting for SGLuna runtime to confirm ${pending.action}.` })) as ButtonGuiElement
   new_task.enabled = pending === undefined
   const row = section.add({ type: 'flow', name: PROMPT_FLOW_NAME, direction: 'horizontal' }); row.style.padding = SECTION_PADDING; row.style.horizontally_stretchable = true; row.style.vertical_align = 'center'; row.style.horizontal_spacing = 8
-  const field = row.add({ type: 'textfield', name: PROMPT_FIELD_NAME, text: task_board_ui_prompt_draft(player.index), tooltip: 'Send a prompt directly to SGLuna without typing !luna in chat. Press Enter to send.' }); field.style.width = PROMPT_FIELD_WIDTH; field.style.minimal_width = PROMPT_FIELD_WIDTH; field.style.maximal_width = PROMPT_FIELD_WIDTH
-  const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: 'Send this prompt directly to SGLuna' }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.maximal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
+  const field = row.add({ type: 'textfield', name: PROMPT_FIELD_NAME, text: task_board_ui_prompt_draft(player.index), tooltip: `Send a prompt directly to ${actor_name} without typing !luna in chat. Press Enter to send.` }); field.style.width = PROMPT_FIELD_WIDTH; field.style.minimal_width = PROMPT_FIELD_WIDTH; field.style.maximal_width = PROMPT_FIELD_WIDTH
+  const send = row.add({ type: 'button', name: PROMPT_SEND_BUTTON_NAME, caption: 'SEND', style: 'confirm_button', tooltip: `Send this prompt directly to ${actor_name}` }); send.style.width = PROMPT_SEND_WIDTH; send.style.minimal_width = PROMPT_SEND_WIDTH; send.style.maximal_width = PROMPT_SEND_WIDTH; send.style.height = COMPACT_BUTTON_HEIGHT
 }
 function render_titlebar(root: FrameGuiElement, caption = 'SGLuna NPC Console', close_name = CLOSE_BUTTON_NAME) {
   const titlebar = root.add({ type: 'flow', direction: 'horizontal' }); titlebar.style.horizontally_stretchable = true; titlebar.style.horizontal_spacing = 8; titlebar.drag_target = root
@@ -1021,7 +1022,7 @@ function build_left_dynamic(parent: LuaGuiElement, player: LuaPlayer, board: Tas
 function build_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const board = storage.airi_task_board_ui; const synced_tick = storage.airi_task_board_ui_synced_tick; const runtime = runtime_snapshot()
   const left = columns.add({ type: 'flow', name: LEFT_COLUMN_NAME, direction: 'vertical' }); left.style.width = LEFT_COLUMN_WIDTH; left.style.vertical_spacing = COLUMN_SPACING
-  const dynamic = left.add({ type: 'flow', name: LEFT_DYNAMIC_NAME, direction: 'vertical' }); dynamic.style.width = LEFT_COLUMN_WIDTH; dynamic.style.vertical_spacing = COLUMN_SPACING; build_left_dynamic(dynamic, player, board, synced_tick, runtime); render_tracker(left, board, player); debug_ui.render_ai_reply(dynamic, board?.response ?? '', LEFT_COLUMN_WIDTH); render_prompt(left, player)
+  const dynamic = left.add({ type: 'flow', name: LEFT_DYNAMIC_NAME, direction: 'vertical' }); dynamic.style.width = LEFT_COLUMN_WIDTH; dynamic.style.vertical_spacing = COLUMN_SPACING; build_left_dynamic(dynamic, player, board, synced_tick, runtime); render_tracker(left, board, player); debug_ui.render_ai_reply(dynamic, board?.response ?? '', LEFT_COLUMN_WIDTH); render_prompt(left, player, runtime)
   const right = columns.add({ type: 'flow', name: RIGHT_COLUMN_NAME, direction: 'vertical' }); right.style.width = PREVIEW_COLUMN_WIDTH; right.style.vertical_spacing = COLUMN_SPACING; right.style.vertically_stretchable = true; render_world_preview(right, runtime, player)
   const resources = right.add({ type: 'flow', name: RIGHT_RESOURCES_NAME, direction: 'horizontal' }); resources.style.horizontal_spacing = COLUMN_SPACING; resources.style.vertical_align = 'top'; render_inventory(resources, runtime, player); render_resource_sidebar(resources, board, runtime, player)
 }

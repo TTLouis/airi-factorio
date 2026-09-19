@@ -896,3 +896,12 @@ test('verified final completion is not mistaken for an action omission', async (
   assert.match(resetContext, /No active durable goal/)
   assert.doesNotMatch(resetContext, /place one furnace|requested furnace/i)
 })
+
+
+test('Plan Tracker guidance asks the planner for natural human-facing step labels without losing verification detail', async () => {
+  const source = await fsp.readFile(new URL('./npc-agent-loop.mjs', import.meta.url), 'utf8')
+  assert.match(source, /Plan entries are also the human-facing labels shown in Plan Tracker/)
+  assert.match(source, /preserves concrete checkpoint-relevant details/)
+  assert.match(source, /prefer "Gather 60 stone for the first furnaces" over "Mine stone near AIRI"/)
+  assert.match(source, /Natural wording must not weaken the step boundary or completion semantics needed for verification/)
+})

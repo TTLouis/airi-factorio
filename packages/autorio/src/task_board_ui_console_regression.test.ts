@@ -79,6 +79,14 @@ describe('SGLuna NPC console layout regressions', () => {
     expect(ensure_button).toContain('button.style.maximal_width = 48')
   })
 
+  it('keeps SGLuna as the product name while addressing the current NPC by name', () => {
+    expect(source).toContain("caption = 'SGLuna NPC Console'")
+    expect(source).toContain("caption: \`Prompt \${actor_name}\`")
+    expect(source).toContain("tooltip: \`Send a prompt directly to \${actor_name}")
+    expect(source).not.toContain("caption: 'Prompt SGLuna'")
+    expect(source).toContain("identity?.name ?? 'NPC'")
+  })
+
   it('locks control and prompt widths instead of shrinking to their captions', () => {
     expect(source).toContain('button.style.minimal_width = COMPACT_BUTTON_WIDTH')
     expect(source).toContain('button.style.maximal_width = COMPACT_BUTTON_WIDTH')
