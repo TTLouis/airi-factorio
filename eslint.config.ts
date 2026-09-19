@@ -41,16 +41,7 @@ export default antfu(
     files: [
       'packages/autorio/**/*.ts',
       'packages/tstl-plugin-reload-factorio-mod/example/*.ts',
-      'packages/factorio-rcon-snippets-for-vscode/**/*.ts',
     ],
-  },
-  // #endregion
-  // #region no-console
-  {
-    rules: {
-      'no-console': 'off',
-    },
-    files: ['packages/vscode-factorio-rcon-evaluator/**/*.ts'],
   },
   // #endregion
   // #global-ignore
