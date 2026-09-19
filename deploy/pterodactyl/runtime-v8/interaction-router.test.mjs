@@ -116,7 +116,7 @@ function agentFor(intent, {
     return {
       content: JSON.stringify({
         chatMessage: 'Replanned current work.',
-        ...(intent === 'new_goal' && decisionGranularity === 'split'
+        ...((intent === 'new_goal' && decisionGranularity === 'split') || context.triggerSource === 'hierarchy_split'
           ? {
               project: {
                 currentMilestone: {
@@ -635,4 +635,31 @@ test('Jev observation budget is enforced before decision pressure', async () => 
   assert.equal(agent.messages.filter(message => message.role === 'tool').length, firstToolResults)
   assert.equal(agent.observationDecisionForced, true)
   assert.equal(agent.observationBudgetRemaining, 0)
+})
+
+
+test('durable hierarchy split resumes transactionally after an interrupted planner turn', async () => {
+  const { agent, memory, calls } = agentFor('continue_current', {
+    running: false,
+    withPlan: true,
+    decisionIntent: 'continue_current',
+    decisionGranularity: 'keep',
+  })
+  memory.markHierarchySplitPending('npc:airi', {
+    reason_code: 'hierarchy_split_requested',
+    reasoning_budget: 'deep',
+    planning_horizon: 'subgoal',
+    observation_budget: 2,
+  })
+
+  const result = await agent.request('continue', { sender: 'tester' })
+  const plannerCall = calls.find(call => call.interactionRouter !== true)
+
+  assert.equal(plannerCall.triggerSource, 'hierarchy_split')
+  assert.equal(plannerCall.reasoningBudget, 'deep')
+  assert.equal(result.interactionIntent, 'continue_current')
+  const state = memory.currentPlan('npc:airi')
+  assert.equal(state.hierarchy_split_pending, undefined)
+  assert.equal(state.project_board.current_milestone.title, 'Establish bounded starter production')
+  assert.equal(state.task_board.steps[0].description, 'continue the updated production goal')
 })
