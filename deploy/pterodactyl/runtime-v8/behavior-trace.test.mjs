@@ -98,6 +98,41 @@ function withProviderUsage(message, usage = {
   return message
 }
 
+function completionAndContinueDecision(state) {
+  if (state?.contract === 'step_completion_contract') {
+    return {
+      model: 'jev-test',
+      provider: 'TypeSafe',
+      answers: {
+        contract: {
+          type: 'choice',
+          choice: 'candidate_1',
+          confidence: 0.99,
+          probabilities: { candidate_1: 0.99, semantic_unknown: 0.01 },
+        },
+        compound_step: { type: 'noul', noul: 0.01 },
+      },
+      usage: { input_tokens: 10, output_tokens: 2, cost: 0 },
+    }
+  }
+  if (state?.reason === 'post_step_planner_gate') {
+    return {
+      model: 'jev-test',
+      provider: 'TypeSafe',
+      answers: {
+        route: {
+          type: 'choice',
+          choice: 'continue_current',
+          confidence: 0.99,
+          probabilities: { continue_current: 0.99 },
+        },
+      },
+      usage: { input_tokens: 10, output_tokens: 2, cost: 0 },
+    }
+  }
+  throw new Error('unexpected decision contract')
+}
+
 function truncatedProviderMessage(responseId) {
   const message = { content: '' }
   Object.defineProperty(message, '_airiProvider', {
@@ -139,6 +174,8 @@ test('behavior trace correlates request through verification, records usage, and
     reserve: async () => ({ count: ++budgetCount, token: 'budget-secret-token' }),
     memory: new CanonicalTaskBoardMemory(),
     systemPrompt: 'NPC test prompt',
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
     traceFile,
   })
 
@@ -226,6 +263,8 @@ test('duplicate completion receipts do not spend another provider call, while a 
     },
     memory: new CanonicalTaskBoardMemory(),
     systemPrompt: 'NPC test prompt',
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
     traceFile: null,
     onActivity: (event, data) => activity.push({ event, data }),
   })
