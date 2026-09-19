@@ -20,6 +20,7 @@ import {
   parseStepCheckpointDecision,
   sanitizeStepCompletionContract,
   stepCheckpointDecisionQuestions,
+  stepRelationAllowsAdmission,
 } from './step-completion.mjs'
 import { isObservationToolName, renderOperation, renderOperationPreflight, runtimeConditionCommand, toolCommand } from './structured-policy.mjs'
 
@@ -343,6 +344,9 @@ function persistedStepCheckpoint(board, stepId) {
         boundary: ['checkpoint_here', 'keep_step_open', 'split_recommended'].includes(parsed?.boundary)
           ? parsed.boundary
           : 'keep_step_open',
+        relation: ['advances_current', 'prerequisite_for_current', 'belongs_to_later_step', 'replan_needed', 'unrelated'].includes(parsed?.relation)
+          ? parsed.relation
+          : 'replan_needed',
         compound_probability: parsed?.compound_probability,
         provider: parsed?.provider,
         model: parsed?.model,
@@ -1359,8 +1363,8 @@ function postStepDecisionQuestions() {
       type: 'choice',
       instructions: 'After one authoritative Autorio completion or error boundary, choose the smallest safe planner transition. This is routing only; do not invent world facts, mutation success, or goal completion.',
       criteria: {
-        continue_current: 'The canonical goal still looks semantically on track and the main planner should continue compactly.',
-        replan: 'The completion evidence materially changes the remaining approach or suggests the main planner should reconsider the next action with higher reasoning.',
+        continue_current: 'The canonical goal and active step are semantically aligned with the admitted work, so the main planner should continue compactly.',
+        replan: 'The completion evidence changes the remaining approach, or semantic_alignment shows the admitted/proposed work drifted from the active canonical step; wake the planner to realign or split the plan with higher reasoning.',
         wait_runtime: 'A persistent runtime controller is authoritatively active, healthy, and live, so waking the main planner now would only duplicate ongoing work.',
         fallback_planner: 'The evidence is ambiguous or outside this routing contract; use the existing safe main-planner continuation.',
       },
@@ -2390,18 +2394,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
     const step = activeIndex === undefined ? undefined : board?.steps?.[activeIndex]
     if (!planState || planState.status !== 'active' || !step || !Array.isArray(plan?.operations) || plan.operations.length === 0) {
-      return { boundary: 'keep_step_open', state: planState }
+      return { boundary: 'keep_step_open', relation: 'advances_current', state: planState }
     }
 
     const existing = persistedStepCheckpoint(board, step.id)
-    if (existing?.boundary === 'checkpoint_here' && existing.contract?.mode !== 'semantic_unknown') {
+    if (existing?.boundary === 'checkpoint_here' && existing.contract?.mode !== 'semantic_unknown' && stepRelationAllowsAdmission(existing.relation)) {
       return { ...existing, state: planState, reused: true }
     }
 
     const candidates = completionCandidatesFromOperations(plan.operations)
     const questions = stepCheckpointDecisionQuestions(candidates)
     if (!this.interactionDecisionProvider) {
-      return { boundary: 'keep_step_open', state: planState, reason: 'decision_provider_unavailable' }
+      return { boundary: 'keep_step_open', relation: 'replan_needed', state: planState, reason: 'decision_provider_unavailable' }
     }
 
     const current = await this.assertCurrent()
@@ -2468,6 +2472,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         && Array.isArray(contract.requirements)
         && contract.requirements.length > 1
       let boundary = normalized.boundary
+      const relation = normalized.relation
       if (boundary === 'checkpoint_here' && contract.mode === 'semantic_unknown') boundary = 'keep_step_open'
       if (boundary === 'checkpoint_here' && compoundNeedsStrongProof && !compoundProofStrongEnough) {
         boundary = 'split_recommended'
@@ -2479,6 +2484,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         summary: JSON.stringify({
           contract,
           boundary,
+          relation,
           compound_probability: normalized.compound_probability,
           provider: normalized.provider,
           model: normalized.model,
@@ -2488,6 +2494,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       await this.traceEvent('step.checkpoint_created', {
         active_step_id: step.id,
         boundary,
+        relation,
         contract,
         compound_probability: normalized.compound_probability,
       })
@@ -2498,13 +2505,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         provider: normalized.provider,
         model: normalized.model,
         boundary,
+        relation,
         confidence: contract.confidence,
         latency_ms: Date.now() - startedAt,
         input_units: Number.isFinite(normalized.usage?.input_tokens) ? Math.max(0, Math.trunc(normalized.usage.input_tokens)) : 0,
         output_units: Number.isFinite(normalized.usage?.output_tokens) ? Math.max(0, Math.trunc(normalized.usage.output_tokens)) : 0,
         cost_usd: Number.isFinite(normalized.usage?.cost) && normalized.usage.cost >= 0 ? normalized.usage.cost : 0,
       })
-      return { boundary, contract, state: this.memory.currentPlan?.(key), compound_probability: normalized.compound_probability }
+      return { boundary, relation, contract, state: this.memory.currentPlan?.(key), compound_probability: normalized.compound_probability }
     }
     catch (error) {
       const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
@@ -2521,7 +2529,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         reason: message,
         latency_ms: Date.now() - startedAt,
       })
-      return { boundary: 'keep_step_open', state: planState, reason: 'checkpoint_decision_failed' }
+      return { boundary: 'keep_step_open', relation: 'replan_needed', state: planState, reason: 'checkpoint_decision_failed' }
     }
     finally {
       controller.abort()
@@ -2704,6 +2712,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     const board = planState?.task_board
     const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
+    const activeStep = activeIndex === undefined ? undefined : board?.steps?.[activeIndex]
+    const activeCheckpoint = activeStep ? persistedStepCheckpoint(board, activeStep.id) : undefined
     const skills = this.loadedSkillContext instanceof Map
       ? [...this.loadedSkillContext.values()].slice(-SKILL_CONTEXT_MAX_SKILLS).map(skill => ({
           id: typeof skill?.id === 'string' ? cleanMemoryText(skill.id, 80) : undefined,
@@ -2737,6 +2747,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
               : (Array.isArray(board?.steps) ? board.steps.length : undefined),
             blocker: cleanMemoryText(board?.blocker, 300),
             pause_reason: cleanMemoryText(board?.pause_reason, 300),
+          }
+        : null,
+      semantic_alignment: activeCheckpoint
+        ? {
+            step_relation: activeCheckpoint.relation,
+            checkpoint_boundary: activeCheckpoint.boundary,
+            admission_aligned: stepRelationAllowsAdmission(activeCheckpoint.relation),
           }
         : null,
       autorio: {
@@ -2948,6 +2965,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   async request(text, options = {}) {
     await this.loadPersistentState()
+    this.semanticAlignmentRetries = 0
     const sender = options.sender ?? 'unknown'
     this.lastMemoryKey = `npc:${this.npcId}`
     const memoryKey = this.activePlanKey()
@@ -4128,6 +4146,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
     let stateResult
     let durablePlan = plan
+    let stepCheckpoint
     if (this.requestInfo) {
       this.lastMemoryKey = this.requestInfo.memoryKey
       const previousBoard = previousState?.task_board
@@ -4183,7 +4202,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         completionEvidence,
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
-        allowReplan: this.planUpdateReason === 'failure',
+        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason),
         previousState,
       }) ?? stateResult
       if (commands.length > 0 && stateResult?.state && stateResult?.blockedByHarness !== true) {
@@ -4197,10 +4216,59 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         task_board: visibleTaskBoard(stateResult?.state?.task_board),
       })
       if (commands.length > 0 && stateResult?.blockedByHarness !== true) {
-        const checkpoint = await this.routeStepCheckpointDecision(plan)
-        if (checkpoint?.state) stateResult = { ...(stateResult ?? {}), state: checkpoint.state }
+        stepCheckpoint = await this.routeStepCheckpointDecision(plan)
+        if (stepCheckpoint?.state) stateResult = { ...(stateResult ?? {}), state: stepCheckpoint.state }
       }
     }
+
+    if (commands.length > 0 && stateResult?.blockedByHarness !== true && stepCheckpoint && !stepRelationAllowsAdmission(stepCheckpoint.relation)) {
+      const activeBoard = stateResult?.state?.task_board
+      const activeIndex = Number.isSafeInteger(activeBoard?.active_index) ? activeBoard.active_index : undefined
+      const activeStep = activeIndex === undefined ? undefined : activeBoard?.steps?.[activeIndex]
+      if (this.requestInfo) {
+        const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'preflight_rejected')
+        if (state) stateResult = { ...(stateResult ?? {}), state }
+        this.memory.recordBoardEvidence?.(this.requestInfo.memoryKey, {
+          kind: 'step_semantic_alignment_rejection',
+          ref: `${this.traceRequest?.id ?? 'request'}/semantic_alignment`,
+          summary: JSON.stringify({
+            relation: stepCheckpoint.relation,
+            checkpoint_boundary: stepCheckpoint.boundary,
+            active_step_id: activeStep?.id,
+            active_step: activeStep?.description,
+            proposed_operations: plan.operations.slice(0, 8).map(operation => operation?.name),
+          }),
+        })
+        await this.persistState()
+      }
+      await this.traceEvent('operations.semantic_alignment_rejected', {
+        relation: stepCheckpoint.relation,
+        checkpoint_boundary: stepCheckpoint.boundary,
+        active_step_id: activeStep?.id,
+        active_step: activeStep?.description,
+        operations,
+        task_board: visibleTaskBoard(stateResult?.state?.task_board),
+      })
+
+      const retries = Number.isSafeInteger(this.semanticAlignmentRetries) ? this.semanticAlignmentRetries : 0
+      if (retries >= 1) {
+        throw new AgentLoopError(`provider_semantic_alignment_failed: proposed operations still do not align with active canonical step after re-anchor; relation=${stepCheckpoint.relation}`)
+      }
+      this.semanticAlignmentRetries = retries + 1
+      this.planUpdateReason = 'reanchor_plan'
+      this.reasoningTriggerSource = 'semantic_reanchor'
+      this.messages.push({
+        role: 'user',
+        content: `[HARNESS] Autorio admission was stopped before any world mutation because Jev classified the proposed batch as "${stepCheckpoint.relation}" relative to the active canonical step "${cleanMemoryText(activeStep?.description, 400)}". Re-anchor the plan to authoritative Task Board evidence before proposing another batch. Do not assume the active step completed merely because you intended later work. If existing grounded evidence proves an earlier step complete, propose a plan aligned with that evidence; otherwise continue or split the active step. Avoid extra observations unless one specific mutable fact is genuinely missing.`,
+      })
+      try {
+        return await this.runTurn()
+      }
+      finally {
+        this.reasoningTriggerSource = null
+      }
+    }
+    if (commands.length > 0) this.semanticAlignmentRetries = 0
     this.outputBudgetRecoveryGuard = null
     if (commands.length > 0) this.clearActionOmissionRecovery()
 

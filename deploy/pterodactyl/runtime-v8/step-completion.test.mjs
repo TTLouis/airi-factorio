@@ -11,6 +11,7 @@ import {
   sanitizeStepCompletionContract,
   stepCheckpointDecisionQuestions,
   stepCompletionDecisionQuestions,
+  stepRelationAllowsAdmission,
 } from './step-completion.mjs'
 
 test('unsupported, mixed, truncated, or malformed completion semantics fail closed', () => {
@@ -132,10 +133,12 @@ test('Jev checkpoint pass chooses semantic boundary separately from the grounded
     answers: {
       contract: { type: 'choice', choice: 'candidate_1', confidence: 0.93 },
       compound_step: { type: 'noul', noul: 0.08 },
+      step_relation: { type: 'choice', choice: 'advances_current', confidence: 0.94 },
       checkpoint_boundary: { type: 'choice', choice: 'checkpoint_here', confidence: 0.9 },
     },
   }, candidates)
   assert.equal(selected.boundary, 'checkpoint_here')
+  assert.equal(selected.relation, 'advances_current')
   assert.equal(selected.contract.requirements[0].kind, 'inventory_count')
   assert.equal(selected.contract.requirements[0].item_name, 'stone-furnace')
 
@@ -143,10 +146,34 @@ test('Jev checkpoint pass chooses semantic boundary separately from the grounded
     answers: {
       contract: { type: 'choice', choice: 'candidate_1', confidence: 0.86 },
       compound_step: { type: 'noul', noul: 0.91 },
+      step_relation: { type: 'choice', choice: 'replan_needed', confidence: 0.95 },
       checkpoint_boundary: { type: 'choice', choice: 'split_recommended', confidence: 0.95 },
     },
   }, candidates)
   assert.equal(split.boundary, 'split_recommended')
+})
+
+
+test('step semantic relation admits only current-step progress or prerequisites', () => {
+  assert.equal(stepRelationAllowsAdmission('advances_current'), true)
+  assert.equal(stepRelationAllowsAdmission('prerequisite_for_current'), true)
+  assert.equal(stepRelationAllowsAdmission('belongs_to_later_step'), false)
+  assert.equal(stepRelationAllowsAdmission('replan_needed'), false)
+  assert.equal(stepRelationAllowsAdmission('unrelated'), false)
+
+  const candidates = completionCandidatesFromOperations([
+    { name: 'craft_item', args: { item_name: 'stone-furnace', count: 2 } },
+  ])
+  const drift = parseStepCheckpointDecision({
+    answers: {
+      contract: { type: 'choice', choice: 'candidate_1', confidence: 0.91 },
+      compound_step: { type: 'noul', noul: 0.1 },
+      step_relation: { type: 'choice', choice: 'belongs_to_later_step', confidence: 0.96 },
+      checkpoint_boundary: { type: 'choice', choice: 'keep_step_open', confidence: 0.92 },
+    },
+  }, candidates)
+  assert.equal(drift.relation, 'belongs_to_later_step')
+  assert.equal(drift.boundary, 'keep_step_open')
 })
 
 test('passive progress wait stays active while machine progresses and wakes when it stops', () => {

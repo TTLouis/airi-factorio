@@ -123,7 +123,7 @@ class Rcon {
   }
 }
 
-function checkpointDecision(choice = 'candidate_1', boundary = 'checkpoint_here', confidence = 0.94) {
+function checkpointDecision(choice = 'candidate_1', boundary = 'checkpoint_here', confidence = 0.94, relation = 'advances_current') {
   return {
     model: 'jev-latest',
     provider: 'TypeSafe',
@@ -135,6 +135,12 @@ function checkpointDecision(choice = 'candidate_1', boundary = 'checkpoint_here'
         probabilities: { candidate_1: choice === 'candidate_1' ? 0.94 : 0.03, candidate_2: 0.03, semantic_unknown: 0.03 },
       },
       compound_step: { type: 'noul', noul: boundary === 'split_recommended' ? 0.92 : 0.08 },
+      step_relation: {
+        type: 'choice',
+        choice: relation,
+        confidence: 0.95,
+        probabilities: { advances_current: relation === 'advances_current' ? 0.95 : 0.01, prerequisite_for_current: relation === 'prerequisite_for_current' ? 0.95 : 0.01, belongs_to_later_step: relation === 'belongs_to_later_step' ? 0.95 : 0.01, replan_needed: relation === 'replan_needed' ? 0.95 : 0.01, unrelated: relation === 'unrelated' ? 0.95 : 0.01 },
+      },
       checkpoint_boundary: {
         type: 'choice',
         choice: boundary,
@@ -179,6 +185,8 @@ test('Jev normalizes a checkpoint from high-level gather intent before execution
       assert.equal(decisionState.proposed_operations[0].name, 'gather_resource')
       assert.equal(decisionState.proposed_operations[0].args.resource_name, 'stone')
       assert.ok(questions.checkpoint_boundary.criteria.checkpoint_here)
+      assert.ok(questions.step_relation.criteria.advances_current)
+      assert.ok(questions.step_relation.criteria.belongs_to_later_step)
       return checkpointDecision()
     },
   })
@@ -189,12 +197,42 @@ test('Jev normalizes a checkpoint from high-level gather intent before execution
 
   assert.equal(calls, 1)
   assert.equal(result.boundary, 'checkpoint_here')
+  assert.equal(result.relation, 'advances_current')
   const checkpoint = memory.planByNpc.get('npc:airi').task_board.evidence.find(item => item.kind === 'step_checkpoint_contract')
   assert.ok(checkpoint)
   const summary = JSON.parse(checkpoint.summary)
   assert.equal(summary.contract.requirements[0].kind, 'inventory_count')
   assert.equal(summary.contract.requirements[0].item_name, 'stone')
   assert.equal(summary.contract.requirements[0].minimum, 10)
+  assert.equal(summary.relation, 'advances_current')
+})
+
+test('Jev flags a later-step batch before admission while allowing a current-step prerequisite', async () => {
+  const driftState = activeState({ includeCheckpoint: false })
+  driftState.task_board.evidence = []
+  const { agent: driftAgent, memory: driftMemory } = agentWithState({
+    state: driftState,
+    decisionProvider: async () => checkpointDecision('candidate_1', 'keep_step_open', 0.94, 'belongs_to_later_step'),
+  })
+  const drift = await driftAgent.routeStepCheckpointDecision({
+    operations: [{ name: 'craft_item', args: { item_name: 'stone-furnace', count: 2 } }],
+  })
+  assert.equal(drift.relation, 'belongs_to_later_step')
+  assert.equal(drift.boundary, 'keep_step_open')
+  const driftCheckpoint = driftMemory.planByNpc.get('npc:airi').task_board.evidence.find(item => item.kind === 'step_checkpoint_contract')
+  assert.equal(JSON.parse(driftCheckpoint.summary).relation, 'belongs_to_later_step')
+
+  const prereqState = activeState({ includeCheckpoint: false })
+  prereqState.task_board.evidence = []
+  const { agent: prereqAgent } = agentWithState({
+    state: prereqState,
+    decisionProvider: async () => checkpointDecision('candidate_1', 'keep_step_open', 0.94, 'prerequisite_for_current'),
+  })
+  const prereq = await prereqAgent.routeStepCheckpointDecision({
+    operations: [{ name: 'craft_item', args: { item_name: 'stone-furnace', count: 1 } }],
+  })
+  assert.equal(prereq.relation, 'prerequisite_for_current')
+  assert.equal(prereq.boundary, 'keep_step_open')
 })
 
 test('compound Jev assessment cannot accept a one-requirement checkpoint as step completion', async () => {

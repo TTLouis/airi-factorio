@@ -217,10 +217,33 @@ export function completionCandidatesFromOperations(operations = []) {
   return candidates
 }
 
+const STEP_RELATIONS = new Set([
+  'advances_current',
+  'prerequisite_for_current',
+  'belongs_to_later_step',
+  'replan_needed',
+  'unrelated',
+])
+
+export function stepRelationAllowsAdmission(relation) {
+  return relation === 'advances_current' || relation === 'prerequisite_for_current'
+}
+
 export function stepCheckpointDecisionQuestions(candidates = []) {
   const base = stepCompletionDecisionQuestions(candidates)
   return {
     ...base,
+    step_relation: {
+      type: 'choice',
+      instructions: 'Judge the semantic relationship between the proposed operation batch and the currently active canonical step. This is an admission/alignment judgment, not completion verification. Do not infer that an earlier step is complete merely because a later-step operation was proposed.',
+      criteria: {
+        advances_current: 'The batch directly advances the active canonical step.',
+        prerequisite_for_current: 'The batch is a necessary prerequisite or enabling action for the active canonical step and belongs inside that step.',
+        belongs_to_later_step: 'The batch belongs to a later canonical step rather than the active one. The planner/task board must be re-anchored before this batch may execute.',
+        replan_needed: 'The relationship cannot be represented safely by the current step/plan; wake the planner to realign or split the plan before admission.',
+        unrelated: 'The batch does not materially advance or enable the active canonical step and should not be admitted under it.',
+      },
+    },
     checkpoint_boundary: {
       type: 'choice',
       instructions: 'Judge the semantic boundary before execution. Decide whether the proposed operation batch lands on a useful deterministic checkpoint for this canonical step, whether the step should remain open after the batch, or whether the semantic step should be split/replanned before treating this batch as its completion boundary.',
@@ -236,8 +259,10 @@ export function stepCheckpointDecisionQuestions(candidates = []) {
 export function parseStepCheckpointDecision(response, candidates = []) {
   const normalized = parseStepCompletionDecision(response, candidates)
   const boundary = response?.answers?.checkpoint_boundary?.choice
+  const relation = response?.answers?.step_relation?.choice
   return {
     ...normalized,
+    relation: STEP_RELATIONS.has(relation) ? relation : 'replan_needed',
     boundary: ['checkpoint_here', 'keep_step_open', 'split_recommended'].includes(boundary)
       ? boundary
       : 'keep_step_open',
