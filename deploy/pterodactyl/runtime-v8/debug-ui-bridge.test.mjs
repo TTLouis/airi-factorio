@@ -427,4 +427,11 @@ test('active Jev post-step routing is tracked separately from interaction shadow
   assert.equal(debug.decision_calls_total, 2)
   assert.equal(debug.decision_input_units_total, 210)
   assert.equal(debug.decision_output_units_total, 18)
+  assert.equal(debug.decision_post_step_calls_total, 1)
+
+  debug = liveAgentDebugEvent('planner.wake', { source: 'decision_provider', route: 'fallback_planner' }, debug)
+  assert.equal(debug.decision_planner_wakes_total, 1)
+  assert.equal(debug.decision_planner_continue_low_wakes_total, 0)
+  assert.equal(debug.decision_planner_replan_high_wakes_total, 0)
+  assert.equal(debug.decision_planner_fallback_wakes_total, 1)
 })

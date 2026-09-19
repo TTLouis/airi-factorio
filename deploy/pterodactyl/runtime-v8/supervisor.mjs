@@ -560,8 +560,12 @@ function emptyAgentDebug(fallback = {}) {
     decision_cost_micro_usd_total: 0,
     decision_shadow_matches_total: 0,
     decision_shadow_mismatches_total: 0,
+    decision_post_step_calls_total: 0,
     decision_planner_skips_total: 0,
     decision_planner_wakes_total: 0,
+    decision_planner_continue_low_wakes_total: 0,
+    decision_planner_replan_high_wakes_total: 0,
+    decision_planner_fallback_wakes_total: 0,
     decision_error: '',
     last_tool: '',
     last_event: '',
@@ -595,8 +599,12 @@ function decisionDebugFields(value = {}) {
     decision_cost_micro_usd_total: debugInteger(value.decision_cost_micro_usd_total),
     decision_shadow_matches_total: debugInteger(value.decision_shadow_matches_total),
     decision_shadow_mismatches_total: debugInteger(value.decision_shadow_mismatches_total),
+    decision_post_step_calls_total: debugInteger(value.decision_post_step_calls_total),
     decision_planner_skips_total: debugInteger(value.decision_planner_skips_total),
     decision_planner_wakes_total: debugInteger(value.decision_planner_wakes_total),
+    decision_planner_continue_low_wakes_total: debugInteger(value.decision_planner_continue_low_wakes_total),
+    decision_planner_replan_high_wakes_total: debugInteger(value.decision_planner_replan_high_wakes_total),
+    decision_planner_fallback_wakes_total: debugInteger(value.decision_planner_fallback_wakes_total),
     decision_error: uiText(value.decision_error, 300),
   }
 }
@@ -714,6 +722,7 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
   }
 
   if (event === 'post_step.routed') {
+    debug.decision_post_step_calls_total = debugInteger(debug.decision_post_step_calls_total) + 1
     const decision = data?.decision && typeof data.decision === 'object' ? data.decision : undefined
     debug.decision_post_step_route = uiText(data.route, 80)
     debug.decision_post_step_applied_route = uiText(data.applied_route, 80)
@@ -743,6 +752,15 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
   }
   if (event === 'planner.wake' && data?.source === 'decision_provider') {
     debug.decision_planner_wakes_total = debugInteger(debug.decision_planner_wakes_total) + 1
+    if (data?.route === 'continue_current') {
+      debug.decision_planner_continue_low_wakes_total = debugInteger(debug.decision_planner_continue_low_wakes_total) + 1
+    }
+    else if (data?.route === 'replan') {
+      debug.decision_planner_replan_high_wakes_total = debugInteger(debug.decision_planner_replan_high_wakes_total) + 1
+    }
+    else if (data?.route === 'fallback_planner') {
+      debug.decision_planner_fallback_wakes_total = debugInteger(debug.decision_planner_fallback_wakes_total) + 1
+    }
   }
 
   if (event === 'tool.call' || event === 'tool.result') debug.last_tool = uiText(data.name, 120)
