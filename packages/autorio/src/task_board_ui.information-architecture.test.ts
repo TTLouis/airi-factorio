@@ -39,9 +39,9 @@ describe('NPC console information architecture', () => {
   it('separates Project Board strategy from Plan Tracker execution', () => {
     expect(consoleSource).toContain("create_section(parent, 'Project Board'")
     expect(consoleSource).toContain("create_section(parent, 'Plan Tracker'")
-    expect(consoleSource).toContain("add_key_value(table, 'MILESTONE'")
-    expect(consoleSource).toContain("add_key_value(table, 'DEVELOPMENT'")
-    expect(consoleSource).toContain("add_key_value(table, 'UP NEXT'")
+    expect(consoleSource).toMatch(/add_key_value\(\s*table,\s*'MILESTONE'/)
+    expect(consoleSource).toMatch(/add_key_value\(\s*table,\s*'DEVELOPMENT'/)
+    expect(consoleSource).toMatch(/add_key_value\(\s*table,\s*'UP NEXT'/)
     expect(consoleSource).toMatch(/build_left_dynamic\(dynamic,[\s\S]*render_tracker\(left, board, player\)/)
   })
 
