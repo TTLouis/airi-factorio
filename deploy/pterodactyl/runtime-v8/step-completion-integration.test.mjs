@@ -364,3 +364,47 @@ test('missing pre-admission checkpoint fails closed even with an authoritative b
   assert.equal(result.reason, 'missing_pre_admission_checkpoint')
   assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 0)
 })
+
+
+test('Jev can select a semantic total checkpoint that differs from the next operation amount', async () => {
+  const state = activeState({ includeCheckpoint: false })
+  state.objective = 'Ensure I have at least 100 stone before building furnaces'
+  state.plan = ['Ensure I have at least 100 stone', 'Craft stone furnaces']
+  state.task_board.steps[0].description = 'Ensure I have at least 100 stone'
+  state.task_board.steps[1].description = 'Craft stone furnaces'
+  state.task_board.evidence = []
+
+  const { agent, memory } = agentWithState({
+    state,
+    stone: 102,
+    decisionProvider: async (decisionState, questions) => {
+      assert.equal(decisionState.proposed_checkpoint.requirements[0].minimum, 100)
+      assert.match(questions.contract.criteria.candidate_1, /"minimum":100/)
+      assert.match(questions.contract.criteria.candidate_2, /"minimum":40/)
+      return checkpointDecision('candidate_1', 'checkpoint_here', 0.96, 'advances_current')
+    },
+  })
+
+  const checkpoint = {
+    mode: 'all',
+    source: 'planner_semantic_checkpoint',
+    requirements: [{
+      id: 'stone_total',
+      kind: 'inventory_count',
+      item_name: 'stone',
+      minimum: 100,
+    }],
+  }
+  const result = await agent.routeStepCheckpointDecision({
+    checkpoint,
+    operations: [{ name: 'gather_resource', args: { resource_name: 'stone', count: 40, search_radius: 512 } }],
+  })
+
+  assert.equal(result.boundary, 'checkpoint_here')
+  assert.equal(result.contract.source, 'planner_semantic_checkpoint')
+  assert.equal(result.contract.requirements[0].minimum, 100)
+
+  const stored = memory.planByNpc.get('npc:airi').task_board.evidence.find(item => item.kind === 'step_checkpoint_contract')
+  const summary = JSON.parse(stored.summary)
+  assert.equal(summary.contract.requirements[0].minimum, 100)
+})
