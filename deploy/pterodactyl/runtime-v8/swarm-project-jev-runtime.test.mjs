@@ -371,20 +371,24 @@ test('runtime persists an explicit next strategic goal only after prior completi
     /requires completed prior goal/,
   )
 
-  await first.bindGoal({
-    goalId: 'goal-red-science',
-    objective: 'Automate red science',
-    status: 'completed',
-  })
-  const next = await first.startNextGoal({
-    goalId: 'goal-green-science',
-    objective: 'Automate green science',
-  })
-  await first.flush()
+  await assert.rejects(
+    () => first.bindGoal({
+      goalId: 'goal-red-science',
+      objective: 'Automate red science',
+      status: 'completed',
+    }),
+    /cannot set strategic lifecycle status through bindGoal/,
+  )
 
-  assert.equal(next.goal_id, 'goal-green-science')
-  assert.equal(next.status, 'active')
-  assert.equal(next.revision, 1)
+  await assert.rejects(
+    () => first.startNextGoal({
+      goalId: 'goal-green-science',
+      objective: 'Automate green science',
+    }),
+    /requires completed prior goal/,
+  )
+
+  await first.flush()
 
   const reconstructed = new SwarmProjectJevRuntime({
     rcon: makeRcon(),
@@ -393,8 +397,36 @@ test('runtime persists an explicit next strategic goal only after prior completi
   const loaded = await reconstructed.initialize()
 
   assert.equal(loaded.loaded, true)
-  assert.equal(reconstructed.currentBoard().goal_id, 'goal-green-science')
-  assert.equal(reconstructed.currentBoard().title, 'Automate green science')
+  assert.equal(reconstructed.currentBoard().goal_id, 'goal-red-science')
   assert.equal(reconstructed.currentBoard().status, 'active')
-  assert.deepEqual(reconstructed.currentBoard().completed_milestones, [])
+})
+
+
+test('bindGoal cannot be abused to mark the strategic project blocked paused or completed', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const runtime = new SwarmProjectJevRuntime({
+    rcon: {
+      async command() {
+        return JSON.stringify(coordinationFixture())
+      },
+    },
+    stateFile: filename,
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+  })
+
+  for (const status of ['blocked', 'paused', 'completed']) {
+    await assert.rejects(
+      () => runtime.bindGoal({
+        goalId: 'goal-rocket',
+        objective: 'Launch a rocket',
+        status,
+      }),
+      /cannot set strategic lifecycle status through bindGoal/,
+    )
+  }
+
+  assert.equal(runtime.currentBoard().status, 'active')
 })
