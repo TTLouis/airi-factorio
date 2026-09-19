@@ -3,6 +3,7 @@ import {
   parseDecisionEnvelope,
 } from './jev-decision-taxonomy.mjs'
 import { sanitizeStrategicProjectBoard } from './strategic-project-board.mjs'
+import { evaluateSwarmOutcomeSnapshot } from './swarm-outcome-verdict.mjs'
 
 const MAX_ITEMS = 12
 const MAX_TEXT = 240
@@ -45,32 +46,46 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
   const claims = boundedList(claimSource)
   const actors = boundedList(actorSource)
   const evidence = boundedList(evidenceSource)
+  const strategicBoard = snapshot.strategicBoard && typeof snapshot.strategicBoard === 'object'
+    ? sanitizeStrategicProjectBoard(snapshot.strategicBoard)
+    : undefined
+  const outcomeSource = snapshot.outcome && typeof snapshot.outcome === 'object'
+    ? snapshot.outcome
+    : undefined
+  const outcomeVerdict = outcomeSource
+    ? evaluateSwarmOutcomeSnapshot({
+        work: outcomeSource.work,
+        objective: outcomeSource.objective,
+        mission: outcomeSource.mission,
+        objectives: outcomeSource.objectives,
+        strategicBoard,
+        strategicMilestoneVerification: outcomeSource.strategicMilestoneVerification,
+      })
+    : undefined
 
   return {
     schema: 'swarm_jev_shadow_v1',
-    strategic_project_board: snapshot.strategicBoard && typeof snapshot.strategicBoard === 'object'
-      ? (() => {
-          const board = sanitizeStrategicProjectBoard(snapshot.strategicBoard)
-          return {
-            goal_id: board.goal_id,
-            title: board.title,
-            status: board.status,
-            current_milestone: board.current_milestone
-              ? {
-                  id: board.current_milestone.id,
-                  title: board.current_milestone.title,
-                }
-              : undefined,
-            next_milestones: board.next_milestones.map(item => ({
-              id: item.id,
-              title: item.title,
-            })),
-            development_direction: board.development_direction,
-            transition_state: board.transition_state,
-            revision: board.revision,
-          }
-        })()
+    strategic_project_board: strategicBoard
+      ? {
+          goal_id: strategicBoard.goal_id,
+          title: strategicBoard.title,
+          status: strategicBoard.status,
+          current_milestone: strategicBoard.current_milestone
+            ? {
+                id: strategicBoard.current_milestone.id,
+                title: strategicBoard.current_milestone.title,
+              }
+            : undefined,
+          next_milestones: strategicBoard.next_milestones.map(item => ({
+            id: item.id,
+            title: item.title,
+          })),
+          development_direction: strategicBoard.development_direction,
+          transition_state: strategicBoard.transition_state,
+          revision: strategicBoard.revision,
+        }
       : undefined,
+    outcome_verdict: outcomeVerdict,
     counts: {
       missions: missionSource.length,
       requests: requestSource.length,
