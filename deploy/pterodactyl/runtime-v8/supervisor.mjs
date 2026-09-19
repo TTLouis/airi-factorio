@@ -1254,6 +1254,14 @@ function providerRecoveryExhausted(message) {
   return /^Provider response recovery exhausted after \d+ attempts:/.test(String(message))
 }
 
+export function hierarchyTransitionPending(state) {
+  return Boolean(
+    state?.hierarchy_split_pending
+    || state?.milestone_transition_pending === true
+    || state?.milestone_plan_pending === true
+  )
+}
+
 export function shouldRecoverInterruptedPlan(state) {
   if (!state || state.status === 'completed' || state.status === 'blocked') return false
   if (state.status === 'active') return true
@@ -1273,6 +1281,10 @@ export async function pauseStrandedPlanAfterRequestError(session, message) {
   const state = session?.currentPlanState?.()
   if (!agent || state?.status !== 'active') return undefined
   if (state.condition_wait?.state === 'active') return undefined
+  // Structural hierarchy work is already represented durably. A provider
+  // exception while Autorio is idle must not relabel that transaction as a
+  // paused task; leave it active so continue/restart can resume the same split.
+  if (hierarchyTransitionPending(state)) return undefined
 
   let runtime
   try {
@@ -1306,11 +1318,23 @@ export async function recoverInterruptedAgentPlan(agent, reason, details = {}) {
   const epoch = await agent.captureEpoch()
   const memoryContext = agent.memory?.context?.(key) ?? ''
   const recoveryDetails = JSON.stringify(details ?? {}).slice(0, 2000)
-  const recoveryMessage = `[HARNESS] Runtime recovery after ${uiText(reason, 120)}. The previous finite Autorio task queue was discarded and its last operation MUST NOT be assumed complete. Re-observe the mutable Factorio state required for the canonical current Task Board step before choosing any world mutation. Preserve the existing goal and completed Task Board prefix. If the current step is already satisfied, verify it and advance; if work remains, submit only the minimum deterministic operations needed to continue. Never blindly replay last_operations. Recovery details: ${recoveryDetails}`
+  const pendingSplit = state.hierarchy_split_pending
+  const pendingMilestonePlan = state.milestone_plan_pending === true && state.project_board?.current_milestone
+  const structuralRecovery = Boolean(pendingSplit || pendingMilestonePlan)
+  const recoveryMessage = pendingSplit
+    ? `[HARNESS] Resume the durably pending hierarchy split after ${uiText(reason, 120)}. Do not continue the old flat Plan Tracker and do not mutate the world until you return a bounded project.currentMilestone plus a milestone-local plan. Preserve the user project goal and verified history. Recovery details: ${recoveryDetails}`
+    : pendingMilestonePlan
+      ? `[HARNESS] Resume planning for the already activated current milestone after ${uiText(reason, 120)}. Preserve that milestone identity and write its bounded milestone-local Plan Tracker before new world mutation. Recovery details: ${recoveryDetails}`
+      : `[HARNESS] Runtime recovery after ${uiText(reason, 120)}. The previous finite Autorio task queue was discarded and its last operation MUST NOT be assumed complete. Re-observe the mutable Factorio state required for the canonical current Task Board step before choosing any world mutation. Preserve the existing goal and completed Task Board prefix. If the current step is already satisfied, verify it and advance; if work remains, submit only the minimum deterministic operations needed to continue. Never blindly replay last_operations. Recovery details: ${recoveryDetails}`
 
   agent.epoch = epoch
   agent.lastMemoryKey = key
-  agent.planUpdateReason = 'recovery'
+  agent.planUpdateReason = structuralRecovery ? 'reanchor_plan' : 'recovery'
+  agent.reasoningTriggerSource = pendingSplit
+    ? 'hierarchy_split'
+    : pendingMilestonePlan
+      ? 'hierarchy_advance'
+      : null
   agent.baseMessages = [
     { role: 'system', content: agent.systemPrompt },
     ...(memoryContext ? [{ role: 'user', content: memoryContext }] : []),
@@ -1325,12 +1349,30 @@ export async function recoverInterruptedAgentPlan(agent, reason, details = {}) {
   }
   agent.active = true
   agent.continuations = 1
+  const previousReasoningBudget = agent.reasoningBudgetOverride
+  const previousObservationBudget = agent.observationBudgetOverride
+  const previousObservationBudgetRemaining = agent.observationBudgetRemaining
+  const previousPlanningHorizon = agent.planningHorizonOverride
+  if (pendingSplit) {
+    agent.reasoningBudgetOverride = pendingSplit.reasoning_budget ?? 'deep'
+    agent.observationBudgetOverride = Number.isSafeInteger(pendingSplit.observation_budget) ? pendingSplit.observation_budget : 0
+    agent.observationBudgetRemaining = agent.observationBudgetOverride
+    agent.planningHorizonOverride = pendingSplit.planning_horizon ?? 'subgoal'
+  }
   if (typeof agent.traceEvent === 'function') {
     agent.traceRequest = { id: `recovery_${Date.now().toString(36)}`, seq: 0 }
     await agent.traceEvent('runtime.recovery_started', { reason, details })
   }
-  const result = await agent.runGuarded()
-  return { recovered: true, result, state: agent.memory?.currentPlan?.(key) }
+  try {
+    const result = await agent.runGuarded()
+    return { recovered: true, result, state: agent.memory?.currentPlan?.(key) }
+  }
+  finally {
+    agent.reasoningBudgetOverride = previousReasoningBudget
+    agent.observationBudgetOverride = previousObservationBudget
+    agent.observationBudgetRemaining = previousObservationBudgetRemaining
+    agent.planningHorizonOverride = previousPlanningHorizon
+  }
 }
 
 export class Session {
@@ -1627,6 +1669,12 @@ export class Session {
     catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.log(`Interrupted plan recovery failed after ${reason}: ${message}`)
+      const current = this.currentPlanState()
+      if (hierarchyTransitionPending(current)) {
+        await this.syncTaskBoardUi(current)
+        await this.printChat(`The hierarchy transition is still pending after ${reason}; I preserved it instead of pausing or reverting to the old flat plan. ${message}`)
+        return null
+      }
       const paused = typeof this.agent.pausePersistentPlan === 'function'
         ? await this.agent.pausePersistentPlan(`runtime_recovery_failed:${uiText(reason, 80)}:${uiText(message, 180)}`)
         : undefined
