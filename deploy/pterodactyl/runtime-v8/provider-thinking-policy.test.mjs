@@ -79,7 +79,7 @@ test('Jev post-step replan overrides the compact completion path and uses high e
   assert.equal(seen.url, 'https://proxy.example/v1/chat/completions')
   assert.equal(seen.body.reasoning_effort, 'high')
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
-  assert.equal(seen.body.max_tokens, 4000)
+  assert.equal(seen.body.max_tokens, 6000)
   assert.equal(message._airiProvider.reasoning_policy_reason, 'jev_post_step_replan')
 })
 
@@ -145,10 +145,10 @@ test('meaningful failure following a low continuation escalates the next plannin
   })
   const { seen } = await captureRequest(messages, { allowTools: true })
   assert.equal(seen.body.reasoning_effort, 'high')
-  assert.equal(seen.body.max_tokens, 4000)
+  assert.equal(seen.body.max_tokens, 6000)
 })
 
-test('repeated meaningful failures can escalate a later planning turn to max', async () => {
+test('repeated meaningful failures switch to compact finalization instead of consuming the strategic budget', async () => {
   const messages = [
     { role: 'system', content: 'system' },
     { role: 'user', content: '[CHAT] tester: continue the build' },
@@ -158,9 +158,9 @@ test('repeated meaningful failures can escalate a later planning turn to max', a
     { role: 'user', content: '[HARNESS] Tool-validation failure (2/3; invalid_tool_call): second failure.' },
   ]
   const { seen } = await captureRequest(messages, { allowTools: true })
-  assert.equal(seen.body.reasoning_effort, 'max')
+  assert.equal(seen.body.reasoning_effort, 'low')
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
-  assert.equal(seen.body.max_tokens, 6000)
+  assert.equal(seen.body.max_tokens, 2000)
 })
 
 test('successful grounded execution de-escalates back to low after earlier failures', async () => {
@@ -193,6 +193,17 @@ test('routed lifecycle drives main-planner reasoning instead of raw CHAT framing
     effort: 'high',
     reason: 'new_goal',
   })
+})
+
+test('same-goal and Jev recovery continuations get a bounded 3000-token action budget', async () => {
+  for (const triggerSource of ['continue_current', 'recovery_continue_low']) {
+    const { seen } = await captureRequest([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: '[CHAT] tester: continue current work' },
+    ], { allowTools: true, triggerSource })
+    assert.equal(seen.body.reasoning_effort, 'low')
+    assert.equal(seen.body.max_tokens, 3000)
+  }
 })
 
 test('interaction router is tool-free, disables reasoning, and CHAT alone is not new_goal', async () => {
@@ -332,7 +343,7 @@ test('Jev deep and strategic completion decisions escape the compact 1000-token 
       reasoningBudget,
     })
     assert.equal(seen.body.reasoning_effort, 'max')
-    assert.equal(seen.body.max_tokens, 6000)
+    assert.equal(seen.body.max_tokens, reasoningBudget === 'strategic' ? 8000 : 7000)
   }
 })
 
@@ -346,7 +357,7 @@ test('Jev normal budget keeps its full planner output budget after completion', 
     reasoningBudget: 'normal',
   })
   assert.equal(seen.body.reasoning_effort, 'high')
-  assert.equal(seen.body.max_tokens, 4000)
+  assert.equal(seen.body.max_tokens, 5000)
 })
 
 test('Jev micro budget preserves compact completion behavior', async () => {

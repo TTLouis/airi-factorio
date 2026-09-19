@@ -387,6 +387,34 @@ test('hierarchy gate converts continue_current into runtime wait only for mainta
   assert.equal(routed.hierarchy_gate.allow_runtime_continuation, true)
 })
 
+test('post-step routing accepts canonical continue_runtime vocabulary and preserves the existing internal continuation path', async () => {
+  const { agent, memory } = makeAgent({
+    decisionProvider: async () => postStepDecisionResponse('continue_runtime', {
+      granularity: 'keep',
+      development: 'maintain',
+      reasoningBudget: 'micro',
+      observationBudget: 0,
+    }),
+  })
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.condition_wait = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    {
+      goalId: durable.goal_id,
+      stepId: durable.task_board.active_step_id,
+      actorId: agent.epoch.actor_id,
+      actorEpoch: agent.epoch.epoch,
+      mode: 'passive_progress',
+      maxChecks: 10,
+    },
+  )
+
+  const routed = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0 } })
+  assert.equal(routed.requested_route, 'continue_current')
+  assert.equal(routed.route, 'wait_runtime')
+  assert.equal(routed.hierarchy_gate.allow_runtime_continuation, true)
+})
+
 test('hierarchy gate refuses runtime wait when Jev says strategic direction is not maintain', async () => {
   const { agent, memory } = makeAgent({
     decisionProvider: async () => postStepDecisionResponse('wait_runtime', {
@@ -702,4 +730,56 @@ test('continuation boundary clears a previous forced observation-decision state'
     /capture continuation options/,
   )
   assert.equal(seenOptions.allowTools, true)
+})
+
+
+test('Jev observation budget partially admits useful read-only observations instead of dropping the whole batch', async () => {
+  const { agent } = makeAgent()
+  agent.observationBudgetRemaining = 1
+  const message = {
+    role: 'assistant',
+    content: null,
+    tool_calls: [10, 20, 30].map((radius, index) => ({
+      id: `obs-budget-${index}`,
+      type: 'function',
+      function: {
+        name: 'getNearbyEntities',
+        arguments: JSON.stringify({ radius, limit: 1 }),
+      },
+    })),
+  }
+
+  await agent.handleToolBatch(message)
+
+  const toolMessages = agent.messages.filter(entry => entry.role === 'tool')
+  assert.equal(toolMessages.length, 1)
+  assert.equal(toolMessages[0].tool_call_id, 'obs-budget-0')
+  assert.equal(agent.observationBudgetRemaining, 0)
+  assert.equal(agent.observationDecisionForced, true)
+})
+
+test('read-only observation batches above the four-call turn cap execute the bounded prefix and defer the rest', async () => {
+  const { agent } = makeAgent()
+  agent.observationBudgetRemaining = null
+  const message = {
+    role: 'assistant',
+    content: null,
+    tool_calls: [10, 20, 30, 40, 50].map((radius, index) => ({
+      id: `obs-cap-${index}`,
+      type: 'function',
+      function: {
+        name: 'getNearbyEntities',
+        arguments: JSON.stringify({ radius, limit: 1 }),
+      },
+    })),
+  }
+
+  await agent.handleToolBatch(message)
+
+  const toolMessages = agent.messages.filter(entry => entry.role === 'tool')
+  assert.equal(toolMessages.length, 4)
+  assert.deepEqual(toolMessages.map(entry => entry.tool_call_id), ['obs-cap-0', 'obs-cap-1', 'obs-cap-2', 'obs-cap-3'])
+  assert.equal(agent.observationDecisionForced, false)
+  assert.match(agent.messages.at(-1)?.content ?? '', /partially admitted/i)
+  assert.match(agent.messages.at(-1)?.content ?? '', /deferred 1/i)
 })

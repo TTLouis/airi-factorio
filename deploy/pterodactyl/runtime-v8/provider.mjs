@@ -100,7 +100,7 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   }
 
   const failures = currentDifficultySignals(messages)
-  if (failures >= 2) return { effort: 'max', reason: 'repeated_failure' }
+  if (failures >= 2) return { effort: 'low', reason: 'repeated_failure_compact_finalize' }
   if (failures === 1 || options.triggerSource === 'failure') {
     return { effort: 'high', reason: 'ordinary_replan' }
   }
@@ -112,9 +112,24 @@ export function selectReasoningPolicy(config, messages, options = {}) {
 }
 
 function reasoningOutputBudget(policy) {
-  if (policy?.effort === 'max') return 6000
-  if (policy?.effort === 'high') return 4000
-  return undefined
+  switch (policy?.reason) {
+    case 'jev_budget_strategic': return 8000
+    case 'jev_budget_deep': return 7000
+    case 'jev_budget_normal': return 5000
+    case 'ordinary_replan':
+    case 'jev_post_step_replan':
+    case 'jev_recovery_replan':
+      return 6000
+    case 'same_goal_continue':
+    case 'jev_recovery_continue':
+      return 3000
+    case 'repeated_failure_compact_finalize':
+      return 2000
+    default:
+      if (policy?.effort === 'max') return 6000
+      if (policy?.effort === 'high') return 4000
+      return undefined
+  }
 }
 
 function reasoningBodyPatch(policy) {

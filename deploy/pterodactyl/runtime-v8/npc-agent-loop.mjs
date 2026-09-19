@@ -50,6 +50,7 @@ const TRACE_FILES = 5
 const SENSITIVE_TRACE_KEY = /(?:authorization|api.?key|token|password|secret|cookie|session)/i
 const STATE_SCHEMA = 1
 const PLAN_HISTORY_LIMIT = 24
+const MAX_OBSERVATION_TOOL_CALLS_PER_BATCH = 4
 const DUPLICATE_OBSERVATION_MESSAGE = '[HARNESS] Duplicate observation suppressed. The result is unchanged from the earlier identical tool call already present in this decision context; reuse it and act or report a blocker.'
 const OUTPUT_BUDGET_RECOVERY_MESSAGE = '[HARNESS] The immediately preceding provider response exhausted its output budget before emitting content or tool calls. Continue the same logical request and goal from this unchanged harness context. Tools remain available. Do not treat the empty response as an action, plan update, completion, or evidence. Do not replay any world mutation already proven complete by the supplied receipts or canonical Task Board. Return the next necessary observation tool call(s), or use submitPlan for the planner decision. Legacy strict-JSON content remains a compatibility fallback only.'
 const ACTION_OMISSION_MAX_TOKENS = 700
@@ -1417,9 +1418,9 @@ function postStepDecisionQuestions() {
       type: 'choice',
       instructions: 'After one authoritative Autorio completion or error boundary, choose the smallest safe planner transition. This is routing only; do not invent world facts, mutation success, or goal completion.',
       criteria: {
-        continue_current: 'The canonical goal and active step are semantically aligned with the admitted work, so the main planner should continue compactly.',
+        continue_runtime: 'The next bounded continuation is already parameterized. Continue through deterministic runtime control when healthy runtime work can carry it; otherwise this maps to the existing compact planner continuation.',
         reanchor_plan: 'The user goal is still valid, but semantic_alignment shows the planner focus and canonical active step need a small alignment correction before more work. Preserve verified progress and re-anchor the plan without redesigning the whole goal.',
-        replan: 'The completion evidence materially changes the remaining approach or the current plan needs a broader structural reconsideration; wake the planner with higher reasoning.',
+        wake_planner: 'The completion evidence materially changes the remaining approach or the current plan needs a broader structural reconsideration; wake the planner with higher reasoning.',
         wait_runtime: 'A persistent runtime controller is authoritatively active, healthy, and live, so waking the main planner now would only duplicate ongoing work.',
         fallback_planner: 'The evidence is ambiguous or outside this routing contract; use the existing safe main-planner continuation.',
       },
@@ -1429,12 +1430,19 @@ function postStepDecisionQuestions() {
 
 function parsePostStepDecision(response) {
   const answer = response?.answers?.route
-  if (!answer || !POST_STEP_ROUTES.has(answer.choice)) throw new AgentLoopError('Decision provider returned invalid post-step route')
+  if (!answer) throw new AgentLoopError('Decision provider returned invalid post-step route')
+  const normalizedRoute = answer.choice === 'continue_runtime'
+    ? 'continue_current'
+    : answer.choice === 'wake_planner'
+      ? 'replan'
+      : answer.choice
+  if (!POST_STEP_ROUTES.has(normalizedRoute)) throw new AgentLoopError('Decision provider returned invalid post-step route')
   if (typeof answer.confidence !== 'number' || !Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1) {
     throw new AgentLoopError('Decision provider returned invalid post-step confidence')
   }
   return {
-    route: answer.choice,
+    route: normalizedRoute,
+    requested_route: answer.choice,
     confidence: answer.confidence,
     probabilities: answer.probabilities,
     model: typeof response?.model === 'string' ? response.model : undefined,
@@ -4222,7 +4230,25 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   prepareToolBatch(message) {
     try {
-      return super.prepareToolBatch(message)
+      const rawCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : []
+      const partialBatchEligible = rawCalls.length > MAX_OBSERVATION_TOOL_CALLS_PER_BATCH
+        && rawCalls.every(tool => isObservationToolName(tool?.function?.name))
+        && rawCalls.every(tool => tool?.function?.name !== 'measureTransportThroughput')
+      const admittedMessage = partialBatchEligible
+        ? { ...message, tool_calls: rawCalls.slice(0, MAX_OBSERVATION_TOOL_CALLS_PER_BATCH) }
+        : message
+      const prepared = super.prepareToolBatch(admittedMessage)
+      if (partialBatchEligible) {
+        Object.defineProperty(prepared, '_airiObservationAdmission', {
+          configurable: true,
+          enumerable: false,
+          value: {
+            requested_count: rawCalls.length,
+            deferred_tools: rawCalls.slice(MAX_OBSERVATION_TOOL_CALLS_PER_BATCH),
+          },
+        })
+      }
+      return prepared
     }
     catch (error) {
       void this.traceEvent('tool.rejected', { message: error instanceof Error ? error.message : String(error) })
@@ -4256,36 +4282,75 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return
     }
 
-    const cachedBefore = prepared.map(entry => this.toolCache.has(entry.signature))
-    const staticCachedBefore = prepared.map(entry => entry.tool.function.name === 'getPrototypeDetails' && this.staticPrototypeCache.has(entry.signature))
-    const freshRequestedCount = prepared.reduce(
-      (total, _entry, index) => total + (cachedBefore[index] !== true && staticCachedBefore[index] !== true ? 1 : 0),
+    const admission = prepared._airiObservationAdmission
+    const cachedPrepared = prepared.map(entry => this.toolCache.has(entry.signature))
+    const staticCachedPrepared = prepared.map(entry => entry.tool.function.name === 'getPrototypeDetails' && this.staticPrototypeCache.has(entry.signature))
+    const admittedPrepared = []
+    const admittedCached = []
+    const admittedStaticCached = []
+    const deferredPrepared = []
+    let freshSlots = Number.isSafeInteger(this.observationBudgetRemaining)
+      ? Math.max(0, this.observationBudgetRemaining)
+      : Number.POSITIVE_INFINITY
+
+    for (let index = 0; index < prepared.length; index++) {
+      const fresh = cachedPrepared[index] !== true && staticCachedPrepared[index] !== true
+      if (!fresh || freshSlots > 0) {
+        admittedPrepared.push(prepared[index])
+        admittedCached.push(cachedPrepared[index])
+        admittedStaticCached.push(staticCachedPrepared[index])
+        if (fresh && Number.isFinite(freshSlots)) freshSlots--
+      }
+      else {
+        deferredPrepared.push(prepared[index])
+      }
+    }
+
+    const rawDeferredTools = Array.isArray(admission?.deferred_tools) ? admission.deferred_tools : []
+    const totalDeferredCount = deferredPrepared.length + rawDeferredTools.length
+    if (totalDeferredCount > 0) {
+      await this.traceEvent('observation.partial_admission', {
+        requested_count: Number.isSafeInteger(admission?.requested_count) ? admission.requested_count : prepared.length,
+        admitted_count: admittedPrepared.length,
+        deferred_count: totalDeferredCount,
+        budget_remaining_before: Number.isSafeInteger(this.observationBudgetRemaining) ? this.observationBudgetRemaining : undefined,
+        deferred_tools: [
+          ...deferredPrepared.map(entry => entry.tool.function.name),
+          ...rawDeferredTools.map(tool => tool?.function?.name).filter(Boolean),
+        ],
+      })
+    }
+
+    const freshRequestedCount = admittedPrepared.reduce(
+      (total, _entry, index) => total + (admittedCached[index] !== true && admittedStaticCached[index] !== true ? 1 : 0),
       0,
     )
-    if (!this.actionOmissionRepairActive && Number.isSafeInteger(this.observationBudgetRemaining) && freshRequestedCount > this.observationBudgetRemaining) {
-      const reason = `Jev observation budget had ${this.observationBudgetRemaining} fresh call(s) remaining, but the provider requested ${freshRequestedCount} fresh observation(s).`
+    if (admittedPrepared.length === 0) {
+      const reason = `Jev observation budget had ${this.observationBudgetRemaining ?? 0} fresh call(s) remaining, so the requested fresh observations were deferred.`
       await this.forceDecisionFromObservations(reason, 'jev_observation_budget_exhausted')
       return
     }
-    for (let index = 0; index < prepared.length; index++) {
-      const entry = prepared[index]
+
+    for (let index = 0; index < admittedPrepared.length; index++) {
+      const entry = admittedPrepared[index]
       if (this.traceRequest?.usage) {
         this.traceRequest.usage.tool_calls++
-        if (cachedBefore[index]) this.traceRequest.usage.duplicate_tool_calls++
+        if (admittedCached[index]) this.traceRequest.usage.duplicate_tool_calls++
       }
       const toolTrace = {
         phase: 'call',
         tool_call_id: entry.tool.id,
         name: entry.tool.function.name,
         args: entry.args,
-        cached: cachedBefore[index],
+        cached: admittedCached[index],
       }
       if (this.traceRequest) this.traceRequest.last_tool = toolTrace
       await this.traceEvent('tool.call', toolTrace)
     }
     const beforeCount = this.messages.length
+    const admittedMessage = { ...message, tool_calls: admittedPrepared.map(entry => entry.tool) }
     try {
-      await super.handleToolBatch(message, prepared)
+      await super.handleToolBatch(admittedMessage, admittedPrepared)
     }
     catch (error) {
       await this.traceEvent('tool.error', { message: error instanceof Error ? error.message : String(error) })
@@ -4296,12 +4361,20 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.observationBudgetRemaining = Math.max(0, this.observationBudgetRemaining - freshRequestedCount)
       if (this.observationBudgetRemaining === 0) {
         await this.forceDecisionFromObservations(
-          'Jev observation budget is exhausted for this decision.',
+          totalDeferredCount > 0
+            ? `Jev observation budget is exhausted for this decision after partially admitting the useful subset; ${totalDeferredCount} observation call(s) were deferred.`
+            : 'Jev observation budget is exhausted for this decision.',
           'jev_observation_budget_complete',
         )
       }
     }
-    const freshResultObserved = results.some((_, index) => cachedBefore[index] !== true && staticCachedBefore[index] !== true)
+    else if (totalDeferredCount > 0) {
+      this.messages.push({
+        role: 'user',
+        content: `[HARNESS] Observation batch partially admitted: executed ${admittedPrepared.length} read-only call(s) and deferred ${totalDeferredCount} due to the per-turn observation cap. Reuse the returned evidence first; request only still-needed deferred facts on a later observation turn.`,
+      })
+    }
+    const freshResultObserved = results.some((_, index) => admittedCached[index] !== true && admittedStaticCached[index] !== true)
     if (freshResultObserved) this.freshObservationSinceContinuation = true
     if (this.outputBudgetRecoveryGuard && freshResultObserved) {
       this.outputBudgetRecoveryGuard.world_evidence_observed = true
@@ -4309,9 +4382,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     for (let index = 0; index < results.length; index++) {
       const original = String(results[index].content ?? '')
-      const toolName = prepared[index]?.tool?.function?.name
+      const toolName = admittedPrepared[index]?.tool?.function?.name
       this.recordLiveEntityToolResult(toolName, original)
-      const loadedSkill = this.recordLoadedSkillToolResult(toolName, prepared[index]?.args, original)
+      const loadedSkill = this.recordLoadedSkillToolResult(toolName, admittedPrepared[index]?.args, original)
       if (loadedSkill) {
         await this.traceEvent('skill.context_loaded', {
           skill_id: loadedSkill.id,
@@ -4319,14 +4392,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           loaded_skill_count: this.loadedSkillContext.size,
         })
       }
-      if (cachedBefore[index]) results[index].content = DUPLICATE_OBSERVATION_MESSAGE
+      if (admittedCached[index]) results[index].content = DUPLICATE_OBSERVATION_MESSAGE
       const output = String(results[index].content ?? '')
       if (this.traceRequest?.usage) this.traceRequest.usage.tool_result_chars += output.length
       const toolTrace = {
         phase: 'result',
-        tool_call_id: prepared[index]?.tool.id,
-        name: prepared[index]?.tool.function.name,
-        cached: cachedBefore[index],
+        tool_call_id: admittedPrepared[index]?.tool.id,
+        name: admittedPrepared[index]?.tool.function.name,
+        cached: admittedCached[index],
         original_output_chars: original.length,
         output_chars: output.length,
       }
@@ -4339,8 +4412,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.actionOmissionForceNoTools = true
       this.messages.push({ role: 'user', content: `[HARNESS] ${ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE}` })
       await this.traceEvent('recovery.action_omission_observation_complete', {
-        cached: cachedBefore[0] === true,
-        observation: prepared[0]?.tool?.function?.name,
+        cached: admittedCached[0] === true,
+        observation: admittedPrepared[0]?.tool?.function?.name,
         tools_enabled_next_round: false,
       })
     }
