@@ -58,3 +58,32 @@ export function updateProjectBoard(current, patch = {}, context = {}) {
     updated_at: now,
   }, { ...context, now })
 }
+
+
+export function parseProjectProposal(value) {
+  if (value === undefined || value === null) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid project proposal')
+  const allowed = new Set(['currentMilestone', 'nextMilestones', 'developmentDirection'])
+  if (Object.keys(value).some(key => !allowed.has(key))) throw new Error('Invalid project proposal field')
+
+  const parseMilestone = (entry, label) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`Invalid ${label}`)
+    if (Object.keys(entry).some(key => !['title', 'completionSummary'].includes(key))) throw new Error(`Invalid ${label} field`)
+    const title = clean(entry.title, 500)
+    if (!title) throw new Error(`Invalid ${label} title`)
+    return { title, completion_summary: clean(entry.completionSummary, 800) || undefined }
+  }
+
+  const current = parseMilestone(value.currentMilestone, 'currentMilestone')
+  const nextRaw = value.nextMilestones === undefined ? [] : value.nextMilestones
+  if (!Array.isArray(nextRaw) || nextRaw.length > PROJECT_BOARD_NEXT_LIMIT) throw new Error('Invalid nextMilestones')
+  const next = nextRaw.map((entry, index) => parseMilestone(entry, `nextMilestones[${index}]`))
+  const direction = value.developmentDirection === undefined ? '' : value.developmentDirection
+  if (direction && !DEVELOPMENT_DIRECTIONS.has(direction)) throw new Error('Invalid developmentDirection')
+
+  return {
+    current_milestone: current,
+    next_milestones: next,
+    development_direction: direction,
+  }
+}
