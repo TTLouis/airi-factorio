@@ -633,5 +633,6 @@ test('Jev observation budget is enforced before decision pressure', async () => 
   }
   await agent.handleToolBatch(second)
   assert.equal(agent.messages.filter(message => message.role === 'tool').length, firstToolResults)
-  assert.match(agent.messages.map(message => String(message.content ?? '')).join('\n'), /0 fresh call\(s\) remaining/i)
+  assert.equal(agent.observationDecisionForced, true)
+  assert.equal(agent.observationBudgetRemaining, 0)
 })
