@@ -117,85 +117,37 @@ test('in-game task board snapshot is a projection of canonical durable state', (
     },
   }
   const snapshot = taskBoardUiSnapshot(state)
-  assert.deepEqual(snapshot, {
-    goal_id: 'goal_1',
-    objective: '爬科技树',
-    status: 'blocked',
-    blocker: 'provider_recovery_exhausted',
-    blocker_summary: 'AIRI could not get a usable model response after retrying.',
-    pause_reason: '',
-    pause_summary: '',
-    completed_count: 2,
-    total_steps: 5,
-    active_index: 2,
-    steps: state.task_board.steps,
-    activity: [],
-    wanted_items: [],
-    conversation_id: '',
-    conversation: [],
-    agent: { phase: 'idle', detail: '' },
-    debug: {
-      request_id: '',
-      turn: 0,
-      provider_model: '',
-      provider_round: 0,
-      provider_latency_ms: 0,
-      provider_diagnostic_code: '',
-      provider_finish_reason: '',
-      reasoning_effort: '',
-      reasoning_policy_reason: '',
-      content_chars: 0,
-      reasoning_content_chars: 0,
-      input_units: 0,
-      cached_input_units: 0,
-      output_units: 0,
-      total_units: 0,
-      latest_round_provider_round: 0,
-      latest_round_input_units: 0,
-      latest_round_cached_input_units: 0,
-      latest_round_output_units: 0,
-      latest_round_total_units: 0,
-      decision_provider: '',
-      decision_model: '',
-      decision_shadow_intent: '',
-      decision_active_intent: '',
-      decision_post_step_route: '',
-      decision_post_step_applied_route: '',
-      decision_post_step_confidence_percent: 0,
-      decision_post_step_latency_ms: 0,
-      decision_post_step_fallback: '',
-      decision_confidence_percent: 0,
-      decision_queue_conflict_percent: 0,
-      decision_latency_ms: 0,
-      decision_input_units: 0,
-      decision_output_units: 0,
-      decision_cost_micro_usd: 0,
-      decision_calls_total: 0,
-      decision_input_units_total: 0,
-      decision_output_units_total: 0,
-      decision_cost_micro_usd_total: 0,
-      decision_shadow_matches_total: 0,
-      decision_shadow_mismatches_total: 0,
-      decision_post_step_calls_total: 0,
-      decision_planner_skips_total: 0,
-      decision_planner_wakes_total: 0,
-      decision_planner_continue_low_wakes_total: 0,
-      decision_planner_replan_high_wakes_total: 0,
-      decision_planner_fallback_wakes_total: 0,
-      decision_error: '',
-      step_completion_contract: '',
-      step_completion_status: '',
-      step_completion_evidence: '',
-      runtime_condition: '',
-      runtime_condition_state: '',
-      last_tool: '',
-      last_event: '',
-      recovery_attempt: 0,
-      last_error: '',
-      actor_id: 0,
-      actor_epoch: 0,
-    },
-  })
+  assert.equal(snapshot.goal_id, 'goal_1')
+  assert.equal(snapshot.objective, '爬科技树')
+  assert.equal(snapshot.project, undefined)
+  assert.equal(snapshot.status, 'blocked')
+  assert.equal(snapshot.blocker, 'provider_recovery_exhausted')
+  assert.equal(snapshot.blocker_summary, 'AIRI could not get a usable model response after retrying.')
+  assert.equal(snapshot.pause_reason, '')
+  assert.equal(snapshot.pause_summary, '')
+  assert.equal(snapshot.completed_count, 2)
+  assert.equal(snapshot.total_steps, 5)
+  assert.equal(snapshot.active_index, 2)
+  assert.deepEqual(snapshot.steps, state.task_board.steps)
+  assert.deepEqual(snapshot.activity, [])
+  assert.deepEqual(snapshot.wanted_items, [])
+  assert.equal(snapshot.conversation_id, '')
+  assert.deepEqual(snapshot.conversation, [])
+  assert.deepEqual(snapshot.agent, { phase: 'idle', detail: '' })
+
+  // Debug telemetry is additive. Assert stable defaults for the public contract
+  // without freezing every newly-added diagnostic key.
+  assert.equal(snapshot.debug.request_id, '')
+  assert.equal(snapshot.debug.provider_model, '')
+  assert.equal(snapshot.debug.decision_model, '')
+  assert.equal(snapshot.debug.decision_granularity, '')
+  assert.equal(snapshot.debug.decision_development, '')
+  assert.equal(snapshot.debug.step_relation, '')
+  assert.equal(snapshot.debug.step_checkpoint_boundary, '')
+  assert.equal(snapshot.debug.step_admission_alignment, '')
+  assert.equal(snapshot.debug.last_error, '')
+  assert.equal(snapshot.debug.actor_id, 0)
+  assert.equal(snapshot.debug.actor_epoch, 0)
 })
 
 
