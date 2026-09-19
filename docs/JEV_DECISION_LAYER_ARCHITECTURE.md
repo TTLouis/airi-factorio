@@ -79,7 +79,7 @@ The implementation order is intentionally conservative:
 3. **implemented conservatively in the experiment:** Jev may suppress a post-step planner wake only when authoritative runtime work is healthy, granularity is `keep`, development is `maintain`, and the boundary is a successful completion; otherwise the existing planner path remains authoritative;
 4. **implemented as the next foundation:** add bounded durable Project/Milestone state above the existing Plan Tracker, without yet letting Jev invent or mutate milestones autonomously;
 5. **active foundation:** Main LLM can propose one bounded current milestone plus up to three tentative next milestones. Jev `granularity=split` can force bounded milestone replanning. When the final Plan Tracker step is authoritatively verified, runtime now closes the milestone without closing the user project; Jev then chooses `advance_next | replan_project | project_complete_candidate`. Advancing activates the tentative next milestone but still wakes the Main LLM to create its fresh Plan Tracker;
-6. only then map Jev reasoning budgets into provider/model-specific reasoning controls.
+6. **implemented for the current DeepSeek capability shim:** Jev semantic reasoning budgets now flow into the next Main LLM call as provider-neutral `micro | normal | deep | strategic`; the DeepSeek adapter maps them to supported effort levels, while unsupported/non-DeepSeek providers continue on their existing policy path. Recovery safety policies still override Jev budget requests.
 
 This preserves current completion authority and makes each behavior change independently testable.
 
@@ -1330,3 +1330,19 @@ Main LLM must create Project -> currentMilestone -> Plan Steps
 The interaction router remains authoritative for whether the message is a new goal, amendment, status request, cancellation, or chat. Jev's granularity result becomes active only after the independent router has classified the message as `new_goal`.
 
 This is the first path that prevents a broad goal such as "Launch a rocket" from being flattened directly into one giant Plan Tracker before execution begins.
+
+
+### Jev reasoning budget reaches the Main LLM
+
+The hierarchy decision envelope's `reasoning_budget` is no longer telemetry-only for post-step planner wakes. The runtime carries that semantic budget into exactly the next Main LLM call and then restores the previous override.
+
+The budget remains provider-neutral: `micro | normal | deep | strategic`.
+
+The current DeepSeek-compatible adapter maps these onto the effort controls it supports:
+
+- `micro -> low`
+- `normal -> high`
+- `deep -> max`
+- `strategic -> max`
+
+Multiple semantic classes may collapse onto one provider setting when the provider exposes fewer levels. Non-DeepSeek providers do not receive DeepSeek-specific fields. Strict recovery, output-budget recovery, interaction routing, and action-omission safety paths retain higher precedence than Jev's requested semantic budget.

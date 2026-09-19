@@ -278,3 +278,43 @@ test('provider prompt trace records selected effort and policy reason per call',
     await fsp.rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Jev semantic reasoning budget maps through the DeepSeek capability shim', () => {
+  const messages = [{ role: 'user', content: '[MOD] Autorio operation batch completed. Detailed task receipt: {}' }]
+  assert.deepEqual(selectReasoningPolicy(config(), messages, { allowTools: true, reasoningBudget: 'micro' }), {
+    effort: 'low',
+    reason: 'jev_budget_micro',
+  })
+  assert.deepEqual(selectReasoningPolicy(config(), messages, { allowTools: true, reasoningBudget: 'normal' }), {
+    effort: 'high',
+    reason: 'jev_budget_normal',
+  })
+  assert.deepEqual(selectReasoningPolicy(config(), messages, { allowTools: true, reasoningBudget: 'deep' }), {
+    effort: 'max',
+    reason: 'jev_budget_deep',
+  })
+  assert.deepEqual(selectReasoningPolicy(config(), messages, { allowTools: true, reasoningBudget: 'strategic' }), {
+    effort: 'max',
+    reason: 'jev_budget_strategic',
+  })
+})
+
+test('strict recovery still overrides Jev semantic reasoning budget', () => {
+  const messages = [{ role: 'user', content: '[MOD] Autorio operation error: failed' }]
+  assert.deepEqual(selectReasoningPolicy(config(), messages, {
+    allowTools: false,
+    recoveryAttempt: 1,
+    reasoningBudget: 'strategic',
+  }), {
+    effort: 'none',
+    reason: 'strict_recovery',
+  })
+})
+
+test('non-DeepSeek providers ignore the DeepSeek-specific Jev reasoning mapping', () => {
+  const messages = [{ role: 'user', content: '[CHAT] TTLouis: continue' }]
+  assert.equal(selectReasoningPolicy(config({ model: 'gpt-5.6' }), messages, {
+    allowTools: true,
+    reasoningBudget: 'deep',
+  }), undefined)
+})

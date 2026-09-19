@@ -1743,6 +1743,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.lastRecoveryDecision = null
     this.loadedSkillContext = new Map()
     this.reasoningTriggerSource = null
+    this.reasoningBudgetOverride = null
     this.persistQueue = Promise.resolve()
     this.traceRequest = null
     this.traceRequestSequence = 0
@@ -3016,6 +3017,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         runtime: persistentRuntime,
         runtime_reason: runtimeReason,
         decision,
+        hierarchy: hierarchyTelemetry,
         hierarchy_gate: hierarchyGate,
         hierarchy_action: hierarchyAction,
         fallback_reason: fallbackReason,
@@ -3551,6 +3553,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
                   ? 'post_step_replan'
                   : null
     if (routed.route === 'reanchor_plan') this.planUpdateReason = 'reanchor_plan'
+    const previousReasoningBudget = this.reasoningBudgetOverride
+    this.reasoningBudgetOverride = routed.hierarchy?.reasoning_budget ?? null
     try {
       const hierarchyInstruction = routed.hierarchy_action === 'split_current_milestone'
         ? ' [HIERARCHY] Jev determined the current milestone is too broad. Preserve the user project goal and verified Plan Tracker progress, replace currentMilestone with a smaller bounded strategic outcome, keep at most three tentative nextMilestones, and make plan contain only executable/verifiable steps for the new current milestone.'
@@ -3576,6 +3580,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     finally {
       this.reasoningTriggerSource = null
+      this.reasoningBudgetOverride = previousReasoningBudget
     }
   }
 
@@ -3611,6 +3616,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         : routed.route === 'replan'
           ? 'post_step_replan'
           : null
+    const previousReasoningBudget = this.reasoningBudgetOverride
+    this.reasoningBudgetOverride = routed.hierarchy?.reasoning_budget ?? null
     try {
       return await this.continueFromModMessage(
         `[MOD] Autorio operation error: ${cleanError}. Dependent queued operations may have been cancelled. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
@@ -3619,6 +3626,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     finally {
       this.reasoningTriggerSource = null
+      this.reasoningBudgetOverride = previousReasoningBudget
     }
   }
 
@@ -3704,6 +3712,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         recoveryAttempt: effectiveRecoveryAttempt,
         recoveryKind,
         triggerSource,
+        reasoningBudget: this.reasoningBudgetOverride ?? undefined,
         lifecycle: this.requestLifecycle,
         actionOmissionRepair: omissionRepair,
         requestBodyPatch: omissionRepair ? { max_tokens: ACTION_OMISSION_MAX_TOKENS } : undefined,

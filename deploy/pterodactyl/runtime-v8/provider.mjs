@@ -50,6 +50,14 @@ function currentDifficultySignals(messages) {
   return failures
 }
 
+function semanticBudgetPolicy(value) {
+  if (value === 'micro') return { effort: 'low', reason: 'jev_budget_micro' }
+  if (value === 'normal') return { effort: 'high', reason: 'jev_budget_normal' }
+  if (value === 'deep') return { effort: 'max', reason: 'jev_budget_deep' }
+  if (value === 'strategic') return { effort: 'max', reason: 'jev_budget_strategic' }
+  return undefined
+}
+
 export function selectReasoningPolicy(config, messages, options = {}) {
   if (!deepSeekModel(config)) return undefined
   if (options.interactionRouter === true) {
@@ -64,6 +72,8 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   if (Number.isSafeInteger(options.recoveryAttempt) && options.recoveryAttempt > 0) {
     return { effort: 'none', reason: 'strict_recovery' }
   }
+  const semanticBudget = semanticBudgetPolicy(options.reasoningBudget)
+  if (semanticBudget) return semanticBudget
   if (options.triggerSource === 'amend_current') {
     return { effort: 'high', reason: 'same_goal_amendment' }
   }
