@@ -637,3 +637,53 @@ test('activating a tentative next milestone resets the Plan Tracker for a fresh 
   assert.equal(advanced.state.task_board.total_steps, 0)
   assert.equal(advanced.state.plan.length, 0)
 })
+
+
+test('activated next milestone stays pending until a fresh milestone-local plan is committed', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const key = 'npc:airi'
+  memory.planByNpc.set(key, planState({
+    goal_id: 'goal_long',
+    objective: 'Launch a rocket',
+    plan: [],
+    current_step: 0,
+    task_board: createTaskBoard([], 0, { goalId: 'goal_long', now: 1 }),
+    project_board: {
+      kind: 'project_board_v1',
+      project_id: 'goal_long',
+      title: 'Launch a rocket',
+      status: 'active',
+      completed_milestones: [{ title: 'Establish burner production', status: 'completed' }],
+      current_milestone: undefined,
+      next_milestones: [{ title: 'Reach Automation', status: 'tentative' }],
+      development_direction: 'vertical',
+      transition_state: 'awaiting_next_milestone',
+      revision: 2,
+      updated_at: 1,
+    },
+    milestone_transition_pending: true,
+  }))
+
+  const advanced = memory.activateNextMilestone(key)
+  assert.equal(advanced.changed, true)
+  assert.equal(advanced.state.project_board.current_milestone.title, 'Reach Automation')
+  assert.equal(advanced.state.milestone_plan_pending, true)
+  assert.equal(advanced.state.task_board.steps.length, 0)
+
+  const proposal = {
+    chatMessage: 'Planning Automation.',
+    plan: ['Prepare science production', 'Research Automation'],
+    currentStep: 0,
+    operations: [],
+  }
+  const previous = memory.currentPlan(key)
+  const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'continue' }, proposal, { continuation: true })
+  const reconciled = memory.reconcileTaskBoard(key, previous.task_board, proposal, recorded, {
+    previousState: previous,
+    allowReplan: true,
+    newMilestone: true,
+  })
+  assert.equal(reconciled.state.milestone_plan_pending, false)
+  assert.equal(reconciled.state.task_board.steps.length, 2)
+  assert.equal(reconciled.state.project_board.current_milestone.title, 'Reach Automation')
+})
