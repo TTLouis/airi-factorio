@@ -4177,6 +4177,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         goal_id: stateResult?.state?.goal_id,
         task_board: visibleTaskBoard(stateResult?.state?.task_board),
       })
+      if (commands.length > 0 && stateResult?.blockedByHarness !== true) {
+        const checkpoint = await this.routeStepCheckpointDecision(plan)
+        if (checkpoint?.state) stateResult = { ...(stateResult ?? {}), state: checkpoint.state }
+      }
     }
     this.outputBudgetRecoveryGuard = null
     if (commands.length > 0) this.clearActionOmissionRecovery()
