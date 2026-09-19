@@ -136,7 +136,7 @@ function postStepDecisionResponse(route = 'wait_runtime', {
       development: { type: 'choice', choice: development, confidence: 0.9 },
       reasoning_budget: { type: 'choice', choice: reasoningBudget, confidence: 0.8 },
       planning_horizon: { type: 'choice', choice: planningHorizon, confidence: 0.8 },
-      observation_budget: { type: 'number', number: observationBudget, confidence: 0.8 },
+      observation_budget: { type: 'score', score: observationBudget, confidence: 0.8 },
       ...(milestoneTransition
         ? { milestone_transition: { type: 'choice', choice: milestoneTransition, confidence: 0.9 } }
         : {}),
