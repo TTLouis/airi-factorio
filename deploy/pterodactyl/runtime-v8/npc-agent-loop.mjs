@@ -57,6 +57,21 @@ const EXACT_ENTITY_TARGET_OPERATIONS = new Set([
   'set_machine_recipe',
 ])
 
+const JEV_PIPELINE_RUNTIME_GUARDS = [
+  ['decisionEnvelopeQuestions', typeof decisionEnvelopeQuestions],
+  ['granularityDecisionQuestions', typeof granularityDecisionQuestions],
+  ['developmentDecisionQuestions', typeof developmentDecisionQuestions],
+  ['hierarchyRuntimeGate', typeof hierarchyRuntimeGate],
+  ['parseDecisionFamily', typeof parseDecisionFamily],
+  ['parseHierarchyTelemetry', typeof parseHierarchyTelemetry],
+  ['milestoneTransitionDecisionQuestions', typeof milestoneTransitionDecisionQuestions],
+  ['parseMilestoneTransitionDecision', typeof parseMilestoneTransitionDecision],
+  ['parseProjectProposal', typeof parseProjectProposal],
+]
+for (const [name, type] of JEV_PIPELINE_RUNTIME_GUARDS) {
+  if (type !== 'function') throw new Error(`Jev pipeline dependency ${name} is unavailable`)
+}
+
 const DURABLE_PLAN_PROMPT = `
 ## Durable goal and plan state
 
