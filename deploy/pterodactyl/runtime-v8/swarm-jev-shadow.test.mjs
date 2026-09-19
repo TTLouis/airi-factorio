@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   buildSwarmJevShadowContext,
   parseSwarmJevShadowDecision,
+  swarmJevRecoveryShadowQuestions,
   swarmJevShadowQuestions,
   validateSwarmJevShadowDecision,
 } from './swarm-jev-shadow.mjs'
@@ -205,4 +206,42 @@ test('shadow exposes coordination wait state without polling or consuming it', (
   assert.equal(context.objectives[0].id, 'objective-1')
   assert.equal(context.projects[0].id, 'project-1')
   assert.deepEqual(conditionWait, before)
+})
+
+
+test('recovery shadow questions stay separate from the normal decision envelope', () => {
+  const normal = swarmJevShadowQuestions()
+  const recovery = swarmJevRecoveryShadowQuestions()
+
+  assert.equal(Object.hasOwn(normal, 'failure_class'), false)
+  assert.equal(recovery.failure_class.type, 'choice')
+  assert.equal(recovery.next_recovery.type, 'choice')
+})
+
+test('shadow recovery capsule cannot bypass deterministic swarm reconciliation', () => {
+  const context = buildSwarmJevShadowContext({
+    recovery: {
+      reason: 'invalid provider JSON',
+      reconciliationActions: [{
+        kind: 'release_claim',
+        claimId: 'claim-1',
+        workId: 'work-1',
+        reason: 'body_revision_changed',
+      }],
+      runtime: { active: true },
+      outcome: {
+        state: 'progress',
+        authoritative: true,
+        reason: 'mission_progress',
+      },
+      effects: ['must_not_escape'],
+    },
+  })
+
+  assert.equal(context.recovery.authority, 'shadow')
+  assert.deepEqual(context.recovery.effects, [])
+  assert.equal(context.recovery.deterministic_recovery_pending, true)
+  assert.equal(context.recovery.jev_eligible, false)
+  assert.equal(context.recovery.failure_class_hint, 'provider_format')
+  assert.equal(Object.hasOwn(context.recovery, 'must_not_escape'), false)
 })
