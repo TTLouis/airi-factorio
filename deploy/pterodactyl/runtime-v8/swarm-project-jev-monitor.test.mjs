@@ -74,7 +74,7 @@ test('initial monitor poll reads once and triggers one global Jev cycle', async 
   const monitor = new SwarmProjectJevMonitor({
     rcon,
     service,
-    strategicBoard: () => ({ revision: 1 }),
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
   })
 
   const result = await monitor.poll()
@@ -93,13 +93,14 @@ test('tick-only poll updates do not trigger another Jev decision', async () => {
   let triggers = 0
   const monitor = new SwarmProjectJevMonitor({
     rcon,
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
     service: {
       async trigger() {
         triggers += 1
         return { authority: 'shadow', effects: [] }
       },
     },
-    strategicBoard: () => ({ revision: 1 }),
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
   })
 
   const first = await monitor.poll()
@@ -120,6 +121,7 @@ test('blackboard cursor change triggers with the same preloaded snapshot', async
   const seen = []
   const monitor = new SwarmProjectJevMonitor({
     rcon,
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
     service: {
       async trigger(reason, { snapshot: current }) {
         seen.push({ reason, tick: current.tick, cursor: current.eventCursor })
@@ -149,13 +151,14 @@ test('strategic board revision change triggers even with no Factorio coordinatio
   let triggers = 0
   const monitor = new SwarmProjectJevMonitor({
     rcon,
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
     service: {
       async trigger() {
         triggers += 1
         return { authority: 'shadow', effects: [] }
       },
     },
-    strategicBoard: () => ({ revision }),
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision }),
   })
 
   await monitor.poll()
@@ -175,6 +178,7 @@ test('busy to quiescent transition triggers project review', async () => {
   const reasons = []
   const monitor = new SwarmProjectJevMonitor({
     rcon,
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
     service: {
       async trigger(reason) {
         reasons.push(reason)
@@ -203,6 +207,7 @@ test('concurrent monitor polls coalesce into one RCON read', async () => {
   }
   const monitor = new SwarmProjectJevMonitor({
     rcon,
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
     service: {
       async trigger() {
         return { authority: 'shadow', effects: [] }
@@ -228,6 +233,7 @@ test('resetBaseline forces the next valid snapshot to become a fresh initial tri
   let triggers = 0
   const monitor = new SwarmProjectJevMonitor({
     rcon,
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
     service: {
       async trigger() {
         triggers += 1
