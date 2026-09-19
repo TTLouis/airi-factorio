@@ -535,6 +535,83 @@ const constructionIntentDefinition = {
   },
 }
 
+
+export const PLANNER_CONTROL_TOOL_NAME = 'submitPlan'
+
+export const plannerControlToolDefinitions = [{
+  type: 'function',
+  function: {
+    name: PLANNER_CONTROL_TOOL_NAME,
+    description: 'Submit the planner/control-plane decision to the AIRI harness. Prefer this tool over serializing the whole response as JSON content. Normal assistant content may remain natural-language text for the user. The harness/Jev/runtime will validate semantics, checkpoint alignment, plan state, and world mutations before persistence or execution.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['plan', 'currentStep', 'operations'],
+      properties: {
+        chatMessage: { type: 'string', maxLength: 2000, description: 'Optional fallback user-facing message when assistant content is empty.' },
+        plan: {
+          type: 'array',
+          maxItems: 30,
+          items: { type: 'string', minLength: 1, maxLength: 500 },
+        },
+        currentStep: { type: 'integer', minimum: 0, maximum: 30 },
+        operations: {
+          type: 'array',
+          maxItems: 16,
+          description: 'Approved Autorio operation proposals. The runtime re-validates every name/args pair before admission.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name', 'args'],
+            properties: {
+              name: { type: 'string', minLength: 1, maxLength: 100 },
+              args: { type: 'object' },
+            },
+          },
+        },
+        checkpoint: {
+          type: 'object',
+          description: 'Optional semantic completion contract for the active step. Runtime-supported requirement shapes are validated by the harness.',
+        },
+        project: {
+          type: 'object',
+          description: 'Optional bounded Project Board proposal for hierarchy transitions. Jev/runtime validate it before persistence.',
+        },
+      },
+    },
+  },
+}]
+
+export function isPlannerControlToolName(name) {
+  return name === PLANNER_CONTROL_TOOL_NAME
+}
+
+export function plannerControlPayloadFromMessage(message) {
+  const calls = Array.isArray(message?.tool_calls) ? message.tool_calls : []
+  const controls = calls.filter(call => call?.type === 'function' && isPlannerControlToolName(call?.function?.name))
+  if (controls.length === 0) return undefined
+  check(calls.length === 1 && controls.length === 1, 'submitPlan must be the only tool call in its assistant message')
+  const rawArgs = controls[0]?.function?.arguments
+  check(typeof rawArgs === 'string', 'submitPlan arguments must be JSON')
+  let args
+  try { args = JSON.parse(rawArgs) }
+  catch { throw new base.PolicyError('submitPlan arguments must be valid JSON') }
+  exactKeys(args, ['chatMessage', 'plan', 'currentStep', 'operations', 'checkpoint', 'project'])
+  check(Array.isArray(args.plan), 'submitPlan.plan must be an array')
+  check(Number.isSafeInteger(args.currentStep), 'submitPlan.currentStep must be an integer')
+  check(Array.isArray(args.operations), 'submitPlan.operations must be an array')
+  const natural = typeof message?.content === 'string' ? message.content.trim() : ''
+  const fallback = typeof args.chatMessage === 'string' ? args.chatMessage : ''
+  return {
+    chatMessage: natural || fallback,
+    plan: args.plan,
+    currentStep: args.currentStep,
+    operations: args.operations,
+    ...(args.checkpoint !== undefined ? { checkpoint: args.checkpoint } : {}),
+    ...(args.project !== undefined ? { project: args.project } : {}),
+  }
+}
+
 const researchPathDefinition = {
   type: 'function',
   function: {
@@ -564,9 +641,12 @@ export const toolDefinitions = [
   constructionPlanValidationDefinition,
   constructionIntentDefinition,
   researchPathDefinition,
+  ...plannerControlToolDefinitions,
 ]
 export function isObservationToolName(name) {
-  return typeof name === 'string' && toolDefinitions.some(tool => tool?.type === 'function' && tool.function?.name === name)
+  return typeof name === 'string'
+    && !isPlannerControlToolName(name)
+    && toolDefinitions.some(tool => tool?.type === 'function' && tool.function?.name === name)
 }
 
 export function toolCommand(name, args) {
