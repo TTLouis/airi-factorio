@@ -415,17 +415,29 @@ export function build_swarm_coordination_snapshot(swarm: SwarmStorage, tick: num
   }))
 
   let missionCount = 0
+  let incompleteMissionCount = 0
   let objectiveCount = 0
+  let incompleteObjectiveCount = 0
   let projectCount = 0
+  let incompleteProjectCount = 0
   let workCount = 0
   let requestCount = 0
   let claimCount = 0
   let resultCount = 0
   let agentCount = 0
   let actorCount = 0
-  for (const unused in swarm.missions) missionCount += 1
-  for (const unused in swarm.objectives) objectiveCount += 1
-  for (const unused in swarm.projects) projectCount += 1
+  for (const id in swarm.missions) {
+    missionCount += 1
+    if (swarm.missions[id].status !== 'satisfied') incompleteMissionCount += 1
+  }
+  for (const id in swarm.objectives) {
+    objectiveCount += 1
+    if (swarm.objectives[id].status !== 'satisfied') incompleteObjectiveCount += 1
+  }
+  for (const id in swarm.projects) {
+    projectCount += 1
+    if (swarm.projects[id].status !== 'complete') incompleteProjectCount += 1
+  }
   for (const unused in swarm.board.work) workCount += 1
   for (const unused in swarm.board.requests) requestCount += 1
   for (const unused in swarm.board.claims) claimCount += 1
@@ -439,8 +451,11 @@ export function build_swarm_coordination_snapshot(swarm: SwarmStorage, tick: num
     limit: bounded,
     counts: {
       missions: missionCount,
+      incompleteMissions: incompleteMissionCount,
       objectives: objectiveCount,
+      incompleteObjectives: incompleteObjectiveCount,
       projects: projectCount,
+      incompleteProjects: incompleteProjectCount,
       work: workCount,
       requests: requestCount,
       claims: claimCount,
