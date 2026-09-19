@@ -609,15 +609,7 @@ function sync_age(synced_tick: number | undefined) {
   return seconds < 60 ? `${seconds}s` : `${math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
-function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_tick: number | undefined) {
-  body.clear()
-  const note = body.add({ type: 'label', caption: 'Structured runtime diagnostics only — no hidden chain-of-thought or secrets are exposed.' })
-  note.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }; note.style.single_line = false
-  const table = body.add({ type: 'table', column_count: 2 }); table.style.horizontal_spacing = 12; table.style.vertical_spacing = 5
-  const debug = sanitize_debug_snapshot(board?.debug); const follow = runtime?.follow; const world = runtime?.world_task; const version = current_sync_version()
-  const step = board !== undefined && board.total_steps > 0 ? `${math.min(board.active_index + 1, board.total_steps)}/${board.total_steps} (${board.completed_count} done)` : '—'
-  const phase = board?.agent.phase ? String(board.agent.phase).toUpperCase() : 'IDLE'; const detail = clean_text(board?.agent.detail, 300)
-  const provider = clean_text(debug.provider_model, 160); const latency = integer(debug.provider_latency_ms)
+function add_debug_decision_rows(table: LuaGuiElement, debug: TaskBoardUiDebugSnapshot) {
   const decision_provider = clean_text(debug.decision_provider, 80)
   const decision_model = clean_text(debug.decision_model, 160)
   const decision_shadow = clean_text(debug.decision_shadow_intent, 80)
@@ -657,34 +649,7 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const decision_planner_reanchor = integer(debug.decision_planner_reanchor_low_wakes_total)
   const decision_planner_high = integer(debug.decision_planner_replan_high_wakes_total)
   const decision_planner_fallback = integer(debug.decision_planner_fallback_wakes_total)
-  const step_relation = clean_text(debug.step_relation, 80)
-  const step_checkpoint_boundary = clean_text(debug.step_checkpoint_boundary, 80)
-  const step_admission_alignment = clean_text(debug.step_admission_alignment, 80)
-  const step_completion_contract = clean_text(debug.step_completion_contract, 200)
-  const step_completion_status = clean_text(debug.step_completion_status, 120)
-  const step_completion_evidence = clean_text(debug.step_completion_evidence, 300)
-  const runtime_condition = clean_text(debug.runtime_condition, 300)
-  const runtime_condition_state = clean_text(debug.runtime_condition_state, 80)
-  const tokens = integer(debug.total_units) > 0 ? `${integer(debug.input_units)} in / ${integer(debug.cached_input_units)} cached / ${integer(debug.output_units)} out / ${integer(debug.total_units)} total` : '—'
-  const latest_round_tokens = integer(debug.latest_round_total_units) > 0
-    ? `round ${integer(debug.latest_round_provider_round) + 1} · ${integer(debug.latest_round_input_units)} in / ${integer(debug.latest_round_cached_input_units)} cached / ${integer(debug.latest_round_output_units)} out / ${integer(debug.latest_round_total_units)} total`
-    : '—'
-  const actor = integer(debug.actor_id) > 0 ? `${runtime?.actor_name ?? 'AIRI'} · id ${integer(debug.actor_id)} · epoch ${integer(debug.actor_epoch)}` : `${runtime?.actor_name ?? 'AIRI'} · ${runtime?.actor_kind ?? 'unknown'}`
-  const world_text = world === undefined ? 'unknown' : `${clean_text(world.task_state, 48) || 'idle'} · queue ${integer(world.queue_length)}`
-  const follow_text = follow?.active ? `active · ${clean_text(follow.target_player, 128) || 'target'}${typeof follow.current_distance === 'number' ? ` · ${math.floor(follow.current_distance * 10) / 10} tiles` : ''}` : 'inactive'
-  const reply = latest_ai_reply(board)
-  add_row(table, 'AI phase', detail.length > 0 ? `${phase} · ${detail}` : phase)
-  add_row(table, 'Goal', board?.status ? `${String(board.status).toUpperCase()} · ${clean_text(board.objective, 300) || clean_text(board.goal_id, 120)}` : 'none')
-  add_row(table, 'AI reply', reply || '—')
-  add_row(table, 'Plan step', step)
-  add_row(table, 'Request', clean_text(debug.request_id, 120) || '—')
-  add_row(table, 'Turn', integer(debug.turn) > 0 ? `${integer(debug.turn)}` : '—')
-  add_row(table, 'Provider', provider.length > 0 ? `${provider} · round ${integer(debug.provider_round) + 1}` : '—')
-  add_row(table, 'Reasoning effort · latest round', clean_text(debug.reasoning_effort, 32) || '—')
-  add_row(table, 'Policy reason · latest round', clean_text(debug.reasoning_policy_reason, 80) || '—')
-  add_row(table, 'Latency', latency > 0 ? `${latency} ms` : '—')
-  add_row(table, 'Tokens · request cumulative', tokens)
-  add_row(table, 'Latest completed round', latest_round_tokens)
+
   add_row(table, 'Decision provider', decision_model.length > 0 ? `${decision_provider || 'decision'} · ${decision_model}` : '—')
   add_row(table, 'Decision shadow', decision_shadow.length > 0 ? `${decision_shadow} · ${decision_confidence}% · active ${decision_active || 'unknown'} · conflict ${decision_conflict}%` : '—')
   add_row(table, 'Jev ACTIVE post-step', decision_post_step.length > 0 ? `${decision_post_step}${decision_post_step_applied.length > 0 && decision_post_step_applied !== decision_post_step ? ` → ${decision_post_step_applied}` : ''} · ${decision_post_step_confidence}% · ${decision_post_step_latency} ms${decision_post_step_fallback.length > 0 ? ` · ${decision_post_step_fallback}` : ''}` : '—')
@@ -697,11 +662,62 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Decision usage', decision_shadow.length > 0 || decision_post_step.length > 0 ? `${decision_input} in / ${decision_output} out · ${decision_latency || decision_post_step_latency} ms${decision_cost > 0 ? ` · ${decision_cost} µUSD` : ''}` : '—')
   add_row(table, 'Decision totals', decision_calls_total > 0 ? `${decision_calls_total} calls · ${decision_input_total} in / ${decision_output_total} out${decision_cost_total > 0 ? ` · ${decision_cost_total} µUSD` : ''} · shadow ${decision_matches} match / ${decision_mismatches} differ` : '—')
   add_row(table, 'Planner routing · Jev', decision_post_step_calls > 0 || decision_planner_skips > 0 || decision_planner_wakes > 0 ? `${decision_planner_skips} skips / ${decision_planner_low} continue / ${decision_planner_reanchor} reanchor / ${decision_planner_high} replan / ${decision_planner_fallback} fallback · ${decision_post_step_calls} decisions` : 'not active yet')
+}
+
+function add_debug_step_rows(table: LuaGuiElement, debug: TaskBoardUiDebugSnapshot) {
+  const step_relation = clean_text(debug.step_relation, 80)
+  const step_checkpoint_boundary = clean_text(debug.step_checkpoint_boundary, 80)
+  const step_admission_alignment = clean_text(debug.step_admission_alignment, 80)
+  const step_completion_contract = clean_text(debug.step_completion_contract, 200)
+  const step_completion_status = clean_text(debug.step_completion_status, 120)
+  const step_completion_evidence = clean_text(debug.step_completion_evidence, 300)
+  const runtime_condition = clean_text(debug.runtime_condition, 300)
+  const runtime_condition_state = clean_text(debug.runtime_condition_state, 80)
+
   add_row(table, 'Step relation', step_relation.length > 0 ? step_relation.split('_').join(' ').toUpperCase() : '—')
   add_row(table, 'Step checkpoint', step_checkpoint_boundary.length > 0 ? step_checkpoint_boundary.split('_').join(' ').toUpperCase() : '—')
   add_row(table, 'Step admission', step_admission_alignment.length > 0 ? step_admission_alignment.split('_').join(' ').toUpperCase() : '—')
   add_row(table, 'Completion proof', step_completion_contract.length > 0 || step_completion_status.length > 0 ? `${step_completion_contract.length > 0 ? step_completion_contract : 'semantic_unknown'} · ${step_completion_status.length > 0 ? step_completion_status : 'unknown'}${step_completion_evidence.length > 0 ? ` · ${step_completion_evidence}` : ''}` : '—')
   add_row(table, 'Runtime wait', runtime_condition.length > 0 || runtime_condition_state.length > 0 ? `${runtime_condition_state.length > 0 ? runtime_condition_state : 'unknown'} · ${runtime_condition.length > 0 ? runtime_condition : '—'}` : '—')
+}
+
+function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_tick: number | undefined) {
+  body.clear()
+  const note = body.add({ type: 'label', caption: 'Structured runtime diagnostics only — no hidden chain-of-thought or secrets are exposed.' })
+  note.style.font_color = { r: 0.68, g: 0.68, b: 0.68 }; note.style.single_line = false
+  const table = body.add({ type: 'table', column_count: 2 }); table.style.horizontal_spacing = 12; table.style.vertical_spacing = 5
+  const debug = sanitize_debug_snapshot(board?.debug)
+  const follow = runtime?.follow
+  const world = runtime?.world_task
+  const version = current_sync_version()
+  const step = board !== undefined && board.total_steps > 0 ? `${math.min(board.active_index + 1, board.total_steps)}/${board.total_steps} (${board.completed_count} done)` : '—'
+  const phase = board?.agent.phase ? String(board.agent.phase).toUpperCase() : 'IDLE'
+  const detail = clean_text(board?.agent.detail, 300)
+  const provider = clean_text(debug.provider_model, 160)
+  const latency = integer(debug.provider_latency_ms)
+  const tokens = integer(debug.total_units) > 0 ? `${integer(debug.input_units)} in / ${integer(debug.cached_input_units)} cached / ${integer(debug.output_units)} out / ${integer(debug.total_units)} total` : '—'
+  const latest_round_tokens = integer(debug.latest_round_total_units) > 0
+    ? `round ${integer(debug.latest_round_provider_round) + 1} · ${integer(debug.latest_round_input_units)} in / ${integer(debug.latest_round_cached_input_units)} cached / ${integer(debug.latest_round_output_units)} out / ${integer(debug.latest_round_total_units)} total`
+    : '—'
+  const actor = integer(debug.actor_id) > 0 ? `${runtime?.actor_name ?? 'AIRI'} · id ${integer(debug.actor_id)} · epoch ${integer(debug.actor_epoch)}` : `${runtime?.actor_name ?? 'AIRI'} · ${runtime?.actor_kind ?? 'unknown'}`
+  const world_text = world === undefined ? 'unknown' : `${clean_text(world.task_state, 48) || 'idle'} · queue ${integer(world.queue_length)}`
+  const follow_text = follow?.active ? `active · ${clean_text(follow.target_player, 128) || 'target'}${typeof follow.current_distance === 'number' ? ` · ${math.floor(follow.current_distance * 10) / 10} tiles` : ''}` : 'inactive'
+  const reply = latest_ai_reply(board)
+
+  add_row(table, 'AI phase', detail.length > 0 ? `${phase} · ${detail}` : phase)
+  add_row(table, 'Goal', board?.status ? `${String(board.status).toUpperCase()} · ${clean_text(board.objective, 300) || clean_text(board.goal_id, 120)}` : 'none')
+  add_row(table, 'AI reply', reply || '—')
+  add_row(table, 'Plan step', step)
+  add_row(table, 'Request', clean_text(debug.request_id, 120) || '—')
+  add_row(table, 'Turn', integer(debug.turn) > 0 ? `${integer(debug.turn)}` : '—')
+  add_row(table, 'Provider', provider.length > 0 ? `${provider} · round ${integer(debug.provider_round) + 1}` : '—')
+  add_row(table, 'Reasoning effort · latest round', clean_text(debug.reasoning_effort, 32) || '—')
+  add_row(table, 'Policy reason · latest round', clean_text(debug.reasoning_policy_reason, 80) || '—')
+  add_row(table, 'Latency', latency > 0 ? `${latency} ms` : '—')
+  add_row(table, 'Tokens · request cumulative', tokens)
+  add_row(table, 'Latest completed round', latest_round_tokens)
+  add_debug_decision_rows(table, debug)
+  add_debug_step_rows(table, debug)
   add_row(table, 'Provider diag', clean_text(debug.provider_diagnostic_code, 160) || '—')
   add_row(table, 'Finish', clean_text(debug.provider_finish_reason, 80) || '—')
   add_row(table, 'Content chars', `${integer(debug.content_chars)}`)
@@ -715,7 +731,6 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'UI sync', `gen ${version.generation} · rev ${version.revision} · age ${sync_age(synced_tick)}`)
   if (clean_text(debug.decision_error, 300).length > 0) add_row(table, 'Decision error', clean_text(debug.decision_error, 300))
   if (clean_text(debug.last_error, 500).length > 0) add_row(table, 'Last error', clean_text(debug.last_error, 500))
-
 }
 
 function build_debug_activity(root: LuaGuiElement) {
