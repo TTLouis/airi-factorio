@@ -361,3 +361,17 @@ test('Jev micro budget preserves compact completion behavior', async () => {
   assert.equal(seen.body.reasoning_effort, 'low')
   assert.equal(seen.body.max_tokens, 1000)
 })
+
+
+test('hierarchy collapse always uses the full planner path even with a micro semantic budget', async () => {
+  const { seen } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: COMPLETION },
+  ], {
+    allowTools: true,
+    triggerSource: 'hierarchy_collapse',
+    reasoningBudget: 'micro',
+  })
+  assert.equal(seen.body.reasoning_effort, 'low')
+  assert.equal(seen.body.max_tokens, 2000)
+})
