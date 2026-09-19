@@ -208,11 +208,15 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     return state.project_board
   }
 
-  updateProjectBoard(key, patch = {}) {
+  updateProjectBoard(key, patch = {}, options = {}) {
     const state = key ? this.planByNpc.get(key) : undefined
     if (!state) return undefined
     const now = Date.now()
-    state.project_board = updateProjectBoard(this.ensureProjectBoard(state), patch, {
+    const current = this.ensureProjectBoard(state)
+    const effectivePatch = options.preserveCurrentMilestone === true && current?.current_milestone
+      ? { ...patch, current_milestone: current.current_milestone }
+      : patch
+    state.project_board = updateProjectBoard(current, effectivePatch, {
       goalId: state.goal_id,
       objective: state.objective,
       status: state.status,
