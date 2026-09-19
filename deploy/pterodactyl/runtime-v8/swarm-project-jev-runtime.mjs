@@ -3,6 +3,7 @@ import { SwarmProjectJevShadowService } from './swarm-project-jev-service.mjs'
 import { SwarmStrategicProjectPersistence } from './swarm-strategic-project-persistence.mjs'
 import { SwarmStrategicProjectStore } from './swarm-strategic-project-store.mjs'
 import { applyStrategicPlannerProposal } from './swarm-strategic-planner-contract.mjs'
+import { authorizeStrategicMilestoneCompletion } from './swarm-strategic-transition-gate.mjs'
 
 export class SwarmProjectJevRuntime {
   constructor({
@@ -81,11 +82,24 @@ export class SwarmProjectJevRuntime {
     return result
   }
 
-  async completeCurrentMilestone(options) {
+  async completeCurrentMilestone(outcomeSnapshot) {
     await this.initialize()
-    const result = this.store.completeCurrentMilestone(options)
+    const authorization = authorizeStrategicMilestoneCompletion(outcomeSnapshot)
+    if (!authorization.authorized) {
+      return {
+        changed: false,
+        reason: authorization.reason,
+        board: this.store.current(),
+        authorization,
+      }
+    }
+
+    const result = this.store.completeCurrentMilestone({ verified: true })
     if (result.changed) await this.persistence.save()
-    return result
+    return {
+      ...result,
+      authorization,
+    }
   }
 
   async activateNextMilestone() {
