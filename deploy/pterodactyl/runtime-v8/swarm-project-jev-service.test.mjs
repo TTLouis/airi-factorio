@@ -3,25 +3,26 @@ import assert from 'node:assert/strict'
 
 import { SwarmProjectJevShadowService } from './swarm-project-jev-service.mjs'
 
-test('concurrent project-level triggers coalesce into one global Jev observation', async () => {
+test('triggers arriving during an in-flight project Jev cycle schedule one latest-state follow-up', async () => {
   let observeCalls = 0
-  let release
-  const blocked = new Promise(resolve => { release = resolve })
+  let releaseFirst
+  let markFirstStarted
+  const firstBlocked = new Promise(resolve => { releaseFirst = resolve })
+  const firstStarted = new Promise(resolve => { markFirstStarted = resolve })
+
   const controller = {
     async observe(options) {
       observeCalls += 1
       assert.equal(options.strategicBoard.goal_id, 'goal-1')
-      await blocked
+      if (observeCalls === 1) {
+        markFirstStarted()
+        await firstBlocked
+      }
       return {
         authority: 'shadow',
         effects: [],
         scope: 'swarm_global',
-        source_tick: 100,
-        decision: {
-          authority: 'shadow',
-          effects: [],
-          decision: { routing: 'continue_runtime' },
-        },
+        source_tick: 100 + observeCalls,
       }
     },
   }
@@ -32,6 +33,8 @@ test('concurrent project-level triggers coalesce into one global Jev observation
   })
 
   const first = service.trigger('mission_updated')
+  await firstStarted
+
   const second = service.trigger('work_completed')
   const third = service.trigger('ui_refresh')
 
@@ -40,10 +43,14 @@ test('concurrent project-level triggers coalesce into one global Jev observation
   assert.strictEqual(second, third)
   assert.equal(observeCalls, 1)
 
-  release()
+  releaseFirst()
   const result = await first
-  assert.equal(result.trigger_sequence, 1)
-  assert.equal(result.trigger_reason, 'mission_updated')
+
+  assert.equal(observeCalls, 2)
+  assert.equal(result.trigger_sequence, 2)
+  assert.deepEqual(result.trigger_reasons, ['work_completed', 'ui_refresh'])
+  assert.equal(result.trigger_reason, 'work_completed,ui_refresh')
+  assert.equal(result.source_tick, 102)
   assert.equal(result.authority, 'shadow')
   assert.deepEqual(result.effects, [])
   assert.equal(service.busy(), false)
@@ -151,4 +158,35 @@ test('last telemetry is defensive-copied', async () => {
   const first = service.last()
   first.source_counts.missions = 999
   assert.equal(service.last().source_counts.missions, 1)
+})
+
+
+test('shadow service contains snapshot/controller failures and remains reusable', async () => {
+  let shouldFail = true
+  const service = new SwarmProjectJevShadowService({
+    controller: {
+      async observe() {
+        if (shouldFail) throw new Error('global snapshot unavailable\ntransient detail')
+        return {
+          authority: 'shadow',
+          effects: [],
+          scope: 'swarm_global',
+          source_tick: 400,
+        }
+      },
+    },
+  })
+
+  const failed = await service.trigger('periodic_check')
+  assert.equal(failed.status, 'observation_error')
+  assert.equal(failed.authority, 'shadow')
+  assert.deepEqual(failed.effects, [])
+  assert.equal(failed.error, 'global snapshot unavailable transient detail')
+  assert.equal(service.busy(), false)
+
+  shouldFail = false
+  const recovered = await service.trigger('retry_after_snapshot_error')
+  assert.equal(recovered.source_tick, 400)
+  assert.equal(recovered.authority, 'shadow')
+  assert.equal(recovered.trigger_sequence, 2)
 })
