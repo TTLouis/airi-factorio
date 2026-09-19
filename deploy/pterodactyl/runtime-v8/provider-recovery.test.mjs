@@ -175,3 +175,17 @@ test('normalizer validates operations through the plan policy', () => {
   assert.equal(normalizeProviderPlanContent(`reason {"x":1}\n${valid}`), valid)
   assert.equal(normalizeProviderPlanContent(invalid), invalid)
 })
+
+
+test('normal tool-enabled provider requests advertise submitPlan as a control-plane tool', async () => {
+  const captured = []
+  await providerRequest(config, messages, { fetchImpl: successfulFetch(captured), allowTools: true })
+  const names = captured[0].tools.map(tool => tool?.function?.name)
+  assert.equal(names.includes('submitPlan'), true)
+})
+
+test('tools-disabled recovery does not advertise submitPlan', async () => {
+  const captured = []
+  await providerRequest(config, messages, { fetchImpl: successfulFetch(captured), allowTools: false, recoveryAttempt: 1 })
+  assert.equal('tools' in captured[0], false)
+})
