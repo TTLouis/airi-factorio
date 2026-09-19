@@ -130,91 +130,44 @@ const RECEIPT_SAFE_OPERATION_NAMES = new Set([
   'clear_enemy_area',
 ])
 
-function operationIntentRequirement(operation, index) {
+const EXPLICIT_SEMANTIC_CHECKPOINT_OPERATIONS = new Set([
+  'gather_resource',
+  'harvest_product',
+  'craft_item',
+  'mine_entity',
+  'mine_entity_exact',
+  'mine_resource_at',
+  'supply_entity',
+  'move_items',
+  'move_items_exact',
+  'move_items_with_player',
+])
+
+function operationReceiptRequirement(operation, index) {
   if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return undefined
   const name = clean(operation.name, 100)
-  const args = operation.args && typeof operation.args === 'object' && !Array.isArray(operation.args)
-    ? operation.args
-    : {}
-
-  if (name === 'gather_resource' || name === 'harvest_product') {
-    const itemName = clean(name === 'gather_resource' ? args.resource_name : args.product_name, 160)
-    const minimum = positiveInteger(args.count)
-    if (itemName && minimum) {
-      return { id: `intent_${index + 1}`, kind: 'inventory_count', item_name: itemName, minimum }
-    }
-  }
-
-  if (name === 'craft_item') {
-    const itemName = clean(args.item_name, 160)
-    const minimum = positiveInteger(args.count)
-    if (itemName && minimum) {
-      return { id: `intent_${index + 1}`, kind: 'inventory_count', item_name: itemName, minimum }
-    }
-  }
-
-  if (name === 'supply_entity') {
-    const unitNumber = positiveInteger(args.unit_number)
-    const items = Array.isArray(args.items) ? args.items : []
-    if (unitNumber && items.length === 1) {
-      const itemName = clean(items[0]?.item_name, 160)
-      const minimum = positiveInteger(items[0]?.count)
-      if (itemName && minimum) {
-        return { id: `intent_${index + 1}`, kind: 'entity_inventory_count', unit_number: unitNumber, item_name: itemName, minimum }
-      }
-    }
-  }
-
-  if (name === 'move_items_exact' && args.to_entity === true) {
-    const unitNumber = positiveInteger(args.unit_number)
-    const itemName = clean(args.item_name, 160)
-    const minimum = positiveInteger(args.max_count)
-    if (unitNumber && itemName && minimum) {
-      return { id: `intent_${index + 1}`, kind: 'entity_inventory_count', unit_number: unitNumber, item_name: itemName, minimum }
-    }
-  }
-
-  if (RECEIPT_SAFE_OPERATION_NAMES.has(name)) {
-    return { id: `intent_${index + 1}`, kind: 'authoritative_operation_receipt', operation_name: name }
-  }
-  return undefined
+  if (!RECEIPT_SAFE_OPERATION_NAMES.has(name) || EXPLICIT_SEMANTIC_CHECKPOINT_OPERATIONS.has(name)) return undefined
+  return { id: `receipt_${index + 1}`, kind: 'authoritative_operation_receipt', operation_name: name }
 }
 
 export function completionCandidatesFromOperations(operations = []) {
   const bounded = Array.isArray(operations) ? operations.slice(0, 8) : []
-  const intentRequirements = bounded.map(operationIntentRequirement).filter(Boolean)
-  const candidates = []
+  // Quantity/delta operations do not imply an absolute semantic outcome. For
+  // example gather_resource(count=40) may be used when the actor already holds
+  // 62 stone and the step means "have at least 100 stone". Synthesizing
+  // inventory_count >= 40 would be a false checkpoint, and an operation receipt
+  // would only prove that the action ran, not that the semantic target is true.
+  // These operations therefore require an explicit planner semantic checkpoint
+  // that Jev judges and runtime verifies.
+  if (bounded.some(operation => EXPLICIT_SEMANTIC_CHECKPOINT_OPERATIONS.has(clean(operation?.name, 100)))) return []
 
-  if (intentRequirements.length > 0) {
-    candidates.push({
-      mode: 'all',
-      source: 'operation_intent',
-      requirements: intentRequirements,
-    })
-  }
-
-  const hasEffectPredicate = intentRequirements.some(requirement => requirement.kind !== 'authoritative_operation_receipt')
-  const receiptRequirements = bounded
-    .map((operation, index) => {
-      const name = clean(operation?.name, 100)
-      return RECEIPT_SAFE_OPERATION_NAMES.has(name)
-        ? { id: `receipt_${index + 1}`, kind: 'authoritative_operation_receipt', operation_name: name }
-        : undefined
-    })
-    .filter(Boolean)
-  // A receipt-only candidate is deliberately weaker than a deterministic
-  // effect predicate such as inventory_count. Do not offer Jev the weaker
-  // escape hatch when the high-level operation intent already gives runtime a
-  // stronger fact to verify.
-  if (!hasEffectPredicate && receiptRequirements.length > 0) {
-    candidates.push({
-      mode: 'all',
-      source: 'operation_receipt',
-      requirements: receiptRequirements,
-    })
-  }
-
-  return candidates
+  const receiptRequirements = bounded.map(operationReceiptRequirement).filter(Boolean)
+  if (receiptRequirements.length === 0) return []
+  return [{
+    mode: 'all',
+    source: 'operation_receipt',
+    requirements: receiptRequirements,
+  }]
 }
 
 const STEP_RELATIONS = new Set([
