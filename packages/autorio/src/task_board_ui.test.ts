@@ -14,6 +14,16 @@ import {
   toggle_task_board_ui_open,
 } from './task_board_ui'
 
+function taskBoardUiSource() {
+  const main = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  const constants = readFileSync(new URL('./task_board_ui_constants.ts', import.meta.url), 'utf8')
+  // UI constants moved into a namespace to preserve Factorio Lua local headroom.
+  // Normalize that namespace for source-architecture assertions while retaining
+  // the constants module so declaration/geometry checks still test real code.
+  return `${main.replaceAll('ui_constants.', '')}\n${constants}`
+}
+
+
 beforeEach(() => {
   ;(globalThis as any).storage = {}
 })
@@ -132,7 +142,7 @@ describe('in-game task board UI projection', () => {
     expect(board?.wanted_items[0].reason).toBe(rich)
     expect(board?.conversation[0].text).toBe(rich)
 
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const debug = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
     const boundary = readFileSync(new URL('./task_board_gui_text.ts', import.meta.url), 'utf8')
     expect(boundary).toContain('defines.rich_text_setting.disabled')
@@ -149,7 +159,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('labels canonical evidence as verified and keeps internal task codes diagnostic-only in the main console', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const statusPanel = source.split('function render_status_panel(')[1]?.split('function follow_button_tooltip(')[0] ?? ''
     const refreshSteps = source.split('function refresh_steps(')[1]?.split('function refresh_activity(')[0] ?? ''
 
@@ -205,7 +215,7 @@ describe('in-game task board UI projection', () => {
     expect(task_board_lifecycle_pending_expired(100, 100 + 60 * 60 - 1)).toBe(false)
     expect(task_board_lifecycle_pending_expired(100, 100 + 60 * 60)).toBe(true)
 
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('task_board_lifecycle_pending_expired(pending.started_tick, game.tick)')
     expect(source).toContain('started_tick: game.tick')
   })
@@ -226,7 +236,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('does not erase Factorio GUI element types before chained add calls', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).not.toMatch(/const\s+\w+\s*:\s*any\s*=\s*player\.gui/)
     expect(source).not.toContain('const root: any')
     expect(source).toContain('as FrameGuiElement')
@@ -253,7 +263,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('uses a vanilla square mod-gui button instead of a text button in gui.top', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain("const MOD_GUI_TOP_FRAME_NAME = 'mod_gui_top_frame'")
     expect(source).toContain("style: 'slot_window_frame'")
     expect(source).toContain("style: 'mod_gui_inside_deep_frame'")
@@ -265,7 +275,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('uses a movable screen window with native Factorio title, section, and control styles', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('player.gui.screen.add')
     expect(source).toContain("style: 'frame_title'")
     expect(source).toContain("style: 'draggable_space_header'")
@@ -284,7 +294,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('aligns the two columns, keeps section spacing uniform, and lets status/controls hug their content', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('left.style.vertical_spacing = COLUMN_SPACING')
     expect(source).toContain('dynamic.style.vertical_spacing = COLUMN_SPACING')
     expect(source).toContain('top.style.horizontal_spacing = COLUMN_SPACING')
@@ -297,7 +307,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('puts a native Factorio camera preview in the right column with an interactive zoom slider', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain("type: 'camera'")
     expect(source).toContain('position: preview.position')
     expect(source).toContain('surface_index: preview.surface_index')
@@ -311,7 +321,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('makes preview coordinates a view-only button that uses the current runtime preview', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain("type: 'button', name: PREVIEW_POSITION_NAME")
     expect(source).toContain("style: 'mini_button_aligned_to_text_vertically'")
     expect(source).toContain("tooltip: 'Show NPC in remote view'")
@@ -331,7 +341,7 @@ describe('in-game task board UI projection', () => {
     expect(refresh).not.toContain('.clear()')
   })
   it('shows live mod task state and when SGLuna last synced', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const control = readFileSync(new URL('./control.ts', import.meta.url), 'utf8')
     expect(source).toContain('storage.airi_task_board_ui_synced_tick = game.tick')
     expect(source).toContain("add_key_value(table, 'WORLD', world_task_summary(runtime.world_task)")
@@ -339,7 +349,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('provides a direct SGLuna prompt field that preserves drafts and queues structured input', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain("type: 'textfield'")
     expect(source).toContain("name: PROMPT_FIELD_NAME")
     expect(source).toContain("name: PROMPT_SEND_BUTTON_NAME")
@@ -350,7 +360,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('refreshes live content without destroying the prompt field being typed into', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain('dynamic.clear()')
     expect(source).toContain('build_left_dynamic(dynamic, player, board, synced_tick, runtime)')
     expect(source).toContain('right.clear()')
@@ -360,7 +370,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('places the window before building content so it never opens in the corner', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toMatch(/root\.auto_center = true[\s\S]*render_titlebar\(root\)/)
     expect(source).not.toContain('root.force_auto_center()')
   })
@@ -378,7 +388,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('keeps rendering read-only so drawing the console cannot desync multiplayer', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const controller = readFileSync(new URL('./actors/actor_controller.ts', import.meta.url), 'utf8')
     expect(source).toContain('peek_controlled_actor()')
     expect(source).not.toContain('get_controlled_actor()')
@@ -393,7 +403,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('opens area learning in its own window instead of consuming console space', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const skills = readFileSync(new URL('./skills.ts', import.meta.url), 'utf8')
     expect(source).toContain('name: SKILLS_BUTTON_NAME')
     expect(source).not.toContain('render_skill_export_section(left)')
@@ -429,7 +439,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('stops presenting a stale snapshot as the current SGLuna state', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain("if (freshness === 'offline') return { tone: 'muted', caption: 'OFFLINE' }")
     expect(source).toContain("if (freshness === 'stale') return { tone: 'bad', caption: 'STALE' }")
     expect(source).toContain("freshness === 'live' ? live_caption : stale_caption")
@@ -437,7 +447,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('asks the runtime for a snapshot over the drain the runtime already performs', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain("return { kind: 'poll', version: 1, tick: game.tick, debug: debug_ui.any_debug_ui_open() }")
     expect(source).toContain('const poll = poll_request()')
     expect(source).toContain('if (!any_console_open()) return undefined')
@@ -448,7 +458,7 @@ describe('in-game task board UI projection', () => {
   it('drains queued input before appending a poll so a request cannot evict player input', () => {
     ;(globalThis as any).game.tick = 100000
     ;(globalThis as any).game.connected_players = []
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const drain = source.split('function drain_ui_inputs() {')[1]?.split('function task_board_ui_prompt_draft')[0] ?? ''
     expect(drain).toContain('storage.airi_task_board_ui_inputs = []')
     expect(drain.indexOf('storage.airi_task_board_ui_inputs = []')).toBeLessThan(drain.indexOf('drained.push(poll)'))
@@ -462,7 +472,7 @@ describe('in-game task board UI projection', () => {
   })
 
   it('removes activity hover state and handlers while preserving scroll pause and explicit LIVE resume', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const activity = readFileSync(new URL('./task_board_activity.ts', import.meta.url), 'utf8')
     const debug = readFileSync(new URL('./task_board_debug.ts', import.meta.url), 'utf8')
     expect(source).not.toContain('defines.events.on_gui_hover')
@@ -476,7 +486,7 @@ describe('in-game task board UI projection', () => {
     expect(source).toContain('activity_state.resume_activity_follow(player.index, last_shown_activity_key(scroll))')
   })
   it('only emits fixed UI control actions instead of arbitrary console commands', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     expect(source).toContain("type TaskBoardUiControlAction = 'pause' | 'terminate' | 'follow' | 'stop_follow' | 'new_task'")
     expect(source).toContain("kind: 'control'")
     expect(source).toContain('drain_inputs: () => drain_ui_inputs()')
@@ -486,7 +496,7 @@ describe('in-game task board UI projection', () => {
 
 
 it('uses SGLuna for normal console branding while retaining AIRI actor identity internally', () => {
-  const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  const source = taskBoardUiSource()
   expect(source).toContain("caption: 'Prompt SGLuna'")
   expect(source).toContain("'SGLuna NPC Console'")
   expect(source).toContain("add_key_value(table, 'SGLuna'")
