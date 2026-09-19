@@ -207,6 +207,7 @@ test('completed historical work does not make project Jev think runtime is activ
   const source = globalSnapshot()
   source.counts.work = 25
   source.counts.claims = 0
+  source.counts.activeClaims = 0
   source.work = [
     { id: 'work-20', status: 'completed', title: 'Historical work' },
   ]
