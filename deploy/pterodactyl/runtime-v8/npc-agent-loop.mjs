@@ -4909,6 +4909,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         previous_reasoning_mode: cleanMemoryText(this.traceRequest?.last_provider_event?.provider?.reasoning_effort, 32),
         previous_trigger_source: cleanMemoryText(this.traceRequest?.last_provider_event?.trigger_source, 80),
       },
+      decision_budget: {
+        observation_remaining: Number.isSafeInteger(this.observationBudgetRemaining) ? this.observationBudgetRemaining : undefined,
+        reasoning_budget: cleanMemoryText(this.reasoningBudgetOverride, 32) || undefined,
+        planning_horizon: cleanMemoryText(this.planningHorizonOverride, 32) || undefined,
+      },
       context: {
         loaded_skill_ids: this.loadedSkillContext instanceof Map ? [...this.loadedSkillContext.keys()].slice(-3) : [],
         dependency_summary: planState?.dependency_context ? sanitizeDurableModelValue(planState.dependency_context) : undefined,
@@ -4953,7 +4958,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           condition_wait: conditionValidation.healthy ? conditionValidation.wait : undefined,
         },
         finalCompletionProven,
-        observationBudgetAvailable: this.actionOmissionObservationUsed !== true,
+        observationBudgetAvailable: this.actionOmissionObservationUsed !== true
+          && (!Number.isSafeInteger(this.observationBudgetRemaining) || this.observationBudgetRemaining > 0),
         evidence,
       })
       const result = {
@@ -5058,7 +5064,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (this.traceRequest) this.traceRequest.recovery = recovery
     await this.traceEvent('replan.started', recovery)
 
-    const observationDecisionComplete = /single targeted observation allowed by decision pressure is complete/i.test(reasonText)
+    const observationDecisionComplete = /(?:single targeted observation allowed|targeted observation budget allowed) by decision pressure is complete/i.test(reasonText)
     const currentState = this.memory.currentPlan?.(this.activePlanKey())
     if (observationDecisionComplete && !this.actionOmissionRepairActive) {
       if (canonicalWorkRemains(currentState)) {
@@ -5208,7 +5214,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     if (['retry_compact', 'continue_low', 'replan_high', 'targeted_observation'].includes(routed.route)) {
       const previousTrigger = this.reasoningTriggerSource
+      const previousReasoningBudget = this.reasoningBudgetOverride
       this.reasoningTriggerSource = routed.route === 'replan_high' ? 'recovery_replan_high' : 'recovery_continue_low'
+      // Recovery-route low/high policy is explicit Jev output. Do not let the
+      // parent planning turn's semantic reasoning budget override that route.
+      this.reasoningBudgetOverride = null
       const state = this.memory.currentPlan?.(this.activePlanKey())
       const board = state?.task_board
       const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : state?.current_step ?? 0
@@ -5253,6 +5263,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
       finally {
         this.reasoningTriggerSource = previousTrigger
+        this.reasoningBudgetOverride = previousReasoningBudget
       }
     }
 
