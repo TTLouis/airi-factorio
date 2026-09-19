@@ -521,6 +521,37 @@ export function isObservationToolName(name) {
   return typeof name === 'string' && toolDefinitions.some(tool => tool?.type === 'function' && tool.function?.name === name)
 }
 
+export function runtimeConditionCommand(rawCondition = {}) {
+  const condition = argsObject(rawCondition)
+  const kind = condition.kind
+  check(['inventory_count', 'entity_inventory_count', 'entity_exists', 'entity_state'].includes(kind), 'Unsupported runtime condition kind')
+  const request = { kind }
+
+  if (kind === 'inventory_count') {
+    noExtra(condition, ['kind', 'item_name', 'minimum'])
+    request.item_name = factorioName(condition.item_name)
+    request.minimum = integer(condition.minimum, 'minimum', 1, Number.MAX_SAFE_INTEGER)
+  }
+  else if (kind === 'entity_inventory_count') {
+    noExtra(condition, ['kind', 'unit_number', 'item_name', 'minimum'])
+    request.unit_number = integer(condition.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER)
+    request.item_name = factorioName(condition.item_name)
+    request.minimum = integer(condition.minimum, 'minimum', 1, Number.MAX_SAFE_INTEGER)
+  }
+  else if (kind === 'entity_exists') {
+    noExtra(condition, ['kind', 'unit_number'])
+    request.unit_number = integer(condition.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER)
+  }
+  else {
+    noExtra(condition, ['kind', 'unit_number', 'expected'])
+    request.unit_number = integer(condition.unit_number, 'unit_number', 1, Number.MAX_SAFE_INTEGER)
+    check(['working', 'not_working', 'exists'].includes(condition.expected), 'Invalid entity_state expected value')
+    request.expected = condition.expected
+  }
+
+  return `/silent-command local request=helpers.json_to_table(${luaString(JSON.stringify(request))}); rcon.print(helpers.table_to_json(remote.call("autorio_tools","evaluate_condition",request)))`
+}
+
 export function toolCommand(name, rawArgs = {}) {
   const args = argsObject(rawArgs)
   switch (name) {

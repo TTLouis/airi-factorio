@@ -96,6 +96,11 @@ export interface TaskBoardUiDebugSnapshot {
   decision_planner_replan_high_wakes_total: number
   decision_planner_fallback_wakes_total: number
   decision_error: string
+  step_completion_contract: string
+  step_completion_status: string
+  step_completion_evidence: string
+  runtime_condition: string
+  runtime_condition_state: string
   last_tool: string
   last_event: string
   recovery_attempt: number
@@ -171,6 +176,11 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     decision_planner_replan_high_wakes_total: integer(debug.decision_planner_replan_high_wakes_total),
     decision_planner_fallback_wakes_total: integer(debug.decision_planner_fallback_wakes_total),
     decision_error: clean_text(debug.decision_error, 300),
+    step_completion_contract: clean_text(debug.step_completion_contract, 200),
+    step_completion_status: clean_text(debug.step_completion_status, 120),
+    step_completion_evidence: clean_text(debug.step_completion_evidence, 300),
+    runtime_condition: clean_text(debug.runtime_condition, 300),
+    runtime_condition_state: clean_text(debug.runtime_condition_state, 80),
     last_tool: clean_text(debug.last_tool, 120),
     last_event: clean_text(debug.last_event, 120),
     recovery_attempt: integer(debug.recovery_attempt),
@@ -605,6 +615,11 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const decision_planner_low = integer(debug.decision_planner_continue_low_wakes_total)
   const decision_planner_high = integer(debug.decision_planner_replan_high_wakes_total)
   const decision_planner_fallback = integer(debug.decision_planner_fallback_wakes_total)
+  const step_completion_contract = clean_text(debug.step_completion_contract, 200)
+  const step_completion_status = clean_text(debug.step_completion_status, 120)
+  const step_completion_evidence = clean_text(debug.step_completion_evidence, 300)
+  const runtime_condition = clean_text(debug.runtime_condition, 300)
+  const runtime_condition_state = clean_text(debug.runtime_condition_state, 80)
   const tokens = integer(debug.total_units) > 0 ? `${integer(debug.input_units)} in / ${integer(debug.cached_input_units)} cached / ${integer(debug.output_units)} out / ${integer(debug.total_units)} total` : '—'
   const latest_round_tokens = integer(debug.latest_round_total_units) > 0
     ? `round ${integer(debug.latest_round_provider_round) + 1} · ${integer(debug.latest_round_input_units)} in / ${integer(debug.latest_round_cached_input_units)} cached / ${integer(debug.latest_round_output_units)} out / ${integer(debug.latest_round_total_units)} total`
@@ -631,6 +646,8 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Decision usage', decision_shadow.length > 0 || decision_post_step.length > 0 ? `${decision_input} in / ${decision_output} out · ${decision_latency || decision_post_step_latency} ms${decision_cost > 0 ? ` · ${decision_cost} µUSD` : ''}` : '—')
   add_row(table, 'Decision totals', decision_calls_total > 0 ? `${decision_calls_total} calls · ${decision_input_total} in / ${decision_output_total} out${decision_cost_total > 0 ? ` · ${decision_cost_total} µUSD` : ''} · shadow ${decision_matches} match / ${decision_mismatches} differ` : '—')
   add_row(table, 'Planner routing · Jev', decision_post_step_calls > 0 || decision_planner_skips > 0 || decision_planner_wakes > 0 ? `${decision_planner_skips} skips / ${decision_planner_low} low / ${decision_planner_high} high / ${decision_planner_fallback} fallback · ${decision_post_step_calls} decisions` : 'not active yet')
+  add_row(table, 'Step completion', step_completion_contract || step_completion_status ? `${step_completion_contract || 'semantic_unknown'} · ${step_completion_status || 'unknown'}${step_completion_evidence ? ` · ${step_completion_evidence}` : ''}` : '—')
+  add_row(table, 'Runtime wait', runtime_condition || runtime_condition_state ? `${runtime_condition_state || 'unknown'} · ${runtime_condition || '—'}` : '—')
   add_row(table, 'Provider diag', clean_text(debug.provider_diagnostic_code, 160) || '—')
   add_row(table, 'Finish', clean_text(debug.provider_finish_reason, 80) || '—')
   add_row(table, 'Content chars', `${integer(debug.content_chars)}`)

@@ -1,6 +1,7 @@
 const OUTCOME_KINDS = new Set([
   'execution_required',
   'runtime_active',
+  'condition_wait_active',
   'verified_complete',
   'world_blocked',
   'recoverable_provider_failure',
@@ -22,6 +23,7 @@ const COMPLETION_EVIDENCE_KINDS = new Set([
   'deterministic_verification',
   'authoritative_completion',
   'verified_world_state',
+  'condition_satisfied',
 ])
 
 function clean(value, max = 500) {
@@ -72,9 +74,18 @@ export function authoritativeRuntimeState(world = {}) {
   const queueLength = Number.isSafeInteger(world?.queue_length) ? world.queue_length : undefined
   const persistentHealthy = world?.persistent_runtime_healthy === true
     || (world?.persistent_runtime?.active === true && world?.persistent_runtime?.healthy === true && world?.persistent_runtime?.controller_live === true)
-  const active = persistentHealthy || (queueLength !== undefined && queueLength > 0) || (taskState && taskState !== 'idle')
-  const idle = !persistentHealthy && queueLength === 0 && taskState === 'idle'
-  return { active, idle, task_state: taskState || undefined, queue_length: queueLength, persistent_runtime_healthy: persistentHealthy }
+  const conditionWaitActive = world?.condition_wait_active === true
+    || (world?.condition_wait?.state === 'active' && world?.condition_wait?.healthy !== false)
+  const active = conditionWaitActive || persistentHealthy || (queueLength !== undefined && queueLength > 0) || (taskState && taskState !== 'idle')
+  const idle = !conditionWaitActive && !persistentHealthy && queueLength === 0 && taskState === 'idle'
+  return {
+    active,
+    idle,
+    task_state: taskState || undefined,
+    queue_length: queueLength,
+    persistent_runtime_healthy: persistentHealthy,
+    condition_wait_active: conditionWaitActive,
+  }
 }
 
 export function hasAuthoritativeBlockerEvidence(evidence) {
@@ -106,6 +117,12 @@ export function validateOutcomeCandidate(candidate, { world = {} } = {}) {
     return runtime.active
       ? { ...base, accepted: true, durable_status: 'active' }
       : { ...base, rejection_reason: 'runtime_active_without_authoritative_runtime' }
+  }
+
+  if (kind === 'condition_wait_active') {
+    return runtime.condition_wait_active
+      ? { ...base, accepted: true, durable_status: 'active' }
+      : { ...base, rejection_reason: 'condition_wait_without_authoritative_watcher' }
   }
 
   if (kind === 'verified_complete') {

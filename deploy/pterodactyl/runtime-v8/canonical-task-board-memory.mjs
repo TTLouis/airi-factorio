@@ -186,19 +186,13 @@ export function canonicalContinuationPlan(previousBoard, plan, { allowReplan = f
     ? -1
     : canonical.findIndex(description => clean(description) === clean(incomingActive))
 
-  if (stateHasUnverifiedTransferIntent(previousState) && matched > currentIndex) {
-    return {
-      ...plan,
-      plan: canonical,
-      currentStep: currentIndex,
-    }
-  }
-
   if (allowReplan) return plan
   return {
     ...plan,
-    plan: allowReplan ? plan.plan : canonical,
-    currentStep: currentIndex,
+    plan: canonical,
+    // currentStep is advisory proposed focus only. Runtime completion authority
+    // remains at currentIndex until grounded evidence is accepted.
+    currentStep: matched >= 0 ? matched : currentIndex,
   }
 }
 
@@ -283,40 +277,12 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
       this.planByNpc.set(key, current)
     }
     const verifiedBoard = this.ensureTaskBoard(current)
-    if (!current || !verifiedBoard || verifiedBoard.status !== 'active' || verifiedBoard.steps.length === 0) return verifiedBoard
+    if (!current || !verifiedBoard || verifiedBoard.status !== 'active') return verifiedBoard
 
-    const currentIndex = Number.isSafeInteger(verifiedBoard.active_index) ? verifiedBoard.active_index : 0
-    if (currentIndex >= verifiedBoard.steps.length - 1) {
-      const verificationEvidence = [...(verifiedBoard.evidence ?? [])].reverse().find(item => item?.kind === 'deterministic_verification' && item?.ref === ref)
-      return this.applyOutcomeAuthority(key, {
-        kind: 'verified_complete',
-        source: 'deterministic_runtime',
-        reason_code: 'verified_final_step',
-        evidence: verificationEvidence ? [verificationEvidence] : [],
-      }).state?.task_board ?? verifiedBoard
-    }
-
-    const canonical = verifiedBoard.steps.map(step => String(step?.description ?? '')).filter(Boolean)
-    const nextIndex = currentIndex + 1
-    const stateResult = super.reconcileTaskBoard(key, verifiedBoard, {
-      plan: canonical,
-      currentStep: nextIndex,
-    }, {
-      state: current,
-      blockedByHarness: false,
-      changed: true,
-    }, { allowReplan: false, authoritativeAdvance: true })
-    const next = stateResult?.state
-    if (!next) return verifiedBoard
-    next.status = 'active'
-    next.blocker = ''
-    next.pause_reason = ''
-    next.plan = canonical
-    next.current_step = nextIndex
-    next.revision += 1
-    next.updated_at = Date.now()
-    this.planByNpc.set(key, next)
-    return next.task_board
+    // Strict operation completion is grounded evidence, not semantic step
+    // completion authority. The Runtime Completion Gate decides whether this
+    // proof is sufficient for the active canonical step.
+    return verifiedBoard
   }
 
   terminatePlan(key) {

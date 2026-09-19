@@ -567,6 +567,11 @@ function emptyAgentDebug(fallback = {}) {
     decision_planner_replan_high_wakes_total: 0,
     decision_planner_fallback_wakes_total: 0,
     decision_error: '',
+    step_completion_contract: '',
+    step_completion_status: '',
+    step_completion_evidence: '',
+    runtime_condition: '',
+    runtime_condition_state: '',
     last_tool: '',
     last_event: '',
     recovery_attempt: 0,
@@ -762,6 +767,36 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
       debug.decision_planner_fallback_wakes_total = debugInteger(debug.decision_planner_fallback_wakes_total) + 1
     }
   }
+
+  if (event === 'step.contract_created') {
+    const contract = data?.contract && typeof data.contract === 'object' ? data.contract : {}
+    const kinds = Array.isArray(contract.requirements)
+      ? contract.requirements.map(requirement => uiText(requirement?.kind, 60)).filter(Boolean).join('+')
+      : ''
+    debug.step_completion_contract = uiText(kinds || contract.mode || 'semantic_unknown', 200)
+    debug.step_completion_status = contract.mode === 'semantic_unknown' ? 'unknown' : 'waiting'
+  }
+  if (event === 'step.completion_checked') {
+    debug.step_completion_status = uiText(data.status, 80) || debug.step_completion_status
+    debug.step_completion_evidence = uiText(JSON.stringify(data.evidence ?? []), 300)
+  }
+  if (event === 'step.completion_rejected') {
+    debug.step_completion_status = uiText(data.reason, 120) || 'rejected'
+  }
+  if (event === 'step.verified') {
+    debug.step_completion_status = 'verified'
+    debug.step_completion_evidence = uiText(JSON.stringify(data.task_board ?? data.evidence ?? {}), 300)
+  }
+  if (event === 'runtime.condition_registered') {
+    debug.runtime_condition = uiText(JSON.stringify(data.condition ?? {}), 300)
+    debug.runtime_condition_state = 'active'
+  }
+  if (event === 'runtime.condition_waiting') debug.runtime_condition_state = 'active'
+  if (event === 'runtime.condition_satisfied') debug.runtime_condition_state = 'satisfied'
+  if (event === 'runtime.condition_timeout') debug.runtime_condition_state = 'timeout'
+  if (event === 'runtime.condition_failed') debug.runtime_condition_state = 'failed'
+  if (event === 'runtime.condition_progress_stopped') debug.runtime_condition_state = 'stopped'
+  if (event === 'runtime.condition_stale') debug.runtime_condition_state = 'stale'
 
   if (event === 'tool.call' || event === 'tool.result') debug.last_tool = uiText(data.name, 120)
   if (event === 'actor.bound') {
@@ -1142,6 +1177,7 @@ export async function pauseStrandedPlanAfterRequestError(session, message) {
   const agent = session?.agent
   const state = session?.currentPlanState?.()
   if (!agent || state?.status !== 'active') return undefined
+  if (state.condition_wait?.state === 'active') return undefined
 
   let runtime
   try {
@@ -1243,6 +1279,7 @@ export class Session {
     this.uiInputPoll = null
     this.uiHeartbeat = null
     this.uiInputPollRunning = false
+    this.conditionPollRunning = false
     this.lastUiFailure = ''
     this.lastUiFailureAt = 0
   }
@@ -1589,6 +1626,60 @@ export class Session {
     }
   }
 
+  pollRuntimeCondition() {
+    if (!this.agent || !this.rcon || !this.ready || this.stopping || this.conditionPollRunning) return false
+    const state = this.currentPlanState()
+    if (state?.condition_wait?.state !== 'active' || typeof this.agent.pollConditionWait !== 'function') return false
+    this.conditionPollRunning = true
+    this.queueEvent(async () => {
+      try {
+        await this.ensureAuthorization()
+        const result = await this.agent.pollConditionWait()
+        if (!result || result.action === 'stale') return
+        if (result.state) await this.syncTaskBoardUi(result.state)
+
+        if (result.action === 'waiting') {
+          this.log(`Runtime condition still active; planner remains asleep wait=${result.wait_id}`)
+          return
+        }
+
+        if (result.action === 'verified') {
+          if (result.state?.status === 'completed') {
+            const completed = {
+              goalStatus: 'completed',
+              goalId: result.state.goal_id,
+              taskBoard: result.state.task_board,
+              chatMessage: 'The requested goal is verified complete.',
+            }
+            const finalized = await finalizeCompletedTaskBoundary(this, completed)
+            if (completed.chatMessage) await this.printChat(completed.chatMessage)
+            if (!finalized) await this.syncTaskBoardUi(result.state)
+            return
+          }
+          const resumed = await this.recoverInterruptedPlan('condition_satisfied', {
+            condition_wait_id: result.wait_id,
+            source: 'runtime_condition',
+          })
+          if (!resumed) await this.syncTaskBoardUi(result.state)
+          return
+        }
+
+        if (result.action === 'wake' || result.action === 'timeout' || result.action === 'failed') {
+          const resumed = await this.recoverInterruptedPlan(`condition_${result.action}`, {
+            condition_wait_id: result.wait_id,
+            reason: result.reason,
+            source: 'runtime_condition',
+          })
+          if (!resumed) await this.syncTaskBoardUi(result.state)
+        }
+      }
+      finally {
+        this.conditionPollRunning = false
+      }
+    }, { reportError: true })
+    return true
+  }
+
   async applyNavigationObstaclePolicy(text) {
     if (!this.rcon) return
     const policy = navigationObstaclePolicy(text)
@@ -1684,9 +1775,12 @@ export class Session {
     this.uiHeartbeat.unref?.()
     this.drainTaskBoardUiInputs()
     this.poll = setInterval(() => {
-      if (!this.stopping) this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
+      if (this.stopping) return
+      if (this.pollRuntimeCondition()) return
+      this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
     }, 2000)
-    if (shouldRecoverInterruptedPlan(this.currentPlanState())) {
+    const startupState = this.currentPlanState()
+    if (startupState?.condition_wait?.state !== 'active' && shouldRecoverInterruptedPlan(startupState)) {
       this.queueEvent(async () => {
         await this.recoverInterruptedPlan('runtime_restart', { actor_id: this.lastStatus?.actor_id, epoch: this.lastStatus?.epoch })
       })

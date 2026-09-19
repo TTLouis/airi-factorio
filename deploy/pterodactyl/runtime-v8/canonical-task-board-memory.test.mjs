@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { canonicalContinuationPlan, CanonicalTaskBoardMemory, verifyDeterministicReceipt } from './canonical-task-board-memory.mjs'
+import { createTaskBoard, reconcileTaskBoard } from './common.mjs'
 
 function board() {
   return {
@@ -82,13 +83,34 @@ test('ordinary continuation cannot shrink a canonical five-step board to three s
   assert.deepEqual(guarded.plan, board().steps.map(step => step.description))
 })
 
-test('ordinary provider continuation cannot advance the canonical board without authority', () => {
+test('ordinary provider continuation preserves proposed focus without completion authority', () => {
   const guarded = canonicalContinuationPlan(board(), {
     plan: ['Mine stone', 'Build power'],
     currentStep: 1,
   })
   assert.equal(guarded.plan.length, 5)
-  assert.equal(guarded.currentStep, 2)
+  assert.equal(guarded.currentStep, 3)
+})
+
+test('initial planner currentStep is proposed focus only and cannot create a completed prefix', () => {
+  const initial = createTaskBoard(['Gather ore', 'Smelt plates', 'Craft machine'], 2, { goalId: 'goal_focus', now: 1 })
+  assert.equal(initial.active_index, 0)
+  assert.equal(initial.completed_count, 0)
+  assert.equal(initial.steps[0].status, 'active')
+  assert.equal(initial.steps[1].status, 'pending')
+  assert.equal(initial.steps[2].status, 'pending')
+  assert.equal(initial.proposed_focus_index, 2)
+  assert.equal(initial.proposed_focus_step_id, 'step_3')
+})
+
+test('reconcileTaskBoard records later focus without advancing verified progress', () => {
+  const initial = createTaskBoard(['Gather ore', 'Smelt plates', 'Craft machine'], 0, { goalId: 'goal_focus', now: 1 })
+  const proposed = reconcileTaskBoard(initial, ['Gather ore', 'Smelt plates', 'Craft machine'], 2, { now: 2 })
+  assert.equal(proposed.active_index, 0)
+  assert.equal(proposed.completed_count, 0)
+  assert.equal(proposed.proposed_focus_index, 2)
+  assert.equal(proposed.steps[0].status, 'active')
+  assert.equal(proposed.steps[1].status, 'pending')
 })
 
 test('explicit failure replan is still allowed to replace the remaining suffix', () => {
@@ -286,7 +308,7 @@ test('failed or zero-effect transfer receipt blocks the active step without comp
   assert.equal(state.last_mutation_verified, false)
 })
 
-test('duplicate completed receipt cannot advance a second canonical step', () => {
+test('duplicate completed receipt records one deterministic proof but cannot advance semantic progress', () => {
   const memory = new CanonicalTaskBoardMemory()
   memory.planByNpc.set('npc:airi', planState())
 
@@ -294,12 +316,13 @@ test('duplicate completed receipt cannot advance a second canonical step', () =>
   memory.recordBoardEvidence('npc:airi', completedReceipt())
 
   const state = memory.currentPlan('npc:airi')
-  assert.equal(state.task_board.active_index, 3)
-  assert.equal(state.current_step, 3)
+  assert.equal(state.task_board.active_index, 2)
+  assert.equal(state.task_board.completed_count, 2)
+  assert.equal(state.current_step, 2)
   assert.equal(state.task_board.evidence.filter(item => item.kind === 'deterministic_verification' && item.ref === 'batch_7').length, 1)
 })
 
-test('verified final step closes the durable goal without requiring provider prose', () => {
+test('verified final operation receipt does not close the semantic goal by itself', () => {
   const finalBoard = board()
   finalBoard.active_index = 4
   finalBoard.active_step_id = 'step_5'
@@ -316,8 +339,8 @@ test('verified final step closes the durable goal without requiring provider pro
   const stored = memory.planByNpc.get('npc:airi')
 
   assert.equal(nextBoard.active_index, 4)
-  assert.equal(nextBoard.status, 'completed')
-  assert.equal(stored.status, 'completed')
+  assert.equal(nextBoard.status, 'active')
+  assert.equal(stored.status, 'active')
   assert.equal(nextBoard.evidence.some(item => item.kind === 'deterministic_verification' && item.ref === 'batch_7'), true)
 })
 
@@ -484,4 +507,5 @@ test('provider currentStep proposal alone cannot increase canonical completed_co
   const reconciled = memory.reconcileTaskBoard(key, initial, proposal, recorded, { previousState: previous })
   assert.equal(reconciled.state.task_board.active_index, 1)
   assert.equal(reconciled.state.task_board.completed_count, 1)
+  assert.equal(reconciled.state.task_board.proposed_focus_index, 4)
 })

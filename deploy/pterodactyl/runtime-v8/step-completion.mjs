@@ -1,0 +1,219 @@
+const SUPPORTED_REQUIREMENT_KINDS = new Set([
+  'inventory_count',
+  'entity_inventory_count',
+  'entity_exists',
+  'entity_state',
+  'authoritative_operation_receipt',
+  'runtime_controller_state',
+])
+
+function clean(value, max = 500) {
+  const text = String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
+}
+
+function positiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+function boundedRequirement(raw, index) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const kind = String(raw.kind ?? '')
+  if (!SUPPORTED_REQUIREMENT_KINDS.has(kind)) return undefined
+  const id = clean(raw.id || `requirement_${index + 1}`, 80)
+
+  if (kind === 'inventory_count') {
+    const minimum = positiveInteger(raw.minimum)
+    const itemName = clean(raw.item_name, 160)
+    if (!minimum || !itemName) return undefined
+    return { id, kind, item_name: itemName, minimum }
+  }
+
+  if (kind === 'entity_inventory_count') {
+    const unitNumber = positiveInteger(raw.unit_number)
+    const minimum = positiveInteger(raw.minimum)
+    const itemName = clean(raw.item_name, 160)
+    if (!unitNumber || !minimum || !itemName) return undefined
+    return { id, kind, unit_number: unitNumber, item_name: itemName, minimum }
+  }
+
+  if (kind === 'entity_exists') {
+    const unitNumber = positiveInteger(raw.unit_number)
+    if (!unitNumber) return undefined
+    return { id, kind, unit_number: unitNumber }
+  }
+
+  if (kind === 'entity_state') {
+    const unitNumber = positiveInteger(raw.unit_number)
+    const expected = clean(raw.expected, 80)
+    if (!unitNumber || !['working', 'not_working', 'exists'].includes(expected)) return undefined
+    return { id, kind, unit_number: unitNumber, expected }
+  }
+
+  if (kind === 'authoritative_operation_receipt') {
+    const operationName = clean(raw.operation_name, 100)
+    return { id, kind, ...(operationName ? { operation_name: operationName } : {}) }
+  }
+
+  const controller = clean(raw.controller, 80)
+  const expected = clean(raw.expected, 80)
+  if (!controller || !['active', 'idle', 'healthy'].includes(expected)) return undefined
+  return { id, kind, controller, expected }
+}
+
+export function sanitizeStepCompletionContract(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { mode: 'semantic_unknown', requirements: [], confidence: 0 }
+  }
+  const confidence = typeof raw.confidence === 'number' && Number.isFinite(raw.confidence)
+    ? Math.max(0, Math.min(1, raw.confidence))
+    : 0
+  if (raw.mode === 'semantic_unknown') return { mode: 'semantic_unknown', requirements: [], confidence }
+  const requirements = (Array.isArray(raw.requirements) ? raw.requirements : [])
+    .slice(0, 8)
+    .map(boundedRequirement)
+    .filter(Boolean)
+  if (requirements.length === 0) return { mode: 'semantic_unknown', requirements: [], confidence }
+  return {
+    mode: raw.mode === 'any' ? 'any' : 'all',
+    requirements,
+    confidence,
+    source: clean(raw.source, 80) || undefined,
+  }
+}
+
+export function completionContractSupported(contract) {
+  const normalized = sanitizeStepCompletionContract(contract)
+  return normalized.mode !== 'semantic_unknown' && normalized.requirements.length > 0
+}
+
+export function stepCompletionDecisionQuestions(candidates = []) {
+  const normalized = candidates
+    .slice(0, 8)
+    .map((candidate, index) => ({
+      id: `candidate_${index + 1}`,
+      contract: sanitizeStepCompletionContract(candidate),
+    }))
+    .filter(entry => completionContractSupported(entry.contract))
+  const criteria = {
+    semantic_unknown: 'No supplied grounded contract safely proves this semantic step complete. Runtime must require explicit verification.',
+  }
+  for (const entry of normalized) {
+    criteria[entry.id] = `Use this runtime-supported grounded completion contract: ${JSON.stringify(entry.contract)}`
+  }
+  if (Object.keys(criteria).length === 1) {
+    criteria.runtime_supported_unknown = 'The runtime supports completion contracts, but no bounded grounded candidate was supplied for this step.'
+  }
+  return {
+    contract: {
+      type: 'choice',
+      instructions: 'Choose which supplied grounded facts would prove the semantic step complete. You are normalizing semantics only; you do not verify that the facts are currently true.',
+      criteria,
+    },
+    compound_step: {
+      type: 'noul',
+      instructions: 'Is this semantic step compound enough that one simple requirement would be unsafe as sole completion proof?',
+    },
+  }
+}
+
+export function parseStepCompletionDecision(response, candidates = []) {
+  const choice = response?.answers?.contract?.choice
+  const confidence = typeof response?.answers?.contract?.confidence === 'number'
+    ? Math.max(0, Math.min(1, response.answers.contract.confidence))
+    : 0
+  const compound = typeof response?.answers?.compound_step?.noul === 'number'
+    ? Math.max(0, Math.min(1, response.answers.compound_step.noul))
+    : undefined
+  if (!choice || choice === 'semantic_unknown' || choice === 'runtime_supported_unknown') {
+    return { contract: { mode: 'semantic_unknown', requirements: [], confidence }, compound_probability: compound }
+  }
+  const match = /^candidate_([1-8])$/.exec(choice)
+  if (!match) return { contract: { mode: 'semantic_unknown', requirements: [], confidence }, compound_probability: compound }
+  const selected = sanitizeStepCompletionContract(candidates[Number(match[1]) - 1])
+  return {
+    contract: { ...selected, confidence },
+    compound_probability: compound,
+    model: typeof response?.model === 'string' ? response.model : undefined,
+    provider: typeof response?.provider === 'string' ? response.provider : undefined,
+    usage: response?.usage && typeof response.usage === 'object' ? response.usage : undefined,
+  }
+}
+
+export function evaluateCompletionContract(contract, facts = {}) {
+  const normalized = sanitizeStepCompletionContract(contract)
+  if (normalized.mode === 'semantic_unknown') {
+    return { status: 'unknown', satisfied: false, contract: normalized, results: [] }
+  }
+  const results = normalized.requirements.map(requirement => {
+    const fact = facts[requirement.id]
+    if (!fact || typeof fact !== 'object') return { id: requirement.id, kind: requirement.kind, satisfied: false, missing: true }
+    return {
+      id: requirement.id,
+      kind: requirement.kind,
+      satisfied: fact.satisfied === true,
+      progressing: fact.progressing === true,
+      summary: clean(fact.summary, 300),
+    }
+  })
+  const satisfied = normalized.mode === 'any'
+    ? results.some(result => result.satisfied)
+    : results.every(result => result.satisfied)
+  return {
+    status: satisfied ? 'verified' : 'waiting',
+    satisfied,
+    contract: normalized,
+    results,
+  }
+}
+
+export function conditionFromRequirement(requirement) {
+  const normalized = boundedRequirement(requirement, 0)
+  if (!normalized) return undefined
+  if (!['inventory_count', 'entity_inventory_count', 'entity_exists', 'entity_state'].includes(normalized.kind)) return undefined
+  return normalized
+}
+
+export function makeConditionWait(requirement, {
+  id,
+  stepId,
+  goalId,
+  mode = 'completion',
+  maxChecks = 900,
+  now = Date.now(),
+} = {}) {
+  const condition = conditionFromRequirement(requirement)
+  if (!condition) return undefined
+  return {
+    id: clean(id || `condition_${now.toString(36)}`, 100),
+    goal_id: clean(goalId, 100),
+    step_id: clean(stepId, 80),
+    mode: mode === 'passive_progress' ? 'passive_progress' : 'completion',
+    condition,
+    state: 'active',
+    checks: 0,
+    max_checks: Number.isSafeInteger(maxChecks) ? Math.max(1, Math.min(maxChecks, 7200)) : 900,
+    registered_at: now,
+    updated_at: now,
+  }
+}
+
+export function applyConditionObservation(wait, observation, { now = Date.now() } = {}) {
+  if (!wait || wait.state !== 'active') return { wait, action: 'stale' }
+  const checks = (Number.isSafeInteger(wait.checks) ? wait.checks : 0) + 1
+  const base = { ...wait, checks, updated_at: now, last_observation: observation }
+  if (observation?.stale === true) return { wait: { ...base, state: 'failed' }, action: 'failed', reason: 'stale_exact_identity' }
+  if (observation?.error) return { wait: { ...base, state: 'failed' }, action: 'failed', reason: clean(observation.error, 160) }
+
+  if (wait.mode === 'passive_progress') {
+    if (observation?.progressing === true) return { wait: base, action: 'waiting' }
+    return { wait: { ...base, state: 'satisfied' }, action: 'wake', reason: 'passive_progress_stopped' }
+  }
+
+  if (observation?.satisfied === true) return { wait: { ...base, state: 'satisfied' }, action: 'verified' }
+  if (checks >= wait.max_checks) return { wait: { ...base, state: 'timeout' }, action: 'timeout', reason: 'condition_timeout' }
+  if (observation?.progressing === false && observation?.progress_known === true) {
+    return { wait: { ...base, state: 'failed' }, action: 'failed', reason: 'condition_unsatisfied_and_not_progressing' }
+  }
+  return { wait: base, action: 'waiting' }
+}

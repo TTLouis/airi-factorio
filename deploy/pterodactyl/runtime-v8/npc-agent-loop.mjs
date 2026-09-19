@@ -12,7 +12,14 @@ import {
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
 import { isLifecycleMetaStep, normalizeCanonicalPlan, validateOutcomeCandidate } from './outcome-authority.mjs'
 import { parseRecoveryDecision, recoveryDecisionQuestions, recoveryFailureClassHint, validateRecoveryRoute } from './recovery-route.mjs'
-import { isObservationToolName, renderOperation, renderOperationPreflight, toolCommand } from './structured-policy.mjs'
+import {
+  applyConditionObservation,
+  evaluateCompletionContract,
+  makeConditionWait,
+  parseStepCompletionDecision,
+  stepCompletionDecisionQuestions,
+} from './step-completion.mjs'
+import { isObservationToolName, renderOperation, renderOperationPreflight, runtimeConditionCommand, toolCommand } from './structured-policy.mjs'
 
 export { AgentLoopError }
 
@@ -285,6 +292,30 @@ function safePersistentRuntime(value) {
   }
 }
 
+function safeConditionWait(value) {
+  if (!value || typeof value !== 'object' || value.state !== 'active') return undefined
+  const condition = value.condition
+  if (!condition || typeof condition !== 'object') return undefined
+  if (!['inventory_count', 'entity_inventory_count', 'entity_exists', 'entity_state'].includes(condition.kind)) return undefined
+  if (['entity_inventory_count', 'entity_exists', 'entity_state'].includes(condition.kind)
+    && (!Number.isSafeInteger(condition.unit_number) || condition.unit_number < 1)) return undefined
+  if (['inventory_count', 'entity_inventory_count'].includes(condition.kind)
+    && (typeof condition.item_name !== 'string' || !Number.isSafeInteger(condition.minimum) || condition.minimum < 1)) return undefined
+  if (condition.kind === 'entity_state' && !['working', 'not_working', 'exists'].includes(condition.expected)) return undefined
+  return {
+    id: cleanMemoryText(value.id, 100),
+    goal_id: cleanMemoryText(value.goal_id, 100),
+    step_id: cleanMemoryText(value.step_id, 80),
+    mode: value.mode === 'passive_progress' ? 'passive_progress' : 'completion',
+    condition: sanitizeDurableModelValue(condition),
+    state: 'active',
+    checks: Number.isSafeInteger(value.checks) ? Math.max(0, value.checks) : 0,
+    max_checks: Number.isSafeInteger(value.max_checks) ? Math.max(1, Math.min(value.max_checks, 7200)) : 900,
+    registered_at: Number.isFinite(value.registered_at) ? value.registered_at : Date.now(),
+    updated_at: Number.isFinite(value.updated_at) ? value.updated_at : Date.now(),
+  }
+}
+
 function visibleTaskBoard(board) {
   if (!board || board.kind !== 'task_board_lite') return undefined
   return {
@@ -298,6 +329,8 @@ function visibleTaskBoard(board) {
     total_steps: board.total_steps,
     active_index: board.active_index,
     active_step_id: board.active_step_id,
+    proposed_focus_index: board.proposed_focus_index,
+    proposed_focus_step_id: board.proposed_focus_step_id,
     steps: board.steps,
     evidence: (board.evidence ?? []).slice(-8),
     events: (board.events ?? []).slice(-12),
@@ -515,14 +548,36 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       board = setTaskBoardStatus(board, 'paused', { pauseReason: state.pause_reason, now })
     }
     else if (decision.durable_status === 'completed') {
-      state.status = 'completed'
-      state.admission_status = undefined
-      state.blocker = ''
-      state.pause_reason = ''
-      state.persistent_runtime = undefined
-      board = setTaskBoardStatus(board, 'completed', { now })
-      state.plan = []
-      state.current_step = 0
+      const stepScope = candidate?.metadata?.scope === 'step'
+      const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : 0
+      const finalIndex = Array.isArray(board?.steps) ? board.steps.length - 1 : -1
+      if (stepScope && activeIndex >= 0 && activeIndex < finalIndex) {
+        const nextIndex = activeIndex + 1
+        board = reconcileTaskBoard(
+          board,
+          board.steps.map(step => step.description),
+          nextIndex,
+          { now, authoritativeAdvance: true },
+        )
+        state.status = 'active'
+        state.admission_status = undefined
+        state.blocker = ''
+        state.pause_reason = ''
+        state.condition_wait = undefined
+        state.plan = board.steps.map(step => step.description)
+        state.current_step = board.active_index
+      }
+      else {
+        state.status = 'completed'
+        state.admission_status = undefined
+        state.blocker = ''
+        state.pause_reason = ''
+        state.persistent_runtime = undefined
+        state.condition_wait = undefined
+        board = setTaskBoardStatus(board, 'completed', { now })
+        state.plan = []
+        state.current_step = 0
+      }
     }
     else if (decision.durable_status === 'active' && state.status === 'active') {
       state.blocker = ''
@@ -544,7 +599,39 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     state.revision = (state.revision ?? 0) + 1
     state.updated_at = now
     this.planByNpc.set(key, state)
-    return { state, decision, changed: previousStatus !== state.status || evidence.length > 0 }
+    return { state, decision, changed: previousStatus !== state.status || evidence.length > 0 || candidate?.metadata?.scope === 'step' }
+  }
+
+  registerConditionWait(key, wait) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    const safe = safeConditionWait(wait)
+    if (!state || !safe || state.status !== 'active' || safe.goal_id !== state.goal_id || safe.step_id !== state.task_board?.active_step_id) return undefined
+    state.condition_wait = safe
+    state.revision += 1
+    state.updated_at = Date.now()
+    this.planByNpc.set(key, state)
+    return state
+  }
+
+  updateConditionWait(key, wait) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state || !wait || state.condition_wait?.id !== wait.id) return undefined
+    if (wait.state === 'active') state.condition_wait = safeConditionWait(wait)
+    else state.condition_wait = undefined
+    state.revision += 1
+    state.updated_at = Date.now()
+    this.planByNpc.set(key, state)
+    return state
+  }
+
+  clearConditionWait(key, id) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state || !state.condition_wait || (id && state.condition_wait.id !== id)) return state
+    state.condition_wait = undefined
+    state.revision += 1
+    state.updated_at = Date.now()
+    this.planByNpc.set(key, state)
+    return state
   }
 
   recordPlan(key, requestInfo, plan, { continuation = false, persistentRuntime, durableOperations = [], exactTargetAudit = [], verifiedCompletion = false, completionEvidence = [] } = {}) {
@@ -586,8 +673,9 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         blocker: '',
         pause_reason: '',
         persistent_runtime: previous?.persistent_runtime,
+        condition_wait: undefined,
         plan: incomingPlan,
-        current_step: incomingStep,
+        current_step: previous?.current_step ?? 0,
         revision: (previous?.revision ?? 0) + 1,
         last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
         last_operations: plan.operations.slice(0, 16).map(operation => cleanMemoryText(`${operation.name} ${JSON.stringify(operation.args ?? {})}`, 800)),
@@ -613,8 +701,9 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         blocker: '',
         pause_reason: '',
         persistent_runtime: runtime,
+        condition_wait: previous?.condition_wait,
         plan: incomingPlan,
-        current_step: incomingStep,
+        current_step: previous?.current_step ?? 0,
         revision: (previous?.revision ?? 0) + 1,
         last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
         last_operations: [],
@@ -632,7 +721,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     const state = {
       ...previous,
       plan: incomingPlan.length > 0 ? incomingPlan : previous.plan,
-      current_step: incomingPlan.length > 0 ? incomingStep : previous.current_step,
+      current_step: previous.current_step,
       last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
       durable_last_operations: [],
       exact_target_audit: mergedExactTargetAudit,
@@ -666,10 +755,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       board = setTaskBoardStatus(board, 'completed', { now })
     }
     else {
-      const proposedStep = authoritativeAdvance
-        ? plan.currentStep
-        : (Number.isSafeInteger(board?.active_index) ? board.active_index : state.current_step)
-      board = reconcileTaskBoard(board, plan.plan, proposedStep, { now, allowReplan })
+      board = reconcileTaskBoard(board, plan.plan, plan.currentStep, { now, allowReplan, authoritativeAdvance })
       board = setTaskBoardStatus(board, state.status, {
         blocker: state.blocker,
         pauseReason: state.pause_reason,
@@ -721,9 +807,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     if (!previous) {
       const incomingPlan = safePlan(plan?.plan)
       if (incomingPlan.length === 0) return undefined
-      const incomingStep = Number.isSafeInteger(plan?.currentStep)
-        ? Math.min(Math.max(plan.currentStep, 0), incomingPlan.length - 1)
-        : 0
+      const incomingStep = 0
       const state = {
         goal_id: `goal_${now.toString(36)}`,
         owner: cleanMemoryText(requestInfo?.sender ?? 'unknown', 128),
@@ -853,6 +937,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         blocker: cleanMemoryText(value.blocker, 500),
         pause_reason: cleanMemoryText(value.pause_reason, 300),
         persistent_runtime: safePersistentRuntime(value.persistent_runtime),
+        condition_wait: safeConditionWait(value.condition_wait),
         plan: safePlan(value.plan),
         current_step: Number.isSafeInteger(value.current_step) && value.current_step >= 0 ? value.current_step : 0,
         revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : 1,
@@ -1558,6 +1643,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.pendingFiniteNoOperationPlan = null
     this.freshObservationSinceContinuation = false
     this.genericRecoveryDecisionActive = false
+    this.conditionPollPromise = null
     this.liveEntityObservations = new Map()
     this.rejectedExactTargets = new Set()
     this.staleExactPreflightRetries = 0
@@ -1705,6 +1791,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       surface,
       surface_index: surfaceIndex,
       source,
+      working: entity.working === true,
+      status: Number.isFinite(entity.status) ? entity.status : undefined,
+      inventories: Array.isArray(entity.inventories) ? sanitizeDurableModelValue(entity.inventories) : undefined,
+      recipe: typeof entity.recipe === 'string' ? cleanMemoryText(entity.recipe, 160) : undefined,
     })
   }
 
@@ -1762,6 +1852,139 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     return Number.isSafeInteger(unitNumber)
       ? this.liveEntityObservations?.get?.(`unit:${unitNumber}`)
       : undefined
+  }
+
+  passiveProgressWaitCandidate(state = this.memory.currentPlan?.(this.activePlanKey())) {
+    if (!state || state.status !== 'active' || !state.task_board?.active_step_id) return undefined
+    const observations = [...(this.liveEntityObservations?.values?.() ?? [])].reverse()
+    const working = observations.find(observation => Number.isSafeInteger(observation?.unit_number) && observation?.working === true)
+    if (!working) return undefined
+    return makeConditionWait(
+      { kind: 'entity_state', unit_number: working.unit_number, expected: 'working' },
+      {
+        goalId: state.goal_id,
+        stepId: state.task_board.active_step_id,
+        mode: 'passive_progress',
+        maxChecks: 900,
+      },
+    )
+  }
+
+  async pollConditionWait() {
+    if (this.conditionPollPromise) return this.conditionPollPromise
+    this.conditionPollPromise = (async () => {
+      const key = this.activePlanKey()
+      const state = this.memory.planByNpc?.get?.(key) ?? this.memory.currentPlan?.(key)
+      const wait = state?.condition_wait
+      if (!state || state.status !== 'active' || !wait || wait.state !== 'active') return null
+      const identity = {
+        goal_id: state.goal_id,
+        step_id: state.task_board?.active_step_id,
+        wait_id: wait.id,
+      }
+      if (!identity.goal_id || !identity.step_id || !identity.wait_id) return null
+
+      let observation
+      try {
+        observation = JSON.parse(String(await this.rcon.command(runtimeConditionCommand(wait.condition))).trim())
+      }
+      catch (error) {
+        observation = { error: `condition_transport_error:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}` }
+      }
+
+      const current = this.memory.planByNpc?.get?.(key)
+      if (!current
+        || current.goal_id !== identity.goal_id
+        || current.task_board?.active_step_id !== identity.step_id
+        || current.condition_wait?.id !== identity.wait_id) {
+        await this.traceEvent('runtime.condition_stale', identity)
+        return { action: 'stale', wait_id: identity.wait_id }
+      }
+
+      const normalizedObservation = observation?.ok === true
+        ? {
+            satisfied: observation.satisfied === true,
+            progressing: observation.progressing === true,
+            progress_known: observation.progress_known === true,
+            summary: cleanMemoryText(JSON.stringify({
+              kind: observation.kind,
+              current: observation.current,
+              minimum: observation.minimum,
+              unit_number: observation.unit_number,
+              entity_status: observation.entity_status,
+              progressing: observation.progressing,
+            }), 600),
+          }
+        : {
+            stale: observation?.stale === true,
+            error: cleanMemoryText(observation?.error || 'condition_evaluation_failed', 160),
+          }
+
+      const result = applyConditionObservation(wait, normalizedObservation)
+      if (result.action === 'waiting') {
+        const updated = this.memory.updateConditionWait?.(key, result.wait)
+        await this.persistState()
+        await this.traceEvent('runtime.condition_waiting', {
+          wait_id: identity.wait_id,
+          condition: wait.condition,
+          observation: normalizedObservation,
+          checks: result.wait?.checks,
+        })
+        return { action: 'waiting', wait_id: identity.wait_id, state: updated, observation: normalizedObservation }
+      }
+
+      if (result.action === 'verified') {
+        const evidence = {
+          kind: 'condition_satisfied',
+          ref: identity.wait_id,
+          summary: JSON.stringify({
+            verdict: 'verified_complete',
+            condition: wait.condition,
+            observation: normalizedObservation,
+          }),
+        }
+        const reduced = this.memory.applyOutcomeAuthority?.(key, {
+          kind: 'verified_complete',
+          source: 'condition_wait',
+          reason_code: 'condition_satisfied',
+          evidence: [evidence],
+          metadata: { scope: 'step' },
+        })
+        await this.persistState()
+        await this.traceEvent('runtime.condition_satisfied', {
+          wait_id: identity.wait_id,
+          condition: wait.condition,
+          task_board: visibleTaskBoard(reduced?.state?.task_board),
+        })
+        await this.traceEvent('step.verified', {
+          source: 'condition_wait',
+          wait_id: identity.wait_id,
+          task_board: visibleTaskBoard(reduced?.state?.task_board),
+        })
+        return { action: 'verified', wait_id: identity.wait_id, state: reduced?.state, observation: normalizedObservation }
+      }
+
+      const updated = this.memory.updateConditionWait?.(key, result.wait)
+      await this.persistState()
+      const event = result.action === 'timeout'
+        ? 'runtime.condition_timeout'
+        : result.action === 'wake'
+          ? 'runtime.condition_progress_stopped'
+          : 'runtime.condition_failed'
+      await this.traceEvent(event, {
+        wait_id: identity.wait_id,
+        condition: wait.condition,
+        reason: result.reason,
+        observation: normalizedObservation,
+      })
+      return { action: result.action, wait_id: identity.wait_id, state: updated, reason: result.reason, observation: normalizedObservation }
+    })()
+    try {
+      return await this.conditionPollPromise
+    }
+    finally {
+      this.conditionPollPromise = null
+    }
   }
 
   observedMiningTargets(entityName) {
@@ -1963,6 +2186,211 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
+  async routeStepCompletionDecision(receipt) {
+    const key = this.activePlanKey()
+    const planState = this.memory.planByNpc?.get?.(key) ?? this.memory.currentPlan?.(key)
+    const board = planState?.task_board
+    const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
+    const step = activeIndex === undefined ? undefined : board?.steps?.[activeIndex]
+    const batchId = Number.isSafeInteger(receipt?.view?.last_completed_batch?.batch_id)
+      ? receipt.view.last_completed_batch.batch_id
+      : undefined
+    const ref = batchId ? `batch_${batchId}` : ''
+    const verification = ref
+      ? [...(board?.evidence ?? [])].reverse().find(item => item?.kind === 'deterministic_verification' && item?.ref === ref)
+      : undefined
+
+    if (!planState || planState.status !== 'active' || !step || !verification) {
+      await this.traceEvent('step.completion_rejected', {
+        reason: 'no_authoritative_operation_receipt',
+        active_step_id: step?.id,
+        batch_id: batchId,
+      })
+      return { verified: false, reason: 'no_authoritative_operation_receipt', state: planState }
+    }
+
+    let operationNames = []
+    try {
+      const parsed = JSON.parse(verification.summary)
+      operationNames = Array.isArray(parsed?.operations) ? parsed.operations.filter(name => typeof name === 'string').slice(0, 8) : []
+    }
+    catch {}
+
+    const receiptContract = {
+      mode: 'all',
+      source: 'runtime_receipt',
+      requirements: [{
+        id: 'operation_receipt',
+        kind: 'authoritative_operation_receipt',
+        ...(operationNames.length === 1 ? { operation_name: operationNames[0] } : {}),
+      }],
+    }
+    const candidates = [receiptContract]
+    const questions = stepCompletionDecisionQuestions(candidates)
+
+    if (!this.interactionDecisionProvider) {
+      await this.traceEvent('step.contract_created', {
+        active_step_id: step.id,
+        contract: { mode: 'semantic_unknown', requirements: [], confidence: 0 },
+        source: 'decision_provider_unavailable',
+      })
+      await this.traceEvent('step.completion_rejected', {
+        active_step_id: step.id,
+        reason: 'semantic_unknown_without_decision_provider',
+      })
+      return { verified: false, reason: 'semantic_unknown_without_decision_provider', state: planState }
+    }
+
+    const current = await this.assertCurrent()
+    const generation = this.generation
+    const skills = this.loadedSkillContext instanceof Map
+      ? [...this.loadedSkillContext.values()].slice(-SKILL_CONTEXT_MAX_SKILLS).map(skill => ({
+          id: typeof skill?.id === 'string' ? cleanMemoryText(skill.id, 80) : undefined,
+          name: typeof skill?.name === 'string' ? cleanMemoryText(skill.name, 160) : undefined,
+          summary: typeof skill?.summary === 'string' ? cleanMemoryText(skill.summary, 800) : undefined,
+          verification: sanitizeDurableModelValue(skill?.verification),
+        }))
+      : []
+    const decisionState = {
+      contract: 'step_completion_contract',
+      goal: {
+        goal_id: sanitizeDurableModelText(planState.goal_id, 100),
+        objective: sanitizeDurableModelText(planState.objective, 500),
+      },
+      step: {
+        id: step.id,
+        description: sanitizeDurableModelText(step.description, 400),
+        active_index: activeIndex,
+      },
+      supported_requirement_kinds: [
+        'inventory_count',
+        'entity_inventory_count',
+        'entity_exists',
+        'entity_state',
+        'authoritative_operation_receipt',
+        'runtime_controller_state',
+      ],
+      authoritative_evidence: [sanitizeDurableModelValue(verification)],
+      ...(skills.length > 0 ? { skills } : {}),
+    }
+    const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
+    const controller = new AbortController()
+    const startedAt = Date.now()
+    await this.decisionTraceEvent('decision.request', {
+      decision_id: decisionId,
+      contract: 'step_completion_contract',
+      mode: 'active',
+      active_step_id: step.id,
+      question_ids: Object.keys(questions),
+    })
+
+    try {
+      const response = await this.interactionDecisionProvider(decisionState, questions, {
+        epoch: current.epoch,
+        actorId: current.actor_id,
+        signal: controller.signal,
+      })
+      if (generation !== this.generation || controller.signal.aborted) {
+        throw new AgentLoopError('Model turn was cancelled or superseded')
+      }
+      await this.assertCurrent()
+      const normalized = parseStepCompletionDecision(response, candidates)
+      const confidenceAccepted = normalized.contract?.confidence >= 0.7
+      const contract = confidenceAccepted
+        ? normalized.contract
+        : { mode: 'semantic_unknown', requirements: [], confidence: normalized.contract?.confidence ?? 0 }
+
+      this.memory.recordBoardEvidence?.(key, {
+        kind: 'step_completion_contract',
+        ref: `${ref}/${step.id}`,
+        summary: JSON.stringify({
+          contract,
+          compound_probability: normalized.compound_probability,
+          provider: normalized.provider,
+          model: normalized.model,
+        }),
+      })
+      await this.traceEvent('step.contract_created', {
+        active_step_id: step.id,
+        contract,
+        confidence: contract.confidence,
+        compound_probability: normalized.compound_probability,
+      })
+
+      const evaluation = evaluateCompletionContract(contract, {
+        operation_receipt: {
+          satisfied: verification !== undefined,
+          summary: cleanMemoryText(verification.summary, 600),
+        },
+      })
+      await this.traceEvent('step.completion_checked', {
+        active_step_id: step.id,
+        status: evaluation.status,
+        contract: evaluation.contract,
+        evidence: evaluation.results,
+      })
+
+      if (!evaluation.satisfied) {
+        await this.persistState()
+        await this.traceEvent('step.completion_rejected', {
+          active_step_id: step.id,
+          reason: contract.mode === 'semantic_unknown' ? 'semantic_unknown' : 'grounded_requirements_unsatisfied',
+          contract,
+        })
+        return { verified: false, reason: contract.mode === 'semantic_unknown' ? 'semantic_unknown' : 'grounded_requirements_unsatisfied', state: planState, contract }
+      }
+
+      const reduced = this.memory.applyOutcomeAuthority?.(key, {
+        kind: 'verified_complete',
+        source: 'step_completion_gate',
+        reason_code: 'authoritative_operation_receipt_satisfies_contract',
+        evidence: [verification],
+        metadata: { scope: 'step' },
+      })
+      await this.persistState()
+      await this.traceEvent('step.verified', {
+        active_step_id: step.id,
+        source: 'step_completion_gate',
+        contract,
+        task_board: visibleTaskBoard(reduced?.state?.task_board),
+      })
+      await this.decisionTraceEvent('decision.response', {
+        decision_id: decisionId,
+        contract: 'step_completion_contract',
+        mode: 'active',
+        provider: normalized.provider,
+        model: normalized.model,
+        selected_mode: contract.mode,
+        verified: true,
+        latency_ms: Date.now() - startedAt,
+        input_units: Number.isFinite(normalized.usage?.input_tokens) ? Math.max(0, Math.trunc(normalized.usage.input_tokens)) : 0,
+        output_units: Number.isFinite(normalized.usage?.output_tokens) ? Math.max(0, Math.trunc(normalized.usage.output_tokens)) : 0,
+        cost_usd: Number.isFinite(normalized.usage?.cost) && normalized.usage.cost >= 0 ? normalized.usage.cost : 0,
+      })
+      return { verified: true, state: reduced?.state, contract }
+    }
+    catch (error) {
+      const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+      await this.traceEvent('step.completion_rejected', {
+        active_step_id: step.id,
+        reason: 'completion_contract_decision_failed',
+        error: message,
+      })
+      await this.decisionTraceEvent('decision.fallback', {
+        decision_id: decisionId,
+        contract: 'step_completion_contract',
+        mode: 'active',
+        fallback_target: 'semantic_unknown',
+        reason: message,
+        latency_ms: Date.now() - startedAt,
+      })
+      return { verified: false, reason: 'completion_contract_decision_failed', error: message, state: planState }
+    }
+    finally {
+      controller.abort()
+    }
+  }
+
   async routePostStepDecision(receipt, { boundary = 'completion', failure = '' } = {}) {
     if (!this.interactionDecisionProvider) return { route: 'fallback_planner', decision_called: false }
 
@@ -1974,13 +2402,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       : (receipt?.providerStatus && typeof receipt.providerStatus === 'object' ? receipt.providerStatus : {})
     const autorioRuntimeHealthy = interactionRuntimeHealthy(autorioStatus)
     const persistentControllerHealthy = persistentRuntimeHealthy(persistentRuntime)
-    const runtimeHealthy = autorioRuntimeHealthy || persistentControllerHealthy
+    const planState = this.memory.planByNpc?.get?.(this.activePlanKey()) ?? this.memory.currentPlan?.(this.activePlanKey())
+    const conditionWaitHealthy = planState?.condition_wait?.state === 'active'
+    const runtimeHealthy = autorioRuntimeHealthy || persistentControllerHealthy || conditionWaitHealthy
     const runtimeReason = autorioRuntimeHealthy
       ? 'autorio_active_work'
       : persistentControllerHealthy
         ? 'persistent_controller_active'
-        : ''
-    const planState = this.memory.currentPlan?.(this.activePlanKey())
+        : conditionWaitHealthy
+          ? 'condition_wait_active'
+          : ''
     const board = planState?.task_board
     const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
     const skills = this.loadedSkillContext instanceof Map
@@ -2586,13 +3017,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     this.lastHandledRuntimeReceipt.completion = receiptKey
 
-    if (!pendingAmendment && receipt.taskBoard?.status === 'completed') {
+    const stepCompletion = pendingAmendment
+      ? { verified: false, reason: 'pending_amendment' }
+      : await this.routeStepCompletionDecision(receipt)
+    const completionState = stepCompletion?.state
+    if (!pendingAmendment && completionState?.status === 'completed') {
       this.active = false
+      const completedBoard = visibleTaskBoard(completionState.task_board)
       await this.traceEvent('outcome.validated', {
         kind: 'verified_complete',
-        source: 'deterministic_runtime',
+        source: 'step_completion_gate',
         reason_code: 'verified_final_step',
-        task_board: receipt.taskBoard,
+        task_board: completedBoard,
       })
       await this.traceEvent('planner.skipped', {
         source: 'outcome_authority',
@@ -2601,7 +3037,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       await this.traceEvent('request.completed', {
         chat_message: 'The requested goal is verified complete.',
         outcome: 'verified_complete',
-        task_board: receipt.taskBoard,
+        task_board: completedBoard,
         usage: this.traceRequest?.usage,
       })
       this.traceRequest = null
@@ -2612,9 +3048,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         operations: [],
         epoch: this.epoch?.epoch,
         actorId: this.epoch?.actor_id,
-        goalId: receipt.taskBoard.goal_id,
+        goalId: completionState.goal_id,
         goalStatus: 'completed',
-        taskBoard: receipt.taskBoard,
+        taskBoard: completedBoard,
       }
     }
 
@@ -3211,6 +3647,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           ...runtime,
           persistent_runtime: persistentRuntime,
           persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
+          condition_wait_active: planState?.condition_wait?.state === 'active',
+          condition_wait: planState?.condition_wait,
         },
         chatMessage: plan.chatMessage,
       })
@@ -3288,8 +3726,29 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       || (!previousState && Array.isArray(plan.plan) && plan.plan.length > 0)
     )
     const explicitBlocker = providerBlockerReason(plan)
+    let conditionWait = previousState?.condition_wait?.state === 'active'
+      ? previousState.condition_wait
+      : undefined
+    if (!conditionWait && commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
+      const candidate = this.passiveProgressWaitCandidate(previousState)
+      if (candidate && this.requestInfo) {
+        const waiting = this.memory.registerConditionWait?.(this.requestInfo.memoryKey, candidate)
+        if (waiting?.condition_wait) {
+          conditionWait = waiting.condition_wait
+          await this.persistState()
+          await this.traceEvent('runtime.condition_registered', {
+            wait_id: conditionWait.id,
+            goal_id: waiting.goal_id,
+            step_id: waiting.task_board?.active_step_id,
+            mode: conditionWait.mode,
+            condition: conditionWait.condition,
+          })
+        }
+      }
+    }
+    const conditionWaitActive = conditionWait?.state === 'active'
 
-    if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
+    if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy && !conditionWaitActive) {
       if (this.genericRecoveryDecisionActive) {
         // Generic strict recovery exists because the provider already failed to
         // produce a valid decision. Tools are intentionally disabled there, so
@@ -3336,7 +3795,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
     }
 
-    if (runtimeHealthy) this.clearActionOmissionRecovery()
+    if (runtimeHealthy || conditionWaitActive) this.clearActionOmissionRecovery()
     this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
     let stateResult
     let durablePlan = plan
@@ -3585,13 +4044,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.active = false
       const outcome = stateResult?.blockedByHarness
         ? 'blocked_no_operation'
-        : stateResult?.persistentRuntimeActive
-          ? 'persistent_runtime_active'
-          : 'no_operations'
+        : conditionWaitActive
+          ? 'condition_wait_active'
+          : stateResult?.persistentRuntimeActive
+            ? 'persistent_runtime_active'
+            : 'no_operations'
       await this.traceEvent('request.completed', {
         chat_message: plan.chatMessage,
         outcome,
         persistent_runtime: persistentRuntime,
+        condition_wait: conditionWait,
         task_board: visibleTaskBoard(stateResult?.state?.task_board),
         usage: this.traceRequest?.usage,
       })
@@ -3619,6 +4081,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       goalStatus: stateResult?.state?.status,
       taskBoard: visibleTaskBoard(stateResult?.state?.task_board),
       persistentRuntime: stateResult?.state?.persistent_runtime,
+      conditionWait: stateResult?.state?.condition_wait,
     }
   }
 
@@ -3679,6 +4142,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         task_state: cleanMemoryText(runtime?.task_state, 64),
         queue_length: Number.isSafeInteger(runtime?.queue_length) ? runtime.queue_length : undefined,
         persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
+        condition_wait_active: planState?.condition_wait?.state === 'active',
+        condition_wait: planState?.condition_wait,
       },
       evidence: {
         latest_relevant_deterministic_evidence: evidence.map(item => sanitizeDurableModelValue(item)),
@@ -3916,6 +4381,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           ...(routed.runtime ?? {}),
           persistent_runtime: routed.persistentRuntime,
           persistent_runtime_healthy: persistentRuntimeHealthy(routed.persistentRuntime),
+          condition_wait_active: this.memory.planByNpc?.get?.(this.activePlanKey())?.condition_wait?.state === 'active',
+          condition_wait: this.memory.planByNpc?.get?.(this.activePlanKey())?.condition_wait,
         },
       })
       if (reduced?.decision?.accepted) {
