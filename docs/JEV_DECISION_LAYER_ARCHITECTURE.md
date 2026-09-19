@@ -1606,3 +1606,65 @@ Add regression coverage for at least:
 - two independent provider decisions in one long request may each use one bounded output-budget recovery;
 - previously persisted provider-derived `BLOCKED` state self-heals to a recoverable state on continue.
 
+## Direction change: strict JSON is not the primary Main LLM contract
+
+Now that Jev owns bounded semantic routing/normalization, the Main LLM should not be forced to serialize the entire planner result into one fragile strict-JSON blob.
+
+Strict JSON was previously carrying too many responsibilities at once:
+
+- human-facing chat text;
+- canonical plan proposal;
+- current-step focus;
+- project/milestone proposal;
+- semantic checkpoint proposal;
+- world mutation operations.
+
+That coupling turns an otherwise usable reasoning result into a provider-format failure when one brace, truncation boundary, or content/tool mixture is malformed. It also makes provider output-budget behavior look like a task/world failure.
+
+The target architecture is **tool-native control plane + Jev validation**, not "Main LLM must emit one perfect JSON document".
+
+### Target flow
+
+```text
+Main LLM
+  ├─ natural-language reasoning / user-facing text
+  ├─ Factorio operation tool calls
+  └─ structured harness control calls
+       ├─ propose_plan / replan
+       ├─ propose_project_transition
+       ├─ propose_checkpoint
+       └─ propose_blocker
+              ↓
+            Jev
+      semantic classification,
+      alignment and bounded normalization
+              ↓
+        Outcome Authority
+      deterministic validation / persistence
+              ↓
+        Autorio / Task Board
+```
+
+The Main LLM may still emit JSON when a provider naturally supports it, but JSON content is an optimization/compatibility format rather than the sole valid protocol.
+
+### Consequences
+
+1. **World actions remain structured tool calls.** Free-form prose never authorizes a mutation.
+2. **Durable Task Board changes become explicit harness control operations**, so plan state is not reconstructed by parsing arbitrary prose.
+3. **Jev validates semantic relationships**: whether a proposed action advances the active step, whether a plan needs splitting/re-anchoring, whether a checkpoint is meaningful, and whether a blocker is genuinely world-grounded.
+4. **Outcome Authority remains final.** Jev can classify/propose; only deterministic authority may persist completion or a world blocker.
+5. **Malformed/empty Main LLM content is no longer automatically fatal** when valid tool/control calls already contain enough information to proceed.
+6. **Provider-format recovery becomes narrower.** It should repair only the missing control-plane payload, not reinterpret the Factorio world.
+7. **Provider-specific structured-output features are optional.** The runtime may use them where reliable, but the architecture must not depend on a single provider obeying strict JSON perfectly.
+
+### Migration strategy
+
+Do not replace the current protocol in one large rewrite. Migrate in layers:
+
+- Phase A: enforce provider/world authority separation and active-step evidence scoping.
+- Phase B: introduce internal structured control calls for plan/checkpoint/project transitions while retaining JSON parsing as a compatibility path.
+- Phase C: allow successful turns with valid tool/control calls even when content JSON is absent or malformed.
+- Phase D: remove strict JSON from the Main LLM's required response contract once coverage proves the tool-native path is complete.
+
+During migration, both paths must converge on the same canonical Task Board, Project Board, Jev gates, and Outcome Authority. There must never be separate JSON-state and tool-state sources of truth.
+
