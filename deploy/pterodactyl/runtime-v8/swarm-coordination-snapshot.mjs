@@ -21,6 +21,11 @@ const SNAPSHOT_COUNT_FIELDS = Object.freeze([
   'results',
   'agents',
   'actors',
+  'openWork',
+  'executingWork',
+  'blockedWork',
+  'openRequests',
+  'activeClaims',
   'activeWarnings',
 ])
 
