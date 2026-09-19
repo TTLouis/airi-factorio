@@ -370,6 +370,356 @@ This should target expensive "wake the planner just to say continue" turns.
 
 It should not silently advance semantic Task Board steps merely because an operation completed. Operation completion and semantic step completion remain separate evidence claims.
 
+## Next-stage direction: Jev as a semantic control plane
+
+The experiment should evolve beyond a collection of isolated routers. The stronger long-term role for Jev is a **semantic control plane** between the planner and deterministic runtime:
+
+```text
+planner LLM
+  = invent strategy and executable intent
+        |
+        v
+Jev
+  = compress semantics into bounded checkpoints,
+    observation needs, dependency state, materiality,
+    and escalation decisions
+        |
+        v
+runtime
+  = validate symbols/contracts, observe truth,
+    execute authorized operations, and mutate canonical state
+```
+
+The target is not to give Jev world authority. It is to give Jev more responsibility for deciding **where semantic boundaries are and what kind of reasoning is needed next**, while the runtime remains authoritative for facts and state transitions.
+
+### Current checkpoint direction
+
+The current experimental branch has already moved semantic completion away from completion-time interpretation of low-level Autorio task names.
+
+The intended flow is now:
+
+```text
+semantic plan
+    |
+    v
+pre-admission Jev checkpoint normalization
+    |
+    v
+persisted checkpoint contract
+    |
+    v
+Autorio execution
+    |
+    v
+deterministic runtime evidence
+    |
+    v
+completion gate
+    |
+    v
+Outcome Authority
+```
+
+A completed `[walking_to_entity, mining]` sequence is therefore not itself a semantic claim such as "10 stone acquired". The checkpoint should be derived before execution from higher-level grounded intent such as:
+
+```text
+gather_resource(stone, 10)
+```
+
+and later verified against deterministic truth such as:
+
+```text
+inventory_count(stone >= 10)
+```
+
+Completion-time Jev should not be asked to reconstruct the original semantic intent from low-level task-state names.
+
+### 1. Grounded Contract Synthesis
+
+The next major capability should allow Jev to **construct** a checkpoint contract from a bounded predicate grammar and grounded symbol table, rather than merely selecting from runtime-authored full contract candidates.
+
+Conceptually, runtime supplies:
+
+```text
+semantic_step
+proposed_operation_intent
+
+grounded_symbols:
+  known_items
+  known_entities
+  quantities_from_goal_or_operation
+  known_locations
+  live exact identities where available
+
+supported_predicates:
+  inventory_count
+  entity_inventory_count
+  entity_exists
+  entity_state
+  authoritative_operation_receipt
+  runtime_controller_state
+```
+
+Jev may then compose:
+
+```text
+ALL(
+  inventory_count(stone >= 10)
+)
+```
+
+or, for a stronger compound boundary:
+
+```text
+ALL(
+  authoritative_operation_receipt(place_entity),
+  inventory_count(iron-plate >= 9)
+)
+```
+
+The runtime must validate every symbol and predicate before accepting the contract. Jev must not invent item names, entity identities, quantities, operations, or predicate types outside the grounded input.
+
+The architectural rule is:
+
+> Runtime decides which semantic building blocks are legal and grounded. Jev decides how those building blocks form a useful checkpoint.
+
+This is intentionally different from having the runtime decide the semantic checkpoint and asking Jev only to choose `candidate_1`.
+
+### 2. First-class checkpoint and split proposals
+
+`split_recommended` should become more informative than a boolean/enum flag.
+
+For a compound semantic milestone such as:
+
+```text
+Place a furnace and obtain at least 9 iron plates
+```
+
+Jev should be able to return a bounded proposal such as:
+
+```text
+boundary = split_recommended
+
+proposed_subcheckpoints:
+  - furnace_placed
+  - smelting_progressing
+  - player_inventory_iron_plate >= 9
+```
+
+These are **semantic suggestions**, not canonical Task Board mutations.
+
+The planner decides whether to:
+
+- expose them as separate human-visible Task Board steps;
+- retain one human-visible milestone and use hidden internal sub-checkpoints;
+- reject the proposed split and replan differently.
+
+This keeps the Task Board readable while allowing the runtime to verify compound work at stable semantic boundaries.
+
+A compound step must not be closed by a weak single requirement merely because Jev selected `checkpoint_here`. If Jev judges the step compound and the proposed proof does not cover the compound semantics, the safe result is `split_recommended` or `keep_step_open`.
+
+### 3. Jev Observation Planner
+
+A large amount of expensive planner work is deciding **what fact is missing** rather than deciding strategy.
+
+Jev should receive:
+
+```text
+active checkpoint
+known grounded facts
+stale facts
+available bounded observation capabilities
+recent deterministic evidence
+```
+
+and choose a minimal observation class:
+
+```text
+no_observation_needed
+inventory_only
+exact_entity_status
+local_entities
+recipe_details
+technology_status
+planner_required
+```
+
+Jev should not receive arbitrary tool authority. The runtime maps the selected observation class into an allowed deterministic observation tool and still validates all parameters and identities.
+
+The target is:
+
+> Use Jev to decide which missing fact matters; use deterministic runtime tools to obtain that fact.
+
+This should reduce full planner turns spent only on "what should I inspect next?"
+
+### 4. Plan materiality gate
+
+Not every world change deserves the same planner response.
+
+Jev should classify how materially new evidence affects the current plan:
+
+```text
+none
+local_adjustment
+step_replan
+suffix_replan
+full_goal_replan
+```
+
+Examples:
+
+```text
+furnace output 6 -> 9
+  => usually none
+
+exact target disappeared
+  => local_adjustment or step_replan
+
+required recipe/technology/dependency invalidated
+  => suffix_replan or full_goal_replan
+```
+
+The runtime still decides whether the reported world change is real. Jev only judges the semantic consequence of grounded evidence.
+
+This provides a richer and more useful control signal than collapsing every meaningful change directly into `continue_low` versus `replan_high`.
+
+### 5. Dependency-boundary classification
+
+Jev is well suited to separate three states that should not be conflated:
+
+```text
+missing reasoning
+missing action
+waiting for already-started deterministic progress
+```
+
+For example, before crafting gears:
+
+```text
+9 iron plates already in player inventory
+  => dependency satisfied; continue
+
+iron plates are being produced by a live working furnace
+  => deterministic passive progress; condition wait may be appropriate
+
+furnace exists but lacks required ore/fuel
+  => missing action; planner or executable continuation required
+
+production path itself is no longer valid
+  => missing reasoning; replan
+```
+
+This classification should feed condition-wait admission, planner wake/sleep, and action-omission handling.
+
+The expected payoff is fewer false waits, fewer unnecessary action-omission repairs, and fewer planner wakes for already-started deterministic processes.
+
+### 6. Decision hysteresis and bounded Jev memory
+
+Jev decisions should not oscillate merely because repeated calls produce small probability changes.
+
+A small decision-layer memory may retain only control metadata such as:
+
+```text
+checkpoint_id
+evidence_fingerprint
+world_revision
+previous_decision
+previous_confidence
+decision_timestamp
+```
+
+This is **not world-state memory** and must never replace authoritative observations.
+
+If the relevant evidence fingerprint and world revision have not materially changed, escalation should require stronger confidence than persistence of the previous route. For example, a stable `keep_step_open` decision should not flip to `full_goal_replan` on unchanged evidence because of minor stochastic variation.
+
+Hysteresis must remain bounded, inspectable, and subordinate to new authoritative evidence.
+
+### 7. Same-state multi-question batching
+
+Jev should be treated as one cheap System-1 assessment over a compact shared state rather than a reason to create many serial decision calls.
+
+When several decisions depend on the same state, prefer one request containing independent bounded questions such as:
+
+```text
+checkpoint_boundary?
+completion_contract?
+compound_probability?
+needs_observation?
+dependency_state?
+plan_materiality?
+planner_wake_level?
+```
+
+The runtime consumes only the answers relevant to the current lifecycle seam.
+
+This should reduce:
+
+- repeated state serialization;
+- duplicated Jev input tokens;
+- request latency;
+- inconsistent answers caused by evaluating closely related questions against slightly different snapshots.
+
+Do not batch questions that require different authoritative snapshots or that would weaken lifecycle isolation.
+
+### 8. Target authority split
+
+The long-term ownership model should become:
+
+```text
+Factorio
+  = world truth + physics
+
+runtime harness
+  = safety + identity + lifecycle
+    + bounded capabilities + admission
+    + observations + receipts
+    + contract validation + canonical mutation
+
+Jev
+  = semantic compression
+    + checkpoint design
+    + split recommendations
+    + observation selection
+    + dependency classification
+    + plan materiality
+    + escalation control
+
+planner LLM
+  = strategy + long-horizon planning
+    + difficult replanning
+    + grounded operation intent
+
+skills
+  = domain knowledge + preferred methods + reusable task patterns
+
+conversation model
+  = human-facing voice
+```
+
+The design goal is therefore not "more Jev authority" in the sense of world mutation. It is **more Jev semantic responsibility with narrower deterministic authority**.
+
+### Recommended implementation order
+
+The preferred next sequence is:
+
+1. **Grounded Contract Synthesis** with a strict predicate grammar and grounded symbol table.
+2. First-class checkpoint/split proposals, including hidden sub-checkpoints for compound human-visible steps.
+3. Observation Planner.
+4. Dependency-boundary classification integrated with condition wait.
+5. Plan materiality gate.
+6. Decision hysteresis/evidence fingerprints.
+7. Broader same-state batching once the individual contracts are stable and well observed.
+
+Each capability should retain the same rollout discipline used elsewhere:
+
+```text
+bounded schema
+  -> shadow/trace
+  -> active with conservative fallback
+  -> measure downstream correctness
+  -> remove redundant harness heuristics only after evidence
+```
+
 ## Conversation design
 
 The "human vibe" should be an explicit product surface rather than an accidental side effect of the planner.
@@ -562,7 +912,7 @@ During the experiment, Jev decision lifecycle events are written to a dedicated 
 
 ## Rollout plan
 
-Current branch status: Phase 0 is implemented, and Phase 1 shadow interaction-routing plumbing is implemented but still awaiting real E2E trace evidence. Phases 2-6 remain design targets and must not be inferred as active from the presence of telemetry counters.
+Current branch status: the branch now contains active Jev decision-layer work beyond the original Phase 1 design, including interaction/post-step/recovery decision plumbing, condition-wait routing, Outcome Authority integration, and pre-admission step-checkpoint normalization. The numbered phases below are retained as the original rollout model, not as a literal statement that the implementation is still only at Phase 1. New semantic-control-plane capabilities described above remain design targets unless explicitly identified as current behavior.
 
 ### Phase 0 - documentation and seam
 
