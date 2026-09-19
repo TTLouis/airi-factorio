@@ -288,6 +288,7 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
         state.condition_wait = undefined
         state.project_board = transition.board
         state.milestone_transition_pending = true
+        state.milestone_plan_pending = false
         state.plan = []
         state.current_step = 0
         state.revision = (state.revision ?? 0) + 1
@@ -312,6 +313,7 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     if (!transition.changed) return { state, changed: false, reason: transition.reason }
     state.project_board = transition.board
     state.milestone_transition_pending = false
+    state.milestone_plan_pending = true
     state.task_board = createTaskBoard([], 0, { goalId: state.goal_id, now })
     state.plan = []
     state.current_step = 0
@@ -359,6 +361,7 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
       state.plan = state.task_board.steps.map(step => step.description)
       state.current_step = state.task_board.active_index
       state.milestone_transition_pending = false
+      state.milestone_plan_pending = false
       this.planByNpc.set(key, state)
       return { ...stateResult, state }
     }
