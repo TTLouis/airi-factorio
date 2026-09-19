@@ -1195,5 +1195,5 @@ test('tool-native submitPlan lets assistant content stay natural language on the
   assert.deepEqual(result.plan, ['Mine one iron ore'])
   assert.equal(result.operations[0].name, 'mine_entity')
   assert.equal(rcon.mutations.length, 1)
-  assert.equal(agent.memory.currentPlan('npc:airi').conversation.at(-1).assistant, 'I am mining one iron ore now.')
+  assert.equal(agent.memory.byNpc.get('npc:airi').recent.at(-1).assistant, 'I am mining one iron ore now.')
 })
