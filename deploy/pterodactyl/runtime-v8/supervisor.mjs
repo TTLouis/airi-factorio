@@ -1936,21 +1936,30 @@ export class Session {
     this.eventQueue = this.eventQueue.then(fn).catch(async error => {
       const message = error instanceof Error ? error.message : String(error)
       this.log(message)
+      let structuralRecoveryHandled = false
       if (reportError && !expectedCancellation(error) && this.agent) {
         try {
-          const state = await pauseStrandedPlanAfterRequestError(this, message)
-          if (state) this.log('Canonical Task Board paused after a failed request left Autorio idle')
-          else if (providerRecoveryExhausted(message)) {
-            // Preserve the old diagnostic signal without blindly pausing if
-            // Autorio status is unknown or still owns live world work.
-            this.log('Provider recovery exhausted; durable task was not auto-paused because Autorio was not authoritatively idle')
+          const current = this.currentPlanState()
+          if (current?.status === 'active' && hierarchyTransitionPending(current)) {
+            structuralRecoveryHandled = true
+            const recovered = await this.recoverInterruptedPlan('request_failure', { message })
+            if (recovered) this.log('Resumed pending hierarchy transition after request failure')
+          }
+          else {
+            const state = await pauseStrandedPlanAfterRequestError(this, message)
+            if (state) this.log('Canonical Task Board paused after a failed request left Autorio idle')
+            else if (providerRecoveryExhausted(message)) {
+              // Preserve the old diagnostic signal without blindly pausing if
+              // Autorio status is unknown or still owns live world work.
+              this.log('Provider recovery exhausted; durable task was not auto-paused because Autorio was not authoritatively idle')
+            }
           }
         }
         catch (pauseError) {
           this.log(`Unable to reconcile Task Board after request failure: ${pauseError instanceof Error ? pauseError.message : pauseError}`)
         }
       }
-      if (reportError && !expectedCancellation(error)) {
+      if (reportError && !expectedCancellation(error) && !structuralRecoveryHandled) {
         try { await this.printChat(`Request failed: ${message}`) }
         catch (printError) { this.log(`Unable to report AIRI error in chat: ${printError instanceof Error ? printError.message : printError}`) }
       }
