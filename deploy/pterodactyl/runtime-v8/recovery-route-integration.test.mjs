@@ -260,3 +260,28 @@ test('Jev blocker proposal without authoritative evidence becomes recoverable pa
   assert.equal(memory.planByNpc.get('npc:airi').blocker, '')
   assert.equal(mainCalls.length, 0)
 })
+
+
+test('provider-format failure cannot consume older active-step world evidence to create durable BLOCKED', async () => {
+  const { agent, memory, mainCalls } = makeAgent({
+    route: 'propose_blocker',
+    failureClass: 'provider_format',
+    taskState: 'idle',
+    queueLength: 0,
+  })
+  memory.planByNpc.get('npc:airi').task_board.evidence.push({
+    id: 'evidence_prior_world_failure',
+    kind: 'operation_preflight_blocker',
+    ref: 'old/preflight',
+    summary: 'an older deterministic blocker record',
+    step_id: 'step_1',
+    at: Date.now(),
+  })
+
+  const result = await agent.recoverPlan(agent.generation, new Error('Invalid provider content JSON'), 1)
+
+  assert.equal(result.goalStatus, 'paused')
+  assert.equal(memory.planByNpc.get('npc:airi').status, 'paused')
+  assert.equal(memory.planByNpc.get('npc:airi').blocker, '')
+  assert.equal(mainCalls.length, 0)
+})
