@@ -526,25 +526,26 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     const previousStatus = state.status
     let board = this.ensureTaskBoard(state)
     const evidence = Array.isArray(candidate?.evidence) ? candidate.evidence : []
-    let newEvidenceCount = 0
     for (const item of evidence) {
       if (!item || typeof item !== 'object') continue
       const duplicate = (board?.evidence ?? []).some(existing => existing?.kind === item.kind && item.ref && existing?.ref === item.ref)
-      if (!duplicate) {
-        board = addTaskBoardEvidence(board, { ...item, now: Number.isFinite(item.now) ? item.now : now })
-        newEvidenceCount++
-      }
+      if (!duplicate) board = addTaskBoardEvidence(board, { ...item, now: Number.isFinite(item.now) ? item.now : now })
     }
-    if (decision.durable_status === 'completed'
-      && candidate?.metadata?.scope === 'step'
-      && evidence.length > 0
-      && newEvidenceCount === 0) {
-      state.task_board = board
-      this.planByNpc.set(key, state)
-      return {
-        state,
-        decision: { ...decision, accepted: false, rejection_reason: 'duplicate_completion_evidence' },
-        changed: false,
+    if (decision.durable_status === 'completed' && candidate?.metadata?.scope === 'step') {
+      const activeStepId = board?.active_step_id
+      const candidateKeys = evidence
+        .filter(item => item && typeof item === 'object' && typeof item.kind === 'string' && item.kind && typeof item.ref === 'string' && item.ref)
+        .map(item => ({ kind: item.kind, ref: item.ref }))
+      const boundToActiveStep = Boolean(activeStepId) && candidateKeys.some(key =>
+        (board?.evidence ?? []).some(existing => existing?.kind === key.kind && existing?.ref === key.ref && existing?.step_id === activeStepId))
+      if (!boundToActiveStep) {
+        state.task_board = board
+        this.planByNpc.set(key, state)
+        return {
+          state,
+          decision: { ...decision, accepted: false, rejection_reason: 'completion_evidence_not_bound_to_active_step' },
+          changed: false,
+        }
       }
     }
 
@@ -2213,7 +2214,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       : undefined
     const ref = batchId ? `batch_${batchId}` : ''
     const verification = ref
-      ? [...(board?.evidence ?? [])].reverse().find(item => item?.kind === 'deterministic_verification' && item?.ref === ref)
+      ? [...(board?.evidence ?? [])].reverse().find(item =>
+          item?.kind === 'deterministic_verification'
+          && item?.ref === ref
+          && item?.step_id === step?.id)
       : undefined
 
     if (!planState || planState.status !== 'active' || !step || !verification) {
@@ -2232,16 +2236,17 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     catch {}
 
-    const receiptContract = {
-      mode: 'all',
-      source: 'runtime_receipt',
-      requirements: [{
-        id: 'operation_receipt',
-        kind: 'authoritative_operation_receipt',
-        ...(operationNames.length === 1 ? { operation_name: operationNames[0] } : {}),
-      }],
-    }
-    const candidates = [receiptContract]
+    const candidates = operationNames.length === 1
+      ? [{
+          mode: 'all',
+          source: 'runtime_receipt',
+          requirements: [{
+            id: 'operation_receipt',
+            kind: 'authoritative_operation_receipt',
+            operation_name: operationNames[0],
+          }],
+        }]
+      : []
     const questions = stepCompletionDecisionQuestions(candidates)
 
     if (!this.interactionDecisionProvider) {
@@ -2312,7 +2317,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       await this.assertCurrent()
       const normalized = parseStepCompletionDecision(response, candidates)
       const confidenceAccepted = normalized.contract?.confidence >= 0.7
-      const contract = confidenceAccepted
+      const compoundAssessmentKnown = typeof normalized.compound_probability === 'number'
+      const compoundNeedsStrongProof = !compoundAssessmentKnown || normalized.compound_probability >= 0.5
+      const compoundProofStrongEnough = normalized.contract?.mode === 'all'
+        && Array.isArray(normalized.contract?.requirements)
+        && normalized.contract.requirements.length > 1
+      const semanticShapeAccepted = !compoundNeedsStrongProof || compoundProofStrongEnough
+      const contract = confidenceAccepted && semanticShapeAccepted
         ? normalized.contract
         : { mode: 'semantic_unknown', requirements: [], confidence: normalized.contract?.confidence ?? 0 }
 
@@ -2335,7 +2346,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
       const evaluation = evaluateCompletionContract(contract, {
         operation_receipt: {
-          satisfied: verification !== undefined,
+          kind: 'authoritative_operation_receipt',
+          authoritative: verification !== undefined,
+          operation_name: operationNames.length === 1 ? operationNames[0] : undefined,
+          operation_names: operationNames,
           summary: cleanMemoryText(verification.summary, 600),
         },
       })
@@ -2364,6 +2378,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         metadata: { scope: 'step' },
       })
       await this.persistState()
+      if (reduced?.decision?.accepted !== true) {
+        const reason = reduced?.decision?.rejection_reason || 'outcome_authority_rejected_completion'
+        await this.traceEvent('step.completion_rejected', { active_step_id: step.id, reason, contract })
+        return { verified: false, reason, state: reduced?.state ?? planState, contract }
+      }
       await this.traceEvent('step.verified', {
         active_step_id: step.id,
         source: 'step_completion_gate',

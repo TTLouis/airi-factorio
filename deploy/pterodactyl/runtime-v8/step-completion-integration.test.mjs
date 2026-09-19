@@ -83,7 +83,7 @@ class Rcon {
   }
 }
 
-function completionDecision(choice, confidence = 0.95) {
+function completionDecision(choice, confidence = 0.95, compoundProbability = choice === 'semantic_unknown' ? 0.9 : 0.1) {
   return {
     model: 'jev-latest',
     provider: 'TypeSafe',
@@ -97,7 +97,7 @@ function completionDecision(choice, confidence = 0.95) {
           candidate_1: choice === 'candidate_1' ? 0.95 : 0.05,
         },
       },
-      compound_step: { type: 'noul', noul: choice === 'semantic_unknown' ? 0.9 : 0.1 },
+      compound_step: { type: 'noul', noul: compoundProbability },
     },
     usage: { input_tokens: 60, output_tokens: 6, cost: 0.000002 },
   }
@@ -138,6 +138,15 @@ test('compound semantic step stays active when Jev says strict receipt is insuff
   assert.ok(state.task_board.evidence.some(item => item.kind === 'step_completion_contract'))
 })
 
+test('compound semantic step fails closed even when Jev selects one weak receipt', async () => {
+  const { agent, memory } = agentWithDecision(async () => completionDecision('candidate_1', 0.95, 0.95))
+  const result = await agent.routeStepCompletionDecision({ view: { last_completed_batch: { batch_id: 7 } } })
+  assert.equal(result.verified, false)
+  assert.equal(result.reason, 'semantic_unknown')
+  assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 0)
+  assert.equal(memory.planByNpc.get('npc:airi').task_board.active_index, 0)
+})
+
 test('Jev contract selection cannot complete a step without matching grounded receipt evidence', async () => {
   const { agent, memory } = agentWithDecision(async () => completionDecision('candidate_1'))
   memory.planByNpc.get('npc:airi').task_board.evidence = []
@@ -168,6 +177,7 @@ test('Jev-selected receipt contract advances exactly one step only after runtime
     view: { last_completed_batch: { batch_id: 7 } },
   })
   assert.equal(duplicate.verified, false)
+  assert.equal(duplicate.reason, 'no_authoritative_operation_receipt')
   assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 1)
 })
 
@@ -178,4 +188,38 @@ test('low-confidence completion normalization fails closed', async () => {
   })
   assert.equal(result.verified, false)
   assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 0)
+})
+
+
+test('provider or Jev failure preserves an already verified canonical prefix', async () => {
+  const { agent, memory } = agentWithDecision(async () => { throw new Error('jev unavailable') })
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.task_board.active_index = 1
+  durable.task_board.active_step_id = 'step_2'
+  durable.task_board.completed_count = 1
+  durable.task_board.proposed_focus_index = 1
+  durable.task_board.proposed_focus_step_id = 'step_2'
+  durable.task_board.steps = durable.task_board.steps.map((step, index) => ({ ...step, status: index === 0 ? 'completed' : 'active' }))
+  durable.current_step = 1
+  durable.task_board.evidence.push({
+    id: 'evidence_2',
+    kind: 'deterministic_verification',
+    ref: 'batch_8',
+    summary: JSON.stringify({ verdict: 'verified_complete', operations: ['craft_item'], task_types: ['crafting'] }),
+    step_id: 'step_2',
+    at: Date.now(),
+  })
+  const failed = await agent.routeStepCompletionDecision({ view: { last_completed_batch: { batch_id: 8 } } })
+  assert.equal(failed.verified, false)
+  assert.equal(failed.reason, 'completion_contract_decision_failed')
+  assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 1)
+  assert.equal(memory.planByNpc.get('npc:airi').task_board.active_index, 1)
+  const reduced = memory.applyOutcomeAuthority('npc:airi', {
+    kind: 'recoverable_provider_failure',
+    source: 'provider',
+    reason_code: 'provider_format',
+    evidence: [],
+  }, { world: { task_state: 'idle', queue_length: 0 } })
+  assert.equal(reduced.state.task_board.completed_count, 1)
+  assert.equal(reduced.state.task_board.active_index, 1)
 })

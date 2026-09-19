@@ -21,6 +21,7 @@ function boundedRequirement(raw, index) {
   const kind = String(raw.kind ?? '')
   if (!SUPPORTED_REQUIREMENT_KINDS.has(kind)) return undefined
   const id = clean(raw.id || `requirement_${index + 1}`, 80)
+  if (!id) return undefined
 
   if (kind === 'inventory_count') {
     const minimum = positiveInteger(raw.minimum)
@@ -52,7 +53,8 @@ function boundedRequirement(raw, index) {
 
   if (kind === 'authoritative_operation_receipt') {
     const operationName = clean(raw.operation_name, 100)
-    return { id, kind, ...(operationName ? { operation_name: operationName } : {}) }
+    if (!operationName) return undefined
+    return { id, kind, operation_name: operationName }
   }
 
   const controller = clean(raw.controller, 80)
@@ -69,17 +71,22 @@ export function sanitizeStepCompletionContract(raw) {
     ? Math.max(0, Math.min(1, raw.confidence))
     : 0
   if (raw.mode === 'semantic_unknown') return { mode: 'semantic_unknown', requirements: [], confidence }
-  const requirements = (Array.isArray(raw.requirements) ? raw.requirements : [])
-    .slice(0, 8)
-    .map(boundedRequirement)
-    .filter(Boolean)
-  if (requirements.length === 0) return { mode: 'semantic_unknown', requirements: [], confidence }
-  return {
-    mode: raw.mode === 'any' ? 'any' : 'all',
-    requirements,
-    confidence,
-    source: clean(raw.source, 80) || undefined,
+  if (!['all', 'any'].includes(raw.mode)) return { mode: 'semantic_unknown', requirements: [], confidence }
+  const rawRequirements = Array.isArray(raw.requirements) ? raw.requirements : []
+  if (rawRequirements.length === 0 || rawRequirements.length > 8) {
+    return { mode: 'semantic_unknown', requirements: [], confidence }
   }
+  const requirements = rawRequirements.map(boundedRequirement)
+  if (requirements.some(requirement => !requirement)) {
+    return { mode: 'semantic_unknown', requirements: [], confidence }
+  }
+  const ids = new Set()
+  for (const requirement of requirements) {
+    if (ids.has(requirement.id)) return { mode: 'semantic_unknown', requirements: [], confidence }
+    ids.add(requirement.id)
+  }
+  return { mode: raw.mode, requirements, confidence, source: clean(raw.source, 80) || undefined }
+
 }
 
 export function completionContractSupported(contract) {
@@ -140,31 +147,39 @@ export function parseStepCompletionDecision(response, candidates = []) {
   }
 }
 
+function evaluateRequirementFact(requirement, fact) {
+  if (!fact || typeof fact !== 'object' || Array.isArray(fact)) return { satisfied: false, missing: true }
+  if (fact.kind !== requirement.kind) return { satisfied: false, mismatched: true }
+  if (requirement.kind === 'inventory_count') {
+    return { satisfied: fact.item_name === requirement.item_name && Number.isFinite(fact.current) && fact.current >= requirement.minimum }
+  }
+  if (requirement.kind === 'entity_inventory_count') {
+    return { satisfied: fact.stale !== true && fact.unit_number === requirement.unit_number && fact.item_name === requirement.item_name && Number.isFinite(fact.current) && fact.current >= requirement.minimum }
+  }
+  if (requirement.kind === 'entity_exists') {
+    return { satisfied: fact.stale !== true && fact.unit_number === requirement.unit_number && fact.exists === true }
+  }
+  if (requirement.kind === 'entity_state') {
+    const exact = fact.stale !== true && fact.unit_number === requirement.unit_number && fact.exists === true
+    return { satisfied: requirement.expected === 'exists' ? exact : requirement.expected === 'working' ? exact && fact.working === true : exact && fact.working === false }
+  }
+  if (requirement.kind === 'authoritative_operation_receipt') {
+    const names = Array.isArray(fact.operation_names) ? fact.operation_names : []
+    return { satisfied: fact.authoritative === true && (fact.operation_name === requirement.operation_name || names.includes(requirement.operation_name)) }
+  }
+  return { satisfied: fact.authoritative === true && fact.controller === requirement.controller && fact.state === requirement.expected }
+}
+
 export function evaluateCompletionContract(contract, facts = {}) {
   const normalized = sanitizeStepCompletionContract(contract)
-  if (normalized.mode === 'semantic_unknown') {
-    return { status: 'unknown', satisfied: false, contract: normalized, results: [] }
-  }
+  if (normalized.mode === 'semantic_unknown') return { status: 'unknown', satisfied: false, contract: normalized, results: [] }
   const results = normalized.requirements.map(requirement => {
     const fact = facts[requirement.id]
-    if (!fact || typeof fact !== 'object') return { id: requirement.id, kind: requirement.kind, satisfied: false, missing: true }
-    return {
-      id: requirement.id,
-      kind: requirement.kind,
-      satisfied: fact.satisfied === true,
-      progressing: fact.progressing === true,
-      summary: clean(fact.summary, 300),
-    }
+    const evaluated = evaluateRequirementFact(requirement, fact)
+    return { id: requirement.id, kind: requirement.kind, ...evaluated, progressing: fact?.progressing === true, summary: clean(fact?.summary, 300) }
   })
-  const satisfied = normalized.mode === 'any'
-    ? results.some(result => result.satisfied)
-    : results.every(result => result.satisfied)
-  return {
-    status: satisfied ? 'verified' : 'waiting',
-    satisfied,
-    contract: normalized,
-    results,
-  }
+  const satisfied = normalized.mode === 'any' ? results.some(result => result.satisfied) : results.every(result => result.satisfied)
+  return { status: satisfied ? 'verified' : 'waiting', satisfied, contract: normalized, results }
 }
 
 export function conditionFromRequirement(requirement) {
