@@ -46,14 +46,17 @@ test('main and NPC E2E eggs resolve different default source refs on reinstall',
   assert.match(e2eEgg.scripts.installation.script, /CHANNEL="npc-e2e"/)
 })
 
-test('channel installer resolves to an exact SHA and only patches source/revision assignments', () => {
+test('channel installer resolves to an exact SHA and loads deployment payload from that same commit', () => {
   const script = channelInstaller(source, 'npcE2e')
   assert.match(script, /api\.github\.com\/repos\/TTLouis\/factorio-npc\/commits/)
+  assert.match(script, /raw\.githubusercontent\.com\/TTLouis\/factorio-npc\/\$RESOLVED_SHA\/deploy\/pterodactyl\/payload-src\/installer\.sh/)
   assert.match(script, /RESOLVED_SHA/)
   assert.match(script, /Unexpected AIRI_REF assignment contract/)
   assert.match(script, /Unexpected REVISION assignment contract/)
   assert.match(script, /AIRI_REF=.*RESOLVED_SHA/)
   assert.match(script, /REVISION=.*CHANNEL.*SHORT_SHA/)
+  assert.doesNotMatch(script, /PAYLOAD_REF/)
+  assert.doesNotMatch(script, /EXPECTED_PAYLOAD_SHA256/)
   assert.doesNotMatch(script, /codeload\.github\.com\/TTLouis\/factorio-npc\/tar\.gz\/\$SOURCE_REF/)
 })
 
