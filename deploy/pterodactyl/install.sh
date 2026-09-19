@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 umask 077
 REF="d6a6ba815cb724c9622d8a980a9c781cc60c0cb8"
-EXPECTED_SOURCE_SHA256="40537a476eb189a613a7d0ed6cd8ffb1fee36a1c34aa6dcb136172659edd0fbf"
+EXPECTED_SOURCE_SHA256="7703023fe57bec98aff47b8c84013fdb86b2c06df3003d00c13dcbcc6d63f007"
 URL="https://raw.githubusercontent.com/TTLouis/airi-factorio/$REF/deploy/pterodactyl/payload-src/installer.sh"
 TMP="$(mktemp)"
 log() { printf '[AIRI bootstrap] %s\n' "$*"; }
