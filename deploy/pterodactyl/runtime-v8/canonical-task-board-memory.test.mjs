@@ -121,7 +121,7 @@ test('explicit failure replan is still allowed to replace the remaining suffix',
   assert.equal(canonicalContinuationPlan(board(), proposal, { allowReplan: true }), proposal)
 })
 
-test('provider currentStep cannot skip an unverified transfer mutation', () => {
+test('provider currentStep may propose later focus but cannot grant transfer completion authority', () => {
   const transferState = planState({
     last_operations: ['move_items_exact {"item_name":"iron-ore","unit_number":582,"max_count":20,"to_entity":true}'],
     last_mutation_verified: false,
@@ -132,8 +132,11 @@ test('provider currentStep cannot skip an unverified transfer mutation', () => {
     operations: [],
   }, { previousState: transferState })
 
-  assert.equal(guarded.currentStep, 2)
+  assert.equal(guarded.currentStep, 3)
   assert.deepEqual(guarded.plan, board().steps.map(step => step.description))
+  assert.equal(transferState.task_board.active_index, 2)
+  assert.equal(transferState.task_board.completed_count, 2)
+  assert.equal(transferState.last_mutation_verified, false)
 })
 
 test('strict completed operation receipts are eligible for deterministic verification', () => {
@@ -214,25 +217,26 @@ test('receipt task types must match the submitted strict operations exactly', ()
   assert.deepEqual(result, { verified: false, reason: 'receipt_operation_mismatch' })
 })
 
-test('verified intermediate step advances canonical board before the model continuation', () => {
+test('verified mutation receipt records proof without advancing semantic canonical progress', () => {
   const memory = new CanonicalTaskBoardMemory()
   memory.planByNpc.set('npc:airi', planState())
 
   const nextBoard = memory.recordBoardEvidence('npc:airi', completedReceipt())
   const state = memory.currentPlan('npc:airi')
 
-  assert.equal(nextBoard.active_index, 3)
-  assert.equal(nextBoard.active_step_id, 'step_4')
-  assert.equal(nextBoard.completed_count, 3)
-  assert.equal(state.current_step, 3)
+  assert.equal(nextBoard.active_index, 2)
+  assert.equal(nextBoard.active_step_id, 'step_3')
+  assert.equal(nextBoard.completed_count, 2)
+  assert.equal(state.current_step, 2)
   assert.equal(state.plan.length, 5)
   assert.equal(state.status, 'active')
+  assert.equal(state.last_mutation_verified, true)
   const proof = nextBoard.evidence.find(item => item.kind === 'deterministic_verification')
   assert.equal(proof.ref, 'batch_7')
   assert.equal(proof.step_id, 'step_3')
 })
 
-test('positive transfer receipt advances once and marks the last mutation verified', () => {
+test('positive transfer receipt marks the mutation verified without completing the semantic step', () => {
   const transferBoard = board()
   transferBoard.steps[2] = { ...transferBoard.steps[2], description: 'Load furnace' }
   const state = planState({
@@ -260,10 +264,12 @@ test('positive transfer receipt advances once and marks the last mutation verifi
   }))
   const nextState = memory.currentPlan('npc:airi')
 
-  assert.equal(nextBoard.active_index, 3)
-  assert.equal(nextBoard.completed_count, 3)
+  assert.equal(nextBoard.active_index, 2)
+  assert.equal(nextBoard.completed_count, 2)
+  assert.equal(nextBoard.active_step_id, 'step_3')
   assert.equal(nextState.last_mutation_verified, true)
   assert.equal(nextState.last_verified_batch_id, 7)
+  assert.equal(nextBoard.evidence.some(item => item.kind === 'deterministic_verification' && item.ref === 'batch_7' && item.step_id === 'step_3'), true)
 })
 
 test('failed or zero-effect transfer receipt blocks the active step without completing it', () => {

@@ -580,6 +580,12 @@ export function reconcileTaskBoard(board, plan, currentStep, { now = Date.now(),
   const incomingActive = incoming[incomingIndex]
   const matchedIndex = findTaskBoardStep(board, incomingActive)
   const currentIndex = board.active_index ?? 0
+  const exactSamePlan = incoming.length === board.steps.length
+    && incoming.every((description, index) => normalizeTaskBoardStep(description) === normalizeTaskBoardStep(board.steps[index]?.description))
+
+  if (allowReplan && !exactSamePlan) {
+    return replanTaskBoardRemaining(board, incoming, incomingIndex, now)
+  }
 
   if (matchedIndex >= 0) {
     const proposedChanged = board.proposed_focus_index !== matchedIndex
@@ -612,8 +618,6 @@ export function reconcileTaskBoard(board, plan, currentStep, { now = Date.now(),
     if (matchedIndex >= currentIndex) return board
   }
 
-  const exactSamePlan = incoming.length === board.steps.length
-    && incoming.every((description, index) => normalizeTaskBoardStep(description) === normalizeTaskBoardStep(board.steps[index]?.description))
   if (exactSamePlan && incomingIndex > currentIndex) {
     let next = {
       ...board,
@@ -696,15 +700,10 @@ export function taskBoardProgress(board) {
 
 export function sanitizeTaskBoard(value, { fallbackPlan = [], fallbackCurrentStep = 0, goalId = '', now = Date.now() } = {}) {
   if (!value || value.kind !== 'task_board_lite' || !Array.isArray(value.steps)) {
-    // Legacy persisted plan state used current_step as harness-owned canonical
-    // progress. Preserve that verified prefix only while migrating old state.
-    // New planner currentStep enters through createTaskBoard/recordPlan as
-    // proposed focus and never gains this authority.
-    let migrated = createTaskBoard(fallbackPlan, fallbackCurrentStep, { goalId, now })
-    if (Number.isSafeInteger(fallbackCurrentStep) && fallbackCurrentStep > 0) {
-      migrated = applyTaskBoardStatuses(migrated, clampTaskBoardIndex(fallbackCurrentStep, migrated.steps.length))
-    }
-    return migrated
+    // Historical planner current_step is not grounded completion evidence.
+    // Preserve it only as proposed focus when migrating a legacy plan; verified
+    // canonical progress must come from a persisted Task Board and its evidence.
+    return createTaskBoard(fallbackPlan, fallbackCurrentStep, { goalId, now })
   }
   const descriptions = value.steps.slice(0, TASK_BOARD_MAX_STEPS).map(step => taskBoardText(step?.description, 500)).filter(Boolean)
   let board = createTaskBoard(descriptions, value.active_index, { goalId: value.goal_id ?? goalId, now: Number.isFinite(value.created_at) ? value.created_at : now })
