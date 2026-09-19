@@ -2,6 +2,7 @@ import {
   decisionEnvelopeQuestions,
   parseDecisionEnvelope,
 } from './jev-decision-taxonomy.mjs'
+import { sanitizeStrategicProjectBoard } from './strategic-project-board.mjs'
 
 const MAX_ITEMS = 12
 const MAX_TEXT = 240
@@ -47,14 +48,28 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
 
   return {
     schema: 'swarm_jev_shadow_v1',
-    project: snapshot.project && typeof snapshot.project === 'object'
-      ? {
-          id: clean(snapshot.project.id ?? snapshot.project.project_id, 100),
-          title: clean(snapshot.project.title ?? snapshot.project.objective, 500),
-          status: clean(snapshot.project.status, 80),
-          milestone: clean(snapshot.project.current_milestone?.title ?? snapshot.project.milestone, 500),
-          development_direction: clean(snapshot.project.development_direction, 80),
-        }
+    strategic_project_board: snapshot.strategicBoard && typeof snapshot.strategicBoard === 'object'
+      ? (() => {
+          const board = sanitizeStrategicProjectBoard(snapshot.strategicBoard)
+          return {
+            goal_id: board.goal_id,
+            title: board.title,
+            status: board.status,
+            current_milestone: board.current_milestone
+              ? {
+                  id: board.current_milestone.id,
+                  title: board.current_milestone.title,
+                }
+              : undefined,
+            next_milestones: board.next_milestones.map(item => ({
+              id: item.id,
+              title: item.title,
+            })),
+            development_direction: board.development_direction,
+            transition_state: board.transition_state,
+            revision: board.revision,
+          }
+        })()
       : undefined,
     counts: {
       missions: missionSource.length,
