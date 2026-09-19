@@ -86,6 +86,7 @@ function makeAgent({
   interactionDecisionProvider,
   maxProviderOutputUnits,
   maxProviderBudgetHandoffs,
+  memory = new CanonicalTaskBoardMemory(),
 } = {}) {
   return new NpcAgentLoop({
     rcon,
@@ -94,7 +95,7 @@ function makeAgent({
     interactionDecisionProvider,
     maxProviderOutputUnits,
     maxProviderBudgetHandoffs,
-    memory: new CanonicalTaskBoardMemory(),
+    memory,
     systemPrompt: 'NPC output-budget recovery test prompt',
     stateFile: null,
     traceFile: null,
@@ -681,4 +682,65 @@ test('provider-budget split scope persists the hierarchy transaction before the 
   assert.equal(state.task_board.steps[0]?.description, 'Inspect one machine output cycle')
   assert.equal(agent.providerBudgetGeneration, 2)
   assert.equal(agent.providerBudgetHandoffCount, 1)
+})
+
+
+test('budget handoff survives memory restore and resumes from the compact handoff capsule', async () => {
+  const setupMemory = new CanonicalTaskBoardMemory()
+  const setupAgent = makeAgent({
+    memory: setupMemory,
+    provider: async () => planMessage({
+      chatMessage: 'Establishing the durable target.',
+      plan: ['Inspect the result'],
+      currentStep: 0,
+      operations: [{ name: 'wait', args: { ticks: 1 } }],
+    }),
+  })
+  await setupAgent.request('establish one durable target', { sender: 'TTLouis' })
+
+  const before = setupMemory.currentPlan('npc:airi')
+  setupMemory.setProviderRecovery('npc:airi', {
+    kind: 'budget_handoff',
+    phase: 'planner_pending',
+    goal_id: before.goal_id,
+    step_id: before.task_board.active_step_id,
+    semantic_scope: 'reanchor_target',
+    route: 'continue_low',
+    reason: 'provider_turn_output_cap_exceeded: generation 1 used 4001 > 4000',
+    budget_generation: 2,
+    handoff_count: 1,
+    started_at: 12345,
+  })
+
+  const restoredMemory = new CanonicalTaskBoardMemory()
+  restoredMemory.restore(setupMemory.snapshot())
+  assert.equal(restoredMemory.currentPlan('npc:airi').provider_recovery?.kind, 'budget_handoff')
+  assert.equal(restoredMemory.currentPlan('npc:airi').provider_recovery?.phase, 'planner_pending')
+  assert.equal(restoredMemory.currentPlan('npc:airi').provider_recovery?.semantic_scope, 'reanchor_target')
+
+  let resumed = false
+  const resumedAgent = makeAgent({
+    memory: restoredMemory,
+    provider: async (messages, context) => {
+      resumed = true
+      assert.equal(context.triggerSource, 'post_step_reanchor')
+      const joined = messages.map(message => message.content ?? '').join('\n')
+      assert.match(joined, /\[PROVIDER_BUDGET_HANDOFF\]/)
+      assert.match(joined, /reanchor_target/)
+      return planMessage({
+        chatMessage: 'Resumed the same durable target after restart.',
+        plan: ['Inspect the result'],
+        currentStep: 0,
+        operations: [{ name: 'wait', args: { ticks: 1 } }],
+      })
+    },
+  })
+
+  const result = await resumedAgent.request('continue current work', { sender: 'TTLouis' })
+
+  assert.equal(resumed, true)
+  assert.equal(result.goalStatus, 'active')
+  assert.equal(resumedAgent.providerBudgetGeneration, 2)
+  assert.equal(resumedAgent.providerBudgetHandoffCount, 1)
+  assert.equal(restoredMemory.currentPlan('npc:airi').provider_recovery, undefined)
 })

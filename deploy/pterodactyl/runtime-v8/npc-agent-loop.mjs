@@ -22,7 +22,7 @@ import {
   parseMilestoneTransitionDecision,
 } from './jev-decision-taxonomy.mjs'
 import { isLifecycleMetaStep, normalizeCanonicalPlan, validateOutcomeCandidate } from './outcome-authority.mjs'
-import { parseRecoveryDecision, recoveryDecisionQuestions, recoveryFailureClassHint, validateRecoveryRoute } from './recovery-route.mjs'
+import { RECOVERY_SEMANTIC_SCOPES, parseRecoveryDecision, recoveryDecisionQuestions, recoveryFailureClassHint, validateRecoveryRoute } from './recovery-route.mjs'
 import {
   applyConditionObservation,
   completionCandidatesFromOperations,
@@ -383,6 +383,40 @@ function safeConditionWait(value) {
   }
 }
 
+function safeProviderRecovery(value) {
+  if (!value || typeof value !== 'object') return undefined
+  if (value.kind === 'output_budget_exhaustion' && value.phase === 'in_flight') {
+    return {
+      kind: 'output_budget_exhaustion',
+      phase: 'in_flight',
+      goal_id: cleanMemoryText(value.goal_id, 100),
+      step_id: cleanMemoryText(value.step_id, 120),
+      started_at: Number.isFinite(value.started_at) ? value.started_at : Date.now(),
+    }
+  }
+  if (value.kind !== 'budget_handoff' || value.phase !== 'planner_pending') return undefined
+  const semanticScope = RECOVERY_SEMANTIC_SCOPES.has(value.semantic_scope) ? value.semantic_scope : 'keep_target'
+  const route = ['retry_compact', 'continue_low', 'replan_high', 'targeted_observation'].includes(value.route)
+    ? value.route
+    : 'continue_low'
+  return {
+    kind: 'budget_handoff',
+    phase: 'planner_pending',
+    goal_id: cleanMemoryText(value.goal_id, 100),
+    step_id: cleanMemoryText(value.step_id, 120),
+    semantic_scope: semanticScope,
+    route,
+    reason: cleanMemoryText(value.reason, 1200),
+    budget_generation: Number.isSafeInteger(value.budget_generation)
+      ? Math.max(2, Math.min(value.budget_generation, 1000000))
+      : 2,
+    handoff_count: Number.isSafeInteger(value.handoff_count)
+      ? Math.max(1, Math.min(value.handoff_count, 16))
+      : 1,
+    started_at: Number.isFinite(value.started_at) ? value.started_at : Date.now(),
+  }
+}
+
 function persistedStepCheckpoint(board, stepId) {
   if (!board || !stepId || !Array.isArray(board.evidence)) return undefined
   for (let index = board.evidence.length - 1; index >= 0; index--) {
@@ -649,15 +683,18 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
   setProviderRecovery(key, recovery) {
     const state = key ? this.planByNpc.get(key) : undefined
     if (!state) return state
-    if (!recovery) state.provider_recovery = undefined
+    if (!recovery) {
+      state.provider_recovery = undefined
+    }
     else {
-      state.provider_recovery = {
-        kind: recovery.kind === 'output_budget_exhaustion' ? recovery.kind : 'output_budget_exhaustion',
-        phase: recovery.phase === 'in_flight' ? 'in_flight' : 'in_flight',
-        goal_id: cleanMemoryText(recovery.goal_id ?? state.goal_id, 100),
-        step_id: cleanMemoryText(recovery.step_id ?? state.task_board?.active_step_id, 120),
+      state.provider_recovery = safeProviderRecovery({
+        ...recovery,
+        kind: recovery.kind === 'budget_handoff' ? 'budget_handoff' : 'output_budget_exhaustion',
+        phase: recovery.kind === 'budget_handoff' ? 'planner_pending' : 'in_flight',
+        goal_id: recovery.goal_id ?? state.goal_id,
+        step_id: recovery.step_id ?? state.task_board?.active_step_id,
         started_at: Number.isFinite(recovery.started_at) ? recovery.started_at : Date.now(),
-      }
+      })
     }
     state.updated_at = Date.now()
     this.planByNpc.set(key, state)
@@ -1106,15 +1143,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         pause_reason: cleanMemoryText(value.pause_reason, 300),
         persistent_runtime: safePersistentRuntime(value.persistent_runtime),
         condition_wait: safeConditionWait(value.condition_wait),
-        provider_recovery: value.provider_recovery?.kind === 'output_budget_exhaustion' && value.provider_recovery?.phase === 'in_flight'
-          ? {
-              kind: 'output_budget_exhaustion',
-              phase: 'in_flight',
-              goal_id: cleanMemoryText(value.provider_recovery.goal_id, 100),
-              step_id: cleanMemoryText(value.provider_recovery.step_id, 120),
-              started_at: Number.isFinite(value.provider_recovery.started_at) ? value.provider_recovery.started_at : Date.now(),
-            }
-          : undefined,
+        provider_recovery: safeProviderRecovery(value.provider_recovery),
         plan: safePlan(value.plan),
         current_step: Number.isSafeInteger(value.current_step) && value.current_step >= 0 ? value.current_step : 0,
         revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : 1,
@@ -1856,6 +1885,12 @@ function actionOmissionRecoveryCapsule(state, runtimeStatus) {
     },
   }
   return `[ACTION_OMISSION_RECOVERY] Compact recovery capsule. It intentionally omits unrelated dialogue and historical tool results.\n${JSON.stringify(capsule)}`
+}
+
+function providerBudgetTriggerSource(semanticScope, route) {
+  if (semanticScope === 'split_milestone') return 'hierarchy_split'
+  if (semanticScope === 'reanchor_target') return 'post_step_reanchor'
+  return route === 'replan_high' ? 'recovery_replan_high' : 'recovery_continue_low'
 }
 
 function providerBudgetHandoffCapsule(state, runtimeStatus, reason, semanticScope = 'keep_target') {
@@ -3489,6 +3524,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       && planBefore?.status === 'active'
       && planBefore?.hierarchy_split_pending
       && !healthyRuntime
+    const resumeProviderBudgetHandoff = intent === 'continue_current'
+      && planBefore?.status === 'active'
+      && planBefore?.provider_recovery?.kind === 'budget_handoff'
+      && planBefore?.provider_recovery?.phase === 'planner_pending'
+      && !healthyRuntime
     if (resumeHierarchySplit) {
       this.memory.setNextContextOverride?.(
         memoryKey,
@@ -3512,7 +3552,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       ? 'hierarchy_initial_split'
       : resumeHierarchySplit
         ? 'hierarchy_split'
-        : null
+        : resumeProviderBudgetHandoff
+          ? providerBudgetTriggerSource(planBefore.provider_recovery.semantic_scope, planBefore.provider_recovery.route)
+          : null
     const previousReasoningBudget = this.reasoningBudgetOverride
     const previousObservationBudget = this.observationBudgetOverride
     const previousObservationBudgetRemaining = this.observationBudgetRemaining
@@ -3535,9 +3577,13 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
     this.outputBudgetRecoveryGuard = null
-    this.providerBudgetGeneration = 1
+    this.providerBudgetGeneration = Number.isSafeInteger(planBefore?.provider_recovery?.budget_generation)
+      ? planBefore.provider_recovery.budget_generation
+      : 1
     this.providerBudgetGenerationOutputUnits = 0
-    this.providerBudgetHandoffCount = 0
+    this.providerBudgetHandoffCount = Number.isSafeInteger(planBefore?.provider_recovery?.handoff_count)
+      ? planBefore.provider_recovery.handoff_count
+      : 0
     const resumeActionOmission = intent === 'continue_current'
       && planBefore?.status === 'active'
       && planBefore?.admission_status === 'action_omission_repair'
@@ -3548,7 +3594,17 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.pendingFiniteNoOperationPlan = null
     this.freshObservationSinceContinuation = false
     this.genericRecoveryDecisionActive = false
-    if (resumeActionOmission) {
+    if (resumeProviderBudgetHandoff && !resumeHierarchySplit) {
+      const budgetCapsule = providerBudgetHandoffCapsule(
+        planBefore,
+        taskStatus,
+        planBefore.provider_recovery.reason || 'provider_budget_handoff_resume',
+        planBefore.provider_recovery.semantic_scope,
+      )
+      const repairCapsule = resumeActionOmission ? `\n${actionOmissionRecoveryCapsule(planBefore, taskStatus)}` : ''
+      this.memory.setNextContextOverride?.(memoryKey, `${budgetCapsule}${repairCapsule}`)
+    }
+    else if (resumeActionOmission && !resumeHierarchySplit) {
       this.memory.setNextContextOverride?.(memoryKey, actionOmissionRecoveryCapsule(planBefore, taskStatus))
     }
     if (this.traceRequest) await this.traceEvent('request.superseded', { usage: this.traceRequest.usage })
@@ -3563,10 +3619,20 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       interaction_intent: intent,
       action_omission_recovery: resumeActionOmission,
       hierarchy_split_resume: resumeHierarchySplit,
+      provider_budget_handoff_resume: resumeProviderBudgetHandoff,
     })
     try {
       const result = await super.request(text, options)
       if (this.requestInfo?.memoryKey) this.lastMemoryKey = this.requestInfo.memoryKey
+      if (resumeProviderBudgetHandoff) {
+        this.memory.setProviderRecovery?.(memoryKey, undefined)
+        await this.persistState()
+        await this.traceEvent('budget.handoff_resumed', {
+          generation: this.providerBudgetGeneration,
+          handoff_count: this.providerBudgetHandoffCount,
+          semantic_scope: planBefore.provider_recovery.semantic_scope,
+        })
+      }
       return { ...result, interactionIntent: intent, routedOnly: false }
     }
     catch (error) {
@@ -5759,7 +5825,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.providerBudgetGenerationOutputUnits = 0
       this.outputBudgetRecoveryGuard = null
       this.outputBudgetRecoveryUsed = false
-      this.memory.setProviderRecovery?.(key, undefined)
+      this.memory.setProviderRecovery?.(key, {
+        kind: 'budget_handoff',
+        phase: 'planner_pending',
+        goal_id: this.memory.currentPlan?.(key)?.goal_id,
+        step_id: this.memory.currentPlan?.(key)?.task_board?.active_step_id,
+        semantic_scope: semanticScope,
+        route: routed.route,
+        reason: reasonText,
+        budget_generation: this.providerBudgetGeneration,
+        handoff_count: this.providerBudgetHandoffCount,
+        started_at: Date.now(),
+      })
       await this.persistState()
       await this.traceEvent('budget.generation_started', {
         generation: this.providerBudgetGeneration,
@@ -5770,13 +5847,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
       const previousTrigger = this.reasoningTriggerSource
       const previousReasoningBudget = this.reasoningBudgetOverride
-      this.reasoningTriggerSource = semanticScope === 'split_milestone'
-        ? 'hierarchy_split'
-        : semanticScope === 'reanchor_target'
-          ? 'post_step_reanchor'
-          : routed.route === 'replan_high'
-            ? 'recovery_replan_high'
-            : 'recovery_continue_low'
+      this.reasoningTriggerSource = providerBudgetTriggerSource(semanticScope, routed.route)
       this.reasoningBudgetOverride = null
       const state = this.memory.currentPlan?.(key)
       const capsule = providerBudgetHandoffCapsule(
@@ -5798,7 +5869,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         reasoning_policy: semanticScope === 'split_milestone' || routed.route === 'replan_high' ? 'high' : 'low',
       })
       try {
-        return await this.runTurn()
+        const result = await this.runTurn()
+        this.memory.setProviderRecovery?.(key, undefined)
+        await this.persistState()
+        await this.traceEvent('budget.handoff_committed', {
+          generation: this.providerBudgetGeneration,
+          handoff_count: this.providerBudgetHandoffCount,
+          semantic_scope: semanticScope,
+          route: routed.route,
+        })
+        return result
       }
       finally {
         this.reasoningTriggerSource = previousTrigger
