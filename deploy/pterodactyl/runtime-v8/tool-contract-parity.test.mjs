@@ -147,3 +147,49 @@ test('canonical operation defaults remain aligned with the Pterodactyl base pars
     }
   }
 })
+
+
+test('planner control tool is provider-only and does not pollute the Factorio observation surface', () => {
+  const factorioNames = runtime.toolDefinitions.map(definition => definition.function.name)
+  const providerNames = runtime.providerToolDefinitions.map(definition => definition.function.name)
+  assert.equal(factorioNames.includes('submitPlan'), false)
+  assert.equal(providerNames.includes('submitPlan'), true)
+  assert.equal(providerNames.length, factorioNames.length + 1)
+})
+
+test('submitPlan accepts natural-language assistant content while keeping control state structured', () => {
+  const payload = runtime.plannerControlPayloadFromMessage({
+    content: 'I am mining the next ore batch now.',
+    tool_calls: [{
+      id: 'control-1',
+      type: 'function',
+      function: {
+        name: 'submitPlan',
+        arguments: JSON.stringify({
+          chatMessage: 'fallback',
+          plan: ['Mine iron ore'],
+          currentStep: 0,
+          operations: [{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } }],
+        }),
+      },
+    }],
+  })
+  assert.equal(payload.chatMessage, 'I am mining the next ore batch now.')
+  assert.deepEqual(payload.plan, ['Mine iron ore'])
+  assert.equal(payload.operations[0].name, 'mine_entity')
+})
+
+test('submitPlan rejects mixed observation/control batches and malformed arguments', () => {
+  assert.throws(() => runtime.plannerControlPayloadFromMessage({
+    content: '',
+    tool_calls: [
+      { id: 'control-1', type: 'function', function: { name: 'submitPlan', arguments: '{"plan":[],"currentStep":0,"operations":[]}' } },
+      { id: 'observe-1', type: 'function', function: { name: 'getTaskStatus', arguments: '{}' } },
+    ],
+  }), /submitPlan must be the only tool call/i)
+
+  assert.throws(() => runtime.plannerControlPayloadFromMessage({
+    content: '',
+    tool_calls: [{ id: 'control-1', type: 'function', function: { name: 'submitPlan', arguments: '{bad json' } }],
+  }), /valid JSON/i)
+})
