@@ -7,7 +7,7 @@ import {
   compactPlanStateContent,
   providerRequest,
 } from './provider.mjs'
-import { toolDefinitions } from './structured-policy.mjs'
+import { providerToolDefinitions } from './structured-policy.mjs'
 
 function fakeProviderResponse() {
   return new Response(JSON.stringify({
@@ -88,7 +88,7 @@ test('successful operation completion uses compact context and bounded fallback 
   assert.notEqual(body.messages[0].content, 'FULL SYSTEM PROMPT '.repeat(500))
   assert.match(body.messages[0].content, /Token-efficient continuation rules/)
   assert.match(body.messages[0].content, /deterministic_verification/)
-  assert.equal(body.tools.length, toolDefinitions.length)
+  assert.equal(body.tools.length, providerToolDefinitions.length)
   assert.ok(body.tools.every(tool => !tool.function?.description || tool.function.description.length <= 120))
 
   const compactMemory = body.messages[1].content
