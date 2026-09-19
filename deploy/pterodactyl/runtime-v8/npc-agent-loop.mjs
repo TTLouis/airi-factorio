@@ -1808,6 +1808,11 @@ function providerBlockerReason(plan) {
   return cleanMemoryText(text.slice(ACTION_OMISSION_BLOCKER_PREFIX.length), 1200)
 }
 
+function terminalProviderBudgetFailure(value) {
+  const message = value instanceof Error ? value.message : String(value ?? '')
+  return /provider_context_window_exceeded|provider_output_budget_recovery_(?:exhausted|budget_unavailable)|provider_turn_output_cap_exceeded/i.test(message)
+}
+
 function canonicalWorkRemains(state) {
   if (state?.status !== 'active') return false
   if (state?.hierarchy_split_pending) return true
@@ -3761,9 +3766,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const planState = this.memory.currentPlan?.(this.activePlanKey())
-      const terminalProviderBudgetFailure = planState?.status === 'active'
-        && /provider_context_window_exceeded|provider_output_budget_recovery_(?:exhausted|budget_unavailable)|provider_turn_output_cap_exceeded/i.test(message)
-      if (terminalProviderBudgetFailure && generation === this.generation && this.active) {
+      const terminalBudgetFailure = planState?.status === 'active' && terminalProviderBudgetFailure(error)
+      if (terminalBudgetFailure && generation === this.generation && this.active) {
         // callProvider can surface the terminal exactly-once budget condition
         // before runTurn reaches its ordinary parse/recovery boundary. Reuse
         // the existing Outcome Authority path instead of leaking the provider
@@ -5888,7 +5892,22 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         reasoning_policy: semanticScope === 'split_milestone' || routed.route === 'replan_high' ? 'high' : 'low',
       })
       try {
-        const result = await this.runTurn()
+        let result
+        try {
+          result = await this.runTurn()
+        }
+        catch (error) {
+          if (terminalProviderBudgetFailure(error) && generation === this.generation && this.active) {
+            await this.traceEvent('budget.handoff_reentered', {
+              generation: this.providerBudgetGeneration,
+              handoff_count: this.providerBudgetHandoffCount,
+              next_round_base: roundBase + 1,
+              reason: cleanMemoryText(error instanceof Error ? error.message : String(error), 600),
+            })
+            return await this.recoverPlan(generation, error, roundBase + 1)
+          }
+          throw error
+        }
         this.memory.setProviderRecovery?.(key, undefined)
         await this.persistState()
         await this.traceEvent('budget.handoff_committed', {

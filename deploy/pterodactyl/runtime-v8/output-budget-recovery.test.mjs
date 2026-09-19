@@ -825,3 +825,125 @@ test('context-window exhaustion enters the same Jev planner-budget handoff witho
   assert.equal(agent.providerBudgetHandoffCount, 1)
   assert.equal(agent.memory.currentPlan('npc:airi').provider_recovery, undefined)
 })
+
+
+function rolloverDecisionProvider(counter) {
+  return async (state) => {
+    if (state?.contract === 'recovery_route') {
+      counter.count++
+      return {
+        model: 'jev-latest',
+        provider: 'TypeSafe',
+        answers: {
+          failure_class: { type: 'choice', choice: 'provider_budget', confidence: 0.99 },
+          next_recovery: { type: 'choice', choice: 'continue_low', confidence: 0.97 },
+          semantic_scope: { type: 'choice', choice: 'keep_target', confidence: 0.98 },
+          world_failure_supported: { type: 'noul', noul: 0.01 },
+          need_fresh_observation: { type: 'noul', noul: 0.05 },
+          need_semantic_replan: { type: 'noul', noul: 0.1 },
+        },
+        usage: { input_tokens: 30, output_tokens: 6, cost: 0 },
+      }
+    }
+    return {
+      model: 'jev-latest',
+      provider: 'TypeSafe',
+      answers: {
+        contract: { type: 'choice', choice: 'semantic_unknown', confidence: 0.8 },
+        compound_step: { type: 'noul', noul: 0.2 },
+        step_relation: { type: 'choice', choice: 'advances_current', confidence: 0.9 },
+        checkpoint_boundary: { type: 'choice', choice: 'keep_step_open', confidence: 0.9 },
+        completion: { type: 'choice', choice: 'progress', confidence: 0.9 },
+        route: { type: 'choice', choice: 'replan', confidence: 0.9 },
+        next_route: { type: 'choice', choice: 'wake_planner', confidence: 0.9 },
+        granularity: { type: 'choice', choice: 'keep', confidence: 0.9 },
+        development: { type: 'choice', choice: 'maintain', confidence: 0.9 },
+        reasoning_budget: { type: 'choice', choice: 'normal', confidence: 0.9 },
+        planning_horizon: { type: 'choice', choice: 'checkpoint', confidence: 0.9 },
+        observation_budget: { type: 'score', score: 0.25, confidence: 0.9 },
+      },
+      usage: { input_tokens: 20, output_tokens: 5, cost: 0 },
+    }
+  }
+}
+
+function contextWindowError() {
+  const error = new Error('provider_context_window_exceeded: Provider HTTP 400 reported context/input token limit exhaustion')
+  error.code = 'provider_context_window_exceeded'
+  error.failureClass = 'provider_budget'
+  return error
+}
+
+test('fresh planner generations can roll over provider budget more than once in one long-lived request', async () => {
+  const canonical = ['Inspect machine state', 'Continue the build']
+  const calls = []
+  const recoveryRoutes = { count: 0 }
+  const agent = makeAgent({
+    interactionDecisionProvider: rolloverDecisionProvider(recoveryRoutes),
+    provider: async (messages, context) => {
+      calls.push({ messages, context })
+      if (calls.length === 1) {
+        return planMessage({
+          chatMessage: 'Start one bounded runtime action.',
+          plan: canonical,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        })
+      }
+      if (calls.length === 2 || calls.length === 3) throw contextWindowError()
+      assert.equal(context.triggerSource, 'recovery_continue_low')
+      assert.match(messages.map(message => message.content ?? '').join('\n'), /\[PROVIDER_BUDGET_HANDOFF\]/)
+      return planMessage({
+        chatMessage: 'Continued after the second planner budget rollover.',
+        plan: canonical,
+        currentStep: 0,
+        operations: [{ name: 'wait', args: { ticks: 1 } }],
+      })
+    },
+  })
+
+  await agent.request('exercise repeated planner budget rollover', { sender: 'TTLouis' })
+  const result = await agent.completed()
+
+  assert.equal(recoveryRoutes.count, 2)
+  assert.equal(calls.length, 4)
+  assert.equal(result.goalStatus, 'active')
+  assert.equal(agent.providerBudgetGeneration, 3)
+  assert.equal(agent.providerBudgetHandoffCount, 2)
+  assert.equal(agent.memory.currentPlan('npc:airi').provider_recovery, undefined)
+})
+
+test('provider budget rollover limit stops recursive fresh generations without creating a world blocker', async () => {
+  const canonical = ['Inspect machine state', 'Continue the build']
+  const calls = []
+  const recoveryRoutes = { count: 0 }
+  const agent = makeAgent({
+    maxProviderBudgetHandoffs: 1,
+    interactionDecisionProvider: rolloverDecisionProvider(recoveryRoutes),
+    provider: async () => {
+      calls.push(calls.length + 1)
+      if (calls.length === 1) {
+        return planMessage({
+          chatMessage: 'Start one bounded runtime action.',
+          plan: canonical,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        })
+      }
+      throw contextWindowError()
+    },
+  })
+
+  await agent.request('exercise bounded planner budget rollover', { sender: 'TTLouis' })
+  const result = await agent.completed()
+
+  assert.equal(recoveryRoutes.count, 2)
+  assert.equal(calls.length, 3)
+  assert.equal(agent.providerBudgetGeneration, 2)
+  assert.equal(agent.providerBudgetHandoffCount, 1)
+  assert.equal(result.goalStatus, 'paused')
+  const state = agent.memory.currentPlan('npc:airi')
+  assert.equal(state.status, 'paused')
+  assert.notEqual(state.status, 'blocked')
+  assert.equal(state.provider_recovery, undefined)
+})
