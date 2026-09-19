@@ -176,3 +176,34 @@ export function validateSwarmRecoveryRoute(decision, {
     deterministic_recovery_actions: 0,
   }
 }
+
+
+export function buildSwarmRecoveryCapsule({
+  reason = '',
+  reconciliationActions = [],
+  runtime = {},
+  outcome,
+  observationBudgetAvailable = true,
+  blockerGrounded = false,
+} = {}) {
+  const runtimeState = authoritativeRuntimeState(runtime)
+  const pending = deterministicSwarmRecoveryPending(reconciliationActions)
+  return {
+    authority: 'shadow',
+    effects: [],
+    deterministic_recovery_pending: pending,
+    deterministic_recovery_actions: Array.isArray(reconciliationActions) ? reconciliationActions.length : 0,
+    jev_eligible: !pending,
+    failure_class_hint: swarmRecoveryFailureClassHint(reason),
+    runtime: runtimeState,
+    outcome: outcome && typeof outcome === 'object'
+      ? {
+          state: String(outcome.state ?? ''),
+          authoritative: outcome.authoritative === true,
+          reason: String(outcome.reason ?? ''),
+        }
+      : undefined,
+    observation_budget_available: observationBudgetAvailable === true,
+    blocker_grounded: blockerGrounded === true,
+  }
+}
