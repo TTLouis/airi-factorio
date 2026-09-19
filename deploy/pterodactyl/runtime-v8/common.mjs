@@ -543,14 +543,30 @@ function replanTaskBoardRemaining(board, incoming, incomingIndex, now) {
   const incomingIncludesCompletedPrefix = taskBoardCompletedPrefixMatches(board, incoming)
   const remainingDescriptions = incoming.slice(incomingIncludesCompletedPrefix ? board.completed_count : 0)
   if (remainingDescriptions.length === 0) return board
-  const steps = [
-    ...completed,
-    ...remainingDescriptions.map((description, offset) => ({
-      id: taskBoardStepId(completed.length + offset),
+
+  // Step ids are semantic identities, not array positions. Reuse an unfinished
+  // id only when the normalized step meaning is unchanged. A changed/new step
+  // gets a revision-scoped id so evidence from the replaced step cannot alias
+  // the new step just because both occupy the same plan index.
+  const priorRemaining = board.steps.slice(board.completed_count)
+  const usedStepIds = new Set(completed.map(step => step.id))
+  const replanRevision = (Number.isSafeInteger(board.revision) ? board.revision : 0) + 1
+  const remainingSteps = remainingDescriptions.map((description, offset) => {
+    const reusable = priorRemaining.find(step =>
+      !usedStepIds.has(step.id)
+      && normalizeTaskBoardStep(step.description) === normalizeTaskBoardStep(description))
+    const id = reusable?.id ?? `${taskBoardStepId(completed.length + offset)}_r${replanRevision}`
+    usedStepIds.add(id)
+    return {
+      id,
       description,
       status: 'pending',
-      revision: 1,
-    })),
+      revision: Number.isSafeInteger(reusable?.revision) ? reusable.revision : 1,
+    }
+  })
+  const steps = [
+    ...completed,
+    ...remainingSteps,
   ].slice(0, TASK_BOARD_MAX_STEPS)
   const proposedDescription = incoming[incomingIndex]
   const proposedFocusIndex = proposedDescription === undefined
@@ -707,6 +723,19 @@ export function sanitizeTaskBoard(value, { fallbackPlan = [], fallbackCurrentSte
   }
   const descriptions = value.steps.slice(0, TASK_BOARD_MAX_STEPS).map(step => taskBoardText(step?.description, 500)).filter(Boolean)
   let board = createTaskBoard(descriptions, value.active_index, { goalId: value.goal_id ?? goalId, now: Number.isFinite(value.created_at) ? value.created_at : now })
+  const usedStepIds = new Set()
+  board.steps = board.steps.map((step, index) => {
+    const persistedId = taskBoardText(value.steps[index]?.id, 80)
+    const id = persistedId && !usedStepIds.has(persistedId) ? persistedId : step.id
+    usedStepIds.add(id)
+    return {
+      ...step,
+      id,
+      revision: Number.isSafeInteger(value.steps[index]?.revision) && value.steps[index].revision > 0
+        ? value.steps[index].revision
+        : step.revision,
+    }
+  })
   board = {
     ...board,
     status: ['active', 'blocked', 'paused', 'completed'].includes(value.status) ? value.status : board.status,
