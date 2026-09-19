@@ -208,6 +208,36 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     return state.project_board
   }
 
+  markHierarchySplitPending(key, envelope = {}) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state || state.status !== 'active') return undefined
+    const now = Date.now()
+    state.hierarchy_split_pending = {
+      kind: 'split_current_milestone',
+      reason_code: String(envelope.reason_code ?? 'hierarchy_split_requested').slice(0, 120),
+      reasoning_budget: ['micro', 'normal', 'deep', 'strategic'].includes(envelope.reasoning_budget) ? envelope.reasoning_budget : undefined,
+      planning_horizon: ['immediate', 'checkpoint', 'subgoal', 'strategic'].includes(envelope.planning_horizon) ? envelope.planning_horizon : undefined,
+      observation_budget: Number.isSafeInteger(envelope.observation_budget)
+        ? Math.max(0, Math.min(8, envelope.observation_budget))
+        : undefined,
+      requested_at: now,
+    }
+    state.revision = (state.revision ?? 0) + 1
+    state.updated_at = now
+    this.planByNpc.set(key, state)
+    return state.hierarchy_split_pending
+  }
+
+  clearHierarchySplitPending(key) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state?.hierarchy_split_pending) return state
+    state.hierarchy_split_pending = undefined
+    state.revision = (state.revision ?? 0) + 1
+    state.updated_at = Date.now()
+    this.planByNpc.set(key, state)
+    return state
+  }
+
   updateProjectBoard(key, patch = {}, options = {}) {
     const state = key ? this.planByNpc.get(key) : undefined
     if (!state) return undefined
@@ -242,7 +272,10 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     }
     const plan = super.planContext(key)
     const project = this.ensureProjectBoard(state)
-    return `${plan}\n[PROJECT_STATE] Durable long-horizon hierarchy. Future milestones are tentative; the current Task Board remains the execution contract.\n${JSON.stringify(project)}`
+    const pending = state.hierarchy_split_pending
+      ? `\n[HIERARCHY_TRANSITION] A Jev split decision is durably pending. Do not continue the old flat Plan Tracker. Resolve the transition by proposing one bounded project.currentMilestone and a milestone-local plan before new world mutation.\n${JSON.stringify(state.hierarchy_split_pending)}`
+      : ''
+    return `${plan}\n[PROJECT_STATE] Durable long-horizon hierarchy. Future milestones are tentative; the current Task Board remains the execution contract.\n${JSON.stringify(project)}${pending}`
   }
 
   currentPlan(key) {
