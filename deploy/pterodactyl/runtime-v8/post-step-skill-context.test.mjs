@@ -148,7 +148,7 @@ test('findSkills remains discovery-only while getSkillDetails creates task-local
     results: [{ id: 'burner-coal-loop', name: 'Burner Coal Loop', summary: 'search metadata only' }],
   })
   assert.equal(agent.recordLoadedSkillToolResult('findSkills', { query: 'coal loop' }, discovery), false)
-  assert.doesNotMatch(agent.providerMessages().map(message => String(message.content ?? '')).join('\n'), /\[SKILL_CONTEXT\]/)
+  assert.equal(agent.skillContext(), '')
 
   const skill = {
     schema_version: 1,
@@ -167,22 +167,25 @@ test('findSkills remains discovery-only while getSkillDetails creates task-local
   }
   assert.ok(agent.recordLoadedSkillToolResult('getSkillDetails', { id: 'burner-coal-loop' }, JSON.stringify(skill)))
 
-  let context = agent.providerMessages().map(message => String(message.content ?? '')).join('\n')
-  assert.match(context, /\[SKILL_CONTEXT\]/)
+  let context = agent.skillContext()
+  assert.match(context, /^\[SKILL_CONTEXT\]/)
   assert.match(context, /burner-coal-loop/)
   assert.match(context, /Verify actual output direction/)
 
   agent.messages.push({ role: 'assistant', content: JSON.stringify({ chatMessage: '', plan: ['verify'], currentStep: 0, operations: [] }) })
   agent.prepareContinuationContext()
-  context = agent.providerMessages().map(message => String(message.content ?? '')).join('\n')
-  assert.match(context, /\[SKILL_CONTEXT\]/)
+  context = agent.skillContext()
+  assert.match(context, /^\[SKILL_CONTEXT\]/)
   assert.match(context, /burner-coal-loop/)
 
   await agent.pausePersistentPlan('ui_pause')
-  assert.match(agent.providerMessages().map(message => String(message.content ?? '')).join('\n'), /\[SKILL_CONTEXT\]/)
+  assert.match(agent.skillContext(), /^\[SKILL_CONTEXT\]/)
 
-  agent.cancel('test_cancel')
-  assert.doesNotMatch(agent.providerMessages().map(message => String(message.content ?? '')).join('\n'), /\[SKILL_CONTEXT\]/)
+  agent.cancel('user_stop_immediate')
+  assert.match(agent.skillContext(), /^\[SKILL_CONTEXT\]/)
+
+  agent.cancel('ui_terminate')
+  assert.equal(agent.skillContext(), '')
 })
 
 test('active Jev post-step continue and replan routes map to low/high planner trigger overrides', async () => {

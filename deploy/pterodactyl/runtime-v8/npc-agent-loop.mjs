@@ -1604,6 +1604,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   clearLoadedSkillContext() {
+    if (!(this.loadedSkillContext instanceof Map)) {
+      this.loadedSkillContext = new Map()
+      return
+    }
     this.loadedSkillContext.clear()
   }
 
@@ -1611,6 +1615,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (toolName !== 'getSkillDetails') return false
     const skill = compactLoadedSkill(raw, typeof args?.id === 'string' ? args.id : undefined)
     if (!skill) return false
+    if (!(this.loadedSkillContext instanceof Map)) this.loadedSkillContext = new Map()
     if (this.loadedSkillContext.has(skill.id)) this.loadedSkillContext.delete(skill.id)
     this.loadedSkillContext.set(skill.id, skill)
     while (this.loadedSkillContext.size > SKILL_CONTEXT_MAX_SKILLS) {
@@ -1622,8 +1627,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   skillContext() {
+    if (!(this.loadedSkillContext instanceof Map) || this.loadedSkillContext.size === 0) return ''
     const skills = [...this.loadedSkillContext.values()]
-    if (skills.length === 0) return ''
     while (skills.length > 1 && JSON.stringify(skills).length > SKILL_CONTEXT_MAX_CHARS) skills.shift()
     const payload = JSON.stringify(skills)
     if (payload.length > SKILL_CONTEXT_MAX_CHARS) return ''
@@ -2550,7 +2555,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.interactionAbort = null
     this.postStepDecisionAbort?.abort()
     this.postStepDecisionAbort = null
-    this.clearLoadedSkillContext()
+    if (/terminate|new_task|cancel_current|user_cancel/i.test(String(reason))) this.clearLoadedSkillContext()
     this.reasoningTriggerSource = null
     void this.traceEvent('request.cancelled', { reason, usage: this.traceRequest?.usage })
     this.traceRequest = null
