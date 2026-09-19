@@ -68,6 +68,8 @@ const JEV_PIPELINE_RUNTIME_GUARDS = [
   ['milestoneTransitionDecisionQuestions', typeof milestoneTransitionDecisionQuestions],
   ['parseMilestoneTransitionDecision', typeof parseMilestoneTransitionDecision],
   ['parseProjectProposal', typeof parseProjectProposal],
+  ['completionContractSupported', typeof completionContractSupported],
+  ['sanitizeStepCompletionContract', typeof sanitizeStepCompletionContract],
 ]
 for (const [name, type] of JEV_PIPELINE_RUNTIME_GUARDS) {
   if (type !== 'function') throw new Error(`Jev pipeline dependency ${name} is unavailable`)
