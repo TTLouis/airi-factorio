@@ -22,7 +22,9 @@ test('creates a bounded canonical board with stable step ids', () => {
   ])
   assert.deepEqual(taskBoardProgress(board), {
     status: 'active', completed: 0, total: 3, index: 1,
-    step_id: 'step_1', step: 'observe', blocker: '', pause_reason: '', revision: 1,
+    step_id: 'step_1', step: 'observe',
+    proposed_focus_index: 0, proposed_focus_step_id: 'step_1',
+    blocker: '', pause_reason: '', revision: 1,
   })
 })
 
@@ -34,9 +36,14 @@ test('does not let a continuation silently expand 1/5 into 1/7', () => {
   assert.equal(taskBoardProgress(changed).index, 1)
 })
 
-test('advances only when the incoming active step matches a later canonical step', () => {
+test('advances only when runtime marks the matching later canonical step authoritative', () => {
   const original = createTaskBoard(['observe', 'build', 'load', 'verify'], 0, { now: 10 })
-  const advanced = reconcileTaskBoard(original, ['observe', 'build', 'load', 'verify'], 2, { now: 20 })
+  const proposed = reconcileTaskBoard(original, ['observe', 'build', 'load', 'verify'], 2, { now: 15 })
+  assert.equal(proposed.active_step_id, 'step_1')
+  assert.equal(proposed.completed_count, 0)
+  assert.equal(proposed.proposed_focus_step_id, 'step_3')
+
+  const advanced = reconcileTaskBoard(proposed, ['observe', 'build', 'load', 'verify'], 2, { now: 20, authoritativeAdvance: true })
   assert.equal(advanced.active_step_id, 'step_3')
   assert.equal(advanced.completed_count, 2)
   assert.equal(advanced.total_steps, 4)
@@ -45,7 +52,7 @@ test('advances only when the incoming active step matches a later canonical step
 
 test('failure recovery may replace only the remaining suffix without losing completed progress', () => {
   let board = createTaskBoard(['observe', 'walk', 'build', 'verify'], 0, { now: 10 })
-  board = reconcileTaskBoard(board, ['observe', 'walk', 'build', 'verify'], 2, { now: 20 })
+  board = reconcileTaskBoard(board, ['observe', 'walk', 'build', 'verify'], 2, { now: 20, authoritativeAdvance: true })
   const replanned = reconcileTaskBoard(board, ['observe', 'walk', 'escape water', 'repath', 'build', 'verify'], 2, { now: 30, allowReplan: true })
   assert.equal(replanned.completed_count, 2)
   assert.equal(replanned.active_index, 2)
@@ -77,8 +84,10 @@ test('records blockers, pauses, completion and bounded evidence as board truth',
 test('sanitizes persisted board data and migrates a legacy plan when board is missing', () => {
   const legacy = sanitizeTaskBoard(undefined, { fallbackPlan: ['a', 'b'], fallbackCurrentStep: 1, goalId: 'goal_old', now: 50 })
   assert.equal(legacy.goal_id, 'goal_old')
-  assert.equal(legacy.active_step_id, 'step_2')
-  assert.equal(legacy.completed_count, 1)
+  assert.equal(legacy.active_step_id, 'step_1')
+  assert.equal(legacy.completed_count, 0)
+  assert.equal(legacy.proposed_focus_index, 1)
+  assert.equal(legacy.proposed_focus_step_id, 'step_2')
 
   const restored = sanitizeTaskBoard({
     ...legacy,
