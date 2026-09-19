@@ -423,7 +423,9 @@ test('active Jev post-step routing is tracked separately from interaction shadow
         planning_horizon: 'checkpoint',
         observation_budget: 1,
       },
-      hierarchy_shadow_only: true,
+      milestone_transition: { decision: 'advance_next', confidence: 0.87 },
+      hierarchy_runtime_gate: { allow_runtime_continuation: false, reason: 'milestone_transition' },
+      hierarchy_budget_shadow_only: true,
       usage: { input_tokens: 90, output_tokens: 8, cost: 0.00000378 },
     },
   }, debug)
@@ -442,6 +444,8 @@ test('active Jev post-step routing is tracked separately from interaction shadow
   assert.equal(debug.decision_reasoning_confidence_percent, 81)
   assert.equal(debug.decision_planning_horizon, 'checkpoint')
   assert.equal(debug.decision_observation_budget, 1)
+  assert.equal(debug.decision_milestone_transition, 'advance_next')
+  assert.equal(debug.decision_milestone_transition_confidence_percent, 87)
   assert.match(debug.decision_post_step_fallback, /wait_runtime_without/)
   assert.equal(debug.decision_calls_total, 2)
   assert.equal(debug.decision_input_units_total, 210)
