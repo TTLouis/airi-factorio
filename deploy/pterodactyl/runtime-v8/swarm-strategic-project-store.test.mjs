@@ -206,3 +206,26 @@ test('next strategic goal requires a new non-empty identity and objective', () =
   assert.equal(store.current().goal_id, 'goal-done')
   assert.equal(store.current().status, 'completed')
 })
+
+
+test('strategic goal completion remains verified-only at the store boundary', () => {
+  const store = new SwarmStrategicProjectStore({
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+  })
+  store.update({
+    completed_milestones: [{ title: 'Final milestone' }],
+    transition_state: 'awaiting_next_milestone',
+  })
+
+  const rejected = store.completeGoal({ verified: false })
+  assert.equal(rejected.changed, false)
+  assert.equal(rejected.reason, 'project_completion_not_verified')
+  assert.equal(store.current().status, 'active')
+
+  const accepted = store.completeGoal({ verified: true })
+  assert.equal(accepted.changed, true)
+  assert.equal(accepted.reason, 'project_verified_complete')
+  assert.equal(store.current().status, 'completed')
+  assert.equal(store.current().transition_state, '')
+})
