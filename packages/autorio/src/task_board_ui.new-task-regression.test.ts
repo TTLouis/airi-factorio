@@ -1,9 +1,19 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
+function taskBoardUiSource() {
+  const main = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+  const constants = readFileSync(new URL('./task_board_ui_constants.ts', import.meta.url), 'utf8')
+  // UI constants moved into a namespace to preserve Factorio Lua local headroom.
+  // Normalize that namespace for source-architecture assertions while retaining
+  // the constants module so declaration/geometry checks still test real code.
+  return `${main.replaceAll('ui_constants.', '')}\n${constants}`
+}
+
+
 describe('task board New Task control regression', () => {
   it('renders New Task in the Prompt SGLuna heading and queues the server-authoritative action', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const controls = source.split('function render_controls_panel(')[1]?.split('export function task_board_gui_height(')[0] ?? ''
     const prompt = source.split('function render_prompt(')[1]?.split('function render_titlebar(')[0] ?? ''
     const handler = source.split('function handle_control_click(')[1]?.split('\n}\n\nexport function create_task_board_ui_remote_interface')[0] ?? ''
@@ -24,7 +34,7 @@ describe('task board New Task control regression', () => {
   })
 
   it('refreshes Current Task Conversation while the console stays open', () => {
-    const source = readFileSync(new URL('./task_board_ui.ts', import.meta.url), 'utf8')
+    const source = taskBoardUiSource()
     const refresh = source.split('function refresh_columns(')[1]?.split('function build_panel(')[0] ?? ''
 
     expect(refresh).toContain('dynamic.clear(); build_left_dynamic(dynamic, player, board, synced_tick, runtime)')
