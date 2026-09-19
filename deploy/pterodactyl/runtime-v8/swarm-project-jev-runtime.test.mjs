@@ -176,12 +176,22 @@ test('milestone completion through runtime still requires explicit verified auth
     developmentDirection: 'vertical',
   })
 
-  const rejected = await runtime.completeCurrentMilestone({ verified: false })
+  const rejected = await runtime.completeCurrentMilestone({ verified: true })
   assert.equal(rejected.changed, false)
+  assert.equal(rejected.reason, 'outcome_snapshot_not_verdict_authority')
   assert.equal(runtime.currentBoard().current_milestone.title, 'Bootstrap power')
 
-  const accepted = await runtime.completeCurrentMilestone({ verified: true })
+  const accepted = await runtime.completeCurrentMilestone({
+    authority: 'verdict_only',
+    effects: [],
+    strategic_milestone: {
+      state: 'completed',
+      authoritative: true,
+      reason: 'strategic_milestone_verified',
+    },
+  })
   assert.equal(accepted.changed, true)
+  assert.equal(accepted.authorization.authorized, true)
   assert.equal(runtime.currentBoard().transition_state, 'awaiting_next_milestone')
 })
 
@@ -295,4 +305,41 @@ test('runtime exposes no raw board patch method that can bypass planner admissio
   assert.equal(rejected.changed, false)
   assert.equal(rejected.reason, 'active_milestone_replacement_requires_runtime_transition')
   assert.deepEqual(runtime.currentBoard(), before)
+})
+
+
+test('runtime rejects receipt-only milestone progress even when caller asks to close it', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const runtime = new SwarmProjectJevRuntime({
+    rcon: {
+      async command() {
+        return JSON.stringify(coordinationFixture())
+      },
+    },
+    stateFile: filename,
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+  })
+
+  await runtime.applyPlannerProposal({
+    currentMilestone: { title: 'Bootstrap power' },
+    nextMilestones: [{ title: 'Automate science' }],
+    developmentDirection: 'vertical',
+  })
+
+  const result = await runtime.completeCurrentMilestone({
+    authority: 'verdict_only',
+    effects: [],
+    strategic_milestone: {
+      state: 'progress',
+      authoritative: false,
+      reason: 'strategic_milestone_receipt_only',
+    },
+  })
+
+  assert.equal(result.changed, false)
+  assert.equal(result.reason, 'strategic_milestone_not_authoritatively_complete')
+  assert.equal(runtime.currentBoard().current_milestone.title, 'Bootstrap power')
 })
