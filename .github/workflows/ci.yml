@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feat/npc-transition-work
+      - experiment/jev-agent-architecture
 
   pull_request:
     branches:
