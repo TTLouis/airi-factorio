@@ -27,6 +27,23 @@ function clean(value) {
   return String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLocaleLowerCase()
 }
 
+function safeHierarchySplitPending(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.kind !== 'split_current_milestone') return undefined
+  const reasoningBudget = ['micro', 'normal', 'deep', 'strategic'].includes(value.reasoning_budget) ? value.reasoning_budget : undefined
+  const planningHorizon = ['immediate', 'checkpoint', 'subgoal', 'strategic'].includes(value.planning_horizon) ? value.planning_horizon : undefined
+  const observationBudget = Number.isSafeInteger(value.observation_budget)
+    ? Math.max(0, Math.min(8, value.observation_budget))
+    : undefined
+  return {
+    kind: 'split_current_milestone',
+    reason_code: String(value.reason_code ?? 'hierarchy_split_requested').slice(0, 120),
+    reasoning_budget: reasoningBudget,
+    planning_horizon: planningHorizon,
+    observation_budget: observationBudget,
+    requested_at: Number.isFinite(value.requested_at) ? value.requested_at : Date.now(),
+  }
+}
+
 function parseStoredOperation(value) {
   if (typeof value !== 'string') return undefined
   const separator = value.indexOf(' ')
@@ -368,14 +385,29 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
             .map(item => [item.key, item?.state?.project_board])
         : [],
     )
+    const persistedHierarchyState = new Map(
+      Array.isArray(snapshot?.plans)
+        ? snapshot.plans
+            .filter(item => item && typeof item.key === 'string')
+            .map(item => [item.key, {
+              hierarchy_split_pending: item?.state?.hierarchy_split_pending,
+              milestone_transition_pending: item?.state?.milestone_transition_pending === true,
+              milestone_plan_pending: item?.state?.milestone_plan_pending === true,
+            }])
+        : [],
+    )
     super.restore(snapshot)
     for (const [key, state] of this.planByNpc.entries()) {
+      const hierarchyState = persistedHierarchyState.get(key)
       state.project_board = sanitizeProjectBoard(persistedProjects.get(key), {
         goalId: state.goal_id,
         objective: state.objective,
         status: state.status,
         now: state.updated_at,
       })
+      state.hierarchy_split_pending = safeHierarchySplitPending(hierarchyState?.hierarchy_split_pending)
+      state.milestone_transition_pending = hierarchyState?.milestone_transition_pending === true
+      state.milestone_plan_pending = hierarchyState?.milestone_plan_pending === true
       this.planByNpc.set(key, state)
     }
   }
