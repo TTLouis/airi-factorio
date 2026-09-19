@@ -92,3 +92,70 @@ test('swarm Project records are never interpreted as the strategic Project Board
   assert.equal(context.strategic_project_board, undefined)
   assert.equal(Object.hasOwn(context, 'project'), false)
 })
+
+
+test('shadow context exposes evidence verdicts without inheriting mutation authority', () => {
+  const context = buildSwarmJevShadowContext({
+    strategicBoard: {
+      goal_id: 'goal-1',
+      title: 'Automate blue science',
+      current_milestone: { title: 'Establish oil processing' },
+    },
+    outcome: {
+      work: {
+        status: 'completed',
+        evidence: [{ kind: 'operation_receipt', id: 'batch-1', tick: 10 }],
+      },
+      strategicMilestoneVerification: {
+        verified: true,
+        evidence: [{ kind: 'operation_receipt', id: 'batch-2', tick: 11 }],
+      },
+      effects: ['must_not_escape'],
+    },
+  })
+
+  assert.equal(context.outcome_verdict.authority, 'verdict_only')
+  assert.deepEqual(context.outcome_verdict.effects, [])
+  assert.equal(context.outcome_verdict.work.state, 'progress')
+  assert.equal(context.outcome_verdict.work.authoritative, false)
+  assert.equal(context.outcome_verdict.strategic_milestone.state, 'progress')
+  assert.equal(context.outcome_verdict.strategic_milestone.authoritative, false)
+  assert.equal(Object.hasOwn(context.outcome_verdict, 'must_not_escape'), false)
+})
+
+test('grounded mission verdict can be visible to Jev while the Jev response remains shadow-only', () => {
+  const context = buildSwarmJevShadowContext({
+    outcome: {
+      mission: {
+        status: 'satisfied',
+        objectiveIds: ['o-1'],
+        acceptance: [],
+        acceptanceState: {},
+        blockers: [],
+      },
+      objectives: [{
+        id: 'o-1',
+        status: 'satisfied',
+        acceptance: [{ id: 'a-1' }],
+        acceptanceState: {
+          'a-1': {
+            conditionId: 'a-1',
+            satisfied: true,
+            evidence: [{ kind: 'observation', id: 'obs-1', tick: 20 }],
+            tick: 20,
+          },
+        },
+      }],
+    },
+  })
+  assert.equal(context.outcome_verdict.mission.state, 'completed')
+  assert.equal(context.outcome_verdict.mission.authoritative, true)
+
+  const decision = parseSwarmJevShadowDecision({
+    answers: {
+      routing: { choice: 'continue_runtime' },
+    },
+  })
+  assert.equal(decision.authority, 'shadow')
+  assert.deepEqual(decision.effects, [])
+})
