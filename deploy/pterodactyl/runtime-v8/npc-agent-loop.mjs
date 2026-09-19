@@ -3240,6 +3240,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       super.cancel()
       this.memory.clearTaskContext?.(memoryKey)
       if (initialHierarchySplit) {
+        this.memory.beginHierarchyGoal?.(memoryKey, { sender, text }, {
+          reason_code: 'hierarchy_initial_split',
+          reasoning_budget: routed.decision_shadow?.reasoning_budget,
+          planning_horizon: routed.decision_shadow?.planning_horizon,
+          observation_budget: routed.decision_shadow?.observation_budget,
+        })
         this.memory.setNextContextOverride?.(
           memoryKey,
           '[HIERARCHY_REQUEST] Jev classified this new user goal as too broad for one flat Plan Tracker. Create a bounded Project hierarchy now: keep the user goal unchanged, choose exactly one currentMilestone with a verifiable outcome, keep at most three tentative nextMilestones, and make plan contain only the executable/verifiable steps for that current milestone. Jev decides that a split is needed; you decide how to decompose it.',
@@ -4577,7 +4583,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           { preserveCurrentMilestone },
         )
         if (projectBoard && stateResult?.state) {
-          if (triggerSource === 'hierarchy_split') this.memory.clearHierarchySplitPending?.(this.requestInfo.memoryKey)
+          if (['hierarchy_initial_split', 'hierarchy_split'].includes(triggerSource)) {
+            this.memory.clearHierarchySplitPending?.(this.requestInfo.memoryKey)
+          }
           stateResult = { ...stateResult, state: this.memory.currentPlan?.(this.requestInfo.memoryKey) ?? stateResult.state }
           await this.traceEvent('project.updated', {
             project_id: projectBoard.project_id,
