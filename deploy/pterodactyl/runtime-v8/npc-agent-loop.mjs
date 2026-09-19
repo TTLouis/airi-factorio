@@ -1676,6 +1676,7 @@ function providerBlockerReason(plan) {
 
 function canonicalWorkRemains(state) {
   if (state?.status !== 'active') return false
+  if (state?.hierarchy_split_pending) return true
   if (state?.milestone_plan_pending === true && state?.project_board?.current_milestone) return true
   const board = state?.task_board
   if (board?.kind !== 'task_board_lite' || !Array.isArray(board.steps) || board.steps.length === 0) return false
@@ -3247,17 +3248,34 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       await this.persistState()
     }
 
+    const resumeHierarchySplit = intent === 'continue_current'
+      && planBefore?.status === 'active'
+      && planBefore?.hierarchy_split_pending
+      && !healthyRuntime
+    if (resumeHierarchySplit) {
+      this.memory.setNextContextOverride?.(
+        memoryKey,
+        '[HIERARCHY_REQUEST] A Jev-approved split is durably pending from the previous planner boundary. Do not continue the old flat Plan Tracker. Resolve the transaction now by proposing one bounded project.currentMilestone and a milestone-local plan before any new world mutation.',
+      )
+    }
+
     this.liveEntityObservations = new Map()
     this.rejectedExactTargets = new Set()
     this.staleExactPreflightRetries = 0
     this.bootstrapDependencyPreflightRetries = 0
-    this.planUpdateReason = intent === 'new_goal'
-      ? 'new_goal'
-      : intent === 'amend_current'
-        ? 'amend_current'
-        : 'continue_current'
+    this.planUpdateReason = resumeHierarchySplit
+      ? 'reanchor_plan'
+      : intent === 'new_goal'
+        ? 'new_goal'
+        : intent === 'amend_current'
+          ? 'amend_current'
+          : 'continue_current'
     this.requestLifecycle = intent
-    this.reasoningTriggerSource = initialHierarchySplit ? 'hierarchy_initial_split' : null
+    this.reasoningTriggerSource = initialHierarchySplit
+      ? 'hierarchy_initial_split'
+      : resumeHierarchySplit
+        ? 'hierarchy_split'
+        : null
     const previousReasoningBudget = this.reasoningBudgetOverride
     const previousObservationBudget = this.observationBudgetOverride
     const previousObservationBudgetRemaining = this.observationBudgetRemaining
@@ -3267,6 +3285,14 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.observationBudgetOverride = Number.isSafeInteger(routed.decision_shadow.observation_budget) ? routed.decision_shadow.observation_budget : null
       this.observationBudgetRemaining = this.observationBudgetOverride
       this.planningHorizonOverride = routed.decision_shadow.planning_horizon ?? null
+    }
+    else if (resumeHierarchySplit) {
+      this.reasoningBudgetOverride = planBefore.hierarchy_split_pending.reasoning_budget ?? 'deep'
+      this.observationBudgetOverride = Number.isSafeInteger(planBefore.hierarchy_split_pending.observation_budget)
+        ? planBefore.hierarchy_split_pending.observation_budget
+        : 0
+      this.observationBudgetRemaining = this.observationBudgetOverride
+      this.planningHorizonOverride = planBefore.hierarchy_split_pending.planning_horizon ?? 'subgoal'
     }
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
@@ -3296,6 +3322,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       text,
       interaction_intent: intent,
       action_omission_recovery: resumeActionOmission,
+      hierarchy_split_resume: resumeHierarchySplit,
     })
     try {
       const result = await super.request(text, options)
@@ -3583,6 +3610,25 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       routed = await this.routePostStepDecision(receipt)
     }
     if (routed.route === 'wait_runtime') return null
+
+    if (routed.hierarchy_action === 'split_current_milestone' && this.requestInfo?.memoryKey) {
+      const pending = this.memory.markHierarchySplitPending?.(this.requestInfo.memoryKey, {
+        reason_code: routed.fallback_reason || 'hierarchy_split_requested',
+        reasoning_budget: routed.hierarchy?.reasoning_budget,
+        planning_horizon: routed.hierarchy?.planning_horizon,
+        observation_budget: routed.hierarchy?.observation_budget,
+      })
+      if (pending) {
+        await this.persistState()
+        await this.traceEvent('hierarchy.transition_pending', {
+          kind: pending.kind,
+          reason_code: pending.reason_code,
+          reasoning_budget: pending.reasoning_budget,
+          planning_horizon: pending.planning_horizon,
+          observation_budget: pending.observation_budget,
+        })
+      }
+    }
 
     this.reasoningTriggerSource = routed.hierarchy_action === 'split_current_milestone'
       ? 'hierarchy_split'
@@ -4531,6 +4577,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           { preserveCurrentMilestone },
         )
         if (projectBoard && stateResult?.state) {
+          if (triggerSource === 'hierarchy_split') this.memory.clearHierarchySplitPending?.(this.requestInfo.memoryKey)
           stateResult = { ...stateResult, state: this.memory.currentPlan?.(this.requestInfo.memoryKey) ?? stateResult.state }
           await this.traceEvent('project.updated', {
             project_id: projectBoard.project_id,
