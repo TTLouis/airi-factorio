@@ -48,3 +48,37 @@ test('updates hierarchy metadata without changing project identity', () => {
   assert.equal(updated.development_direction, 'vertical')
   assert.equal(updated.revision, 2)
 })
+
+
+test('parses a bounded Main LLM project proposal without allowing project-goal rewrites', async () => {
+  const { parseProjectProposal } = await import('./project-board.mjs')
+  assert.deepEqual(parseProjectProposal({
+    currentMilestone: {
+      title: 'Establish burner production',
+      completionSummary: 'Stable early iron and copper production is available.',
+    },
+    nextMilestones: [
+      { title: 'Reach Automation' },
+      { title: 'Establish electric power' },
+    ],
+    developmentDirection: 'vertical',
+  }), {
+    current_milestone: {
+      title: 'Establish burner production',
+      completion_summary: 'Stable early iron and copper production is available.',
+    },
+    next_milestones: [
+      { title: 'Reach Automation', completion_summary: undefined },
+      { title: 'Establish electric power', completion_summary: undefined },
+    ],
+    development_direction: 'vertical',
+  })
+  assert.throws(() => parseProjectProposal({
+    title: 'Rewrite the user goal',
+    currentMilestone: { title: 'Bootstrap' },
+  }), /Invalid project proposal field/)
+  assert.throws(() => parseProjectProposal({
+    currentMilestone: { title: 'Bootstrap' },
+    nextMilestones: [{ title: 'a' }, { title: 'b' }, { title: 'c' }, { title: 'd' }],
+  }), /Invalid nextMilestones/)
+})
