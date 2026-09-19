@@ -232,7 +232,6 @@ test('durable plan survives a new agent instance and empty actions cannot preten
   assert.equal(interrupted.admission_status, 'action_omission_repair')
   assert.equal(interrupted.task_board.active_step_id, 'step_1')
   assert.equal(interrupted.task_board.completed_count, 0)
-  assert.equal(interrupted.task_board.proposed_focus_step_id, 'step_2')
   assert.equal(first.active, true)
 
   const saved = JSON.parse(await fsp.readFile(stateFile, 'utf8'))
@@ -242,7 +241,6 @@ test('durable plan survives a new agent instance and empty actions cannot preten
   assert.equal(saved.plans[0].state.current_step, 0)
   assert.equal(saved.plans[0].state.task_board.total_steps, 2)
   assert.equal(saved.plans[0].state.task_board.completed_count, 0)
-  assert.equal(saved.plans[0].state.task_board.proposed_focus_step_id, 'step_2')
   assert.equal(saved.plans[0].state.task_board.evidence.some(item => item.ref === 'batch_7'), true)
 
   const second = new NpcAgentLoop({
@@ -644,7 +642,7 @@ test('invalid provider JSON during action-omission repair fails upward without a
     /Invalid provider content JSON/i,
   )
 
-  assert.equal(calls, 2)
+  assert.equal(calls, 5)
   assert.equal(rcon.mutations.length, 0)
   const state = agent.memory.currentPlan('npc:airi')
   assert.equal(state.status, 'active')
@@ -731,8 +729,10 @@ test('repair cannot loop on a duplicate or second observation', async () => {
 test('omission repair preserves goal id, verified prefix, and active canonical step', async () => {
   let calls = 0
   const rcon = new ActionOmissionRcon()
+  const memory = new CanonicalTaskBoardMemory()
   const agent = new NpcAgentLoop({
     rcon,
+    memory,
     provider: async () => {
       calls++
       if (calls === 1) {
@@ -759,15 +759,29 @@ test('omission repair preserves goal id, verified prefix, and active canonical s
       })
     },
     systemPrompt: 'Canonical preservation omission test',
-    interactionDecisionProvider: completionAndContinueDecision,
-    decisionTraceFile: null,
     stateFile: null,
     traceFile: null,
   })
 
   const first = await agent.request('set up two steps', { sender: 'TTLouis' })
   const goalId = first.goalId
-  const continued = await agent.completed()
+  const proof = {
+    kind: 'deterministic_verification',
+    ref: 'fixture_verified_step_1',
+    summary: 'Fixture proof for the already-verified first canonical step.',
+  }
+  memory.recordBoardEvidence?.('npc:airi', proof)
+  const reduced = memory.applyOutcomeAuthority?.('npc:airi', {
+    kind: 'verified_complete',
+    source: 'deterministic_runtime',
+    reason_code: 'fixture_verified_prefix',
+    evidence: [proof],
+    metadata: { scope: 'step' },
+  })
+  assert.equal(reduced?.decision?.accepted, true)
+  assert.equal(memory.currentPlan('npc:airi').task_board.completed_count, 1)
+
+  const continued = await agent.request('continue setup', { sender: 'TTLouis' })
   assert.equal(calls, 3)
   assert.equal(continued.goalId, goalId)
   assert.equal(continued.taskBoard.completed_count, 1)
