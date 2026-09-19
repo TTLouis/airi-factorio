@@ -340,7 +340,8 @@ test('idle no-plan real new goal is classified before the main planner runs once
   assert.equal(calls.length, 2)
   assert.equal(calls[0].interactionRouter, true)
   assert.equal(calls[1].triggerSource, 'new_goal')
-  assert.equal(decisionCalls.length, 1)
+  assert.equal(decisionCalls.filter(call => call.questions?.intent).length, 1)
+  assert.equal(decisionCalls.filter(call => call.state?.contract === 'step_checkpoint_normalizer').length, 1)
   assert.equal(rcon.cancelCount, 0)
 })
 
@@ -562,8 +563,9 @@ test('new broad goal uses Jev granularity to require Project -> Milestone -> Pla
 
   assert.equal(result.interactionIntent, 'new_goal')
   assert.equal(result.routedOnly, false)
-  assert.equal(decisionCalls.length, 1)
-  assert.equal(decisionCalls[0].questions.granularity.type, 'choice')
+  assert.equal(decisionCalls.filter(call => call.questions?.intent).length, 1)
+  assert.equal(decisionCalls.filter(call => call.state?.contract === 'step_checkpoint_normalizer').length, 1)
+  assert.equal(decisionCalls.find(call => call.questions?.intent).questions.granularity.type, 'choice')
   const state = memory.currentPlan('npc:airi')
   assert.equal(state.project_board.title, 'Launch a rocket from this fresh start.')
   assert.equal(state.project_board.current_milestone.title, 'Establish bounded starter production')
