@@ -10,7 +10,7 @@ const OUTCOME_KINDS = new Set([
 
 const BLOCKER_EVIDENCE_KINDS = new Set([
   'deterministic_preflight',
-  'operation_preflight_rejection',
+  'operation_preflight_blocker',
   'operation_admission_failure',
   'operation_error_receipt',
   'autorio_failure',
@@ -24,6 +24,11 @@ const COMPLETION_EVIDENCE_KINDS = new Set([
   'authoritative_completion',
   'verified_world_state',
   'condition_satisfied',
+])
+
+const PROVIDER_CONTROL_PLANE_FAILURES = new Set([
+  'provider_format',
+  'provider_budget',
 ])
 
 function clean(value, max = 500) {
@@ -132,6 +137,9 @@ export function validateOutcomeCandidate(candidate, { world = {} } = {}) {
   }
 
   if (kind === 'world_blocked') {
+    if (PROVIDER_CONTROL_PLANE_FAILURES.has(reasonCode)) {
+      return { ...base, rejection_reason: 'provider_failure_cannot_be_world_blocker' }
+    }
     const blocker = clean(candidate?.candidate_blocker, 500)
     if (!blocker) return { ...base, rejection_reason: 'world_blocked_without_candidate_blocker' }
     return hasAuthoritativeBlockerEvidence(evidence)
