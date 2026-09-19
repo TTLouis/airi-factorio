@@ -48,7 +48,7 @@ const DURABLE_PLAN_PROMPT = `
 
 The Pterodactyl harness may provide a [PLAN_STATE] message. It is harness-owned durable goal/plan context for this logical NPC and survives ordinary model turns and server restarts. Use it to resume a prior task, answer what you were doing, or continue after a pause. It is not authoritative live Factorio state: re-observe mutable game state before depending on it.
 
-The task_board field is the canonical single-NPC Task Board Lite. Its stable step ids, statuses, completed count, evidence, and revision are harness-owned. Your plan/currentStep fields are proposals used to advance or intentionally replan the remaining work; do not assume that changing the length of your plan array resets completed progress.
+The task_board field is the canonical single-NPC Task Board Lite. Its stable step ids, statuses, completed count, evidence, and revision are harness-owned. Your plan/currentStep fields are proposals only. currentStep is a proposed focus, not evidence that earlier work completed, and it cannot by itself advance active_index or completed_count. Only grounded runtime authority advances canonical progress. If you intentionally replan, preserve already-completed intent instead of treating currentStep as proof that work happened.
 
 For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
 

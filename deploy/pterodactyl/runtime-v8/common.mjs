@@ -540,7 +540,8 @@ function taskBoardCompletedPrefixMatches(board, incoming) {
 
 function replanTaskBoardRemaining(board, incoming, incomingIndex, now) {
   const completed = board.steps.slice(0, board.completed_count).map(step => ({ ...step, status: 'completed' }))
-  const remainingDescriptions = incoming.slice(Math.max(incomingIndex, board.completed_count))
+  const incomingIncludesCompletedPrefix = taskBoardCompletedPrefixMatches(board, incoming)
+  const remainingDescriptions = incoming.slice(incomingIncludesCompletedPrefix ? board.completed_count : 0)
   if (remainingDescriptions.length === 0) return board
   const steps = [
     ...completed,
@@ -551,6 +552,10 @@ function replanTaskBoardRemaining(board, incoming, incomingIndex, now) {
       revision: 1,
     })),
   ].slice(0, TASK_BOARD_MAX_STEPS)
+  const proposedDescription = incoming[incomingIndex]
+  const proposedFocusIndex = proposedDescription === undefined
+    ? completed.length
+    : steps.findIndex(step => normalizeTaskBoardStep(step.description) === normalizeTaskBoardStep(proposedDescription))
   let next = {
     ...board,
     status: 'active',
@@ -559,7 +564,7 @@ function replanTaskBoardRemaining(board, incoming, incomingIndex, now) {
     revision: board.revision + 1,
     steps,
     active_index: completed.length,
-    proposed_focus_index: completed.length,
+    proposed_focus_index: proposedFocusIndex >= 0 ? proposedFocusIndex : completed.length,
     updated_at: now,
   }
   next = applyTaskBoardStatuses(next, completed.length)

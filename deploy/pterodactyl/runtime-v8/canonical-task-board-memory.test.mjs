@@ -509,3 +509,25 @@ test('provider currentStep proposal alone cannot increase canonical completed_co
   assert.equal(reconciled.state.task_board.completed_count, 1)
   assert.equal(reconciled.state.task_board.proposed_focus_index, 4)
 })
+
+
+test('replan keeps every unverified remaining step even when proposed currentStep points later', () => {
+  const initial = createTaskBoard(['Gather ore', 'Smelt plates', 'Craft machine'], 0, { goalId: 'goal_replan', now: 1 })
+  const replanned = reconcileTaskBoard(
+    initial,
+    ['Gather ore', 'Prepare fuel', 'Smelt plates', 'Craft machine'],
+    2,
+    { now: 2, allowReplan: true },
+  )
+
+  assert.equal(replanned.active_index, 0)
+  assert.equal(replanned.completed_count, 0)
+  assert.deepEqual(
+    replanned.steps.map(step => step.description),
+    ['Gather ore', 'Prepare fuel', 'Smelt plates', 'Craft machine'],
+  )
+  assert.equal(replanned.proposed_focus_index, 2)
+  assert.equal(replanned.proposed_focus_step_id, 'step_3')
+  assert.equal(replanned.steps[0].status, 'active')
+  assert.equal(replanned.steps[1].status, 'pending')
+})
