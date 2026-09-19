@@ -56,6 +56,33 @@ A more precise authority statement is:
 
 "Less harness" therefore does **not** mean removing validation or letting model output become authoritative world state. It means reducing deterministic code that tries to make semantic decisions that a model can make better from grounded evidence.
 
+## Hierarchical autonomy implementation direction
+
+The long-horizon design is being implemented incrementally rather than by replacing the current Task Board in one pass.
+
+The first implementation step introduces explicit Jev decision families as a typed contract, without yet changing planner wake/sleep behavior:
+
+- `granularity = keep | split | collapse`
+- `development = vertical | horizontal | maintain | recover`
+- `completion = incomplete | progress | completed | invalidated`
+- `routing = wait_runtime | continue_runtime | wake_planner`
+- `reasoning_budget = micro | normal | deep | strategic`
+
+The development classifier is explicitly relative to the **active milestone and its critical path**. Technology is not automatically vertical and factory expansion is not automatically horizontal. Capacity expansion is vertical when it removes the current critical-path blocker; the same expansion is horizontal when the path is already viable and the purpose is resilience, sustained throughput, or future scale.
+
+The initial decision envelope also separates `planning_horizon` from `observation_budget`. These are semantic budgets. Provider-specific reasoning parameters remain adapter/runtime concerns.
+
+The implementation order is intentionally conservative:
+
+1. define and test the decision taxonomy;
+2. wire the taxonomy into traces/diagnostics without changing authority;
+3. let Jev gate planner wake/sleep for already-supported deterministic wait/continue cases;
+4. add milestone/project durable state above the existing Plan Tracker;
+5. add granularity-driven milestone decomposition;
+6. only then map Jev reasoning budgets into provider/model-specific reasoning controls.
+
+This preserves current completion authority and makes each behavior change independently testable.
+
 ## Three model lanes
 
 ### 1. Jev decision lane
