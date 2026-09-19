@@ -82,3 +82,18 @@ test('parses a bounded Main LLM project proposal without allowing project-goal r
     nextMilestones: [{ title: 'a' }, { title: 'b' }, { title: 'c' }, { title: 'd' }],
   }), /Invalid nextMilestones/)
 })
+
+
+test('derives stable milestone ids from milestone titles', () => {
+  const first = sanitizeProjectBoard({
+    current_milestone: { title: 'Establish burner production' },
+    next_milestones: [{ title: 'Reach Automation' }],
+  }, { goalId: 'goal_1', objective: 'Launch a rocket', now: 10 })
+  const second = sanitizeProjectBoard({
+    current_milestone: { title: 'Establish burner production' },
+    next_milestones: [{ title: 'Reach Automation' }],
+  }, { goalId: 'goal_1', objective: 'Launch a rocket', now: 20 })
+  assert.match(first.current_milestone.id, /^milestone_/)
+  assert.equal(first.current_milestone.id, second.current_milestone.id)
+  assert.equal(first.next_milestones[0].id, second.next_milestones[0].id)
+})
