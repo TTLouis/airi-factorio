@@ -1,7 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { liveAgentDebugEvent, liveAgentEvent, navigationObstaclePolicy, taskBoardUiSnapshot } from './supervisor.mjs'
+import {
+  hierarchyTransitionPending,
+  liveAgentDebugEvent,
+  liveAgentEvent,
+  navigationObstaclePolicy,
+  pauseStrandedPlanAfterRequestError,
+  recoverInterruptedAgentPlan,
+  taskBoardUiSnapshot,
+} from './supervisor.mjs'
 
 test('natural obstacle clearing defaults on for ordinary new requests', () => {
   assert.deepEqual(navigationObstaclePolicy('去最近的石矿'), {
@@ -188,4 +196,91 @@ test('in-game task board snapshot is a projection of canonical durable state', (
       actor_epoch: 0,
     },
   })
+})
+
+
+test('structural hierarchy transactions are not auto-paused after an idle request failure', async () => {
+  const state = {
+    status: 'active',
+    hierarchy_split_pending: {
+      kind: 'split_current_milestone',
+      reason_code: 'hierarchy_split_requested',
+    },
+  }
+  let pauses = 0
+  const session = {
+    currentPlanState: () => state,
+    syncTaskBoardUi: async () => {},
+    agent: {
+      readInteractionTaskStatus: async () => ({ task_state: 'idle', queue_length: 0 }),
+      pausePersistentPlan: async () => {
+        pauses++
+        return { status: 'paused' }
+      },
+    },
+  }
+
+  assert.equal(hierarchyTransitionPending(state), true)
+  assert.equal(await pauseStrandedPlanAfterRequestError(session, 'synthetic planner failure'), undefined)
+  assert.equal(pauses, 0)
+})
+
+test('interrupted hierarchy split recovery restores its structural trigger and semantic budgets', async () => {
+  const state = {
+    goal_id: 'goal_long',
+    owner: 'tester',
+    objective: 'Reach Automation',
+    status: 'active',
+    hierarchy_split_pending: {
+      kind: 'split_project_goal',
+      reason_code: 'hierarchy_initial_split',
+      reasoning_budget: 'strategic',
+      planning_horizon: 'strategic',
+      observation_budget: 3,
+      requested_at: 1,
+    },
+  }
+  const memory = {
+    currentPlan: () => state,
+    context: () => '[PLAN_STATE] durable hierarchy split',
+  }
+  const seen = {}
+  const agent = {
+    npcId: 'airi',
+    memory,
+    systemPrompt: 'system',
+    turnSequence: 0,
+    reasoningBudgetOverride: null,
+    observationBudgetOverride: null,
+    observationBudgetRemaining: null,
+    planningHorizonOverride: null,
+    loadPersistentState: async () => {},
+    cancel: () => {},
+    captureEpoch: async () => ({ actor_id: 3, epoch: 8 }),
+    traceEvent: async () => {},
+    runGuarded: async function () {
+      seen.planUpdateReason = this.planUpdateReason
+      seen.reasoningTriggerSource = this.reasoningTriggerSource
+      seen.reasoningBudgetOverride = this.reasoningBudgetOverride
+      seen.observationBudgetOverride = this.observationBudgetOverride
+      seen.observationBudgetRemaining = this.observationBudgetRemaining
+      seen.planningHorizonOverride = this.planningHorizonOverride
+      seen.message = this.messages.at(-1)?.content
+      return { chatMessage: 'recovered hierarchy' }
+    },
+  }
+
+  const result = await recoverInterruptedAgentPlan(agent, 'runtime_restart')
+  assert.equal(result.recovered, true)
+  assert.equal(seen.planUpdateReason, 'reanchor_plan')
+  assert.equal(seen.reasoningTriggerSource, 'hierarchy_split')
+  assert.equal(seen.reasoningBudgetOverride, 'strategic')
+  assert.equal(seen.observationBudgetOverride, 3)
+  assert.equal(seen.observationBudgetRemaining, 3)
+  assert.equal(seen.planningHorizonOverride, 'strategic')
+  assert.match(seen.message, /durably pending hierarchy split/i)
+  assert.equal(agent.reasoningBudgetOverride, null)
+  assert.equal(agent.observationBudgetOverride, null)
+  assert.equal(agent.observationBudgetRemaining, null)
+  assert.equal(agent.planningHorizonOverride, null)
 })
