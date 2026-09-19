@@ -864,7 +864,7 @@ test('interrupted omission recovery uses a compact capsule instead of replaying 
 })
 
 
-test('pre-plan observation decision pressure ends in one bounded act-or-block decision', async () => {
+test('pre-plan observation decision pressure closes tools without manufacturing a recovery attempt', async () => {
   let calls = 0
   const optionsSeen = []
   const rcon = new ActionOmissionRcon()
@@ -875,10 +875,10 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
       optionsSeen.push(options)
       if (calls <= 4) return toolMessage(`preplan-observe-${calls}`, 15 + calls)
       return planMessage({
-        chatMessage: '',
-        plan: [],
+        chatMessage: 'Taking the grounded next action now.',
+        plan: ['Take the needed plates'],
         currentStep: 0,
-        operations: [],
+        operations: [{ name: 'wait', args: { ticks: 1 } }],
       })
     },
     systemPrompt: 'Pre-plan observation pressure test',
@@ -886,21 +886,13 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
     traceFile: null,
   })
 
-  await assert.rejects(
-    agent.request('inspect the chest and take the needed plates', { sender: 'TTLouis' }),
-    /provider_action_omission_repair_failed/i,
-  )
+  const result = await agent.request('inspect the chest and take the needed plates', { sender: 'TTLouis' })
   assert.equal(calls, 5)
   assert.equal(rcon.observationCalls, 4)
   assert.equal(optionsSeen.at(-1).allowTools, false)
-  assert.equal(optionsSeen.at(-1).recoveryAttempt, 1)
-  assert.deepEqual(optionsSeen.at(-1).requestBodyPatch, { max_tokens: 700 })
-  const state = agent.memory.currentPlan('npc:airi')
-  if (state) {
-    assert.equal(state.status, 'active')
-    assert.notEqual(state.task_board.blocker, 'action_omission_after_repair')
-  }
-  assert.equal(rcon.mutations.length, 0)
+  assert.equal(optionsSeen.at(-1).recoveryAttempt, 0)
+  assert.equal(optionsSeen.at(-1).requestBodyPatch, undefined)
+  assert.equal(result.operations[0].name, 'wait')
 })
 
 
