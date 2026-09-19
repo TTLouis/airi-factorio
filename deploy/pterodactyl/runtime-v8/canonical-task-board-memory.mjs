@@ -1,6 +1,6 @@
 import { NpcDialogueMemory } from './npc-agent-loop.mjs'
-import { setTaskBoardStatus } from './common.mjs'
-import { sanitizeProjectBoard, updateProjectBoard } from './project-board.mjs'
+import { createTaskBoard, setTaskBoardStatus } from './common.mjs'
+import { activateNextMilestone, completeCurrentMilestone, sanitizeProjectBoard, updateProjectBoard } from './project-board.mjs'
 
 const STRICT_TASKS_BY_OPERATION = new Map([
   ['walk_to_entity', ['walking_to_entity']],
@@ -259,9 +259,66 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
   }
 
   applyOutcomeAuthority(key, candidate, options = {}) {
+    const before = key ? this.planByNpc.get(key) : undefined
+    const boardBefore = before?.task_board
+    const projectBefore = before ? this.ensureProjectBoard(before) : undefined
+    const finalStepOfMilestone = candidate?.metadata?.scope === 'step'
+      && projectBefore?.current_milestone
+      && Array.isArray(boardBefore?.steps)
+      && boardBefore.steps.length > 0
+      && Number.isSafeInteger(boardBefore.active_index)
+      && boardBefore.active_index === boardBefore.steps.length - 1
+
     const result = super.applyOutcomeAuthority(key, candidate, options)
+    if (finalStepOfMilestone && result?.decision?.accepted === true && result?.state?.status === 'completed') {
+      const state = result.state
+      const transition = completeCurrentMilestone(projectBefore, {
+        verified: true,
+        goalId: state.goal_id,
+        objective: state.objective,
+        status: 'active',
+        now: state.updated_at,
+      })
+      if (transition.changed) {
+        state.status = 'active'
+        state.admission_status = undefined
+        state.blocker = ''
+        state.pause_reason = ''
+        state.persistent_runtime = undefined
+        state.condition_wait = undefined
+        state.project_board = transition.board
+        state.milestone_transition_pending = true
+        state.plan = []
+        state.current_step = 0
+        state.revision = (state.revision ?? 0) + 1
+        this.planByNpc.set(key, state)
+        return { ...result, state, changed: true, milestoneCompleted: true }
+      }
+    }
     if (result?.state) this.ensureProjectBoard(result.state)
     return result
+  }
+
+  activateNextMilestone(key) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state || state.status !== 'active') return { state, changed: false, reason: 'no_active_project' }
+    const now = Date.now()
+    const transition = activateNextMilestone(this.ensureProjectBoard(state), {
+      goalId: state.goal_id,
+      objective: state.objective,
+      status: state.status,
+      now,
+    })
+    if (!transition.changed) return { state, changed: false, reason: transition.reason }
+    state.project_board = transition.board
+    state.milestone_transition_pending = false
+    state.task_board = createTaskBoard([], 0, { goalId: state.goal_id, now })
+    state.plan = []
+    state.current_step = 0
+    state.revision = (state.revision ?? 0) + 1
+    state.updated_at = now
+    this.planByNpc.set(key, state)
+    return { state, changed: true, reason: transition.reason }
   }
 
   restore(snapshot) {
@@ -286,6 +343,25 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
 
   reconcileTaskBoard(key, previousBoard, plan, stateResult, options = {}) {
     const truthState = options.previousState ?? stateResult?.state
+    if (options.newMilestone === true && stateResult?.state) {
+      const state = stateResult.state
+      const now = state.updated_at ?? Date.now()
+      const incoming = Array.isArray(plan?.plan) ? plan.plan : []
+      state.task_board = createTaskBoard(incoming, Number.isSafeInteger(plan?.currentStep) ? plan.currentStep : 0, {
+        goalId: state.goal_id,
+        now,
+      })
+      state.task_board = setTaskBoardStatus(state.task_board, state.status, {
+        blocker: state.blocker,
+        pauseReason: state.pause_reason,
+        now,
+      })
+      state.plan = state.task_board.steps.map(step => step.description)
+      state.current_step = state.task_board.active_index
+      state.milestone_transition_pending = false
+      this.planByNpc.set(key, state)
+      return { ...stateResult, state }
+    }
     const guarded = canonicalContinuationPlan(previousBoard, plan, { ...options, previousState: truthState })
     const result = super.reconcileTaskBoard(key, previousBoard, guarded, stateResult, options)
     if (result?.state?.status === 'completed') this.planByNpc.delete(key)
