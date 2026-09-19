@@ -3743,7 +3743,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const message = error instanceof Error ? error.message : String(error)
       const planState = this.memory.currentPlan?.(this.activePlanKey())
       const terminalProviderBudgetFailure = planState?.status === 'active'
-        && /provider_output_budget_recovery_(?:exhausted|budget_unavailable)|provider_turn_output_cap_exceeded/i.test(message)
+        && /provider_context_window_exceeded|provider_output_budget_recovery_(?:exhausted|budget_unavailable)|provider_turn_output_cap_exceeded/i.test(message)
       if (terminalProviderBudgetFailure && generation === this.generation && this.active) {
         // callProvider can surface the terminal exactly-once budget condition
         // before runTurn reaches its ordinary parse/recovery boundary. Reuse

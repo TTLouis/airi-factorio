@@ -394,6 +394,60 @@ function providerUsageNumbers(usage) {
   return { input, output, total, reasoning }
 }
 
+function safeProviderErrorText(value, max = 800) {
+  const text = String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
+}
+
+async function boundedProviderErrorBody(response, maxBytes = 64 * 1024) {
+  if (!response?.body) return { text: '', bytes: 0, truncated: false }
+  const reader = response.body.getReader()
+  const chunks = []
+  let bytes = 0
+  let truncated = false
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    const remaining = maxBytes - bytes
+    if (remaining <= 0) {
+      truncated = true
+      await reader.cancel()
+      break
+    }
+    const chunk = value.length > remaining ? value.slice(0, remaining) : value
+    chunks.push(chunk)
+    bytes += chunk.length
+    if (value.length > remaining) {
+      truncated = true
+      await reader.cancel()
+      break
+    }
+  }
+  return { text: Buffer.concat(chunks).toString('utf8'), bytes, truncated }
+}
+
+function providerHttpErrorDiagnostics(responseText) {
+  let parsed
+  try { parsed = JSON.parse(String(responseText ?? '')) }
+  catch {}
+  const rawError = parsed?.error && typeof parsed.error === 'object' && !Array.isArray(parsed.error)
+    ? parsed.error
+    : parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : {}
+  const code = safeProviderErrorText(rawError.code, 120)
+  const type = safeProviderErrorText(rawError.type, 120)
+  const message = safeProviderErrorText(rawError.message || rawError.detail || responseText, 1200)
+  const classifier = `${code} ${type} ${message}`.toLowerCase()
+  const contextWindowExceeded = /context[_ -]?(?:length|window)[_ -]?exceeded|maximum context length|context window (?:is |was )?(?:too small|exceeded)|prompt (?:is )?too long|input (?:is )?too long|too many (?:input|prompt) tokens|(?:input|prompt) token limit|(?:input|prompt).{0,80}exceeds?.{0,80}(?:context|token limit)/i.test(classifier)
+  return {
+    diagnostic_code: contextWindowExceeded ? 'provider_context_window_exceeded' : 'provider_http_error',
+    provider_error_code: code || undefined,
+    provider_error_type: type || undefined,
+    provider_error_message: message || undefined,
+  }
+}
+
 function topLevelJsonObjectSpans(text) {
   const spans = []
   let depth = 0
@@ -879,11 +933,20 @@ export async function providerRequest(config, messages, {
     })
 
     if (!response.ok) {
+      const errorBody = await boundedProviderErrorBody(response)
+      const diagnostics = providerHttpErrorDiagnostics(errorBody.text)
       await traceProviderResult('provider.response_error', {
-        diagnostic_code: 'provider_http_error',
+        ...diagnostics,
         http_status: response.status,
+        response_bytes: errorBody.bytes,
+        response_truncated: errorBody.truncated,
       }, traceOptions)
-      throw new DeploymentError(`Provider HTTP ${response.status}; request will not be retried automatically`)
+      const failure = diagnostics.diagnostic_code === 'provider_context_window_exceeded'
+        ? new DeploymentError(`provider_context_window_exceeded: Provider HTTP ${response.status} reported context/input token limit exhaustion`)
+        : new DeploymentError(`Provider HTTP ${response.status}; request will not be retried automatically`)
+      failure.code = diagnostics.diagnostic_code
+      if (diagnostics.diagnostic_code === 'provider_context_window_exceeded') failure.failureClass = 'provider_budget'
+      throw failure
     }
     if (!response.body) {
       await traceProviderResult('provider.response_error', {

@@ -31,7 +31,7 @@ export const RECOVERY_SEMANTIC_SCOPES = new Set([
 
 export function recoveryFailureClassHint(reason) {
   const text = String(reason ?? '')
-  if (/finish=length|output budget|provider_(?:turn_output_cap_exceeded|output_budget(?:_recovery)?_(?:exhausted|budget_unavailable))/i.test(text)) return 'provider_budget'
+  if (/finish=length|output budget|context[_ -]?(?:length|window)[_ -]?exceeded|provider_(?:context_window_exceeded|turn_output_cap_exceeded|output_budget(?:_recovery)?_(?:exhausted|budget_unavailable))/i.test(text)) return 'provider_budget'
   if (/provider_safety_blocked|content_filter|safety block/i.test(text)) return 'provider_safety'
   if (/invalid provider|invalid json|strict json|malformed|parse/i.test(text)) return 'provider_format'
   if (/observation|missing fact|exact entity requires live observation/i.test(text)) return 'missing_fact'

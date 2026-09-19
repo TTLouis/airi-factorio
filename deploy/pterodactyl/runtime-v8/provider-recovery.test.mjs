@@ -209,3 +209,47 @@ test('provider diagnostics distinguish invalid content JSON from plan-schema fai
   assert.equal(invalidPlan._airiProvider.structured_content.json_valid, true)
   assert.equal(invalidPlan._airiProvider.structured_content.plan_valid, false)
 })
+
+
+test('provider classifies context-window HTTP failures as provider budget boundaries', async () => {
+  const errorBody = {
+    error: {
+      message: "This model's maximum context length is 128000 tokens. Your messages resulted in 130412 tokens.",
+      type: 'invalid_request_error',
+      code: 'context_length_exceeded',
+    },
+  }
+  await assert.rejects(
+    () => providerRequest(config, messages, {
+      fetchImpl: async () => new Response(JSON.stringify(errorBody), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      }),
+    }),
+    error => {
+      assert.equal(error?.code, 'provider_context_window_exceeded')
+      assert.equal(error?.failureClass, 'provider_budget')
+      assert.match(String(error?.message ?? ''), /provider_context_window_exceeded/)
+      return true
+    },
+  )
+})
+
+test('ordinary provider HTTP failures remain transport failures rather than budget handoffs', async () => {
+  await assert.rejects(
+    () => providerRequest(config, messages, {
+      fetchImpl: async () => new Response(JSON.stringify({
+        error: { message: 'rate limit reached', type: 'rate_limit_error', code: 'rate_limit_exceeded' },
+      }), {
+        status: 429,
+        headers: { 'content-type': 'application/json' },
+      }),
+    }),
+    error => {
+      assert.equal(error?.code, 'provider_http_error')
+      assert.equal(error?.failureClass, undefined)
+      assert.match(String(error?.message ?? ''), /Provider HTTP 429/)
+      return true
+    },
+  )
+})
