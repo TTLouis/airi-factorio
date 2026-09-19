@@ -13,8 +13,11 @@ function globalSnapshot() {
     limit: 12,
     counts: {
       missions: 1,
+      incompleteMissions: 1,
       objectives: 2,
+      incompleteObjectives: 1,
       projects: 1,
+      incompleteProjects: 1,
       work: 3,
       requests: 1,
       claims: 1,
