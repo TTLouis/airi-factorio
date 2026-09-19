@@ -1305,3 +1305,28 @@ Jev milestone_transition
 `project_complete_candidate` is intentionally only a candidate. Jev cannot complete the user-level project. The Main LLM/runtime must still verify the actual project goal from authoritative evidence.
 
 The in-game console now has a separate **Project Board** above **Plan Tracker**. Project Board shows the user-level project, active milestone, development direction, verified milestone count, and up to three tentative upcoming milestones. Plan Tracker remains the current execution contract.
+
+
+### Pre-plan granularity gate for new goals
+
+The Jev decision provider now participates before the first Main LLM planning turn for a new user goal without adding a second Jev request. The existing interaction-side Jev call includes a bounded `granularity` question alongside intent/queue-conflict classification.
+
+For a new actionable goal:
+
+```text
+user message
+  ↓
+interaction router decides lifecycle intent
+  +
+Jev classifies incoming semantic granularity
+  ↓
+if new_goal + granularity=split
+  ↓
+runtime injects HIERARCHY_REQUEST
+  ↓
+Main LLM must create Project -> currentMilestone -> Plan Steps
+```
+
+The interaction router remains authoritative for whether the message is a new goal, amendment, status request, cancellation, or chat. Jev's granularity result becomes active only after the independent router has classified the message as `new_goal`.
+
+This is the first path that prevents a broad goal such as "Launch a rocket" from being flattened directly into one giant Plan Tracker before execution begins.
