@@ -16,7 +16,9 @@ import {
   developmentDecisionQuestions,
   granularityDecisionQuestions,
   hierarchyRuntimeGate,
+  milestoneTransitionDecisionQuestions,
   parseHierarchyTelemetry,
+  parseMilestoneTransitionDecision,
 } from './jev-decision-taxonomy.mjs'
 import { isLifecycleMetaStep, normalizeCanonicalPlan, validateOutcomeCandidate } from './outcome-authority.mjs'
 import { parseRecoveryDecision, recoveryDecisionQuestions, recoveryFailureClassHint, validateRecoveryRoute } from './recovery-route.mjs'
@@ -2747,6 +2749,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
             status: planState.status,
           }
         : null,
+      project: planState?.project_board
+        ? sanitizeDurableModelValue(planState.project_board)
+        : null,
       task_board: board
         ? {
             active_index: activeIndex,
@@ -2789,14 +2794,23 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       ...(failure ? { failure: cleanMemoryText(failure, 1200) } : {}),
     }
     const envelopeQuestions = decisionEnvelopeQuestions()
-    const questions = {
-      ...postStepDecisionQuestions(),
-      ...granularityDecisionQuestions(),
-      ...developmentDecisionQuestions(),
-      reasoning_budget: envelopeQuestions.reasoning_budget,
-      planning_horizon: envelopeQuestions.planning_horizon,
-      observation_budget: envelopeQuestions.observation_budget,
-    }
+    const milestoneTransitionPending = planState?.project_board?.transition_state === 'awaiting_next_milestone'
+    const questions = milestoneTransitionPending
+      ? {
+          ...postStepDecisionQuestions(),
+          ...milestoneTransitionDecisionQuestions(),
+          reasoning_budget: envelopeQuestions.reasoning_budget,
+          planning_horizon: envelopeQuestions.planning_horizon,
+          observation_budget: envelopeQuestions.observation_budget,
+        }
+      : {
+          ...postStepDecisionQuestions(),
+          ...granularityDecisionQuestions(),
+          ...developmentDecisionQuestions(),
+          reasoning_budget: envelopeQuestions.reasoning_budget,
+          planning_horizon: envelopeQuestions.planning_horizon,
+          observation_budget: envelopeQuestions.observation_budget,
+        }
     const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
     this.postStepDecisionAbort?.abort()
     const controller = new AbortController()
@@ -2826,6 +2840,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       await this.assertCurrent()
       const decision = parsePostStepDecision(response)
       const hierarchyTelemetry = parseHierarchyTelemetry(response)
+      const milestoneTransition = milestoneTransitionPending
+        ? parseMilestoneTransitionDecision(response)
+        : undefined
       const latency_ms = Date.now() - startedAt
       if (decision.route === 'wait_runtime' && conditionWaitHealthy) {
         conditionValidation = await this.validateConditionWaitHealth()
@@ -2841,6 +2858,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
       let appliedRoute = decision.route
       let fallbackReason = ''
+      let hierarchyAction
       const hierarchyGate = hierarchyRuntimeGate(hierarchyTelemetry, {
         runtimeHealthy,
         boundary: state.boundary,
@@ -2851,8 +2869,31 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       // is stable, and Jev classifies the next strategic move as maintain.
       // Split/vertical/horizontal/recover remain planner-owned; budget/horizon
       // fields are still telemetry only.
-      if (state.boundary === 'completion' && hierarchyTelemetry.granularity === 'split') {
+      if (milestoneTransitionPending && milestoneTransition?.decision === 'advance_next') {
+        const advanced = this.memory.activateNextMilestone?.(this.activePlanKey())
         appliedRoute = 'replan'
+        if (advanced?.changed) {
+          hierarchyAction = 'advance_next_milestone'
+          fallbackReason = 'verified_milestone_complete_advance_next'
+        }
+        else {
+          hierarchyAction = 'replan_project'
+          fallbackReason = advanced?.reason || 'advance_next_unavailable'
+        }
+      }
+      else if (milestoneTransitionPending && milestoneTransition?.decision === 'project_complete_candidate') {
+        appliedRoute = 'replan'
+        hierarchyAction = 'project_complete_candidate'
+        fallbackReason = 'project_completion_requires_main_planner_verification'
+      }
+      else if (milestoneTransitionPending) {
+        appliedRoute = 'replan'
+        hierarchyAction = 'replan_project'
+        fallbackReason = 'verified_milestone_complete_replan_project'
+      }
+      else if (state.boundary === 'completion' && hierarchyTelemetry.granularity === 'split') {
+        appliedRoute = 'replan'
+        hierarchyAction = 'split_current_milestone'
         fallbackReason = 'hierarchy_split_requested'
       }
       else if (hierarchyGate.allow_runtime_continuation && decision.route === 'continue_current') {
@@ -2878,6 +2919,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         route: decision.route,
         confidence: decision.confidence,
         hierarchy_telemetry: hierarchyTelemetry,
+        milestone_transition: milestoneTransition,
         hierarchy_runtime_gate: hierarchyGate,
         hierarchy_budget_shadow_only: true,
         latency_ms,
@@ -2911,6 +2953,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           route: decision.route,
           confidence: decision.confidence,
           hierarchy: hierarchyTelemetry,
+          milestone_transition: milestoneTransition,
           hierarchy_runtime_gate: hierarchyGate,
           hierarchy_budget_shadow_only: true,
           usage: decision.usage,
@@ -2943,9 +2986,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         runtime_reason: runtimeReason,
         decision,
         hierarchy_gate: hierarchyGate,
-        hierarchy_action: hierarchyTelemetry.granularity === 'split' && state.boundary === 'completion'
-          ? 'split_current_milestone'
-          : undefined,
+        hierarchy_action: hierarchyAction,
         fallback_reason: fallbackReason,
         decision_called: true,
       }
