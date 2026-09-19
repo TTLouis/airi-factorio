@@ -405,11 +405,23 @@ export class Rcon {
   }
 }
 
-export async function reserveBudget(filename, maximum, now = Date.now()) {
+export async function reserveBudget(filename, maximum, now = Date.now(), options = {}) {
   const budget = await readJson(filename, { since: now, count: 0 })
   check(Number.isSafeInteger(budget.since) && Number.isSafeInteger(budget.count) && budget.count >= 0, 'Invalid persisted provider budget')
+  check(Number.isSafeInteger(maximum) && maximum >= 1, 'Invalid provider request budget maximum')
+  const requestedReserve = Number.isSafeInteger(options.reservedSlots) ? Math.max(0, options.reservedSlots) : 0
+  const reservedSlots = Math.min(requestedReserve, Math.max(0, maximum - 1))
+  const emergency = options.emergency === true
   if (now - budget.since >= 3600000) { budget.since = now; budget.count = 0 }
-  check(budget.count < maximum, 'Hourly provider request budget reached')
+  const limit = emergency ? maximum : maximum - reservedSlots
+  check(
+    budget.count < limit,
+    emergency
+      ? 'Hourly provider request budget reached, including recovery reserve'
+      : reservedSlots > 0
+        ? 'Hourly provider request budget reached; recovery reserve preserved'
+        : 'Hourly provider request budget reached',
+  )
   budget.count++
   await atomicWrite(filename, `${JSON.stringify(budget)}\n`)
   return budget.count

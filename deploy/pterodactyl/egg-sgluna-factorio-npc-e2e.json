@@ -89,6 +89,16 @@
             "field_type": "text"
         },
         {
+            "name": "Provider Capability Profile",
+            "description": "Wire contract for token and reasoning fields. auto only recognizes the official DeepSeek endpoint; use deepseek for a verified DeepSeek-compatible proxy, openai-reasoning for max_completion_tokens reasoning APIs, or generic to disable optional reasoning fields.",
+            "env_variable": "PROVIDER_PROFILE",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:auto,generic,deepseek,openai-reasoning",
+            "field_type": "text"
+        },
+        {
             "name": "Provider Timeout (ms)",
             "description": "Maximum time for one provider response before the SGLuna turn is cancelled and reported in game.",
             "env_variable": "PROVIDER_TIMEOUT_MS",
@@ -160,12 +170,22 @@
         },
         {
             "name": "Max AI Requests Per Hour",
-            "description": "Persisted hourly provider request cap.",
+            "description": "Persisted hourly provider request cap. Ordinary requests preserve one slot inside this same cap for exactly-once output-budget recovery.",
             "env_variable": "MAX_PROVIDER_REQUESTS_PER_HOUR",
             "default_value": "300",
             "user_viewable": true,
             "user_editable": true,
             "rules": "required|numeric|between:1,1200",
+            "field_type": "text"
+        },
+        {
+            "name": "Max AI Output Tokens Per Turn",
+            "description": "Aggregate provider-reported completion-token safety cap across one logical planner turn, including bounded recovery. Missing/incomplete usage remains diagnostic rather than being treated as zero.",
+            "env_variable": "MAX_PROVIDER_OUTPUT_TOKENS_PER_TURN",
+            "default_value": "20000",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|between:1000,200000",
             "field_type": "text"
         },
         {

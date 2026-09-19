@@ -1,15 +1,11 @@
 import { check, DeploymentError } from './common.mjs'
-import { providerEndpoint, providerRequest as baseProviderRequest } from './provider-base.mjs'
+import { providerCapabilityProfile, providerRequest as baseProviderRequest } from './provider-base.mjs'
 
 export * from './provider-base.mjs'
 
 const COMPLETION_MARKER = '[MOD] Autorio operation batch completed.'
 const FAILURE_MARKER = '[MOD] Autorio operation error:'
 const CHAT_MARKER = '[CHAT]'
-
-function deepSeekModel(config) {
-  return /^deepseek(?:[-_./:]|$)/i.test(String(config?.model ?? ''))
-}
 
 function lastUserContent(messages) {
   if (!Array.isArray(messages)) return ''
@@ -59,7 +55,8 @@ function semanticBudgetPolicy(value) {
 }
 
 export function selectReasoningPolicy(config, messages, options = {}) {
-  if (!deepSeekModel(config)) return undefined
+  const capabilities = providerCapabilityProfile(config)
+  if (!capabilities.reasoning_effort) return undefined
   if (options.interactionRouter === true) {
     return { effort: 'none', reason: 'interaction_router' }
   }
@@ -132,27 +129,32 @@ function reasoningOutputBudget(policy) {
   }
 }
 
-function reasoningBodyPatch(policy) {
-  return {
-    reasoning_effort: policy.effort,
-    thinking: { type: policy.effort === 'none' ? 'disabled' : 'enabled' },
+function reasoningBodyPatch(policy, capabilities) {
+  const patch = {}
+  if (capabilities.reasoning_effort) {
+    patch.reasoning_effort = capabilities.id === 'openai-reasoning'
+      ? (policy.effort === 'none' ? 'minimal' : policy.effort === 'max' ? 'high' : policy.effort)
+      : policy.effort
   }
+  if (capabilities.thinking_control === 'deepseek') {
+    patch.thinking = { type: policy.effort === 'none' ? 'disabled' : 'enabled' }
+  }
+  return patch
 }
 
 /**
  * Provider policy shim.
  *
  * The runtime selects a deterministic reasoning policy from observable request
- * state. Capability encoding remains model-sensitive: DeepSeek-compatible
- * models may run behind arbitrary OpenAI-compatible base URLs, so hostname
- * alone never decides whether DeepSeek reasoning fields are emitted.
+ * state. Wire-level capability encoding is explicit through the configured
+ * provider profile. Auto mode recognizes only the official DeepSeek endpoint;
+ * unknown OpenAI-compatible gateways fail closed to generic fields.
  */
 export async function providerRequest(config, messages, options = {}) {
+  const capabilities = providerCapabilityProfile(config)
   const policy = selectReasoningPolicy(config, messages, options)
   if (!policy) return baseProviderRequest(config, messages, options)
 
-  const actualFetch = options.fetchImpl ?? fetch
-  const actualEndpoint = providerEndpoint(config.base)
   const semanticBudgetNeedsFullPlanner = ['normal', 'deep', 'strategic'].includes(options.reasoningBudget)
   const structuralHierarchyTrigger = [
     'hierarchy_split',
@@ -171,7 +173,7 @@ export async function providerRequest(config, messages, options = {}) {
   const callerPatch = options.requestBodyPatch && typeof options.requestBodyPatch === 'object' && !Array.isArray(options.requestBodyPatch)
     ? options.requestBodyPatch
     : {}
-  const policyBudget = !compactPath && callerPatch.max_tokens === undefined
+  const policyBudget = !compactPath && callerPatch.max_tokens === undefined && callerPatch.max_completion_tokens === undefined
     ? reasoningOutputBudget(policy)
     : undefined
   const requestOptions = {
@@ -179,22 +181,15 @@ export async function providerRequest(config, messages, options = {}) {
     requestBodyPatch: {
       ...(policyBudget !== undefined ? { max_tokens: policyBudget } : {}),
       ...callerPatch,
-      ...reasoningBodyPatch(policy),
+      ...reasoningBodyPatch(policy, capabilities),
     },
-    providerPolicy: policy,
+    providerPolicy: {
+      ...policy,
+      capability_profile: capabilities.id,
+    },
   }
 
-  if (!compactPath) return baseProviderRequest(config, messages, requestOptions)
-
-  // Keep the existing compact prompt/tool/output-budget path intact. The base
-  // implementation uses the official DeepSeek base only as a capability hint;
-  // transport is still routed to the user's configured endpoint.
-  const routedFetch = async (_url, init) => actualFetch(actualEndpoint, init)
-  return baseProviderRequest(
-    { ...config, base: 'https://api.deepseek.com' },
-    messages,
-    { ...requestOptions, fetchImpl: routedFetch },
-  )
+  return baseProviderRequest(config, messages, requestOptions)
 }
 
 

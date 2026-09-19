@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
-import { NpcAgentLoop } from './npc-agent-loop.mjs'
+import { NpcAgentLoop, normalizedProviderUsage } from './npc-agent-loop.mjs'
+import { providerRequest } from './provider.mjs'
 
 function deployment() {
   return {
@@ -91,40 +92,117 @@ function makeAgent({ provider, rcon = new FakeRcon(), reserve = async () => ({})
   })
 }
 
-test('first tool-capable output-budget exhaustion gets exactly one tool-capable recovery before the existing bounded recovery path', async () => {
+test('second output-budget exhaustion pauses canonical work after exactly one compact recovery and never loops', async () => {
   const calls = []
+  const rcon = new FakeRcon()
   let reserves = 0
+  const canonical = ['Wait for the machine cycle', 'Inspect the result']
   const agent = makeAgent({
+    rcon,
     reserve: async () => { reserves++; return {} },
     provider: async (messages, context) => {
       calls.push({ messages, context })
-      if (calls.length <= 2) return exhaustedMessage()
-      return planMessage({ chatMessage: 'Recovered through the existing strict-plan path.' })
+      if (calls.length === 1) {
+        return planMessage({
+          chatMessage: 'Waiting first.',
+          plan: canonical,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 60 } }],
+        })
+      }
+      return exhaustedMessage()
     },
   })
 
-  const result = await agent.request('inspect the area', { sender: 'TTLouis' })
+  await agent.request('run the bounded recovery check', { sender: 'TTLouis' })
+  assert.equal(rcon.mutations.length, 1)
+  const result = await agent.completed()
 
-  assert.equal(result.chatMessage, 'Recovered through the existing strict-plan path.')
   assert.equal(calls.length, 3)
   assert.equal(reserves, 3)
-
-  assert.equal(calls[0].context.allowTools, true)
-  assert.equal(calls[0].context.recoveryAttempt, 0)
-  assert.equal(calls[0].context.recoveryKind, undefined)
-
-  assert.equal(calls[1].context.allowTools, true)
-  assert.equal(calls[1].context.recoveryAttempt, 1)
-  assert.equal(calls[1].context.recoveryKind, 'output_budget_exhaustion')
-  assert.match(calls[1].messages.at(-1).content, /immediately preceding provider response exhausted its output budget/)
-  assert.match(calls[1].messages.at(-1).content, /Tools remain available/)
-
-  assert.equal(calls[2].context.allowTools, false)
+  assert.equal(calls[1].context.recoveryKind, undefined)
   assert.equal(calls[2].context.recoveryAttempt, 1)
-  assert.equal(calls[2].context.recoveryKind, undefined)
-  const boundedRecoveryContext = calls[2].messages.map(message => message.content ?? '').join('\n')
-  assert.match(boundedRecoveryContext, /Tool calls are disabled for recovery/)
-  assert.doesNotMatch(boundedRecoveryContext, /immediately preceding provider response exhausted its output budget/)
+  assert.equal(calls[2].context.recoveryKind, 'output_budget_exhaustion')
+  assert.match(calls[2].messages.at(-1).content, /immediately preceding provider response exhausted its output budget/)
+  assert.equal(result.goalStatus, 'paused')
+  assert.equal(rcon.mutations.length, 1)
+  assert.equal(rcon.mutations.filter(text => text.includes("'wait'")).length, 1)
+})
+
+test('cross-layer provider bodies switch high reasoning exhaustion to one no-reasoning recovery that succeeds', async () => {
+  const bodies = []
+  let httpCalls = 0
+  const fetchImpl = async (_url, init) => {
+    bodies.push(JSON.parse(init.body))
+    httpCalls++
+    if (httpCalls === 1) {
+      return new Response(JSON.stringify({
+        id: 'budget-hit',
+        model: 'deepseek-flash',
+        choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '', reasoning_content: 'r'.repeat(2048) } }],
+        usage: { prompt_tokens: 100, completion_tokens: 4000, total_tokens: 4100, completion_tokens_details: { reasoning_tokens: 4000 } },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({
+      id: 'budget-recovered',
+      model: 'deepseek-flash',
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        chatMessage: 'Recovered with a bounded executable plan.',
+        plan: ['Wait once'],
+        currentStep: 0,
+        operations: [{ name: 'wait', args: { ticks: 1 } }],
+      }) } }],
+      usage: { prompt_tokens: 120, completion_tokens: 80, total_tokens: 200, completion_tokens_details: { reasoning_tokens: 0 } },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  const provider = (messages, context) => providerRequest({
+    base: 'https://gateway.example/v1',
+    key: 'test-key',
+    model: 'deepseek-flash',
+    profile: 'deepseek',
+    timeoutMs: 5000,
+  }, messages, { ...context, fetchImpl })
+
+  const agent = makeAgent({ provider })
+  const result = await agent.request('plan one safe step', { sender: 'TTLouis' })
+
+  assert.equal(result.goalStatus, 'active')
+  assert.equal(bodies.length, 2)
+  assert.equal(bodies[0].reasoning_effort, 'high')
+  assert.deepEqual(bodies[0].thinking, { type: 'enabled' })
+  assert.equal(bodies[0].max_tokens, 4000)
+  assert.equal(bodies[1].reasoning_effort, 'none')
+  assert.deepEqual(bodies[1].thinking, { type: 'disabled' })
+  assert.equal(bodies[1].max_tokens, 1000)
+})
+
+test('usage normalization keeps unknown distinct and separates cached/reasoning/visible output', () => {
+  assert.deepEqual(normalizedProviderUsage({
+    prompt_tokens: 1000,
+    completion_tokens: 500,
+    total_tokens: 1500,
+    prompt_tokens_details: { cached_tokens: 700 },
+    completion_tokens_details: { reasoning_tokens: 400 },
+  }), {
+    input_units: 1000,
+    cached_input_units: 700,
+    cache_miss_input_units: 300,
+    output_units: 500,
+    visible_output_units: 100,
+    reasoning_output_units: 400,
+    total_units: 1500,
+    usage_complete: true,
+  })
+  const malformed = normalizedProviderUsage({
+    prompt_tokens: 10.5,
+    completion_tokens: -1,
+    total_tokens: Number.MAX_SAFE_INTEGER + 10,
+    prompt_tokens_details: { cached_tokens: 99 },
+  })
+  assert.equal(malformed.input_units, undefined)
+  assert.equal(malformed.output_units, undefined)
+  assert.equal(malformed.total_units, undefined)
+  assert.equal(malformed.usage_complete, false)
 })
 
 test('output-budget recovery keeps the canonical Task Board at the evidenced step and does not replay the completed mutation', async () => {

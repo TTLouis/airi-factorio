@@ -29,6 +29,7 @@ const COMPLETION_EVIDENCE_KINDS = new Set([
 const PROVIDER_CONTROL_PLANE_FAILURES = new Set([
   'provider_format',
   'provider_budget',
+  'provider_safety',
 ])
 
 function clean(value, max = 500) {

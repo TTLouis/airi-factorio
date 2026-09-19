@@ -40,6 +40,7 @@ test('recovery_route contract is bounded and exposes all required routing questi
 test('failure hint separates provider format and budget failures from world failure', () => {
   assert.equal(recoveryFailureClassHint('invalid provider JSON'), 'provider_format')
   assert.equal(recoveryFailureClassHint('finish=length output budget exhausted'), 'provider_budget')
+  assert.equal(recoveryFailureClassHint('provider_safety_blocked content_filter'), 'provider_safety')
   assert.equal(recoveryFailureClassHint('one targeted observation is missing'), 'missing_fact')
   assert.equal(recoveryFailureClassHint('unexpected failure'), 'unknown')
 })
@@ -110,4 +111,14 @@ test('propose_blocker requires grounded-world-failure classification as well as 
   })
   assert.equal(validated.route, 'pause_recoverable')
   assert.equal(validated.rejection_reason, 'blocker_proposal_requires_grounded_world_failure')
+})
+
+test('provider safety failures cannot re-enter ordinary main-provider retry routes', () => {
+  const decision = parseRecoveryDecision(response('retry_compact', 'provider_safety'))
+  const validated = validateRecoveryRoute(decision, {
+    world: { task_state: 'idle', queue_length: 0 },
+    failureClassHint: 'provider_safety',
+  })
+  assert.equal(validated.route, 'pause_recoverable')
+  assert.equal(validated.rejection_reason, 'provider_safety_is_terminal_for_main_provider')
 })

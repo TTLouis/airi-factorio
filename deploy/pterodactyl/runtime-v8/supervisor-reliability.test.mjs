@@ -236,3 +236,61 @@ test('interrupted hierarchy split recovery restores its structural trigger and s
   assert.equal(agent.observationBudgetRemaining, null)
   assert.equal(agent.planningHorizonOverride, null)
 })
+
+test('restart during output-budget recovery fails closed without another planner call or world mutation', async () => {
+  const state = {
+    goal_id: 'goal_restart',
+    objective: 'Build a safe setup',
+    status: 'active',
+    provider_recovery: {
+      kind: 'output_budget_exhaustion',
+      phase: 'in_flight',
+      goal_id: 'goal_restart',
+      step_id: 'step_1',
+      started_at: 1234,
+    },
+    task_board: {
+      kind: 'task_board_lite',
+      status: 'active',
+      active_index: 0,
+      steps: [{ id: 'step_1', description: 'Build safely', status: 'active' }],
+    },
+  }
+  let plannerCalls = 0
+  let cleared = false
+  let persisted = false
+  let cancelled = false
+  const memory = {
+    currentPlan: () => state,
+    applyOutcomeAuthority: (_key, candidate) => {
+      assert.equal(candidate.kind, 'recoverable_provider_failure')
+      assert.equal(candidate.reason_code, 'provider_budget')
+      state.status = 'paused'
+      state.task_board.status = 'paused'
+      return { state, decision: { accepted: true }, changed: true }
+    },
+    setProviderRecovery: (_key, value) => {
+      assert.equal(value, undefined)
+      state.provider_recovery = undefined
+      cleared = true
+    },
+  }
+  const agent = {
+    npcId: 'airi',
+    memory,
+    loadPersistentState: async () => {},
+    readInteractionTaskStatus: async () => ({ task_state: 'idle', queue_length: 0 }),
+    persistState: async () => { persisted = true },
+    cancel: () => { cancelled = true },
+    runGuarded: async () => { plannerCalls++; return {} },
+  }
+
+  const result = await recoverInterruptedAgentPlan(agent, 'runtime_restart')
+  assert.equal(result.recovered, true)
+  assert.equal(result.reason, 'interrupted_output_budget_recovery_fail_closed')
+  assert.equal(result.state.status, 'paused')
+  assert.equal(plannerCalls, 0)
+  assert.equal(cleared, true)
+  assert.equal(persisted, true)
+  assert.equal(cancelled, true)
+})

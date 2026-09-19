@@ -646,6 +646,24 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return state
   }
 
+  setProviderRecovery(key, recovery) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state) return state
+    if (!recovery) state.provider_recovery = undefined
+    else {
+      state.provider_recovery = {
+        kind: recovery.kind === 'output_budget_exhaustion' ? recovery.kind : 'output_budget_exhaustion',
+        phase: recovery.phase === 'in_flight' ? 'in_flight' : 'in_flight',
+        goal_id: cleanMemoryText(recovery.goal_id ?? state.goal_id, 100),
+        step_id: cleanMemoryText(recovery.step_id ?? state.task_board?.active_step_id, 120),
+        started_at: Number.isFinite(recovery.started_at) ? recovery.started_at : Date.now(),
+      }
+    }
+    state.updated_at = Date.now()
+    this.planByNpc.set(key, state)
+    return state
+  }
+
   applyOutcomeAuthority(key, candidate, { world = {}, chatMessage = '' } = {}) {
     const state = key ? this.planByNpc.get(key) : undefined
     const decision = validateOutcomeCandidate(candidate, { world })
@@ -1088,6 +1106,15 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         pause_reason: cleanMemoryText(value.pause_reason, 300),
         persistent_runtime: safePersistentRuntime(value.persistent_runtime),
         condition_wait: safeConditionWait(value.condition_wait),
+        provider_recovery: value.provider_recovery?.kind === 'output_budget_exhaustion' && value.provider_recovery?.phase === 'in_flight'
+          ? {
+              kind: 'output_budget_exhaustion',
+              phase: 'in_flight',
+              goal_id: cleanMemoryText(value.provider_recovery.goal_id, 100),
+              step_id: cleanMemoryText(value.provider_recovery.step_id, 120),
+              started_at: Number.isFinite(value.provider_recovery.started_at) ? value.provider_recovery.started_at : Date.now(),
+            }
+          : undefined,
         plan: safePlan(value.plan),
         current_step: Number.isSafeInteger(value.current_step) && value.current_step >= 0 ? value.current_step : 0,
         revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : 1,
@@ -1203,42 +1230,46 @@ function finiteNonNegative(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
-function firstUsageNumber(...values) {
-  for (const value of values) {
-    const valid = finiteNonNegative(value)
-    if (valid !== undefined) return valid
-  }
-  return 0
+function safeUsageInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
-function normalizedProviderUsage(usage) {
+function firstUsageInteger(...values) {
+  for (const value of values) {
+    const valid = safeUsageInteger(value)
+    if (valid !== undefined) return valid
+  }
+  return undefined
+}
+
+export function normalizedProviderUsage(usage) {
   if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return undefined
-  const details = usage.prompt_tokens_details ?? usage.input_tokens_details ?? {}
-  const cached = firstUsageNumber(
-    details?.cached_tokens,
-    usage.prompt_cache_hit_tokens,
-    usage.input_cache_hit_tokens,
-    usage.cache_hit_tokens,
-  )
-  const explicitMiss = firstUsageNumber(
-    usage.prompt_cache_miss_tokens,
-    usage.input_cache_miss_tokens,
-    usage.cache_miss_tokens,
-  )
-  const input = firstUsageNumber(
-    usage.prompt_tokens,
-    usage.input_tokens,
-    cached + explicitMiss,
-  )
-  const output = firstUsageNumber(usage.completion_tokens, usage.output_tokens)
-  const total = firstUsageNumber(usage.total_tokens, input + output)
-  const miss = explicitMiss > 0 ? explicitMiss : Math.max(0, input - cached)
+  const inputDetails = usage.prompt_tokens_details ?? usage.input_tokens_details ?? {}
+  const outputDetails = usage.completion_tokens_details ?? usage.output_tokens_details ?? {}
+  const cachedRaw = firstUsageInteger(inputDetails?.cached_tokens, usage.prompt_cache_hit_tokens, usage.input_cache_hit_tokens, usage.cache_hit_tokens)
+  const explicitMissRaw = firstUsageInteger(usage.prompt_cache_miss_tokens, usage.input_cache_miss_tokens, usage.cache_miss_tokens)
+  const directInput = firstUsageInteger(usage.prompt_tokens, usage.input_tokens)
+  const input = directInput ?? (cachedRaw !== undefined && explicitMissRaw !== undefined ? cachedRaw + explicitMissRaw : undefined)
+  const cached = cachedRaw !== undefined && (input === undefined || cachedRaw <= input) ? cachedRaw : undefined
+  const explicitMiss = explicitMissRaw !== undefined && (input === undefined || cached === undefined || cached + explicitMissRaw <= input) ? explicitMissRaw : undefined
+  const miss = explicitMiss ?? (input !== undefined && cached !== undefined ? input - cached : undefined)
+  const output = firstUsageInteger(usage.completion_tokens, usage.output_tokens)
+  const reasoning = firstUsageInteger(outputDetails?.reasoning_tokens, usage.reasoning_tokens)
+  const reasoningValid = reasoning === undefined || (output !== undefined && reasoning <= output)
+  const visibleOutput = output !== undefined && reasoning !== undefined && reasoningValid ? output - reasoning : undefined
+  const directTotal = firstUsageInteger(usage.total_tokens)
+  const total = directTotal ?? (input !== undefined && output !== undefined ? input + output : undefined)
+  const usageComplete = input !== undefined && output !== undefined && total !== undefined
+    && total >= input && total >= output && (cachedRaw === undefined || cached !== undefined) && reasoningValid
   return {
     input_units: input,
     cached_input_units: cached,
     cache_miss_input_units: miss,
     output_units: output,
+    visible_output_units: visibleOutput,
+    reasoning_output_units: reasoningValid ? reasoning : undefined,
     total_units: total,
+    usage_complete: usageComplete,
   }
 }
 
@@ -1249,7 +1280,11 @@ function emptyUsageSummary() {
     cached_input_units: 0,
     cache_miss_input_units: 0,
     output_units: 0,
+    visible_output_units: 0,
+    reasoning_output_units: 0,
     total_units: 0,
+    usage_complete: true,
+    usage_incomplete_calls: 0,
     tool_calls: 0,
     duplicate_tool_calls: 0,
     tool_result_chars: 0,
@@ -1260,12 +1295,25 @@ function emptyUsageSummary() {
 function accumulateProviderUsage(summary, usage) {
   if (!summary) return
   summary.provider_calls++
-  if (!usage) return
-  summary.input_units += usage.input_units
-  summary.cached_input_units += usage.cached_input_units
-  summary.cache_miss_input_units += usage.cache_miss_input_units
-  summary.output_units += usage.output_units
-  summary.total_units += usage.total_units
+  if (!usage) {
+    summary.usage_complete = false
+    summary.usage_incomplete_calls++
+    return
+  }
+  const add = key => {
+    if (Number.isSafeInteger(usage[key]) && usage[key] >= 0) summary[key] += usage[key]
+  }
+  add('input_units')
+  add('cached_input_units')
+  add('cache_miss_input_units')
+  add('output_units')
+  add('visible_output_units')
+  add('reasoning_output_units')
+  add('total_units')
+  if (usage.usage_complete !== true) {
+    summary.usage_complete = false
+    summary.usage_incomplete_calls++
+  }
 }
 
 function compactProviderMetadata(metadata) {
@@ -1291,6 +1339,15 @@ function compactProviderMetadata(metadata) {
     reasoning_content_chars: finiteNonNegative(metadata.reasoning_content_chars),
     reasoning_effort: cleanMemoryText(metadata.reasoning_effort, 32),
     reasoning_policy_reason: cleanMemoryText(metadata.reasoning_policy_reason, 80),
+    capability_profile: cleanMemoryText(metadata.capability_profile, 40),
+    requested_token_field: cleanMemoryText(metadata.requested_token_field, 40),
+    requested_output_cap: safeUsageInteger(metadata.requested_output_cap),
+    requested_reasoning_effort: cleanMemoryText(metadata.requested_reasoning_effort, 32),
+    requested_thinking_mode: cleanMemoryText(metadata.requested_thinking_mode, 32),
+    reported_reasoning_tokens: safeUsageInteger(metadata.reported_reasoning_tokens),
+    reported_output_tokens: safeUsageInteger(metadata.reported_output_tokens),
+    usage_complete: metadata.usage_complete === true,
+    cap_enforcement_anomaly: metadata.cap_enforcement_anomaly === true,
     tool_call_count: finiteNonNegative(metadata.tool_call_count),
     structured_content: structured,
     content_preview: typeof metadata.content_preview === 'string' ? metadata.content_preview.slice(0, 1200) : undefined,
@@ -1811,6 +1868,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     })
     this.stateFile = stateFileFromOptions(options)
     this.stateLoaded = false
+    this.maxProviderOutputUnits = Number.isSafeInteger(options.maxProviderOutputUnits) ? options.maxProviderOutputUnits : 20000
+    if (this.maxProviderOutputUnits < 1000 || this.maxProviderOutputUnits > 200000) {
+      throw new AgentLoopError('maxProviderOutputUnits must be an integer from 1000 to 200000')
+    }
     this.interactionProvider = typeof options.interactionProvider === 'function' ? options.interactionProvider : null
     this.interactionDecisionProvider = typeof options.interactionDecisionProvider === 'function' ? options.interactionDecisionProvider : null
     this.interactionAbort = null
@@ -3929,11 +3990,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const budgetStartedAt = Date.now()
     let budget
     try {
-      budget = await this.reserve({ epoch: current.epoch, actorId: current.actor_id })
-      await this.traceEvent('budget.reserved', { latency_ms: Date.now() - budgetStartedAt, usage: budget })
+      budget = await this.reserve({ epoch: current.epoch, actorId: current.actor_id, recoveryKind, recoveryAttempt: effectiveRecoveryAttempt })
+      await this.traceEvent('budget.reserved', { latency_ms: Date.now() - budgetStartedAt, usage: budget, recovery_attempt: effectiveRecoveryAttempt, recovery_kind: traceRecoveryKind })
     }
     catch (error) {
-      await this.traceEvent('budget.rejected', { latency_ms: Date.now() - budgetStartedAt, message: error instanceof Error ? error.message : String(error) })
+      const message = error instanceof Error ? error.message : String(error)
+      await this.traceEvent('budget.rejected', { latency_ms: Date.now() - budgetStartedAt, message, recovery_attempt: effectiveRecoveryAttempt, recovery_kind: traceRecoveryKind })
+      if (recoveryKind === 'output_budget_exhaustion') {
+        const wrapped = new AgentLoopError(`provider_output_budget_recovery_budget_unavailable: ${message}`)
+        wrapped.failureClass = 'provider_budget'
+        wrapped.code = 'provider_output_budget_recovery_budget_unavailable'
+        throw wrapped
+      }
       throw error
     }
     if (generation !== this.generation || !this.active || !this.epoch) throw new AgentLoopError('Model turn was cancelled or superseded')
@@ -3992,6 +4060,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
       const usage = normalizedProviderUsage(message?._airiProvider?.usage)
       accumulateProviderUsage(this.traceRequest?.usage, usage)
+      const aggregateOutputUnits = this.traceRequest?.usage?.output_units
+      const turnOutputCapExceeded = Number.isSafeInteger(aggregateOutputUnits) && aggregateOutputUnits > this.maxProviderOutputUnits
       const responseTrace = {
         kind: 'response',
         round,
@@ -4003,9 +4073,19 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         content_chars: typeof message?.content === 'string' ? message.content.length : 0,
         usage,
         provider: compactProviderMetadata(message?._airiProvider),
+        turn_output_cap: this.maxProviderOutputUnits,
+        turn_output_units: Number.isSafeInteger(aggregateOutputUnits) ? aggregateOutputUnits : undefined,
       }
+      if (responseTrace.provider) responseTrace.provider.usage_complete = usage?.usage_complete === true
       if (this.traceRequest) this.traceRequest.last_provider_event = responseTrace
       await this.traceEvent('provider.response', responseTrace)
+      if (turnOutputCapExceeded) {
+        await this.traceEvent('budget.output_units_exceeded', { output_units: aggregateOutputUnits, output_cap: this.maxProviderOutputUnits, provider_calls: this.traceRequest?.usage?.provider_calls })
+        const capError = new AgentLoopError(`provider_turn_output_cap_exceeded: ${aggregateOutputUnits} > ${this.maxProviderOutputUnits}`)
+        capError.failureClass = 'provider_budget'
+        capError.code = 'provider_turn_output_cap_exceeded'
+        throw capError
+      }
     }
     catch (error) {
       const messageText = error instanceof Error ? error.message : String(error)
@@ -4098,16 +4178,43 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         world_evidence_observed: this.outputBudgetRecoveryGuard.world_evidence_observed,
         completed_operation_count: this.outputBudgetRecoveryGuard.completed_operations.length,
       })
-      return this.callProvider(current, generation, {
-        round,
-        allowTools: true,
-        recoveryAttempt: 1,
-        recoveryKind: 'output_budget_exhaustion',
-        providerMessagesOverride: [
-          ...providerMessages.map(item => ({ ...item })),
-          { role: 'user', content: OUTPUT_BUDGET_RECOVERY_MESSAGE },
-        ],
+      this.memory.setProviderRecovery?.(this.activePlanKey(), {
+        kind: 'output_budget_exhaustion',
+        phase: 'in_flight',
+        goal_id: state?.goal_id,
+        step_id: state?.task_board?.active_step_id,
+        started_at: Date.now(),
       })
+      await this.persistState()
+      try {
+        const recovered = await this.callProvider(current, generation, {
+          round,
+          allowTools: true,
+          recoveryAttempt: 1,
+          recoveryKind: 'output_budget_exhaustion',
+          providerMessagesOverride: [
+            ...providerMessages.map(item => ({ ...item })),
+            { role: 'user', content: OUTPUT_BUDGET_RECOVERY_MESSAGE },
+          ],
+        })
+        if (providerOutputBudgetExhausted(recovered)) {
+          await this.traceEvent('provider.output_budget_recovery_exhausted', { round, recovery_attempt: 1, recovery_kind: 'output_budget_exhaustion' })
+          const exhausted = new AgentLoopError('provider_output_budget_recovery_exhausted: compact no-reasoning recovery also exhausted its output budget')
+          exhausted.failureClass = 'provider_budget'
+          exhausted.code = 'provider_output_budget_recovery_exhausted'
+          throw exhausted
+        }
+        this.memory.setProviderRecovery?.(this.activePlanKey(), undefined)
+        await this.persistState()
+        await this.traceEvent('provider.output_budget_recovery_succeeded', { round, recovery_attempt: 1, recovery_kind: 'output_budget_exhaustion' })
+        return recovered
+      }
+      catch (error) {
+        if (error?.code !== 'provider_output_budget_recovery_exhausted') {
+          await this.traceEvent('provider.output_budget_recovery_failed', { round, recovery_attempt: 1, recovery_kind: 'output_budget_exhaustion', message: error instanceof Error ? error.message : String(error) })
+        }
+        throw error
+      }
     }
     return message
   }
@@ -4117,6 +4224,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const error = new AgentLoopError('provider_output_budget_exhausted: provider response exhausted its output budget before emitting valid plan content')
       error.failureClass = 'provider_budget'
       error.code = 'provider_output_budget_exhausted'
+      throw error
+    }
+    if (message?._airiProvider?.diagnostic_code === 'provider_safety_blocked') {
+      const error = new AgentLoopError('provider_safety_blocked: provider refused the response through a safety/content filter')
+      error.failureClass = 'provider_safety'
+      error.code = 'provider_safety_blocked'
       throw error
     }
     let project
@@ -5371,6 +5484,35 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     if (this.traceRequest) this.traceRequest.recovery = recovery
     await this.traceEvent('replan.started', recovery)
+
+    const terminalProviderBudgetFailure = /provider_output_budget_recovery_(?:exhausted|budget_unavailable)|provider_turn_output_cap_exceeded/i.test(reasonText)
+    if (terminalProviderBudgetFailure) {
+      const key = this.activePlanKey()
+      const existing = this.memory.currentPlan?.(key)
+      if (existing) {
+        const runtime = await this.readInteractionTaskStatus()
+        const reduced = this.memory.applyOutcomeAuthority?.(key, { kind: 'recoverable_provider_failure', source: 'main_planner', reason_code: 'provider_budget' }, { world: runtime })
+        if (reduced?.decision?.accepted) {
+          this.memory.setProviderRecovery?.(key, undefined)
+          await this.persistState()
+          const paused = reduced.state?.status === 'paused'
+          if (paused) this.active = false
+          await this.traceEvent('planner.skipped', { source: 'output_budget_recovery', contract: 'exactly_once_output_budget_recovery', route: paused ? 'pause_recoverable' : 'runtime_remains_authoritative', reason_code: 'provider_budget' })
+          return {
+            chatMessage: paused ? 'The provider exhausted the bounded recovery path; the canonical task was paused without replaying world mutations.' : 'The provider exhausted the bounded recovery path, but authoritative Autorio work is still active and was left untouched.',
+            plan: reduced.state?.plan ?? [],
+            currentStep: reduced.state?.current_step ?? 0,
+            operations: [],
+            epoch: this.epoch?.epoch,
+            actorId: this.epoch?.actor_id,
+            goalId: reduced.state?.goal_id,
+            goalStatus: reduced.state?.status,
+            taskBoard: visibleTaskBoard(reduced.state?.task_board),
+            persistentRuntime: reduced.state?.persistent_runtime,
+          }
+        }
+      }
+    }
 
     const observationDecisionComplete = /(?:single targeted observation allowed|targeted observation budget allowed) by decision pressure is complete/i.test(reasonText)
     const currentState = this.memory.currentPlan?.(this.activePlanKey())

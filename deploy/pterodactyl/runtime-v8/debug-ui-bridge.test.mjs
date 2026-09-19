@@ -24,6 +24,7 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
   debug = liveAgentDebugEvent('provider.response', {
     round: 4,
     recovery_attempt: 2,
+    recovery_kind: 'output_budget_exhaustion',
     latency_ms: 10954,
     usage: {
       input_units: 4982,
@@ -37,6 +38,14 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
       diagnostic_code: 'provider_output_truncated_empty_content',
       reasoning_effort: 'none',
       reasoning_policy_reason: 'strict_recovery',
+      capability_profile: 'deepseek',
+      requested_token_field: 'max_tokens',
+      requested_output_cap: 1000,
+      requested_reasoning_effort: 'none',
+      requested_thinking_mode: 'disabled',
+      reported_reasoning_tokens: 700,
+      usage_complete: true,
+      cap_enforcement_anomaly: false,
       content_chars: 0,
       reasoning_content_chars: 8241,
     },
@@ -53,6 +62,15 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
   assert.equal(debug.provider_finish_reason, 'length')
   assert.equal(debug.reasoning_effort, 'none')
   assert.equal(debug.reasoning_policy_reason, 'strict_recovery')
+  assert.equal(debug.provider_capability_profile, 'deepseek')
+  assert.equal(debug.requested_token_field, 'max_tokens')
+  assert.equal(debug.requested_output_cap, 1000)
+  assert.equal(debug.requested_reasoning_effort, 'none')
+  assert.equal(debug.requested_thinking_mode, 'disabled')
+  assert.equal(debug.reported_reasoning_tokens, 700)
+  assert.equal(debug.usage_complete, 1)
+  assert.equal(debug.cap_enforcement_anomaly, 0)
+  assert.equal(debug.recovery_result, 'response_received')
   assert.equal(debug.content_chars, 0)
   assert.equal(debug.reasoning_content_chars, 8241)
   assert.equal(debug.input_units, 13982)

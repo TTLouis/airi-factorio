@@ -55,6 +55,14 @@ export interface TaskBoardUiDebugSnapshot {
   provider_latency_ms: number
   provider_diagnostic_code: string
   provider_finish_reason: string
+  provider_capability_profile: string
+  requested_token_field: string
+  requested_output_cap: number
+  requested_reasoning_effort: string
+  requested_thinking_mode: string
+  reported_reasoning_tokens: number
+  usage_complete: number
+  cap_enforcement_anomaly: number
   reasoning_effort: string
   reasoning_policy_reason: string
   content_chars: number
@@ -119,6 +127,7 @@ export interface TaskBoardUiDebugSnapshot {
   last_tool: string
   last_event: string
   recovery_attempt: number
+  recovery_result: string
   last_error: string
   actor_id: number
   actor_epoch: number
@@ -150,6 +159,14 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     provider_latency_ms: integer(debug.provider_latency_ms),
     provider_diagnostic_code: clean_text(debug.provider_diagnostic_code, 160),
     provider_finish_reason: clean_text(debug.provider_finish_reason, 80),
+    provider_capability_profile: clean_text(debug.provider_capability_profile, 40),
+    requested_token_field: clean_text(debug.requested_token_field, 40),
+    requested_output_cap: integer(debug.requested_output_cap),
+    requested_reasoning_effort: clean_text(debug.requested_reasoning_effort, 32),
+    requested_thinking_mode: clean_text(debug.requested_thinking_mode, 32),
+    reported_reasoning_tokens: integer(debug.reported_reasoning_tokens),
+    usage_complete: math.min(1, integer(debug.usage_complete)),
+    cap_enforcement_anomaly: math.min(1, integer(debug.cap_enforcement_anomaly)),
     reasoning_effort: clean_text(debug.reasoning_effort, 32),
     reasoning_policy_reason: clean_text(debug.reasoning_policy_reason, 80),
     content_chars: integer(debug.content_chars),
@@ -214,6 +231,7 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     last_tool: clean_text(debug.last_tool, 120),
     last_event: clean_text(debug.last_event, 120),
     recovery_attempt: integer(debug.recovery_attempt),
+    recovery_result: clean_text(debug.recovery_result, 64),
     last_error: clean_text(debug.last_error, 500),
     actor_id: integer(debug.actor_id),
     actor_epoch: integer(debug.actor_epoch),

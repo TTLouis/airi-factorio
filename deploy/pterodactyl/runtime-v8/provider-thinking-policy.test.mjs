@@ -24,6 +24,7 @@ function config(overrides = {}) {
     key: 'test-key',
     model: 'deepseek-flash',
     base: 'https://proxy.example/v1',
+    profile: 'deepseek',
     timeoutMs: 5000,
     ...overrides,
   }
@@ -256,14 +257,115 @@ test('custom DeepSeek-compatible base URL keeps its endpoint while receiving mod
   assert.equal(seen.body.reasoning_effort, 'high')
 })
 
+test('auto profile fails closed on an unknown DeepSeek-compatible gateway', async () => {
+  const { seen } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: inspect the factory' },
+  ], { allowTools: true, triggerSource: 'new_goal' }, config({
+    model: 'deepseek/deepseek-v4-pro',
+    base: 'https://gateway.example/custom/v1',
+    profile: 'auto',
+  }))
+
+  assert.equal(seen.url, 'https://gateway.example/custom/v1/chat/completions')
+  assert.equal(seen.body.reasoning_effort, undefined)
+  assert.equal(seen.body.thinking, undefined)
+  assert.equal(seen.body.max_tokens, 2000)
+})
+
+test('openai reasoning profile uses max_completion_tokens and capability-safe minimal recovery reasoning', async () => {
+  const messages = [
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: plan a difficult build' },
+  ]
+  const first = await captureRequest(messages, { allowTools: true, triggerSource: 'new_goal' }, config({
+    model: 'reasoning-model',
+    base: 'https://gateway.example/openai/v1',
+    profile: 'openai-reasoning',
+  }))
+  assert.equal(first.seen.body.max_tokens, undefined)
+  assert.equal(first.seen.body.max_completion_tokens, 4000)
+  assert.equal(first.seen.body.reasoning_effort, 'high')
+  assert.equal(first.seen.body.thinking, undefined)
+
+  const recovery = await captureRequest(messages, {
+    allowTools: true,
+    recoveryAttempt: 1,
+    recoveryKind: 'output_budget_exhaustion',
+  }, config({
+    model: 'reasoning-model',
+    base: 'https://gateway.example/openai/v1',
+    profile: 'openai-reasoning',
+  }))
+  assert.equal(recovery.seen.body.max_tokens, undefined)
+  assert.equal(recovery.seen.body.max_completion_tokens, 1000)
+  assert.equal(recovery.seen.body.reasoning_effort, 'minimal')
+  assert.equal(recovery.seen.body.thinking, undefined)
+})
+
+test('requestBodyPatch rejects transport-critical fields outside the allowlist', async () => {
+  await assert.rejects(
+    captureRequest([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: '[CHAT] tester: inspect the factory' },
+    ], {
+      allowTools: true,
+      triggerSource: 'new_goal',
+      requestBodyPatch: { messages: [] },
+    }),
+    /requestBodyPatch key is not allowed/i,
+  )
+})
+
 test('non-DeepSeek providers do not receive DeepSeek-specific request fields', async () => {
   const { seen } = await captureRequest([
     { role: 'system', content: 'system' },
     { role: 'user', content: '[CHAT] tester: inspect the factory' },
-  ], { allowTools: true }, config({ model: 'gpt-5.6', base: 'https://provider.example/v1' }))
+  ], { allowTools: true }, config({ model: 'gpt-5.6', base: 'https://provider.example/v1', profile: 'generic' }))
 
   assert.equal(seen.body.reasoning_effort, undefined)
   assert.equal(seen.body.thinking, undefined)
+})
+
+test('content-filter finish is classified separately from ordinary parse/budget recovery', async () => {
+  const message = await providerRequest(config(), [
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: inspect' },
+  ], {
+    allowTools: true,
+    triggerSource: 'new_goal',
+    fetchImpl: async () => new Response(JSON.stringify({
+      id: 'safety-block',
+      model: 'deepseek-flash',
+      choices: [{ finish_reason: 'content_filter', message: { role: 'assistant', content: '' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 0, total_tokens: 20 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+  assert.equal(message._airiProvider.diagnostic_code, 'provider_safety_blocked')
+  assert.equal(message._airiProvider.output_budget_exhausted, false)
+})
+
+test('provider diagnostics flag a gateway that reports completion usage above the requested cap', async () => {
+  const message = await providerRequest(config(), [
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: concise plan' },
+  ], {
+    allowTools: true,
+    triggerSource: 'new_goal',
+    requestBodyPatch: { max_tokens: 10 },
+    fetchImpl: async () => new Response(JSON.stringify({
+      id: 'ignored-cap',
+      model: 'deepseek-flash',
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: VALID_PLAN } }],
+      usage: { prompt_tokens: 20, completion_tokens: 11, total_tokens: 31, completion_tokens_details: { reasoning_tokens: 9 } },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+  assert.equal(message._airiProvider.requested_token_field, 'max_tokens')
+  assert.equal(message._airiProvider.requested_output_cap, 10)
+  assert.equal(message._airiProvider.reported_reasoning_tokens, 9)
+  assert.equal(message._airiProvider.usage_complete, true)
+  assert.equal(message._airiProvider.cap_enforcement_anomaly, true)
+  assert.equal(message._airiProvider.diagnostic_code, 'provider_output_cap_ignored')
 })
 
 test('provider prompt trace records selected effort and policy reason per call', async () => {
@@ -324,7 +426,7 @@ test('strict recovery still overrides Jev semantic reasoning budget', () => {
 
 test('non-DeepSeek providers ignore the DeepSeek-specific Jev reasoning mapping', () => {
   const messages = [{ role: 'user', content: '[CHAT] TTLouis: continue' }]
-  assert.equal(selectReasoningPolicy(config({ model: 'gpt-5.6' }), messages, {
+  assert.equal(selectReasoningPolicy(config({ model: 'gpt-5.6', profile: 'generic' }), messages, {
     allowTools: true,
     reasoningBudget: 'deep',
   }), undefined)

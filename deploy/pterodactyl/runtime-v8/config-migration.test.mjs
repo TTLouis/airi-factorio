@@ -18,6 +18,8 @@ test('a fresh SGLuna config uses explicit non-provider placeholders', () => {
   assert.equal(next.model, 'replace-me')
   assert.equal(next.providerUrl, SGLUNA_CONFIG_DEFAULTS.providerUrl)
   assert.equal(next.model, SGLUNA_CONFIG_DEFAULTS.model)
+  assert.equal(next.providerProfile, 'auto')
+  assert.equal(next.maxProviderOutputTokensPerTurn, 20000)
 })
 
 test('an old config missing providerUrl is migrated to the default while preserving other values', () => {
@@ -46,6 +48,13 @@ test('OPENAI_MODEL is synchronized into model so the file reflects the setup val
     { OPENAI_MODEL: 'setup-model' },
   )
   assert.equal(next.model, 'setup-model')
+})
+
+test('provider profile and per-turn output cap are explicit and validated', () => {
+  const next = migrateConfig({}, { PROVIDER_PROFILE: 'openai-reasoning', MAX_PROVIDER_OUTPUT_TOKENS_PER_TURN: '32000' })
+  assert.equal(next.providerProfile, 'openai-reasoning')
+  assert.equal(next.maxProviderOutputTokensPerTurn, 32000)
+  assert.throws(() => migrateConfig({}, { PROVIDER_PROFILE: 'guess-from-hostname' }), /PROVIDER_PROFILE/)
 })
 
 test('OPENAI_API_KEY is never written into the migrated config', () => {

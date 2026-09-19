@@ -79,6 +79,12 @@ function chatPlayersValue(env, raw = {}, fallback = '') {
   return raw.chatPlayers ?? raw.chatPlayer ?? raw.player ?? fallback
 }
 
+function providerProfileValue(env, raw = {}, fallback = 'auto') {
+  const value = cleanString(env.PROVIDER_PROFILE ?? raw.providerProfile ?? fallback, 'PROVIDER_PROFILE', 40).toLowerCase()
+  check(['auto', 'generic', 'deepseek', 'openai-reasoning'].includes(value), 'PROVIDER_PROFILE must be auto, generic, deepseek, or openai-reasoning')
+  return value
+}
+
 export function deploymentCompatibilityWarnings(env = process.env) {
   const warnings = []
   for (const [primary, compatibility] of [
@@ -110,11 +116,13 @@ export function configuration(raw = {}, env = process.env) {
     save: cleanString(env.SAVE_NAME ?? raw.save ?? '', 'SAVE_NAME', 160),
     model: cleanString(env.OPENAI_MODEL ?? raw.model ?? 'replace-me', 'OPENAI_MODEL', 200),
     base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? 'https://provider.invalid/v1',
+    profile: providerProfileValue(env, raw, 'auto'),
     key: env.OPENAI_API_KEY ?? '',
     decisionProvider: decisionProviderConfiguration(env),
     providerTimeoutMs: safeInteger(env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? 120000, 'PROVIDER_TIMEOUT_MS', 1000, 600000),
     gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? 34197, 'SERVER_PORT', 1024, 65535),
     budget: safeInteger(env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? 30, 'MAX_PROVIDER_REQUESTS_PER_HOUR', 1, 1200),
+    maxProviderOutputUnits: safeInteger(env.MAX_PROVIDER_OUTPUT_TOKENS_PER_TURN ?? raw.maxProviderOutputTokensPerTurn ?? 20000, 'MAX_PROVIDER_OUTPUT_TOKENS_PER_TURN', 1000, 200000),
     stopMs: safeInteger(env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? 60000, 'SHUTDOWN_TIMEOUT_MS', 1000, 300000),
     factorio: {
       username: factorioUsername,
@@ -136,11 +144,13 @@ export const SGLUNA_CONFIG_DEFAULTS = {
   actorMode: 'npc',
   chatPlayers: '',
   providerUrl: 'https://provider.invalid/v1',
+  providerProfile: 'auto',
   model: 'replace-me',
   save: '',
   providerTimeoutMs: 120000,
   gamePort: 34197,
   maxProviderRequestsPerHour: 30,
+  maxProviderOutputTokensPerTurn: 20000,
   shutdownTimeoutMs: 60000,
 }
 
@@ -159,6 +169,7 @@ export function migrateConfig(raw = {}, env = process.env) {
     actorMode,
     chatPlayers,
     providerUrl: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? SGLUNA_CONFIG_DEFAULTS.providerUrl,
+    providerProfile: providerProfileValue(env, raw, SGLUNA_CONFIG_DEFAULTS.providerProfile),
     model: cleanString(env.OPENAI_MODEL ?? raw.model ?? SGLUNA_CONFIG_DEFAULTS.model, 'OPENAI_MODEL', 200),
     save: cleanString(env.SAVE_NAME ?? raw.save ?? SGLUNA_CONFIG_DEFAULTS.save, 'SAVE_NAME', 160),
     providerTimeoutMs: safeInteger(
@@ -173,6 +184,12 @@ export function migrateConfig(raw = {}, env = process.env) {
       'MAX_PROVIDER_REQUESTS_PER_HOUR',
       1,
       1200,
+    ),
+    maxProviderOutputTokensPerTurn: safeInteger(
+      env.MAX_PROVIDER_OUTPUT_TOKENS_PER_TURN ?? raw.maxProviderOutputTokensPerTurn ?? SGLUNA_CONFIG_DEFAULTS.maxProviderOutputTokensPerTurn,
+      'MAX_PROVIDER_OUTPUT_TOKENS_PER_TURN',
+      1000,
+      200000,
     ),
     shutdownTimeoutMs: safeInteger(
       env.SHUTDOWN_TIMEOUT_MS ?? raw.shutdownTimeoutMs ?? SGLUNA_CONFIG_DEFAULTS.shutdownTimeoutMs,
@@ -526,6 +543,14 @@ function emptyAgentDebug(fallback = {}) {
     provider_latency_ms: 0,
     provider_diagnostic_code: '',
     provider_finish_reason: '',
+    provider_capability_profile: '',
+    requested_token_field: '',
+    requested_output_cap: 0,
+    requested_reasoning_effort: '',
+    requested_thinking_mode: '',
+    reported_reasoning_tokens: 0,
+    usage_complete: 0,
+    cap_enforcement_anomaly: 0,
     reasoning_effort: '',
     reasoning_policy_reason: '',
     content_chars: 0,
@@ -590,6 +615,7 @@ function emptyAgentDebug(fallback = {}) {
     last_tool: '',
     last_event: '',
     recovery_attempt: 0,
+    recovery_result: '',
     last_error: '',
     actor_id: debugInteger(fallback.actor_id),
     actor_epoch: debugInteger(fallback.actor_epoch),
@@ -701,6 +727,14 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
     debug.provider_model = uiText(provider?.model ?? fallback.provider_model ?? debug.provider_model, 160)
     debug.provider_diagnostic_code = uiText(provider?.diagnostic_code ?? debug.provider_diagnostic_code, 160)
     debug.provider_finish_reason = uiText(provider?.finish_reason ?? debug.provider_finish_reason, 80)
+    debug.provider_capability_profile = uiText(provider?.capability_profile ?? debug.provider_capability_profile, 40)
+    debug.requested_token_field = uiText(provider?.requested_token_field ?? debug.requested_token_field, 40)
+    debug.requested_output_cap = debugInteger(provider?.requested_output_cap ?? debug.requested_output_cap)
+    debug.requested_reasoning_effort = uiText(provider?.requested_reasoning_effort ?? debug.requested_reasoning_effort, 32)
+    debug.requested_thinking_mode = uiText(provider?.requested_thinking_mode ?? debug.requested_thinking_mode, 32)
+    debug.reported_reasoning_tokens = debugInteger(provider?.reported_reasoning_tokens ?? debug.reported_reasoning_tokens)
+    debug.usage_complete = provider?.usage_complete === true ? 1 : provider?.usage_complete === false ? 0 : debug.usage_complete
+    debug.cap_enforcement_anomaly = provider?.cap_enforcement_anomaly === true ? 1 : 0
     debug.reasoning_effort = uiText(provider?.reasoning_effort ?? debug.reasoning_effort, 32)
     debug.reasoning_policy_reason = uiText(provider?.reasoning_policy_reason ?? debug.reasoning_policy_reason, 80)
     debug.content_chars = debugInteger(provider?.content_chars ?? debug.content_chars)
@@ -713,6 +747,16 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
   }
   else if (!debug.provider_model) {
     debug.provider_model = uiText(fallback.provider_model ?? debug.provider_model, 160)
+  }
+
+  if (event === 'provider.output_budget_recovery_started') debug.recovery_result = 'started'
+  if (event === 'provider.output_budget_recovery_succeeded') debug.recovery_result = 'succeeded'
+  if (event === 'provider.output_budget_recovery_exhausted') debug.recovery_result = 'exhausted_again'
+  if (event === 'provider.output_budget_recovery_failed' && debug.recovery_result !== 'budget_rejected') debug.recovery_result = 'failed'
+  if (event === 'budget.rejected' && data?.recovery_kind === 'output_budget_exhaustion') debug.recovery_result = 'budget_rejected'
+  if (event === 'provider.response' && data?.recovery_kind === 'output_budget_exhaustion') {
+    const recoveryDiagnostic = uiText(provider?.diagnostic_code, 160)
+    debug.recovery_result = recoveryDiagnostic === 'provider_output_budget_exhausted' ? 'exhausted_again' : 'response_received'
   }
 
   // Request-cumulative usage comes from traceRequest/failure snapshots. A
@@ -1314,6 +1358,25 @@ export async function recoverInterruptedAgentPlan(agent, reason, details = {}) {
   const state = agent.memory?.currentPlan?.(key)
   if (!shouldRecoverInterruptedPlan(state)) return { recovered: false, reason: 'plan_not_recoverable', state }
 
+  if (state?.provider_recovery?.kind === 'output_budget_exhaustion' && state.provider_recovery.phase === 'in_flight') {
+    const runtime = await agent.readInteractionTaskStatus?.()
+    const reduced = agent.memory?.applyOutcomeAuthority?.(key, {
+      kind: 'recoverable_provider_failure',
+      source: 'runtime_restart',
+      reason_code: 'provider_budget',
+    }, {
+      world: runtime ?? {},
+    })
+    agent.memory?.setProviderRecovery?.(key, undefined)
+    await agent.persistState?.()
+    if (reduced?.state?.status === 'paused') agent.cancel?.('runtime_recovery_interrupted_output_budget')
+    return {
+      recovered: true,
+      reason: 'interrupted_output_budget_recovery_fail_closed',
+      state: reduced?.state ?? state,
+    }
+  }
+
   agent.cancel?.(`runtime_recovery_prepare:${reason}`)
   const epoch = await agent.captureEpoch()
   const memoryContext = agent.memory?.context?.(key) ?? ''
@@ -1881,12 +1944,14 @@ export class Session {
         base: this.config.base,
         key: this.config.key,
         model: this.config.model,
+        profile: this.config.profile,
         timeoutMs: this.config.providerTimeoutMs,
       }, messages, context),
       interactionProvider: (messages, context) => this.provider({
         base: this.config.base,
         key: this.config.key,
         model: this.config.model,
+        profile: this.config.profile,
         timeoutMs: this.config.providerTimeoutMs,
       }, messages, context),
       interactionDecisionProvider: this.config.decisionProvider
@@ -1903,7 +1968,13 @@ export class Session {
             },
           )
         : undefined,
-      reserve: async () => reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget),
+      reserve: async context => reserveBudget(
+        path.join(this.root, '.airi', 'provider-budget.json'),
+        this.config.budget,
+        Date.now(),
+        { reservedSlots: 1, emergency: context?.recoveryKind === 'output_budget_exhaustion' },
+      ),
+      maxProviderOutputUnits: this.config.maxProviderOutputUnits,
       log: message => this.log(`[SGLuna agent] ${redact(secrets, message)}`),
       onActivity: (event, data) => this.onAgentActivity(event, data),
     })

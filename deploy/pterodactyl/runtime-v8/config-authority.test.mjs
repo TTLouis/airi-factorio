@@ -40,10 +40,12 @@ function eggEnv(overrides = {}) {
     OPENAI_API_KEY: fixtureSecret('provider-key'),
     OPENAI_MODEL: 'egg-model-a',
     OPENAI_API_BASEURL: 'https://provider-a.example.test/v1',
+    PROVIDER_PROFILE: 'deepseek',
     PROVIDER_TIMEOUT_MS: '150000',
     SAVE_NAME: 'egg-a.zip',
     SERVER_PORT: '35123',
     MAX_PROVIDER_REQUESTS_PER_HOUR: '333',
+    MAX_PROVIDER_OUTPUT_TOKENS_PER_TURN: '24000',
     SHUTDOWN_TIMEOUT_MS: '71000',
     FACTORIO_USERNAME: 'egg-user',
     FACTORIO_TOKEN: fixtureSecret('factorio-token'),
@@ -80,11 +82,13 @@ test('SGLuna Egg environment overrides stored runtime config and is synchronized
   assert.deepEqual(direct.chatPlayers, { mode: 'allowlist', names: ['Alice', 'Bob'] })
   assert.equal(direct.model, 'egg-model-a')
   assert.equal(direct.base, 'https://provider-a.example.test/v1')
+  assert.equal(direct.profile, 'deepseek')
   assert.equal(direct.key, firstEnv.OPENAI_API_KEY)
   assert.equal(direct.providerTimeoutMs, 150000)
   assert.equal(direct.save, 'egg-a.zip')
   assert.equal(direct.gamePort, 35123)
   assert.equal(direct.budget, 333)
+  assert.equal(direct.maxProviderOutputUnits, 24000)
   assert.equal(direct.stopMs, 71000)
   assert.deepEqual(direct.factorio, {
     username: 'egg-user',
@@ -97,11 +101,13 @@ test('SGLuna Egg environment overrides stored runtime config and is synchronized
     actorMode: 'npc',
     chatPlayers: 'Alice,Bob',
     providerUrl: 'https://provider-a.example.test/v1',
+    providerProfile: 'deepseek',
     model: 'egg-model-a',
     save: 'egg-a.zip',
     providerTimeoutMs: 150000,
     gamePort: 35123,
     maxProviderRequestsPerHour: 333,
+    maxProviderOutputTokensPerTurn: 24000,
     shutdownTimeoutMs: 71000,
   })
   let fileText = await fsp.readFile(filename, 'utf8')
@@ -117,10 +123,12 @@ test('SGLuna Egg environment overrides stored runtime config and is synchronized
     OPENAI_API_KEY: fixtureSecret('provider-key-b'),
     OPENAI_MODEL: 'egg-model-b',
     OPENAI_API_BASEURL: 'https://provider-b.example.test/v1',
+    PROVIDER_PROFILE: 'generic',
     PROVIDER_TIMEOUT_MS: '190000',
     SAVE_NAME: '',
     SERVER_PORT: '35234',
     MAX_PROVIDER_REQUESTS_PER_HOUR: '444',
+    MAX_PROVIDER_OUTPUT_TOKENS_PER_TURN: '26000',
     SHUTDOWN_TIMEOUT_MS: '82000',
     FACTORIO_USERNAME: '',
     FACTORIO_TOKEN: '',
@@ -132,21 +140,25 @@ test('SGLuna Egg environment overrides stored runtime config and is synchronized
     actorMode: 'npc',
     chatPlayers: 'none',
     providerUrl: 'https://provider-b.example.test/v1',
+    providerProfile: 'generic',
     model: 'egg-model-b',
     save: '',
     providerTimeoutMs: 190000,
     gamePort: 35234,
     maxProviderRequestsPerHour: 444,
+    maxProviderOutputTokensPerTurn: 26000,
     shutdownTimeoutMs: 82000,
   })
   assert.deepEqual(secondEffective.chatPlayers, { mode: 'disabled', names: [] })
   assert.equal(secondEffective.model, 'egg-model-b')
   assert.equal(secondEffective.base, 'https://provider-b.example.test/v1')
+  assert.equal(secondEffective.profile, 'generic')
   assert.equal(secondEffective.key, secondEnv.OPENAI_API_KEY)
   assert.equal(secondEffective.providerTimeoutMs, 190000)
   assert.equal(secondEffective.save, '')
   assert.equal(secondEffective.gamePort, 35234)
   assert.equal(secondEffective.budget, 444)
+  assert.equal(secondEffective.maxProviderOutputUnits, 26000)
   assert.equal(secondEffective.stopMs, 82000)
   assert.deepEqual(secondEffective.factorio, { username: '', token: '', public: false })
 

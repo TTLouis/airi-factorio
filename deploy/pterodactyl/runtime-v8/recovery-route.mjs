@@ -3,6 +3,7 @@ import { authoritativeRuntimeState, hasAuthoritativeBlockerEvidence } from './ou
 export const RECOVERY_FAILURE_CLASSES = new Set([
   'provider_format',
   'provider_budget',
+  'provider_safety',
   'missing_fact',
   'semantic_replan',
   'runtime_busy',
@@ -25,6 +26,7 @@ export const RECOVERY_ROUTES = new Set([
 export function recoveryFailureClassHint(reason) {
   const text = String(reason ?? '')
   if (/finish=length|output budget|provider_output_budget_exhausted/i.test(text)) return 'provider_budget'
+  if (/provider_safety_blocked|content_filter|safety block/i.test(text)) return 'provider_safety'
   if (/invalid provider|invalid json|strict json|malformed|parse/i.test(text)) return 'provider_format'
   if (/observation|missing fact|exact entity requires live observation/i.test(text)) return 'missing_fact'
   if (/strategy|replan|dependency|preflight/i.test(text)) return 'semantic_replan'
@@ -39,6 +41,7 @@ export function recoveryDecisionQuestions() {
       criteria: {
         provider_format: 'Malformed or invalid provider response/tool-call formatting.',
         provider_budget: 'Provider output budget or finish=length exhaustion.',
+        provider_safety: 'Provider safety/content-filter refusal. This is terminal for ordinary main-provider retry.',
         missing_fact: 'Exactly one mutable fact is missing and one bounded observation may resolve it.',
         semantic_replan: 'The remaining strategy needs semantic reconsideration.',
         runtime_busy: 'Authoritative runtime work is already active.',
@@ -110,12 +113,17 @@ export function validateRecoveryRoute(decision, {
   const runtime = authoritativeRuntimeState(world)
   const requested = RECOVERY_ROUTES.has(decision?.route) ? decision.route : 'fallback_runtime'
   const hintedFailureClass = RECOVERY_FAILURE_CLASSES.has(failureClassHint) ? failureClassHint : 'unknown'
-  const providerControlPlaneFailure = hintedFailureClass === 'provider_format' || hintedFailureClass === 'provider_budget'
+  const providerControlPlaneFailure = hintedFailureClass === 'provider_format' || hintedFailureClass === 'provider_budget' || hintedFailureClass === 'provider_safety'
+  const providerSafetyFailure = hintedFailureClass === 'provider_safety'
   const safeNonBlockingRoute = runtime.idle ? 'pause_recoverable' : runtime.active ? 'wait_runtime' : 'fallback_runtime'
   let route = requested
   let rejection_reason = ''
 
-  if (route === 'deterministic_close' && !finalCompletionProven) {
+  if (providerSafetyFailure && ['targeted_observation', 'retry_compact', 'continue_low', 'replan_high'].includes(route)) {
+    route = safeNonBlockingRoute
+    rejection_reason = 'provider_safety_is_terminal_for_main_provider'
+  }
+  else if (route === 'deterministic_close' && !finalCompletionProven) {
     route = 'fallback_runtime'
     rejection_reason = 'deterministic_close_without_authoritative_completion'
   }

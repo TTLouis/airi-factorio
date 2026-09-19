@@ -11,6 +11,35 @@ const STEERING_MARKER = '[STEERING]'
 const COMPLETION_MAX_TOKENS = 1000
 const FALLBACK_CONTINUATION_MAX_TOKENS = 4000
 const DEFAULT_MAX_TOKENS = 2000
+const MAX_PROVIDER_OUTPUT_CAP = 65536
+const PROVIDER_PROFILE_IDS = new Set(['auto', 'generic', 'deepseek', 'openai-reasoning'])
+const PROVIDER_PROFILES = Object.freeze({
+  generic: Object.freeze({
+    id: 'generic',
+    token_field: 'max_tokens',
+    reasoning_effort: false,
+    thinking_control: 'none',
+    tool_support: true,
+    structured_output: 'tools_or_json',
+  }),
+  deepseek: Object.freeze({
+    id: 'deepseek',
+    token_field: 'max_tokens',
+    reasoning_effort: true,
+    thinking_control: 'deepseek',
+    tool_support: true,
+    structured_output: 'tools_or_json',
+  }),
+  'openai-reasoning': Object.freeze({
+    id: 'openai-reasoning',
+    token_field: 'max_completion_tokens',
+    reasoning_effort: true,
+    thinking_control: 'none',
+    tool_support: true,
+    structured_output: 'tools_or_json',
+  }),
+})
+const REQUEST_BODY_PATCH_KEYS = new Set(['max_tokens', 'max_completion_tokens', 'reasoning_effort', 'thinking', 'response_format'])
 const PLAN_STATE_MARKER = '[PLAN_STATE]'
 const MEMORY_MARKER = '[MEMORY]'
 const PROMPT_TRACE_MAX_BYTES = 10 * 1024 * 1024
@@ -146,6 +175,9 @@ function promptTraceIdentity(options = {}) {
   const providerPolicy = options.providerPolicy && typeof options.providerPolicy === 'object'
     ? options.providerPolicy
     : undefined
+  const capabilities = options.providerCapabilities && typeof options.providerCapabilities === 'object'
+    ? options.providerCapabilities
+    : undefined
   return {
     request_id: typeof options.requestId === 'string' ? options.requestId : undefined,
     round: Number.isSafeInteger(options.round) ? options.round : undefined,
@@ -155,6 +187,7 @@ function promptTraceIdentity(options = {}) {
     allow_tools: options.allowTools !== false,
     reasoning_effort: typeof providerPolicy?.effort === 'string' ? providerPolicy.effort : undefined,
     reasoning_policy_reason: typeof providerPolicy?.reason === 'string' ? providerPolicy.reason : undefined,
+    capability_profile: typeof capabilities?.id === 'string' ? capabilities.id : undefined,
   }
 }
 
@@ -164,12 +197,19 @@ async function traceProviderPayload(body, options = {}) {
   try {
     const rawBody = JSON.stringify(body)
     const tools = Array.isArray(body?.tools) ? body.tools : []
+    const tokenField = typeof options.providerCapabilities?.token_field === 'string'
+      ? options.providerCapabilities.token_field
+      : undefined
     await promptTraceWriter(filename).emit({
       schema: 1,
       event: 'provider.request',
       ts: new Date().toISOString(),
       ...promptTraceIdentity(options),
       trigger_source: promptTraceTrigger(body?.messages, options.recoveryAttempt),
+      requested_token_field: tokenField,
+      requested_output_cap: tokenField ? body?.[tokenField] : undefined,
+      requested_reasoning_effort: typeof body?.reasoning_effort === 'string' ? body.reasoning_effort : undefined,
+      requested_thinking_mode: typeof body?.thinking?.type === 'string' ? body.thinking.type : 'not_sent',
       payload: body,
       stats: {
         body_chars: rawBody.length,
@@ -272,9 +312,83 @@ function isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAtte
   return typeof lastUser?.content === 'string' && lastUser.content.startsWith(COMPLETION_MARKER)
 }
 
-function supportsDisabledThinking(base) {
-  try { return new URL(base).hostname.toLowerCase() === 'api.deepseek.com' }
-  catch { return false }
+function providerHostname(base) {
+  try { return new URL(base).hostname.toLowerCase() }
+  catch { return '' }
+}
+
+export function providerCapabilityProfile(config = {}) {
+  const requested = String(config.profile ?? config.providerProfile ?? 'auto').trim().toLowerCase()
+  check(PROVIDER_PROFILE_IDS.has(requested), 'Invalid provider capability profile')
+  let resolved = requested
+  if (resolved === 'auto') {
+    resolved = providerHostname(config.base) === 'api.deepseek.com' && /^deepseek(?:[-_./:]|$)/i.test(String(config.model ?? ''))
+      ? 'deepseek'
+      : 'generic'
+  }
+  const profile = PROVIDER_PROFILES[resolved]
+  return {
+    ...profile,
+    requested_profile: requested,
+    auto_resolved: requested === 'auto',
+  }
+}
+
+function validOutputCap(value) {
+  check(Number.isSafeInteger(value) && value >= 1 && value <= MAX_PROVIDER_OUTPUT_CAP, `Provider output cap must be an integer from 1 to ${MAX_PROVIDER_OUTPUT_CAP}`)
+  return value
+}
+
+function validateResponseFormat(value) {
+  check(value && typeof value === 'object' && !Array.isArray(value), 'Invalid response_format override')
+  check(value.type === 'json_object' || value.type === 'json_schema', 'Unsupported response_format override')
+  check(JSON.stringify(value).length <= 32768, 'response_format override is too large')
+  return value
+}
+
+function applyRequestBodyPatch(body, patch, capability) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return
+  for (const key of Object.keys(patch)) check(REQUEST_BODY_PATCH_KEYS.has(key), `requestBodyPatch key is not allowed: ${key}`)
+
+  const hasMaxTokens = patch.max_tokens !== undefined
+  const hasMaxCompletionTokens = patch.max_completion_tokens !== undefined
+  if (hasMaxTokens && hasMaxCompletionTokens) {
+    check(patch.max_tokens === patch.max_completion_tokens, 'Conflicting provider output cap overrides')
+  }
+  const outputCap = hasMaxCompletionTokens ? patch.max_completion_tokens : (hasMaxTokens ? patch.max_tokens : undefined)
+  if (outputCap !== undefined) {
+    delete body.max_tokens
+    delete body.max_completion_tokens
+    body[capability.token_field] = validOutputCap(outputCap)
+  }
+
+  if (patch.reasoning_effort !== undefined) {
+    check(capability.reasoning_effort === true, 'Provider profile does not allow reasoning_effort')
+    check(['none', 'minimal', 'low', 'medium', 'high', 'max'].includes(patch.reasoning_effort), 'Invalid reasoning_effort override')
+    body.reasoning_effort = patch.reasoning_effort
+  }
+  if (patch.thinking !== undefined) {
+    check(capability.thinking_control === 'deepseek', 'Provider profile does not allow thinking control')
+    check(patch.thinking && typeof patch.thinking === 'object' && !Array.isArray(patch.thinking), 'Invalid thinking override')
+    check(Object.keys(patch.thinking).length === 1 && ['enabled', 'disabled'].includes(patch.thinking.type), 'Invalid thinking override')
+    body.thinking = { type: patch.thinking.type }
+  }
+  if (patch.response_format !== undefined) body.response_format = validateResponseFormat(patch.response_format)
+}
+
+function usageSafeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+function providerUsageNumbers(usage) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return {}
+  const input = usageSafeInteger(usage.prompt_tokens) ?? usageSafeInteger(usage.input_tokens)
+  const output = usageSafeInteger(usage.completion_tokens) ?? usageSafeInteger(usage.output_tokens)
+  const total = usageSafeInteger(usage.total_tokens)
+  const reasoning = usageSafeInteger(usage.completion_tokens_details?.reasoning_tokens)
+    ?? usageSafeInteger(usage.output_tokens_details?.reasoning_tokens)
+    ?? usageSafeInteger(usage.reasoning_tokens)
+  return { input, output, total, reasoning }
 }
 
 function topLevelJsonObjectSpans(text) {
@@ -714,22 +828,24 @@ export async function providerRequest(config, messages, {
   const outputBudgetRecovery = recoveryKind === 'output_budget_exhaustion'
   const compactContinuation = outputBudgetRecovery || isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAttempt })
   const compactedMessages = compactContinuation ? compactCompletionMessages(messages) : messages
-  const disableThinking = compactContinuation && supportsDisabledThinking(config.base)
+  const capability = providerCapabilityProfile(config)
+  check(!allowTools || capability.tool_support === true, 'Provider profile does not allow tool calls')
+  const disableThinking = compactContinuation && capability.thinking_control === 'deepseek'
+  const compactReasoningDisabled = outputBudgetRecovery && capability.reasoning_effort === true
   const body = {
     model: config.model,
     messages: applySteeringMessages(compactedMessages, messages),
-    max_tokens: compactContinuation
-      ? (disableThinking ? COMPLETION_MAX_TOKENS : FALLBACK_CONTINUATION_MAX_TOKENS)
-      : DEFAULT_MAX_TOKENS,
   }
+  body[capability.token_field] = compactContinuation
+    ? ((disableThinking || compactReasoningDisabled) ? COMPLETION_MAX_TOKENS : FALLBACK_CONTINUATION_MAX_TOKENS)
+    : DEFAULT_MAX_TOKENS
   if (disableThinking) body.thinking = { type: 'disabled' }
   if (allowTools) {
     body.tools = compactContinuation ? compactCompletionTools(toolDefinitions) : toolDefinitions
     body.tool_choice = 'auto'
   }
-  if (requestBodyPatch && typeof requestBodyPatch === 'object' && !Array.isArray(requestBodyPatch)) {
-    Object.assign(body, requestBodyPatch)
-  }
+  applyRequestBodyPatch(body, requestBodyPatch, capability)
+  const requestedOutputCap = body[capability.token_field]
 
   const traceOptions = {
     round,
@@ -740,6 +856,7 @@ export async function providerRequest(config, messages, {
     allowTools,
     promptTraceFile: traceFile,
     providerPolicy,
+    providerCapabilities: capability,
   }
   await traceProviderPayload(body, traceOptions)
 
@@ -819,9 +936,23 @@ export async function providerRequest(config, messages, {
       ? structuredContentDiagnostics(normalizedContent)
       : undefined
     const finishReason = choice?.finish_reason
-    const diagnosticCode = finishReason === 'length'
+    const usageNumbers = providerUsageNumbers(data?.usage)
+    const usageComplete = usageNumbers.input !== undefined
+      && usageNumbers.output !== undefined
+      && usageNumbers.total !== undefined
+      && usageNumbers.total >= usageNumbers.input
+      && usageNumbers.total >= usageNumbers.output
+      && (usageNumbers.reasoning === undefined || usageNumbers.reasoning <= usageNumbers.output)
+    const capEnforcementAnomaly = Number.isSafeInteger(requestedOutputCap)
+      && usageNumbers.output !== undefined
+      && usageNumbers.output > requestedOutputCap
+    const safetyFinish = ['content_filter', 'safety', 'blocked'].includes(String(finishReason ?? '').toLowerCase())
+    let diagnosticCode = finishReason === 'length'
       ? (rawShape.content_chars === 0 && toolCallCount === 0 ? 'provider_output_budget_exhausted' : 'provider_output_truncated')
-      : (rawShape.content_chars === 0 && toolCallCount === 0 ? 'provider_empty_content' : 'ok')
+      : safetyFinish
+        ? 'provider_safety_blocked'
+        : (rawShape.content_chars === 0 && toolCallCount === 0 ? 'provider_empty_content' : 'ok')
+    if (capEnforcementAnomaly && diagnosticCode === 'ok') diagnosticCode = 'provider_output_cap_ignored'
     const providerDiagnostics = {
       response_id: typeof data?.id === 'string' ? data.id : undefined,
       model: typeof data?.model === 'string' ? data.model : config.model,
@@ -839,6 +970,16 @@ export async function providerRequest(config, messages, {
       structured_content: structured,
       reasoning_effort: typeof providerPolicy?.effort === 'string' ? providerPolicy.effort : undefined,
       reasoning_policy_reason: typeof providerPolicy?.reason === 'string' ? providerPolicy.reason : undefined,
+      capability_profile: capability.id,
+      requested_profile: capability.requested_profile,
+      requested_token_field: capability.token_field,
+      requested_output_cap: requestedOutputCap,
+      requested_reasoning_effort: typeof body.reasoning_effort === 'string' ? body.reasoning_effort : undefined,
+      requested_thinking_mode: typeof body.thinking?.type === 'string' ? body.thinking.type : 'not_sent',
+      reported_reasoning_tokens: usageNumbers.reasoning,
+      reported_output_tokens: usageNumbers.output,
+      usage_complete: usageComplete,
+      cap_enforcement_anomaly: capEnforcementAnomaly,
     }
 
     await traceProviderResult('provider.response', providerDiagnostics, traceOptions)
