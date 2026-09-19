@@ -533,7 +533,29 @@ export class Session {
 
   refreshProjectJevAgentContext() {
     if (typeof this.agent?.setStrategicProjectState !== 'function') return
-    this.agent.setStrategicProjectState(this.projectJev?.currentBoard())
+    const board = this.projectJev?.currentBoard()
+    this.agent.setStrategicProjectState(board)
+
+    if (typeof this.agent?.setProjectJevAdvisory === 'function') {
+      const telemetry = this.projectJev?.lastTelemetry()
+      const sourceMatches = telemetry
+        && board?.goal_id
+        && telemetry.source_goal_id === board.goal_id
+        && telemetry.source_project_revision === board.revision
+      this.agent.setProjectJevAdvisory(sourceMatches ? telemetry : undefined)
+    }
+  }
+
+  async refreshProjectJevAdvisory({ poll = false } = {}) {
+    if (!this.projectJev) return false
+    if (poll && this.projectJev.decisionProviderConfigured) {
+      try { await this.projectJev.poll() }
+      catch (error) {
+        this.log(`[Project Jev] Advisory poll failed without blocking AIRI: ${error instanceof Error ? error.message : error}`)
+      }
+    }
+    this.refreshProjectJevAgentContext()
+    return true
   }
 
   async syncProjectJevGoalFromPlan(state = this.currentPlanState()) {
@@ -761,6 +783,7 @@ export class Session {
       }
       await this.ensureAuthorization()
       await this.applyNavigationObstaclePolicy(text)
+      await this.refreshProjectJevAdvisory({ poll: true })
       const result = await this.agent.request(text, { sender })
       await this.syncTaskBoardUi()
       await this.syncProjectJevGoalFromPlan()
@@ -821,6 +844,7 @@ export class Session {
         if (!this.agent.active) return
         await this.ensureAuthorization()
         if (!this.agent.active) return
+        await this.refreshProjectJevAdvisory({ poll: true })
         const result = await this.agent.completed()
         await this.syncTaskBoardUi()
         await this.syncProjectJevGoalFromPlan()
@@ -840,6 +864,7 @@ export class Session {
         }
         await this.ensureAuthorization()
         if (!this.agent.active) return
+        await this.refreshProjectJevAdvisory({ poll: true })
         const result = typeof this.agent.failed === 'function' ? await this.agent.failed(autorioError[1]) : null
         await this.syncTaskBoardUi()
         await this.syncProjectJevGoalFromPlan()
