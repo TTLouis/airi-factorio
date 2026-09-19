@@ -100,7 +100,6 @@ test('tick-only poll updates do not trigger another Jev decision', async () => {
         return { authority: 'shadow', effects: [] }
       },
     },
-    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
   })
 
   const first = await monitor.poll()
@@ -151,14 +150,13 @@ test('strategic board revision change triggers even with no Factorio coordinatio
   let triggers = 0
   const monitor = new SwarmProjectJevMonitor({
     rcon,
-    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision: 1 }),
+    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision }),
     service: {
       async trigger() {
         triggers += 1
         return { authority: 'shadow', effects: [] }
       },
     },
-    strategicBoard: () => ({ goal_id: 'goal-1', status: 'active', revision }),
   })
 
   await monitor.poll()
