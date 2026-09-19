@@ -149,14 +149,16 @@ export class SwarmProjectJevShadowController {
     this.lastTelemetry = undefined
   }
 
-  async observe(options = {}) {
-    const globalSnapshot = await readSwarmCoordinationSnapshot(this.rcon, {
-      limit: this.snapshotLimit,
-    })
+  async observeSnapshot(globalSnapshot, options = {}) {
+    if (!globalSnapshot || globalSnapshot.schema !== 'swarm_coordination_snapshot_v1') {
+      throw new Error('Project Jev requires canonical swarm coordination snapshot')
+    }
+
     const key = decisionKey(globalSnapshot, options)
     if (options.force !== true && key === this.lastDecisionKey && this.lastTelemetry) {
       const reused = structuredClone(this.lastTelemetry)
       reused.source_tick = globalSnapshot.tick
+      reused.source_event_cursor = globalSnapshot.eventCursor
       reused.reused = true
       this.lastTelemetry = structuredClone(reused)
       return reused
@@ -176,6 +178,7 @@ export class SwarmProjectJevShadowController {
       effects: [],
       scope: 'swarm_global',
       source_tick: globalSnapshot.tick,
+      source_event_cursor: globalSnapshot.eventCursor,
       source_schema: globalSnapshot.schema,
       source_counts: structuredClone(globalSnapshot.counts),
       decision_key: key,
@@ -186,6 +189,13 @@ export class SwarmProjectJevShadowController {
     this.lastDecisionKey = key
     this.lastTelemetry = structuredClone(result)
     return result
+  }
+
+  async observe(options = {}) {
+    const globalSnapshot = await readSwarmCoordinationSnapshot(this.rcon, {
+      limit: this.snapshotLimit,
+    })
+    return this.observeSnapshot(globalSnapshot, options)
   }
 
   last() {
