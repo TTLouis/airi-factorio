@@ -98,3 +98,26 @@ test('sanitizes persisted board data and migrates a legacy plan when board is mi
   assert.equal(restored.evidence[0].ref, 'batch_1')
   assert.equal(restored.events.at(-1).type, 'evidence')
 })
+
+
+test('replanning never rebinds old evidence to a changed semantic step id', () => {
+  let board = createTaskBoard(['gather stone', 'craft furnaces', 'verify output'], 0, { now: 10 })
+  board = reconcileTaskBoard(board, ['gather stone', 'craft furnaces', 'verify output'], 1, { now: 20, authoritativeAdvance: true })
+  const replacedStepId = board.active_step_id
+  const unchangedVerifyId = board.steps[2].id
+  board = addTaskBoardEvidence(board, { kind: 'deterministic_verification', summary: 'crafted furnaces', ref: 'batch_2', now: 21 })
+
+  const replanned = reconcileTaskBoard(board, ['gather stone', 'smelt iron plates', 'verify output'], 1, { now: 30, allowReplan: true })
+
+  assert.equal(replanned.completed_count, 1)
+  assert.notEqual(replanned.active_step_id, replacedStepId)
+  assert.equal(replanned.steps[1].description, 'smelt iron plates')
+  assert.equal(replanned.steps[2].id, unchangedVerifyId)
+  assert.equal(replanned.evidence.at(-1).step_id, replacedStepId)
+  assert.notEqual(replanned.evidence.at(-1).step_id, replanned.active_step_id)
+
+  const restored = sanitizeTaskBoard(replanned, { goalId: replanned.goal_id, now: 40 })
+  assert.equal(restored.active_step_id, replanned.active_step_id)
+  assert.equal(restored.steps[2].id, unchangedVerifyId)
+  assert.equal(restored.evidence.at(-1).step_id, replacedStepId)
+})
