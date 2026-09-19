@@ -127,6 +127,7 @@ tar -xzf "$WORK/airi-source.tar.gz" --strip-components=1 --no-same-owner -C "$WO
 [[ -f "$WORK/source/pnpm-lock.yaml" ]] || fail 'Pinned source lockfile is missing'
 [[ -f "$WORK/source/deploy/pterodactyl/staging/guard.ts" ]] || fail 'Pinned source lacks the v8 NPC guard'
 [[ -f "$WORK/source/deploy/pterodactyl/runtime-v8/supervisor.mjs" ]] || fail 'Pinned source lacks the v8 runtime supervisor'
+[[ -f "$WORK/source/deploy/pterodactyl/runtime-v8/outcome-authority.mjs" ]] || fail 'Pinned source lacks the runtime outcome authority module'
 
 # Full staging/runtime and Autorio test suites run in GitHub CI. Reinstall should
 # remain a bounded deployment path, not a second CI runner inside Pterodactyl.
@@ -154,7 +155,7 @@ cp "$WORK/source/packages/autorio/info.json" "$WORK/source/packages/autorio/dist
 cp -a "$WORK/source/packages/autorio/dist/." "$APP/autorio/"
 
 log 'Copying v8 supervisor, shared policy, and prompt'
-for file in common.mjs canonical-task-board-memory.mjs game-files.mjs provider-base.mjs provider.mjs supervisor.mjs structured-policy.mjs supervisor-adapter.mjs npc-agent-loop.mjs; do
+for file in common.mjs canonical-task-board-memory.mjs game-files.mjs provider-base.mjs provider.mjs supervisor.mjs structured-policy.mjs supervisor-adapter.mjs outcome-authority.mjs npc-agent-loop.mjs; do
   cp "$WORK/source/deploy/pterodactyl/runtime-v8/$file" "$APP/src/runtime-v8/$file"
 done
 for file in structured-policy.mjs supervisor-adapter.mjs npc-agent-loop.mjs; do
@@ -246,6 +247,7 @@ const names = [
   'src/runtime-v8/supervisor.mjs',
   'src/runtime-v8/structured-policy.mjs',
   'src/runtime-v8/supervisor-adapter.mjs',
+  'src/runtime-v8/outcome-authority.mjs',
   'src/runtime-v8/npc-agent-loop.mjs',
   'src/staging/structured-policy.mjs',
   'src/staging/supervisor-adapter.mjs',
