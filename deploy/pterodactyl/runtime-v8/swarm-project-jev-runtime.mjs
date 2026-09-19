@@ -2,6 +2,7 @@ import { SwarmProjectJevShadowController } from './swarm-project-jev-shadow.mjs'
 import { SwarmProjectJevShadowService } from './swarm-project-jev-service.mjs'
 import { SwarmStrategicProjectPersistence } from './swarm-strategic-project-persistence.mjs'
 import { SwarmStrategicProjectStore } from './swarm-strategic-project-store.mjs'
+import { applyStrategicPlannerProposal } from './swarm-strategic-planner-contract.mjs'
 
 export class SwarmProjectJevRuntime {
   constructor({
@@ -73,11 +74,11 @@ export class SwarmProjectJevRuntime {
     return board
   }
 
-  async updateBoard(patch) {
+  async applyPlannerProposal(proposal) {
     await this.initialize()
-    const board = this.store.update(patch)
-    await this.persistence.save()
-    return board
+    const result = applyStrategicPlannerProposal(this.store, proposal)
+    if (result.changed) await this.persistence.save()
+    return result
   }
 
   async completeCurrentMilestone(options) {
