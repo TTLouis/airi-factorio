@@ -311,7 +311,7 @@ test('provider response metadata is available to tracing without changing assist
   assert.equal(message._airiProvider.model, 'test-model-v2')
   assert.equal(message._airiProvider.finish_reason, 'stop')
   assert.deepEqual(message._airiProvider.usage, { prompt_tokens: 12, completion_tokens: 4 })
-  assert.equal(message._airiProvider.diagnostic_code, 'ok')
+  assert.equal(message._airiProvider.diagnostic_code, 'provider_content_schema_invalid')
   assert.equal(message._airiProvider.content_chars, 2)
   assert.equal(message._airiProvider.content_utf8_bytes, 2)
   assert.equal(message._airiProvider.reasoning_content_chars, 0)

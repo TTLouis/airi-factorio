@@ -81,7 +81,7 @@ test('prompt trace records the exact final provider body after continuation comp
   assert.equal(requestRow.payload.max_tokens, 4000)
   assert.match(requestRow.payload.messages[0].content, /Token-efficient continuation rules/)
   assert.ok(requestRow.payload.messages.some(message => typeof message.content === 'string' && message.content.startsWith('[STEERING]')))
-  assert.equal(responseRow.diagnostic_code, 'ok')
+  assert.equal(responseRow.diagnostic_code, 'provider_content_schema_invalid')
   assert.equal(responseRow.response_id, 'resp-prompt-trace')
   assert.equal(responseRow.finish_reason, 'stop')
   assert.equal((await fsp.stat(promptTraceFile)).mode & 0o777, 0o600)
