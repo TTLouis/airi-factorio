@@ -210,6 +210,7 @@ test('provider format retry_compact makes exactly one low-reasoning main call', 
   assert.equal(mainCalls.length, 1)
   assert.equal(mainCalls[0].triggerSource, 'recovery_continue_low')
   assert.equal(mainCalls[0].allowTools, false)
+  assert.equal(mainCalls[0].recoveryKind, undefined)
 })
 
 test('semantic replan makes exactly one high-reasoning main call', async () => {
@@ -218,6 +219,7 @@ test('semantic replan makes exactly one high-reasoning main call', async () => {
   assert.equal(result.operations.length, 1)
   assert.equal(mainCalls.length, 1)
   assert.equal(mainCalls[0].triggerSource, 'recovery_replan_high')
+  assert.equal(mainCalls[0].recoveryKind, undefined)
 })
 
 test('duplicate recovery event coalesces the Jev call', async () => {
