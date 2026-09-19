@@ -415,7 +415,7 @@ test('Jev can select a semantic total checkpoint that differs from the next oper
     decisionProvider: async (decisionState, questions) => {
       assert.equal(decisionState.proposed_checkpoint.requirements[0].minimum, 100)
       assert.match(questions.contract.criteria.candidate_1, /"minimum":100/)
-      assert.match(questions.contract.criteria.candidate_2, /"minimum":40/)
+      assert.equal(questions.contract.criteria.candidate_2, undefined)
       return checkpointDecision('candidate_1', 'checkpoint_here', 0.96, 'advances_current')
     },
   })
