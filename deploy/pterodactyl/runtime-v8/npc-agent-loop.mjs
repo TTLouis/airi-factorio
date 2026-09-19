@@ -804,7 +804,19 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     })
     return {
       ...plan,
-      strategicProjectProposal: project,
+      strategicProjectProposal: {
+        currentMilestone: {
+          title: project.current_milestone.title,
+          ...(project.current_milestone.completion_summary
+            ? { completionSummary: project.current_milestone.completion_summary }
+            : {}),
+        },
+        nextMilestones: project.next_milestones.map(item => ({
+          title: item.title,
+          ...(item.completion_summary ? { completionSummary: item.completion_summary } : {}),
+        })),
+        developmentDirection: project.development_direction,
+      },
     }
   }
 
