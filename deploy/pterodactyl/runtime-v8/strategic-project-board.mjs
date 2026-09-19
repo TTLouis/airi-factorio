@@ -33,7 +33,7 @@ function milestone(value, status) {
 export function sanitizeStrategicProjectBoard(value, {
   goalId = '',
   objective = '',
-  status = 'active',
+  status,
   now = Date.now(),
 } = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -51,7 +51,9 @@ export function sanitizeStrategicProjectBoard(value, {
     kind: 'strategic_project_board_v1',
     goal_id: clean(source.goal_id || goalId, 100),
     title: clean(source.title || objective, 500),
-    status: BOARD_STATUSES.has(status) ? status : 'active',
+    status: BOARD_STATUSES.has(status)
+      ? status
+      : (BOARD_STATUSES.has(source.status) ? source.status : 'active'),
     completed_milestones: completed,
     current_milestone: current,
     next_milestones: next,
