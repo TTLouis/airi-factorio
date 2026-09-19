@@ -606,3 +606,17 @@ test('verified milestone transition can activate the next tentative milestone bu
   assert.equal(advanced.project_board.transition_state, '')
   assert.equal(advanced.task_board.total_steps, 0)
 })
+
+
+test('granularity collapse wakes bounded simplification instead of silently behaving like keep', async () => {
+  const { agent } = makeAgent({
+    decisionProvider: async () => postStepDecisionResponse('continue_current', {
+      granularity: 'collapse',
+      development: 'maintain',
+    }),
+  })
+  const routed = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0 } })
+  assert.equal(routed.route, 'replan')
+  assert.equal(routed.hierarchy_action, 'collapse_current_scope')
+  assert.equal(routed.fallback_reason, 'hierarchy_collapse_requested')
+})
