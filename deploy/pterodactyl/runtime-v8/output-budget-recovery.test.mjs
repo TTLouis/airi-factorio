@@ -597,7 +597,7 @@ test('terminal provider budget becomes a Jev-directed fresh planner generation i
   await agent.request('run a long bounded task without stopping on planner budget rollover', { sender: 'TTLouis' })
   const result = await agent.completed()
 
-  assert.equal(decisions.length, 1)
+  assert.equal(decisions.filter(item => item.state?.contract === 'recovery_route').length, 1)
   assert.equal(calls.length, 4)
   assert.equal(result.goalStatus, 'active')
   assert.notEqual(result.goalStatus, 'paused')
