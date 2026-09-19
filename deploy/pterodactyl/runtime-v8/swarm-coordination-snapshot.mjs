@@ -92,9 +92,17 @@ export function parseSwarmCoordinationSnapshot(value, { requestedLimit = 12 } = 
     normalizedCounts[field] = nonNegativeInteger(counts[field], `count ${field}`)
   }
 
+  const eventCursor = typeof source.eventCursor === 'string' && source.eventCursor.length <= 160
+    ? source.eventCursor
+    : undefined
+  if (eventCursor === undefined) {
+    throw new Error('Invalid swarm coordination snapshot eventCursor')
+  }
+
   const normalized = {
     schema: SNAPSHOT_SCHEMA,
     tick: nonNegativeInteger(source.tick, 'tick'),
+    eventCursor,
     limit: returnedLimit,
     counts: normalizedCounts,
   }
