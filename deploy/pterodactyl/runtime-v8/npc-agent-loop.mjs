@@ -47,7 +47,7 @@ const OUTPUT_BUDGET_RECOVERY_MESSAGE = '[HARNESS] The immediately preceding prov
 const ACTION_OMISSION_MAX_TOKENS = 700
 const ACTION_OMISSION_BLOCKER_PREFIX = 'BLOCKED:'
 const ACTION_OMISSION_REPAIR_MESSAGE = 'Finite canonical work remains, but no executable operation was submitted. Reuse the authoritative evidence already collected and do not repeat completed observations. If that evidence already parameterizes the next action, submit the next executable operation now. If exactly one mutable fact is genuinely missing, use exactly one targeted observation for that fact; after it, no more observation turns are allowed. Do not stop and wait for a human "continue" message. Otherwise keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or truthful blocker.'
-const ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE = 'The single targeted observation for this decision is complete. Do not observe again or switch to another read-only tool. Submit the next executable operation now, or keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact still-missing fact or truthful blocker.'
+const ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE = 'The targeted observation budget for this decision is complete. Do not observe again or switch to another read-only tool. Submit the next executable operation now, or keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact still-missing fact or truthful blocker.'
 const EXACT_ENTITY_TARGET_OPERATIONS = new Set([
   'walk_to_entity_exact',
   'mine_entity_exact',
@@ -5095,6 +5095,24 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
       this.actionOmissionObservationUsed = true
       this.actionOmissionForceNoTools = true
+    }
+
+    if (observationDecisionComplete) {
+      // This is a controlled decision boundary, not a provider/world failure.
+      // The observation allowance was intentionally spent; routing it through
+      // generic recovery can incorrectly choose pause_recoverable while the
+      // hierarchy planner still owes an act-or-block decision.
+      await this.traceEvent('recovery.observation_budget_force_decision', {
+        reason_code: 'observation_decision_pressure_complete',
+        trigger_source: this.reasoningTriggerSource ?? this.planUpdateReason,
+        tools_enabled: false,
+        canonical_work_remaining: canonicalWorkRemains(currentState),
+      })
+      return super.recoverPlan(
+        generation,
+        new AgentLoopError('The targeted observation budget for this decision is complete. Reuse the grounded evidence already collected and return the required strict-JSON hierarchy/plan decision now; do not request another observation.'),
+        roundBase,
+      )
     }
 
     let routed
