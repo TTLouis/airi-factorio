@@ -2573,6 +2573,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         throw new AgentLoopError('Model turn was cancelled or superseded')
       }
       await this.assertCurrent()
+
+      // Missing checkpoint fields are an invalid Jev response, not evidence of
+      // semantic drift. Treat malformed/foreign decision envelopes exactly like
+      // a checkpoint-provider outage: keep completion authority closed, but do
+      // not manufacture replan_needed and block an otherwise-valid batch.
+      const relationChoice = response?.answers?.step_relation?.choice
+      const boundaryChoice = response?.answers?.checkpoint_boundary?.choice
+      if (!['advances_current', 'prerequisite_for_current', 'belongs_to_later_step', 'replan_needed', 'unrelated'].includes(relationChoice)
+        || !['checkpoint_here', 'keep_step_open', 'split_recommended'].includes(boundaryChoice)) {
+        throw new AgentLoopError('invalid Jev step checkpoint decision')
+      }
+
       const normalized = parseStepCheckpointDecision(response, candidates)
       const confidenceAccepted = normalized.contract?.confidence >= 0.7
       const contract = confidenceAccepted
