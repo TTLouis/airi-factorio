@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ControlledActor } from './actors/types'
 import { new_task_manager } from './task_manager'
 import { TaskStates } from './types'
+
+beforeEach(() => {
+  ;(globalThis as any).storage = {}
+})
 
 describe('task manager status snapshot', () => {
   it('reports idle state without exposing runtime objects', () => {
@@ -13,6 +17,7 @@ describe('task manager status snapshot', () => {
       queue_length: 0,
       queued_task_types: [],
       current_task: undefined,
+      batch_generation: 1,
       active_batch: undefined,
       last_completed_batch: undefined,
       last_cancelled_batch: undefined,
@@ -40,8 +45,11 @@ describe('task manager status snapshot', () => {
         type: TaskStates.WAITING,
         remaining_ticks: 120,
       },
+      batch_generation: 1,
       active_batch: {
         batch_id: 1,
+        batch_generation: 1,
+        batch_ref: 'batch-g1-1',
         task_count: 2,
         task_types: [TaskStates.WAITING, TaskStates.WAITING],
       },
@@ -92,8 +100,11 @@ describe('task manager status snapshot', () => {
         owns_native_queue: true,
         queued_crafts: 2,
       },
+      batch_generation: 1,
       active_batch: {
         batch_id: 1,
+        batch_generation: 1,
+        batch_ref: 'batch-g1-1',
         task_count: 1,
         task_types: [TaskStates.CRAFTING],
       },
@@ -131,8 +142,11 @@ describe('task manager status snapshot', () => {
         owns_native_queue: false,
         queued_crafts: 0,
       },
+      batch_generation: 1,
       active_batch: {
         batch_id: 1,
+        batch_generation: 1,
+        batch_ref: 'batch-g1-1',
         task_count: 1,
         task_types: [TaskStates.CRAFTING],
       },
@@ -160,10 +174,13 @@ describe('task manager status snapshot', () => {
       queue_length: 0,
       queued_task_types: [],
       current_task: undefined,
+      batch_generation: 1,
       active_batch: undefined,
       last_completed_batch: undefined,
       last_cancelled_batch: {
         batch_id: 1,
+        batch_generation: 1,
+        batch_ref: 'batch-g1-1',
         task_count: 2,
         task_types: [TaskStates.WAITING, TaskStates.WAITING],
         tick: 0,

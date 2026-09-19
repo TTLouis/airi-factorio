@@ -486,21 +486,27 @@ function compactBasicOperationResult(result) {
   }
 }
 
-function receiptEvidence(raw, outcome) {
+export function receiptEvidence(raw, outcome) {
   try {
     const parsed = JSON.parse(raw)
     const receipt = outcome === 'failed'
       ? (parsed?.last_cancelled_batch ?? parsed?.last_completed_batch)
       : (parsed?.last_completed_batch ?? parsed?.last_cancelled_batch)
     const batchId = Number.isSafeInteger(receipt?.batch_id) ? receipt.batch_id : undefined
+    const batchGeneration = Number.isSafeInteger(receipt?.batch_generation) ? receipt.batch_generation : undefined
+    const batchRef = typeof receipt?.batch_ref === 'string' && receipt.batch_ref.length > 0
+      ? cleanMemoryText(receipt.batch_ref, 160)
+      : undefined
     return {
       kind: outcome === 'failed' ? 'operation_error_receipt' : 'operation_receipt',
-      ref: batchId === undefined ? '' : `batch_${batchId}`,
+      ref: batchRef ?? (batchId === undefined ? '' : `batch_${batchId}`),
       summary: JSON.stringify({
         outcome,
         task_state: parsed?.task_state,
         queue_length: parsed?.queue_length,
         batch_id: batchId,
+        batch_generation: batchGeneration,
+        batch_ref: batchRef,
         task_count: receipt?.task_count,
         task_types: Array.isArray(receipt?.task_types) ? receipt.task_types.slice(0, 16) : undefined,
         tick: receipt?.tick,

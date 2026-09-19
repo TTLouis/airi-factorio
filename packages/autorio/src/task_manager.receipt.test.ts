@@ -32,6 +32,7 @@ function persistent_follow_task() {
 }
 
 beforeEach(() => {
+  ;(globalThis as any).storage = {}
   ;(globalThis as any).game.tick = 100
   ;(globalThis as any).game.print = vi.fn()
   ;(globalThis as any).log = vi.fn()
@@ -156,4 +157,48 @@ describe('Autorio task batch receipts', () => {
       '[AUTORIO] Operation batch cancelled: batch=1, task_count=1, tasks=waiting, tick=145, reason=actor_loss',
     )
   })
+  it('persists the numeric sequence and rotates generation across manager recreation', () => {
+    const first = new_task_manager(() => actor())
+    first.add_task({ type: TaskStates.WAITING, remaining_ticks: 1, requested_ticks: 1 })
+
+    expect(first.get_status_snapshot()).toMatchObject({
+      batch_generation: 1,
+      active_batch: {
+        batch_id: 1,
+        batch_generation: 1,
+        batch_ref: 'batch-g1-1',
+      },
+    })
+
+    first.reset_task_state()
+    ;(globalThis as any).game.tick = 110
+    first.next_task()
+    expect(first.get_status_snapshot().last_completed_batch).toMatchObject({
+      batch_id: 1,
+      batch_generation: 1,
+      batch_ref: 'batch-g1-1',
+    })
+
+    const second = new_task_manager(() => actor())
+    expect(second.get_status_snapshot()).toMatchObject({ batch_generation: 2 })
+    second.add_task({ type: TaskStates.WAITING, remaining_ticks: 1, requested_ticks: 1 })
+    expect(second.get_status_snapshot().active_batch).toMatchObject({
+      batch_id: 2,
+      batch_generation: 2,
+      batch_ref: 'batch-g2-2',
+    })
+
+    second.cancel_all_tasks('reload-test')
+    expect(second.get_status_snapshot().last_cancelled_batch).toMatchObject({
+      batch_id: 2,
+      batch_generation: 2,
+      batch_ref: 'batch-g2-2',
+      reason: 'reload-test',
+    })
+    expect((globalThis as any).storage).toMatchObject({
+      airi_task_batch_sequence: 2,
+      airi_task_batch_generation: 2,
+    })
+  })
+
 })

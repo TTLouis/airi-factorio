@@ -95,6 +95,8 @@ export interface SkillVerificationRun {
   input_routes: VerificationInputRoute[]
   built_entities: VerificationBuiltEntity[]
   active_batch_id?: number
+  active_batch_generation?: number
+  active_batch_ref?: string
   baseline_output_counts: Record<string, number>
   observed_output_counts: Record<string, number>
   output_deadline_tick?: number
@@ -485,17 +487,74 @@ function operation_result(method: string, ...args: any[]) {
   return { ok: result === true, message: result === true ? 'accepted' : 'operation rejected' }
 }
 
-function active_batch_id() {
-  const status = operations_status()
-  return typeof status?.active_batch?.batch_id === 'number' ? status.active_batch.batch_id : undefined
+interface ActiveOperationBatchIdentity {
+  batch_id: number
+  batch_generation: number
+  batch_ref: string
 }
 
-function batch_state(batch_id: number | undefined) {
-  if (batch_id === undefined) return 'missing' as const
+function active_batch_identity(): ActiveOperationBatchIdentity | undefined {
   const status = operations_status()
-  if (status?.last_cancelled_batch?.batch_id === batch_id) return 'cancelled' as const
-  if (status?.last_completed_batch?.batch_id === batch_id) return 'completed' as const
-  return 'pending' as const
+  const batch = status?.active_batch
+  if (typeof batch?.batch_id !== 'number'
+    || typeof batch?.batch_generation !== 'number'
+    || typeof batch?.batch_ref !== 'string'
+    || batch.batch_ref.length === 0) return undefined
+  return {
+    batch_id: batch.batch_id,
+    batch_generation: batch.batch_generation,
+    batch_ref: batch.batch_ref,
+  }
+}
+
+function batch_receipt_matches(receipt: any, run: SkillVerificationRun) {
+  return receipt
+    && receipt.batch_id === run.active_batch_id
+    && receipt.batch_generation === run.active_batch_generation
+    && receipt.batch_ref === run.active_batch_ref
+}
+
+function batch_state(run: SkillVerificationRun) {
+  if (run.active_batch_id === undefined) {
+    return { state: 'missing' as const, reason: 'verification run has no submitted operation batch identity; explicit retry required' }
+  }
+  if (run.active_batch_generation === undefined || typeof run.active_batch_ref !== 'string' || run.active_batch_ref.length === 0) {
+    return { state: 'legacy' as const, reason: `legacy pending batch ${run.active_batch_id} has no restart-safe identity; explicit retry required` }
+  }
+
+  const status = operations_status()
+  if (typeof status?.batch_generation !== 'number') {
+    return { state: 'missing' as const, reason: `runtime did not expose a batch generation for ${run.active_batch_ref}; explicit retry required` }
+  }
+  if (status.batch_generation !== run.active_batch_generation) {
+    return {
+      state: 'stale' as const,
+      reason: `execution identity was interrupted by runtime reload: expected generation ${run.active_batch_generation}, current generation ${status.batch_generation}; explicit retry required`,
+    }
+  }
+  if (batch_receipt_matches(status?.last_cancelled_batch, run)) return { state: 'cancelled' as const }
+  if (batch_receipt_matches(status?.last_completed_batch, run)) return { state: 'completed' as const }
+  if (batch_receipt_matches(status?.active_batch, run)) return { state: 'pending' as const }
+  return {
+    state: 'missing' as const,
+    reason: `operation batch ${run.active_batch_ref} is no longer active and has no matching completion/cancellation receipt; explicit retry required`,
+  }
+}
+
+function batch_identity_patch(batch: ActiveOperationBatchIdentity) {
+  return {
+    active_batch_id: batch.batch_id,
+    active_batch_generation: batch.batch_generation,
+    active_batch_ref: batch.batch_ref,
+  }
+}
+
+function clear_batch_identity() {
+  return {
+    active_batch_id: undefined,
+    active_batch_generation: undefined,
+    active_batch_ref: undefined,
+  }
 }
 
 function resolve_built_entities(actor: ControlledActor, run: SkillVerificationRun, template: SkillInstanceTemplate) {
@@ -550,7 +609,7 @@ function queue_configuration(run: SkillVerificationRun, template: SkillInstanceT
     }
     queued++
   }
-  return { ok: true as const, queued, batch_id: queued > 0 ? active_batch_id() : undefined }
+  return { ok: true as const, queued, batch: queued > 0 ? active_batch_identity() : undefined }
 }
 
 function queue_inputs(run: SkillVerificationRun) {
@@ -565,7 +624,7 @@ function queue_inputs(run: SkillVerificationRun) {
     }
     queued++
   }
-  return { ok: true as const, queued, batch_id: queued > 0 ? active_batch_id() : undefined }
+  return { ok: true as const, queued, batch: queued > 0 ? active_batch_identity() : undefined }
 }
 
 function add_contents(total: Record<string, number>, contents: any) {
@@ -719,9 +778,10 @@ function begin_supply(run: SkillVerificationRun, skill: SkillDefinition) {
   const supplied = queue_inputs(run)
   if (!supplied.ok) return fail_skill_verification_run(run, 'execution', supplied.error)
   if (supplied.queued === 0) {
-    return begin_reobservation(update_run(run, { state: 'supplying', baseline_output_counts: baseline, active_batch_id: undefined }), skill)
+    return begin_reobservation(update_run(run, { state: 'supplying', baseline_output_counts: baseline, ...clear_batch_identity() }), skill)
   }
-  return update_run(run, { state: 'supplying', baseline_output_counts: baseline, active_batch_id: supplied.batch_id, reason: 'External candidate inputs queued through normal NPC item-transfer operations.' })
+  if (!supplied.batch) return block_run(run, 'queued input provisioning did not expose restart-safe operation identity; explicit retry required')
+  return update_run(run, { state: 'supplying', baseline_output_counts: baseline, ...batch_identity_patch(supplied.batch), reason: `External candidate inputs queued through normal NPC item-transfer batch ${supplied.batch.batch_ref}.` })
 }
 
 function begin_reobservation(run: SkillVerificationRun, skill: SkillDefinition) {
@@ -737,7 +797,7 @@ function begin_reobservation(run: SkillVerificationRun, skill: SkillDefinition) 
     live_analysis_id: observed.analysis_id,
     topology_match: topology.match,
     output_deadline_tick: game.tick + OUTPUT_OBSERVATION_TICKS,
-    active_batch_id: undefined,
+    ...clear_batch_identity(),
     evidence_refs: refs,
     reason: topology.match ? 'Live topology matched; observing bounded real output delta.' : `${topology.reason}; observing output window to classify semantic failure.`,
   })
@@ -760,36 +820,40 @@ function process_run_tick(run: SkillVerificationRun) {
   if (!template) return block_run(run, 'source example is no longer available to seed a translated verification instance')
 
   if (run.state === 'constructing') {
-    const state = batch_state(run.active_batch_id)
-    if (state === 'pending') return run
-    if (state === 'cancelled' || state === 'missing') return fail_skill_verification_run(run, 'execution', 'normal NPC construction batch did not complete')
+    const batch = batch_state(run)
+    if (batch.state === 'pending') return run
+    if (batch.state === 'cancelled') return fail_skill_verification_run(run, 'execution', 'normal NPC construction batch did not complete')
+    if (batch.state !== 'completed') return block_run(run, batch.reason)
     const actor = verification_actor_getter?.()
     if (!actor || !actor.is_valid || actor.surface.index !== run.target_surface_index) return fail_skill_verification_run(run, 'execution', 'controlled actor changed surface or became unavailable after construction')
     const resolved = resolve_built_entities(actor, run, template)
     if (!resolved.ok) return fail_skill_verification_run(run, 'execution', resolved.error)
-    let next = update_run(run, { built_entities: resolved.entities, active_batch_id: undefined })
+    let next = update_run(run, { built_entities: resolved.entities, ...clear_batch_identity() })
     const power_reason = power_block_reason(next, template)
     if (power_reason) return block_run(next, power_reason)
     const configured = queue_configuration(next, template)
     if (!configured.ok) return fail_skill_verification_run(next, 'execution', configured.error)
-    if (configured.queued === 0) return begin_supply(update_run(next, { state: 'configuring', active_batch_id: undefined }), skill)
-    return update_run(next, { state: 'configuring', active_batch_id: configured.batch_id, reason: 'Machine recipes queued through normal NPC recipe operations.' })
+    if (configured.queued === 0) return begin_supply(update_run(next, { state: 'configuring', ...clear_batch_identity() }), skill)
+    if (!configured.batch) return block_run(next, 'queued recipe configuration did not expose restart-safe operation identity; explicit retry required')
+    return update_run(next, { state: 'configuring', ...batch_identity_patch(configured.batch), reason: `Machine recipes queued through normal NPC batch ${configured.batch.batch_ref}.` })
   }
 
   if (run.state === 'configuring') {
-    const state = batch_state(run.active_batch_id)
-    if (state === 'pending') return run
-    if (state === 'cancelled' || state === 'missing') return fail_skill_verification_run(run, 'execution', 'machine recipe configuration batch did not complete')
-    return begin_supply(update_run(run, { active_batch_id: undefined }), skill)
+    const batch = batch_state(run)
+    if (batch.state === 'pending') return run
+    if (batch.state === 'cancelled') return fail_skill_verification_run(run, 'execution', 'machine recipe configuration batch did not complete')
+    if (batch.state !== 'completed') return block_run(run, batch.reason)
+    return begin_supply(update_run(run, { ...clear_batch_identity() }), skill)
   }
 
   if (run.state === 'supplying') {
     if (run.active_batch_id !== undefined) {
-      const state = batch_state(run.active_batch_id)
-      if (state === 'pending') return run
-      if (state === 'cancelled' || state === 'missing') return fail_skill_verification_run(run, 'execution', 'external input provisioning batch did not complete')
+      const batch = batch_state(run)
+      if (batch.state === 'pending') return run
+      if (batch.state === 'cancelled') return fail_skill_verification_run(run, 'execution', 'external input provisioning batch did not complete')
+      if (batch.state !== 'completed') return block_run(run, batch.reason)
     }
-    return begin_reobservation(update_run(run, { active_batch_id: undefined }), skill)
+    return begin_reobservation(update_run(run, { ...clear_batch_identity() }), skill)
   }
 
   if (run.state === 'observing_output') {
@@ -897,9 +961,12 @@ export function start_next_skill_verification(get_actor: () => ControlledActor |
   })
   const executed = operation_result('execute_construction_plan', selected.validation.validation_id, selected.validation.placement_count)
   if (!executed.ok) return { ok: false as const, run: fail_skill_verification_run(next, 'execution', `validated construction was rejected: ${executed.message}`) }
-  const batch_id = active_batch_id()
-  if (batch_id === undefined) return { ok: false as const, run: fail_skill_verification_run(next, 'execution', 'validated construction did not create a normal NPC task batch') }
-  next = update_run(next, { active_batch_id: batch_id, reason: `Normal NPC construction batch ${batch_id} is running.` })
+  const batch = active_batch_identity()
+  if (!batch) {
+    operation_result('cancel_all_tasks')
+    return { ok: false as const, run: block_run(next, 'validated construction did not expose restart-safe operation identity; explicit retry required') }
+  }
+  next = update_run(next, { ...batch_identity_patch(batch), reason: `Normal NPC construction batch ${batch.batch_ref} is running.` })
   return { ok: true as const, run: next }
 }
 

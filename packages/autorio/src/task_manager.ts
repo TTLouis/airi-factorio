@@ -4,13 +4,25 @@ import { is_runtime_task_state, unsupported_task_state_reason } from './task_sta
 import type { PlayerParameters, PlayerState } from './types'
 import { TaskStates } from './types'
 
-interface TaskBatchReceipt {
+export interface TaskBatchIdentity {
   batch_id: number
+  batch_generation: number
+  batch_ref: string
+}
+
+interface TaskBatchReceipt extends TaskBatchIdentity {
   task_count: number
   task_types: TaskStates[]
   tick: number
   reason?: string
 }
+
+declare const storage: {
+  airi_task_batch_sequence?: number
+  airi_task_batch_generation?: number
+}
+
+const MAX_SAFE_COUNTER = 9007199254740990
 
 export function new_task_manager(get_controlled_actor: () => ControlledActor | undefined) {
   const player_state: PlayerState = {
@@ -19,7 +31,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
 
   const task_queue: PlayerParameters[] = []
   const cancel_handlers: Partial<Record<TaskStates, () => void>> = {}
-  let batch_sequence = 0
+  let batch_generation: number | undefined
   let active_batch_id: number | undefined
   let active_batch_task_types: TaskStates[] = []
   let active_batch_console_quiet = false
@@ -30,12 +42,42 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     return task.type === TaskStates.WALKING_TO_ENTITY && task.persistent_follow === true
   }
 
+  function valid_persisted_counter(value: unknown): value is number {
+    return typeof value === 'number'
+      && value === math.floor(value)
+      && value >= 0
+      && value <= MAX_SAFE_COUNTER
+  }
+
+  function ensure_batch_generation() {
+    if (batch_generation !== undefined) return batch_generation
+    const previous = valid_persisted_counter(storage.airi_task_batch_generation)
+      ? storage.airi_task_batch_generation
+      : 0
+    batch_generation = previous + 1
+    storage.airi_task_batch_generation = batch_generation
+    return batch_generation
+  }
+
+  function batch_ref(batch_id: number) {
+    return `batch-g${ensure_batch_generation()}-${batch_id}`
+  }
+
+  function next_batch_id() {
+    const previous = valid_persisted_counter(storage.airi_task_batch_sequence)
+      ? storage.airi_task_batch_sequence
+      : 0
+    const next = previous + 1
+    storage.airi_task_batch_sequence = next
+    return next
+  }
+
   function begin_or_extend_batch(task: PlayerParameters) {
     const created = active_batch_id === undefined
     const quiet_task = is_routine_follow_task(task)
     if (created) {
-      batch_sequence += 1
-      active_batch_id = batch_sequence
+      ensure_batch_generation()
+      active_batch_id = next_batch_id()
       active_batch_task_types = []
       active_batch_console_quiet = quiet_task
     }
@@ -50,6 +92,8 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
     if (active_batch_id === undefined) return undefined
     const receipt: TaskBatchReceipt = {
       batch_id: active_batch_id,
+      batch_generation: ensure_batch_generation(),
+      batch_ref: batch_ref(active_batch_id),
       task_count: active_batch_task_types.length,
       task_types: [...active_batch_task_types],
       tick: game.tick,
@@ -396,6 +440,7 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
   function get_status_snapshot() {
     return {
       task_state: player_state.task_state,
+      batch_generation: ensure_batch_generation(),
       queue_empty: task_queue.length === 0,
       queue_length: task_queue.length,
       queued_task_types: task_queue.map(task => task.type),
@@ -404,6 +449,8 @@ export function new_task_manager(get_controlled_actor: () => ControlledActor | u
         ? undefined
         : {
             batch_id: active_batch_id,
+            batch_generation: ensure_batch_generation(),
+            batch_ref: batch_ref(active_batch_id),
             task_count: active_batch_task_types.length,
             task_types: [...active_batch_task_types],
           },
