@@ -322,6 +322,7 @@ export class NpcAgentLoop {
     this.observationOnlyRounds = 0
     this.observationDecisionPressure = false
     this.observationDecisionPressureRemaining = 0
+    this.observationDecisionForced = false
     this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
     this.planCategoryRetries = 0
@@ -416,6 +417,25 @@ export class NpcAgentLoop {
     return 1
   }
 
+  async forceDecisionFromObservations(reason, reasonCode = 'observation_decision_required') {
+    if (this.observationDecisionForced) return
+    this.observationDecisionPressure = true
+    this.observationDecisionPressureRemaining = 0
+    this.observationDecisionForced = true
+    await this.recoveryDiagnostic({
+      failure_class: 'observation_no_progress',
+      reason_code: reasonCode,
+      reason,
+      retry: 1,
+      retry_limit: 1,
+      tools_enabled: false,
+    })
+    this.messages.push({
+      role: 'user',
+      content: `[HARNESS] ${reason} The observation phase for this decision is now closed. Reuse the grounded evidence already collected and return the required strict-JSON plan/action or a truthful blocker. Do not request another read-only observation.`,
+    })
+  }
+
   prepareContinuationContext() {
     const latestPlan = [...this.messages].reverse().find(message => message.role === 'assistant' && message.tool_calls === undefined)
     const prototypeContext = this.prototypeContext()
@@ -438,6 +458,7 @@ export class NpcAgentLoop {
     this.observationOnlyRounds = 0
     this.observationDecisionPressure = false
     this.observationDecisionPressureRemaining = 0
+    this.observationDecisionForced = false
     this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
     this.planCategoryRetries = 0
@@ -782,7 +803,33 @@ export class NpcAgentLoop {
     const generation = this.generation
     for (let round = 0; round < this.maxToolRounds; round++) {
       const current = await this.assertCurrent()
-      const message = await this.callProvider(current, generation, { round })
+      const message = await this.callProvider(current, generation, {
+        round,
+        allowTools: this.observationDecisionForced !== true,
+      })
+
+      if (message.tool_calls !== undefined && this.observationDecisionForced) {
+        this.toolValidationRetries++
+        await this.recoveryDiagnostic({
+          failure_class: 'tool_validation',
+          reason_code: 'observation_phase_closed',
+          reason: 'Provider returned observation tools after the runtime closed the observation phase for this decision.',
+          retry: this.toolValidationRetries,
+          retry_limit: this.maxToolValidationRetries,
+          tools_enabled: false,
+        })
+        if (this.toolValidationRetries > this.maxToolValidationRetries) {
+          return this.blockedWithoutMutation(
+            'Provider repeatedly requested observation tools after the runtime closed the observation phase. Grounded evidence was preserved.',
+            'tool_validation',
+          )
+        }
+        this.messages.push({
+          role: 'user',
+          content: `[HARNESS] Observation phase is closed for this decision (${this.toolValidationRetries}/${this.maxToolValidationRetries}). Tools are disabled. Reuse the grounded evidence already collected and return strict JSON with the next executable action or a truthful blocker.`,
+        })
+        continue
+      }
 
       if (message.tool_calls !== undefined) {
         let prepared
@@ -819,13 +866,14 @@ export class NpcAgentLoop {
         }
         this.toolValidationRetries = 0
         if (this.observationDecisionPressure && prepared.length > this.observationDecisionPressureRemaining) {
-          return this.recoverPlan(
-            generation,
-            new AgentLoopError(`Observation decision pressure has ${this.observationDecisionPressureRemaining} targeted observation call(s) remaining, but the provider requested ${prepared.length}. Reuse the evidence already collected and return the next executable action or a truthful blocker.`),
-            round + 1,
+          await this.forceDecisionFromObservations(
+            `Observation decision pressure had ${this.observationDecisionPressureRemaining} targeted observation call(s) remaining, but the provider requested ${prepared.length}.`,
+            'observation_decision_budget_exhausted',
           )
+          continue
         }
         await this.handleToolBatch(message, prepared)
+        if (this.observationDecisionForced) continue
         if (this.duplicateToolRounds >= this.maxToolLoopRetries && this.duplicateToolRounds > 0) {
           const reason = `Repeated tool observation loop after ${this.duplicateToolRounds} no-progress round${this.duplicateToolRounds === 1 ? '' : 's'}`
           this.observationRecoveryRounds++
@@ -852,11 +900,11 @@ export class NpcAgentLoop {
         if (this.observationDecisionPressure) {
           this.observationDecisionPressureRemaining = Math.max(0, this.observationDecisionPressureRemaining - prepared.length)
           if (this.observationDecisionPressureRemaining <= 0) {
-            return this.recoverPlan(
-              generation,
-              new AgentLoopError('The targeted observation budget allowed by decision pressure is complete. Stop observing. Reuse the live evidence already collected and return the next executable action, or a truthful blocker naming the still-missing fact.'),
-              round + 1,
+            await this.forceDecisionFromObservations(
+              'The targeted observation budget allowed by decision pressure is complete.',
+              'observation_decision_budget_complete',
             )
+            continue
           }
           this.messages.push({
             role: 'user',
@@ -876,11 +924,11 @@ export class NpcAgentLoop {
             tools_enabled: allowance > 0,
           })
           if (allowance <= 0) {
-            return this.recoverPlan(
-              generation,
-              new AgentLoopError('Observation decision pressure permits no additional observations for this decision. Reuse the live evidence already collected and return the next executable action, or a truthful blocker naming the still-missing fact.'),
-              round + 1,
+            await this.forceDecisionFromObservations(
+              'Observation decision pressure permits no additional observations for this decision.',
+              'observation_decision_budget_zero',
             )
+            continue
           }
           this.messages.push({
             role: 'user',
@@ -917,9 +965,12 @@ export class NpcAgentLoop {
             return this.blockedWithoutMutation(`Provider repeatedly placed an observation tool in operations (${error?.details?.tool_name ?? 'unknown'}).`, 'plan_category')
           }
           this.messages.push({ role: 'assistant', content: cleanMemoryText(message.content, 4000) })
+          const toolInstruction = this.observationDecisionForced
+            ? 'Tools remain disabled because the observation phase for this decision is closed. Reuse the evidence already collected and return a corrected strict-JSON plan or truthful blocker.'
+            : 'Tools remain enabled. Preserve the observations and canonical Task Board already collected. Use the supplied correction exactly: issue one required observation tool call when a fact is missing, otherwise return a strict-JSON plan containing only safe approved world-mutation operations.'
           this.messages.push({
             role: 'user',
-            content: `[HARNESS] Plan/tool category or targeting error (${this.planCategoryRetries}/${this.maxToolValidationRetries}; ${error.code}): ${reason} Tools remain enabled. Preserve the observations and canonical Task Board already collected. Use the supplied correction exactly: issue one required observation tool call when a fact is missing, otherwise return a strict-JSON plan containing only safe approved world-mutation operations. Do not bypass an observed exact identity with an ambiguous name-based mutation.`,
+            content: `[HARNESS] Plan/tool category or targeting error (${this.planCategoryRetries}/${this.maxToolValidationRetries}; ${error.code}): ${reason} ${toolInstruction} Do not bypass an observed exact identity with an ambiguous name-based mutation.`,
           })
           continue
         }
