@@ -79,16 +79,15 @@ bash "$TMP"
 
 export function channelInstaller(source, channel) {
   assertNpcV8Source(source)
-  const sourceHash = sha256(source)
   const config = CHANNELS[channel]
   if (!config) throw new Error(`Unknown Pterodactyl channel: ${channel}`)
   return `#!/usr/bin/env bash
 # Generated SGLuna Factorio channel installer: ${config.release}
 # Reinstall follows ${config.sourceRef}; restart keeps the installed exact SHA.
+# The installer payload is loaded from that same resolved commit, so an egg
+# re-import is not required when deployment code changes on the tracked ref.
 set -Eeuo pipefail
 umask 077
-PAYLOAD_REF="${PAYLOAD_REF}"
-EXPECTED_PAYLOAD_SHA256="${sourceHash}"
 DEFAULT_SOURCE_REF="${config.sourceRef}"
 CHANNEL="${config.release}"
 SOURCE_REF="$DEFAULT_SOURCE_REF"
@@ -113,7 +112,7 @@ cleanup() { local code=$?; trap - EXIT; rm -f -- "$BASE" "$PATCHED" "$RESOLUTION
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
-for tool in bash curl sha256sum awk grep mktemp rm tr; do command -v "$tool" >/dev/null || fail "Missing channel installer tool: $tool"; done
+for tool in bash curl awk grep mktemp rm tr; do command -v "$tool" >/dev/null || fail "Missing channel installer tool: $tool"; done
 [[ -n "$SOURCE_REF" && "$SOURCE_REF" != -* && "$SOURCE_REF" != */../* && "$SOURCE_REF" != ../* && "$SOURCE_REF" != */.. && "$SOURCE_REF" != *' '* ]] || fail 'Invalid SGLUNA_SOURCE_REF'
 if [[ "$SOURCE_REF" =~ ^[a-f0-9]{40}$ ]]; then
   RESOLVED_SHA="$SOURCE_REF"
@@ -126,13 +125,11 @@ else
   [[ "$RESOLVED_SHA" =~ ^[a-f0-9]{40}$ ]] || fail "SGLUNA_SOURCE_REF did not resolve to a commit: $SOURCE_REF"
 fi
 log "Resolved $SOURCE_REF -> $RESOLVED_SHA"
-URL="https://raw.githubusercontent.com/TTLouis/factorio-npc/$PAYLOAD_REF/deploy/pterodactyl/payload-src/installer.sh"
+URL="https://raw.githubusercontent.com/TTLouis/factorio-npc/$RESOLVED_SHA/deploy/pterodactyl/payload-src/installer.sh"
 curl --fail --location --retry 3 --connect-timeout 20 --max-time 900 --proto '=https' --proto-redir '=https' "$URL" --output "$BASE" \\
-  || fail 'Unable to download immutable SGLuna installer payload'
-ACTUAL_PAYLOAD_SHA256="$(sha256sum "$BASE" | awk '{print $1}')"
-[[ "$ACTUAL_PAYLOAD_SHA256" == "$EXPECTED_PAYLOAD_SHA256" ]] || fail 'Immutable SGLuna installer payload checksum mismatch'
-[[ "$(grep -Ec '^AIRI_REF="[a-f0-9]{40}"$' "$BASE")" == 1 && "$(grep -c '^AIRI_REF=' "$BASE")" == 1 ]] || fail 'Unexpected AIRI_REF assignment contract in immutable payload'
-[[ "$(grep -Ec '^REVISION="[A-Za-z0-9._-]+"$' "$BASE")" == 1 && "$(grep -c '^REVISION=' "$BASE")" == 1 ]] || fail 'Unexpected REVISION assignment contract in immutable payload'
+  || fail 'Unable to download SGLuna installer payload from resolved source commit'
+[[ "$(grep -Ec '^AIRI_REF="[a-f0-9]{40}"$' "$BASE")" == 1 && "$(grep -c '^AIRI_REF=' "$BASE")" == 1 ]] || fail 'Unexpected AIRI_REF assignment contract in resolved installer payload'
+[[ "$(grep -Ec '^REVISION="[A-Za-z0-9._-]+"$' "$BASE")" == 1 && "$(grep -c '^REVISION=' "$BASE")" == 1 ]] || fail 'Unexpected REVISION assignment contract in resolved installer payload'
 SHORT_SHA="\${RESOLVED_SHA:0:12}"
 awk -v ref="$RESOLVED_SHA" -v revision="$CHANNEL-$SHORT_SHA" '
   /^AIRI_REF=/ { print "AIRI_REF=\\\"" ref "\\\""; next }
