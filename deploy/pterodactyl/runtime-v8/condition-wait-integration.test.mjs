@@ -125,6 +125,7 @@ function postStepDecisionResponse(route = 'wait_runtime', {
   reasoningBudget = 'normal',
   planningHorizon = 'checkpoint',
   observationBudget = 0,
+  milestoneTransition,
 } = {}) {
   return {
     model: 'jev-latest',
@@ -136,6 +137,9 @@ function postStepDecisionResponse(route = 'wait_runtime', {
       reasoning_budget: { type: 'choice', choice: reasoningBudget, confidence: 0.8 },
       planning_horizon: { type: 'choice', choice: planningHorizon, confidence: 0.8 },
       observation_budget: { type: 'number', number: observationBudget, confidence: 0.8 },
+      ...(milestoneTransition
+        ? { milestone_transition: { type: 'choice', choice: milestoneTransition, confidence: 0.9 } }
+        : {}),
     },
     usage: { input_tokens: 40, output_tokens: 4, cost: 0.000002 },
   }
@@ -565,4 +569,39 @@ test('actor epoch change cancels the watcher and a stale poll cannot complete th
   assert.equal(result.reason, 'condition_lifecycle_changed')
   assert.equal(memory.planByNpc.get('npc:airi').condition_wait, undefined)
   assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 0)
+})
+
+
+test('verified milestone transition can activate the next tentative milestone but still wakes the Main LLM for its Plan Tracker', async () => {
+  const { agent, memory } = makeAgent({
+    decisionProvider: async () => postStepDecisionResponse('continue_current', {
+      milestoneTransition: 'advance_next',
+      reasoningBudget: 'normal',
+      planningHorizon: 'subgoal',
+    }),
+  })
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.project_board = {
+    kind: 'project_board_v1',
+    project_id: durable.goal_id,
+    title: durable.objective,
+    status: 'active',
+    completed_milestones: [{ title: 'Establish burner production', status: 'completed' }],
+    current_milestone: undefined,
+    next_milestones: [{ title: 'Reach Automation', status: 'tentative' }],
+    development_direction: 'vertical',
+    transition_state: 'awaiting_next_milestone',
+    revision: 2,
+    updated_at: Date.now(),
+  }
+  durable.milestone_transition_pending = true
+
+  const routed = await agent.routePostStepDecision({ view: { task_state: 'idle', queue_length: 0 } })
+  assert.equal(routed.route, 'replan')
+  assert.equal(routed.hierarchy_action, 'advance_next_milestone')
+  assert.equal(routed.fallback_reason, 'verified_milestone_complete_advance_next')
+  const advanced = memory.planByNpc.get('npc:airi')
+  assert.equal(advanced.project_board.current_milestone.title, 'Reach Automation')
+  assert.equal(advanced.project_board.transition_state, '')
+  assert.equal(advanced.task_board.total_steps, 0)
 })
