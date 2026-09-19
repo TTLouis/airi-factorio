@@ -11,6 +11,7 @@ import {
 } from './common.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
 import { isLifecycleMetaStep, normalizeCanonicalPlan, validateOutcomeCandidate } from './outcome-authority.mjs'
+import { parseRecoveryDecision, recoveryDecisionQuestions, recoveryFailureClassHint, validateRecoveryRoute } from './recovery-route.mjs'
 import { isObservationToolName, renderOperation, renderOperationPreflight, toolCommand } from './structured-policy.mjs'
 
 export { AgentLoopError }
@@ -1534,6 +1535,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.interactionDecisionProvider = typeof options.interactionDecisionProvider === 'function' ? options.interactionDecisionProvider : null
     this.interactionAbort = null
     this.postStepDecisionAbort = null
+    this.recoveryDecisionAbort = null
+    this.lastRecoveryDecisionKey = ''
+    this.lastRecoveryDecision = null
     this.loadedSkillContext = new Map()
     this.reasoningTriggerSource = null
     this.persistQueue = Promise.resolve()
@@ -2462,7 +2466,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const message = error instanceof Error ? error.message : String(error)
       const planState = this.memory.currentPlan?.(this.activePlanKey())
       const recoverablePlannerFailure = planState?.status === 'active'
-        && /provider_action_omission_repair_failed|provider_output_budget_exhausted|Provider strict recovery could not safely resolve remaining canonical work/i.test(message)
+        && /provider_action_omission_repair_failed|provider_output_budget_exhausted|provider_jev_recovery_route_failed|Provider strict recovery could not safely resolve remaining canonical work/i.test(message)
       if (!recoverablePlannerFailure && generation === this.generation) this.reset()
       if (this.traceRequest) {
         await this.traceEvent('request.failed', {
@@ -2683,6 +2687,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.interactionAbort = null
     this.postStepDecisionAbort?.abort()
     this.postStepDecisionAbort = null
+    this.recoveryDecisionAbort?.abort()
+    this.recoveryDecisionAbort = null
     if (/terminate|new_task|cancel_current|user_cancel/i.test(String(reason))) this.clearLoadedSkillContext()
     this.reasoningTriggerSource = null
     void this.traceEvent('request.cancelled', { reason, usage: this.traceRequest?.usage })
@@ -2695,6 +2701,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.pendingFiniteNoOperationPlan = null
     this.freshObservationSinceContinuation = false
     this.genericRecoveryDecisionActive = false
+    this.lastRecoveryDecisionKey = ''
+    this.lastRecoveryDecision = null
     return super.cancel()
   }
 
@@ -3614,6 +3622,201 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
+  async routeRecoveryDecision(reason, roundBase = 0) {
+    if (!this.interactionDecisionProvider) return { route: 'fallback_runtime', decision_called: false }
+
+    const generation = this.generation
+    const current = await this.assertCurrent()
+    const reasonText = cleanMemoryText(reason instanceof Error ? reason.message : String(reason), 1600)
+    const planState = this.memory.currentPlan?.(this.activePlanKey())
+    const board = planState?.task_board
+    const runtime = await this.readInteractionTaskStatus()
+    const persistentRuntime = await this.persistentRuntimeStatus()
+    const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
+    const evidence = (Array.isArray(board?.evidence) ? board.evidence : []).slice(-4)
+    const finalIndex = Array.isArray(board?.steps) ? board.steps.length - 1 : -1
+    const finalCompletionProven = latestDeterministicCompletionEvidence(planState)
+      && Number.isSafeInteger(activeIndex)
+      && activeIndex === finalIndex
+    const failureClass = recoveryFailureClassHint(reasonText)
+    const key = [
+      generation,
+      planState?.goal_id ?? '',
+      board?.revision ?? 0,
+      roundBase,
+      failureClass,
+      reasonText.slice(0, 240),
+    ].join('|')
+    if (this.lastRecoveryDecisionKey === key && this.lastRecoveryDecision) {
+      await this.traceEvent('recovery.route_coalesced', {
+        failure_class: failureClass,
+        route: this.lastRecoveryDecision.route,
+      })
+      return { ...this.lastRecoveryDecision, duplicate: true }
+    }
+
+    const state = {
+      contract: 'recovery_route',
+      failure: {
+        class: failureClass,
+        reason_code: cleanMemoryText(this.traceRequest?.recovery?.reason_code || failureClass, 120),
+        detail: reasonText,
+        provider_finish_reason: cleanMemoryText(this.traceRequest?.last_provider_event?.provider?.finish_reason, 80) || undefined,
+        invalid_json: /invalid provider|invalid json|strict json|malformed|parse/i.test(reasonText),
+        recovery_attempt: Number.isSafeInteger(this.traceRequest?.recovery?.attempt) ? this.traceRequest.recovery.attempt : 0,
+      },
+      task: planState
+        ? {
+            goal_id: sanitizeDurableModelText(planState.goal_id, 100),
+            objective: sanitizeDurableModelText(planState.objective, 500),
+            active_step: activeIndex === undefined ? undefined : sanitizeDurableModelText(board?.steps?.[activeIndex]?.description, 300),
+            completed_count: Number.isSafeInteger(board?.completed_count) ? board.completed_count : 0,
+            total_steps: Array.isArray(board?.steps) ? board.steps.length : 0,
+            canonical_status: planState.status,
+          }
+        : null,
+      world: {
+        task_state: cleanMemoryText(runtime?.task_state, 64),
+        queue_length: Number.isSafeInteger(runtime?.queue_length) ? runtime.queue_length : undefined,
+        persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
+      },
+      evidence: {
+        latest_relevant_deterministic_evidence: evidence.map(item => sanitizeDurableModelValue(item)),
+        fresh_observation_available: this.freshObservationSinceContinuation === true,
+      },
+      provider: {
+        previous_reasoning_mode: cleanMemoryText(this.traceRequest?.last_provider_event?.provider?.reasoning_effort, 32),
+        previous_trigger_source: cleanMemoryText(this.traceRequest?.last_provider_event?.trigger_source, 80),
+      },
+      context: {
+        loaded_skill_ids: this.loadedSkillContext instanceof Map ? [...this.loadedSkillContext.keys()].slice(-3) : [],
+        dependency_summary: planState?.dependency_context ? sanitizeDurableModelValue(planState.dependency_context) : undefined,
+      },
+    }
+
+    const questions = recoveryDecisionQuestions()
+    const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
+    this.recoveryDecisionAbort?.abort()
+    const controller = new AbortController()
+    this.recoveryDecisionAbort = controller
+    const startedAt = Date.now()
+    await this.decisionTraceEvent('decision.request', {
+      decision_id: decisionId,
+      contract: 'recovery_route',
+      mode: 'active',
+      failure_class_hint: failureClass,
+      question_ids: Object.keys(questions),
+      canonical_step: activeIndex,
+    })
+
+    try {
+      const response = await this.interactionDecisionProvider(state, questions, {
+        epoch: current.epoch,
+        actorId: current.actor_id,
+        signal: controller.signal,
+      })
+      if (generation !== this.generation || !this.active || controller.signal.aborted) {
+        throw new AgentLoopError('Model turn was cancelled or superseded')
+      }
+      await this.assertCurrent()
+      const decision = parseRecoveryDecision(response)
+      const validated = validateRecoveryRoute(decision, {
+        world: {
+          ...runtime,
+          persistent_runtime: persistentRuntime,
+          persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
+        },
+        finalCompletionProven,
+        observationBudgetAvailable: this.actionOmissionObservationUsed !== true,
+        evidence,
+      })
+      const result = {
+        route: validated.route,
+        requested_route: validated.requested_route,
+        failure_class: decision.failure_class,
+        rejection_reason: validated.rejection_reason,
+        runtime,
+        persistentRuntime,
+        runtime_state: validated.runtime,
+        decision,
+        decision_called: true,
+      }
+      this.lastRecoveryDecisionKey = key
+      this.lastRecoveryDecision = result
+
+      await this.decisionTraceEvent('decision.response', {
+        decision_id: decisionId,
+        contract: 'recovery_route',
+        mode: 'active',
+        provider: decision.provider,
+        model: decision.model,
+        failure_class: decision.failure_class,
+        route: decision.route,
+        confidence: decision.confidence,
+        latency_ms: Date.now() - startedAt,
+        input_units: Number.isFinite(decision.usage?.input_tokens) ? Math.max(0, Math.trunc(decision.usage.input_tokens)) : 0,
+        output_units: Number.isFinite(decision.usage?.output_tokens) ? Math.max(0, Math.trunc(decision.usage.output_tokens)) : 0,
+        cost_usd: Number.isFinite(decision.usage?.cost) && decision.usage.cost >= 0 ? decision.usage.cost : 0,
+      })
+      await this.decisionTraceEvent('decision.route_applied', {
+        decision_id: decisionId,
+        contract: 'recovery_route',
+        mode: 'active',
+        requested_route: decision.route,
+        applied_route: validated.route,
+        fallback_reason: validated.rejection_reason,
+      })
+      await this.traceEvent('recovery.routed', {
+        failure_class: decision.failure_class,
+        route: decision.route,
+        applied_route: validated.route,
+        fallback_reason: validated.rejection_reason,
+        confidence: decision.confidence,
+        decision_latency_ms: Date.now() - startedAt,
+        runtime: validated.runtime,
+        decision: {
+          provider: decision.provider,
+          model: decision.model,
+          usage: decision.usage,
+        },
+      })
+      return result
+    }
+    catch (error) {
+      if (generation !== this.generation || controller.signal.aborted) throw new AgentLoopError('Model turn was cancelled or superseded')
+      const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+      await this.decisionTraceEvent('decision.fallback', {
+        decision_id: decisionId,
+        contract: 'recovery_route',
+        mode: 'active',
+        fallback_target: 'runtime',
+        reason: message,
+        latency_ms: Date.now() - startedAt,
+      })
+      await this.traceEvent('recovery.routed', {
+        failure_class: failureClass,
+        route: 'fallback_runtime',
+        applied_route: 'fallback_runtime',
+        fallback_reason: message,
+        decision_latency_ms: Date.now() - startedAt,
+      })
+      const result = {
+        route: 'fallback_runtime',
+        failure_class: failureClass,
+        runtime,
+        persistentRuntime,
+        error: message,
+        decision_called: true,
+      }
+      this.lastRecoveryDecisionKey = key
+      this.lastRecoveryDecision = result
+      return result
+    }
+    finally {
+      if (this.recoveryDecisionAbort === controller) this.recoveryDecisionAbort = null
+    }
+  }
+
   async recoverPlan(generation, reason, roundBase) {
     const reasonText = reason instanceof Error ? reason.message : String(reason)
     const recovery = {
@@ -3626,76 +3829,199 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     const observationDecisionComplete = /single targeted observation allowed by decision pressure is complete/i.test(reasonText)
     const currentState = this.memory.currentPlan?.(this.activePlanKey())
-    if (observationDecisionComplete) {
-      if (!this.actionOmissionRepairActive) {
-        if (canonicalWorkRemains(currentState)) {
-          await this.beginActionOmissionRepair({
-            chatMessage: '',
-            plan: currentState.plan,
-            currentStep: currentState.current_step,
-            operations: [],
-          }, 'observation_decision_pressure_complete')
-        }
-        else {
-          this.actionOmissionRepairActive = true
-          await this.traceEvent('recovery.action_omission_started', {
-            reason_code: 'observation_decision_pressure_without_plan',
-            goal_id: undefined,
-            active_step: undefined,
-            completed_count: 0,
-            provider_call_budget: 'one final no-tools act-or-block call',
-          })
-        }
+    if (observationDecisionComplete && !this.actionOmissionRepairActive) {
+      if (canonicalWorkRemains(currentState)) {
+        await this.beginActionOmissionRepair({
+          chatMessage: '',
+          plan: currentState.plan,
+          currentStep: currentState.current_step,
+          operations: [],
+        }, 'observation_decision_pressure_complete')
+      }
+      else {
+        this.actionOmissionRepairActive = true
       }
       this.actionOmissionObservationUsed = true
       this.actionOmissionForceNoTools = true
-      this.messages.push({ role: 'user', content: `[HARNESS] ${ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE}` })
-      const current = await this.assertCurrent()
-      let message
-      try {
-        message = await this.callProvider(current, generation, {
-          round: roundBase,
-          allowTools: false,
-          recoveryAttempt: 0,
-        })
-      }
-      catch (error) {
-        throw error
-      }
-      let plan
-      try {
-        plan = this.parsePlanMessage(message)
-      }
-      catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
-        await this.traceEvent('recovery.action_omission_failed', {
-          reason_code: 'repair_invalid_response',
-          detail: cleanMemoryText(detail, 800),
-        })
-        throw new AgentLoopError(
-          `provider_action_omission_repair_failed: bounded act-or-block repair returned an invalid provider response: ${detail}`,
-        )
-      }
-      if (plan.operations.length === 0 && plan.plan.length === 0) {
-        plan = {
-          ...plan,
-          chatMessage: plan.chatMessage || 'Action-omission repair ended without an executable action.',
-          plan: [cleanMemoryText(this.requestInfo?.text ?? 'Unresolved user goal', 500)],
-          currentStep: 0,
-        }
-      }
-      return this.commitPlan(plan)
     }
 
-    if (this.actionOmissionRepairActive) {
-      await this.assertCurrent()
-      await this.traceEvent('recovery.action_omission_failed', {
-        reason_code: 'repair_exhausted',
-        detail: cleanMemoryText(reasonText, 800),
+    let routed
+    try {
+      routed = await this.routeRecoveryDecision(reason, roundBase)
+    }
+    catch (error) {
+      if (/cancelled|superseded|epoch changed/i.test(String(error?.message ?? error))) throw error
+      routed = { route: 'fallback_runtime', error: cleanMemoryText(error instanceof Error ? error.message : String(error), 300) }
+    }
+
+    if (routed.route === 'deterministic_close') {
+      const state = this.memory.planByNpc?.get?.(this.activePlanKey()) ?? this.memory.currentPlan?.(this.activePlanKey())
+      const proof = [...(state?.task_board?.evidence ?? [])].reverse().find(item => item?.kind === 'deterministic_verification')
+      const reduced = this.memory.applyOutcomeAuthority?.(this.activePlanKey(), {
+        kind: 'verified_complete',
+        source: 'deterministic_runtime',
+        reason_code: 'jev_suggested_deterministic_close',
+        evidence: proof ? [proof] : [],
       })
-      throw new AgentLoopError(
-        `provider_action_omission_repair_failed: bounded act-or-block repair could not produce a valid final decision: ${reasonText}`,
-      )
+      if (reduced?.decision?.accepted) {
+        await this.persistState()
+        this.active = false
+        await this.traceEvent('planner.skipped', {
+          source: 'decision_provider',
+          contract: 'recovery_route',
+          route: 'deterministic_close',
+        })
+        return {
+          chatMessage: 'The requested goal is verified complete.',
+          plan: [],
+          currentStep: 0,
+          operations: [],
+          epoch: this.epoch?.epoch,
+          actorId: this.epoch?.actor_id,
+          goalId: reduced.state?.goal_id,
+          goalStatus: 'completed',
+          taskBoard: visibleTaskBoard(reduced.state?.task_board),
+        }
+      }
+    }
+
+    if (routed.route === 'wait_runtime') {
+      const state = this.memory.currentPlan?.(this.activePlanKey())
+      await this.traceEvent('planner.skipped', {
+        source: 'decision_provider',
+        contract: 'recovery_route',
+        route: 'wait_runtime',
+      })
+      return {
+        chatMessage: 'Autorio is still working; no recovery planner call was needed.',
+        plan: state?.plan ?? [],
+        currentStep: state?.current_step ?? 0,
+        operations: [],
+        epoch: this.epoch?.epoch,
+        actorId: this.epoch?.actor_id,
+        goalId: state?.goal_id,
+        goalStatus: state?.status,
+        taskBoard: visibleTaskBoard(state?.task_board),
+        persistentRuntime: routed.persistentRuntime,
+      }
+    }
+
+    if (routed.route === 'pause_recoverable') {
+      const reduced = this.memory.applyOutcomeAuthority?.(this.activePlanKey(), {
+        kind: 'recoverable_provider_failure',
+        source: 'jev',
+        reason_code: routed.failure_class || recoveryFailureClassHint(reasonText),
+      }, {
+        world: {
+          ...(routed.runtime ?? {}),
+          persistent_runtime: routed.persistentRuntime,
+          persistent_runtime_healthy: persistentRuntimeHealthy(routed.persistentRuntime),
+        },
+      })
+      if (reduced?.decision?.accepted) {
+        await this.persistState()
+        this.active = false
+        await this.traceEvent('planner.skipped', {
+          source: 'decision_provider',
+          contract: 'recovery_route',
+          route: 'pause_recoverable',
+        })
+        return {
+          chatMessage: 'The provider failure is recoverable; the canonical task was paused without creating a world blocker.',
+          plan: reduced.state?.plan ?? [],
+          currentStep: reduced.state?.current_step ?? 0,
+          operations: [],
+          epoch: this.epoch?.epoch,
+          actorId: this.epoch?.actor_id,
+          goalId: reduced.state?.goal_id,
+          goalStatus: reduced.state?.status,
+          taskBoard: visibleTaskBoard(reduced.state?.task_board),
+        }
+      }
+    }
+
+    if (routed.route === 'propose_blocker') {
+      const state = this.memory.currentPlan?.(this.activePlanKey())
+      const evidence = (Array.isArray(state?.task_board?.evidence) ? state.task_board.evidence : []).slice(-4)
+      const candidate = cleanMemoryText(reasonText, 500)
+      const reduced = this.memory.applyOutcomeAuthority?.(this.activePlanKey(), {
+        kind: 'world_blocked',
+        source: 'jev',
+        reason_code: routed.failure_class || 'grounded_world_failure',
+        candidate_blocker: candidate,
+        evidence,
+      })
+      await this.traceEvent(reduced?.decision?.accepted ? 'outcome.validated' : 'outcome.rejected', {
+        ...(reduced?.decision ?? {}),
+        source: 'jev',
+        candidate_blocker: candidate,
+      })
+      if (reduced?.decision?.accepted) {
+        await this.persistState()
+        this.active = false
+        return {
+          chatMessage: `[Plan blocked] ${candidate}`,
+          plan: reduced.state?.plan ?? [],
+          currentStep: reduced.state?.current_step ?? 0,
+          operations: [],
+          epoch: this.epoch?.epoch,
+          actorId: this.epoch?.actor_id,
+          goalId: reduced.state?.goal_id,
+          goalStatus: 'blocked',
+          taskBoard: visibleTaskBoard(reduced.state?.task_board),
+        }
+      }
+    }
+
+    if (['retry_compact', 'continue_low', 'replan_high', 'targeted_observation'].includes(routed.route)) {
+      const previousTrigger = this.reasoningTriggerSource
+      this.reasoningTriggerSource = routed.route === 'replan_high' ? 'recovery_replan_high' : 'recovery_continue_low'
+      const state = this.memory.currentPlan?.(this.activePlanKey())
+      const board = state?.task_board
+      const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : state?.current_step ?? 0
+      this.messages.push({
+        role: 'user',
+        content: `[RECOVERY_ROUTE] Jev selected ${routed.route}. Preserve the verified canonical prefix and use only current runtime truth. Failure: ${cleanMemoryText(reasonText, 1000)}. Active step: ${cleanMemoryText(board?.steps?.[activeIndex]?.description ?? currentPlanStep(state?.plan, activeIndex), 500)}.`,
+      })
+      await this.traceEvent('planner.wake', {
+        source: 'decision_provider',
+        contract: 'recovery_route',
+        route: routed.route,
+        reasoning_policy: routed.route === 'replan_high' ? 'high' : 'low',
+      })
+      try {
+        const current = await this.assertCurrent()
+        const message = await this.callProvider(current, generation, {
+          round: roundBase,
+          allowTools: routed.route === 'targeted_observation',
+          recoveryAttempt: 0,
+          recoveryKind: 'jev_recovery_route',
+        })
+        if (message?.tool_calls !== undefined) {
+          if (routed.route !== 'targeted_observation') {
+            throw new AgentLoopError('compact recovery returned observation tools outside targeted_observation route')
+          }
+          const prepared = this.prepareToolBatch(message)
+          if (prepared.length !== 1) throw new AgentLoopError('targeted observation route permits exactly one observation call')
+          await this.handleToolBatch(message, prepared)
+          this.actionOmissionObservationUsed = true
+          this.actionOmissionForceNoTools = true
+          return this.recoverPlan(
+            generation,
+            new AgentLoopError('The single targeted recovery observation is complete. Reuse that fresh evidence and choose a bounded next recovery route.'),
+            roundBase + 1,
+          )
+        }
+        const plan = this.parsePlanMessage(message)
+        return await this.commitPlan(plan)
+      }
+      catch (error) {
+        if (/cancelled|superseded|epoch changed/i.test(String(error?.message ?? error))) throw error
+        throw new AgentLoopError(`provider_jev_recovery_route_failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      finally {
+        this.reasoningTriggerSource = previousTrigger
+      }
     }
 
     this.genericRecoveryDecisionActive = true

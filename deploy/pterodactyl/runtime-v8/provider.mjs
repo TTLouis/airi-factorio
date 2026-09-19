@@ -76,6 +76,12 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   if (options.triggerSource === 'post_step_replan') {
     return { effort: 'high', reason: 'jev_post_step_replan' }
   }
+  if (options.triggerSource === 'recovery_continue_low') {
+    return { effort: 'low', reason: 'jev_recovery_continue' }
+  }
+  if (options.triggerSource === 'recovery_replan_high') {
+    return { effort: 'high', reason: 'jev_recovery_replan' }
+  }
   if (completionContinuation(messages, options)) {
     return { effort: 'low', reason: 'deterministic_completion' }
   }

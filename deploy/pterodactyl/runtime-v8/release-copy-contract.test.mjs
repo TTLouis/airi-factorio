@@ -49,6 +49,7 @@ test('installer-shipped runtime is transitively complete and preserves structure
   const runtimeFiles = installerCopySet(installer, 'runtime-v8', 'runtime-v8')
   const stagingFiles = installerCopySet(installer, 'staging', 'staging')
   assert.ok(runtimeFiles.includes('outcome-authority.mjs'), 'installer must ship the runtime outcome authority module')
+  assert.ok(runtimeFiles.includes('recovery-route.mjs'), 'installer must ship the runtime recovery router module')
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'airi-release-copy-'))
 
   try {
