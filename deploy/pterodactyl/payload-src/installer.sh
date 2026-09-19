@@ -114,7 +114,38 @@ cp "$WORK/source/packages/autorio/info.json" "$WORK/source/packages/autorio/dist
 cp -a "$WORK/source/packages/autorio/dist/." "$APP/autorio/"
 
 log 'Copying v8 supervisor, shared policy, and prompt'
-for file in common.mjs canonical-task-board-memory.mjs game-files.mjs provider.mjs supervisor.mjs structured-policy.mjs supervisor-adapter.mjs npc-agent-loop.mjs; do
+for file in \
+  common.mjs \
+  canonical-task-board-memory.mjs \
+  game-files.mjs \
+  provider.mjs \
+  supervisor.mjs \
+  structured-policy.mjs \
+  supervisor-adapter.mjs \
+  npc-agent-loop.mjs \
+  jev-decision-taxonomy.mjs \
+  strategic-project-board.mjs \
+  swarm-condition-wait.mjs \
+  swarm-coordination-snapshot.mjs \
+  swarm-jev-provider.mjs \
+  swarm-jev-shadow-controller.mjs \
+  swarm-jev-shadow.mjs \
+  swarm-outcome-verdict.mjs \
+  swarm-project-jev-bootstrap.mjs \
+  swarm-project-jev-monitor.mjs \
+  swarm-project-jev-process.mjs \
+  swarm-project-jev-runtime.mjs \
+  swarm-project-jev-service.mjs \
+  swarm-project-jev-shadow.mjs \
+  swarm-project-jev-trigger-policy.mjs \
+  swarm-recovery-route.mjs \
+  swarm-session-router.mjs \
+  swarm-strategic-planner-contract.mjs \
+  swarm-strategic-project-completion-gate.mjs \
+  swarm-strategic-project-persistence.mjs \
+  swarm-strategic-project-store.mjs \
+  swarm-strategic-transition-gate.mjs
+do
   cp "$WORK/source/deploy/pterodactyl/runtime-v8/$file" "$APP/src/runtime-v8/$file"
 done
 for file in structured-policy.mjs supervisor-adapter.mjs npc-agent-loop.mjs; do
@@ -123,9 +154,10 @@ done
 cp "$WORK/source/packages/agent/src/llm/prompt.md" "$APP/src/prompt.md"
 cp "$WORK/source/LICENSE" "$APP/UPSTREAM-LICENSE"
 for file in "$APP/src/runtime-v8/"*.mjs "$APP/src/staging/"*.mjs; do node --check "$file"; done
-AIRI_SUPERVISOR_VERIFY="$APP/src/runtime-v8/supervisor.mjs" node --input-type=module <<'VERIFY_RUNTIME_IMPORTS'
+AIRI_SUPERVISOR_VERIFY="$APP/src/runtime-v8/supervisor.mjs" AIRI_SWARM_JEV_VERIFY="$APP/src/runtime-v8/swarm-project-jev-bootstrap.mjs" node --input-type=module <<'VERIFY_RUNTIME_IMPORTS'
 import { pathToFileURL } from 'node:url'
 await import(pathToFileURL(process.env.AIRI_SUPERVISOR_VERIFY).href)
+await import(pathToFileURL(process.env.AIRI_SWARM_JEV_VERIFY).href)
 VERIFY_RUNTIME_IMPORTS
 
 FACTORIO_REQUEST="${FACTORIO_VERSION:-latest}"
@@ -206,6 +238,28 @@ const names = [
   'src/runtime-v8/structured-policy.mjs',
   'src/runtime-v8/supervisor-adapter.mjs',
   'src/runtime-v8/npc-agent-loop.mjs',
+  'src/runtime-v8/jev-decision-taxonomy.mjs',
+  'src/runtime-v8/strategic-project-board.mjs',
+  'src/runtime-v8/swarm-condition-wait.mjs',
+  'src/runtime-v8/swarm-coordination-snapshot.mjs',
+  'src/runtime-v8/swarm-jev-provider.mjs',
+  'src/runtime-v8/swarm-jev-shadow-controller.mjs',
+  'src/runtime-v8/swarm-jev-shadow.mjs',
+  'src/runtime-v8/swarm-outcome-verdict.mjs',
+  'src/runtime-v8/swarm-project-jev-bootstrap.mjs',
+  'src/runtime-v8/swarm-project-jev-monitor.mjs',
+  'src/runtime-v8/swarm-project-jev-process.mjs',
+  'src/runtime-v8/swarm-project-jev-runtime.mjs',
+  'src/runtime-v8/swarm-project-jev-service.mjs',
+  'src/runtime-v8/swarm-project-jev-shadow.mjs',
+  'src/runtime-v8/swarm-project-jev-trigger-policy.mjs',
+  'src/runtime-v8/swarm-recovery-route.mjs',
+  'src/runtime-v8/swarm-session-router.mjs',
+  'src/runtime-v8/swarm-strategic-planner-contract.mjs',
+  'src/runtime-v8/swarm-strategic-project-completion-gate.mjs',
+  'src/runtime-v8/swarm-strategic-project-persistence.mjs',
+  'src/runtime-v8/swarm-strategic-project-store.mjs',
+  'src/runtime-v8/swarm-strategic-transition-gate.mjs',
   'src/staging/structured-policy.mjs',
   'src/staging/supervisor-adapter.mjs',
   'src/staging/npc-agent-loop.mjs',
