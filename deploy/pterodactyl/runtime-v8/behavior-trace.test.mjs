@@ -214,6 +214,7 @@ test('behavior trace correlates request through verification, records usage, and
     cache_miss_input_units: 20,
     output_units: 20,
     total_units: 120,
+    usage_complete: true,
   })
   const toolResultChars = rows
     .filter(row => row.event === 'tool.result')
@@ -225,7 +226,11 @@ test('behavior trace correlates request through verification, records usage, and
     cached_input_units: 160,
     cache_miss_input_units: 40,
     output_units: 40,
+    visible_output_units: 0,
+    reasoning_output_units: 0,
     total_units: 240,
+    usage_complete: true,
+    usage_incomplete_calls: 0,
     tool_calls: 1,
     duplicate_tool_calls: 0,
     tool_result_chars: toolResultChars,

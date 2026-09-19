@@ -6,6 +6,11 @@ export * from './provider-base.mjs'
 const COMPLETION_MARKER = '[MOD] Autorio operation batch completed.'
 const FAILURE_MARKER = '[MOD] Autorio operation error:'
 const CHAT_MARKER = '[CHAT]'
+const FULL_PLANNER_FALLBACK_OUTPUT_BUDGET = 4000
+
+function deepSeekModel(config) {
+  return /^deepseek(?:[-_./:]|$)/i.test(String(config?.model ?? ''))
+}
 
 function lastUserContent(messages) {
   if (!Array.isArray(messages)) return ''
@@ -57,6 +62,11 @@ function semanticBudgetPolicy(value) {
 export function selectReasoningPolicy(config, messages, options = {}) {
   const capabilities = providerCapabilityProfile(config)
   if (!capabilities.reasoning_effort) return undefined
+  // Auto may infer wire capabilities from the official endpoint, but dynamic
+  // reasoning policy still requires a DeepSeek model identity. This preserves
+  // conservative behavior for endpoint aliases while explicit profiles remain
+  // authoritative for compatible gateways.
+  if (capabilities.requested_profile === 'auto' && capabilities.id === 'deepseek' && !deepSeekModel(config)) return undefined
   if (options.interactionRouter === true) {
     return { effort: 'none', reason: 'interaction_router' }
   }
@@ -163,21 +173,24 @@ export async function providerRequest(config, messages, options = {}) {
     'hierarchy_replan_project',
     'hierarchy_project_complete_candidate',
   ].includes(options.triggerSource)
+  const isCompletionContinuation = completionContinuation(messages, options)
   const compactPath = options.recoveryKind === 'output_budget_exhaustion'
     || (
-      completionContinuation(messages, options)
+      isCompletionContinuation
       && options.triggerSource !== 'post_step_replan'
       && !semanticBudgetNeedsFullPlanner
       && !structuralHierarchyTrigger
     )
+  const forceFullPlanner = isCompletionContinuation && !compactPath
   const callerPatch = options.requestBodyPatch && typeof options.requestBodyPatch === 'object' && !Array.isArray(options.requestBodyPatch)
     ? options.requestBodyPatch
     : {}
   const policyBudget = !compactPath && callerPatch.max_tokens === undefined && callerPatch.max_completion_tokens === undefined
-    ? reasoningOutputBudget(policy)
+    ? (reasoningOutputBudget(policy) ?? (forceFullPlanner ? FULL_PLANNER_FALLBACK_OUTPUT_BUDGET : undefined))
     : undefined
   const requestOptions = {
     ...options,
+    forceFullPlanner,
     requestBodyPatch: {
       ...(policyBudget !== undefined ? { max_tokens: policyBudget } : {}),
       ...callerPatch,

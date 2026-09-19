@@ -322,7 +322,10 @@ export function providerCapabilityProfile(config = {}) {
   check(PROVIDER_PROFILE_IDS.has(requested), 'Invalid provider capability profile')
   let resolved = requested
   if (resolved === 'auto') {
-    resolved = providerHostname(config.base) === 'api.deepseek.com' && /^deepseek(?:[-_./:]|$)/i.test(String(config.model ?? ''))
+    // The official endpoint is a trustworthy capability signal even when the
+    // configured model uses an alias. Unknown compatible gateways remain
+    // generic unless the operator explicitly selects a provider profile.
+    resolved = providerHostname(config.base) === 'api.deepseek.com'
       ? 'deepseek'
       : 'generic'
   }
@@ -813,11 +816,13 @@ export async function providerRequest(config, messages, {
   promptTraceFile: traceFile,
   requestBodyPatch,
   providerPolicy,
+  forceFullPlanner = false,
 } = {}) {
   check(typeof config.key === 'string' && config.key.trim().length > 0, 'OPENAI_API_KEY is missing')
   check(typeof config.model === 'string' && /^[a-zA-Z0-9._:/-]{1,200}$/.test(config.model), 'Invalid model identifier')
   check(Array.isArray(messages) && messages.length > 0 && messages.length <= 50, 'Invalid provider message history')
   check(typeof allowTools === 'boolean', 'Invalid tool availability flag')
+  check(typeof forceFullPlanner === 'boolean', 'Invalid full-planner override')
   check(Number.isSafeInteger(recoveryAttempt) && recoveryAttempt >= 0 && recoveryAttempt <= 100, 'Invalid provider recovery attempt')
   check(recoveryKind === undefined || recoveryKind === 'output_budget_exhaustion', 'Invalid provider recovery kind')
   const timeoutMs = config.timeoutMs ?? 120000
@@ -826,7 +831,8 @@ export async function providerRequest(config, messages, {
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
   const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
   const outputBudgetRecovery = recoveryKind === 'output_budget_exhaustion'
-  const compactContinuation = outputBudgetRecovery || isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAttempt })
+  const compactContinuation = outputBudgetRecovery
+    || (!forceFullPlanner && isSuccessfulCompletionContinuation(messages, { allowTools, recoveryAttempt }))
   const compactedMessages = compactContinuation ? compactCompletionMessages(messages) : messages
   const capability = providerCapabilityProfile(config)
   check(!allowTools || capability.tool_support === true, 'Provider profile does not allow tool calls')

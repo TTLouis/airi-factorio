@@ -3635,6 +3635,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const planState = this.memory.currentPlan?.(this.activePlanKey())
+      const terminalProviderBudgetFailure = planState?.status === 'active'
+        && /provider_output_budget_recovery_(?:exhausted|budget_unavailable)|provider_turn_output_cap_exceeded/i.test(message)
+      if (terminalProviderBudgetFailure && generation === this.generation && this.active) {
+        // callProvider can surface the terminal exactly-once budget condition
+        // before runTurn reaches its ordinary parse/recovery boundary. Reuse
+        // the existing Outcome Authority path instead of leaking the provider
+        // exception or spending another provider call.
+        return this.recoverPlan(generation, error, 0)
+      }
       const recoverablePlannerFailure = planState?.status === 'active'
         && /provider_action_omission_repair_failed|provider_output_budget_exhausted|provider_jev_recovery_route_failed|Provider strict recovery could not safely resolve remaining canonical work/i.test(message)
       if (!recoverablePlannerFailure && generation === this.generation) this.reset()

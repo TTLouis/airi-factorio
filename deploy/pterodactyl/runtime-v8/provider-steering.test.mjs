@@ -178,6 +178,7 @@ test('provider request injects steering while preserving compact completion beha
 test('action omission repair stays low reasoning even though it is a bounded recovery call', () => {
   const policy = selectReasoningPolicy({
     model: 'deepseek-chat',
+    profile: 'deepseek',
   }, [
     { role: 'user', content: '[CHAT] TTLouis: continue' },
   ], {
