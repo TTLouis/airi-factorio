@@ -601,3 +601,37 @@ test('shadow intent disagreement cannot force hierarchy split or planner budgets
   assert.equal(plannerCall.triggerSource, 'new_goal')
   assert.equal(plannerCall.reasoningBudget, undefined)
 })
+
+
+test('Jev observation budget is enforced before decision pressure', async () => {
+  const { agent } = agentFor('new_goal', { running: false, withPlan: false })
+  agent.active = true
+  agent.epoch = deployment()
+  agent.messages = [{ role: 'system', content: 'budget enforcement test' }]
+  agent.observationBudgetOverride = 1
+  agent.observationBudgetRemaining = 1
+
+  const first = {
+    tool_calls: [{
+      id: 'obs-1',
+      type: 'function',
+      function: { name: 'getActorStatus', arguments: '{}' },
+    }],
+  }
+  await agent.handleToolBatch(first)
+  assert.equal(agent.observationBudgetRemaining, 0)
+  const firstToolResults = agent.messages.filter(message => message.role === 'tool').length
+  assert.equal(firstToolResults, 1)
+  assert.match(agent.messages.map(message => String(message.content ?? '')).join('\n'), /observation budget is exhausted/i)
+
+  const second = {
+    tool_calls: [{
+      id: 'obs-2',
+      type: 'function',
+      function: { name: 'getTaskStatus', arguments: '{}' },
+    }],
+  }
+  await agent.handleToolBatch(second)
+  assert.equal(agent.messages.filter(message => message.role === 'tool').length, firstToolResults)
+  assert.match(agent.messages.map(message => String(message.content ?? '')).join('\n'), /0 fresh call\(s\) remaining/i)
+})
