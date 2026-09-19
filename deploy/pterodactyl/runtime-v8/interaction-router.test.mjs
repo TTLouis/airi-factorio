@@ -94,6 +94,7 @@ function agentFor(intent, {
   withPlan = true,
   queueConflict = intent === 'amend_current',
   decisionIntent,
+  decisionGranularity = 'keep',
   decisionConflictProbability = 0.2,
   decisionError,
   decisionTraceFile = null,
@@ -115,6 +116,18 @@ function agentFor(intent, {
     return {
       content: JSON.stringify({
         chatMessage: 'Replanned current work.',
+        ...(intent === 'new_goal' && decisionGranularity === 'split'
+          ? {
+              project: {
+                currentMilestone: {
+                  title: 'Establish bounded starter production',
+                  completionSummary: 'A stable starter production capability exists.',
+                },
+                nextMilestones: [{ title: 'Reach the next technology capability' }],
+                developmentDirection: 'vertical',
+              },
+            }
+          : {}),
         plan: ['continue the updated production goal'],
         currentStep: 0,
         operations: [{ name: 'wait', args: { ticks: 1 } }],
@@ -139,6 +152,11 @@ function agentFor(intent, {
             queue_conflict: {
               type: 'noul',
               noul: decisionConflictProbability,
+            },
+            granularity: {
+              type: 'choice',
+              choice: decisionGranularity,
+              confidence: 0.9,
             },
           },
           usage: {
@@ -216,6 +234,7 @@ test('Jev shadow disagreement is observed without changing the active interactio
   assert.equal(decisionCalls[0].state.message, 'what are you doing?')
   assert.equal(decisionCalls[0].questions.intent.type, 'choice')
   assert.equal(decisionCalls[0].questions.queue_conflict.type, 'noul')
+  assert.equal(decisionCalls[0].questions.granularity.type, 'choice')
   assert.ok(decisionCalls[0].context.signal instanceof AbortSignal)
   assert.equal(rcon.cancelCount, 0)
 })
@@ -235,7 +254,7 @@ test('Jev shadow writes a dedicated decision lifecycle trace without copying the
   assert.equal(events[0].data.mode, 'shadow')
   assert.equal(events[0].data.message_chars, 'what are you doing?'.length)
   assert.equal(events[0].data.message, undefined)
-  assert.deepEqual(events[0].data.question_ids, ['intent', 'queue_conflict'])
+  assert.deepEqual(events[0].data.question_ids, ['intent', 'queue_conflict', 'granularity'])
   assert.equal(events[1].data.intent, 'new_goal')
   assert.equal(events[1].data.input_units, 120)
   assert.equal(events[1].data.output_units, 20)
@@ -522,4 +541,27 @@ test('interaction router does not receive historical exact ids from durable goal
   const contextText = routedMessages.map(message => String(message.content ?? '')).join('\n')
   assert.doesNotMatch(contextText, /331/)
   assert.match(contextText, /historical exact identity \[omitted\]|historical-id-omitted/)
+})
+
+
+test('new broad goal uses Jev granularity to require Project -> Milestone -> Plan hierarchy before planning', async () => {
+  const { agent, memory, decisionCalls } = agentFor('new_goal', {
+    running: false,
+    withPlan: false,
+    decisionIntent: 'new_goal',
+    decisionGranularity: 'split',
+  })
+
+  const result = await agent.request('Launch a rocket from this fresh start.', { sender: 'tester' })
+
+  assert.equal(result.interactionIntent, 'new_goal')
+  assert.equal(result.routedOnly, false)
+  assert.equal(decisionCalls.length, 1)
+  assert.equal(decisionCalls[0].questions.granularity.type, 'choice')
+  const state = memory.currentPlan('npc:airi')
+  assert.equal(state.project_board.title, 'Launch a rocket from this fresh start.')
+  assert.equal(state.project_board.current_milestone.title, 'Establish bounded starter production')
+  assert.equal(state.project_board.next_milestones[0].title, 'Reach the next technology capability')
+  assert.equal(state.project_board.development_direction, 'vertical')
+  assert.equal(state.task_board.steps[0].description, 'continue the updated production goal')
 })
