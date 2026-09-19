@@ -8,6 +8,7 @@ import { create_skill_remote_interface, handle_skill_export_click, render_learn_
 import * as activity_state from './task_board_activity'
 import * as gui_text from './task_board_gui_text'
 import * as debug_ui from './task_board_debug'
+import { render_debug_popout as render_task_board_debug_popout } from './task_board_debug_render'
 import * as project_ui from './projects/project_window'
 import * as provider_ui from './task_board_provider'
 import { get_actor_inventory_items } from './utils/inventory'
@@ -1161,7 +1162,7 @@ function build_skills_popout(player: LuaPlayer) {
   const body = root.add({ type: 'flow', name: SKILLS_BODY_NAME, direction: 'vertical' }); body.style.width = SKILLS_POPOUT_WIDTH; body.style.vertical_spacing = 6; build_skills_body(body); root.bring_to_front()
 }
 function render_skills_popout(player: LuaPlayer) { if (!task_board_ui_is_open(player.index) || !task_board_skills_ui_is_open(player.index)) { destroy_skills_popout(player); return }; const root = player.gui.screen[SKILLS_ROOT_NAME]; const body = root?.valid ? root[SKILLS_BODY_NAME] : undefined; if (body?.valid) { body.clear(); build_skills_body(body); return }; build_skills_popout(player) }
-function render_debug_popout(player: LuaPlayer) { debug_ui.render_debug_popout(player, task_board_ui_is_open(player.index), storage.airi_task_board_ui, runtime_snapshot(), storage.airi_task_board_ui_synced_tick) }
+function render_debug_popout(player: LuaPlayer) { render_task_board_debug_popout(player, task_board_ui_is_open(player.index), storage.airi_task_board_ui, runtime_snapshot(), storage.airi_task_board_ui_synced_tick) }
 function render(player: LuaPlayer) { ensure_button(player); render_panel(player); render_skills_popout(player); project_ui.render_projects_popout(player, task_board_ui_is_open(player.index), storage.airi_task_board_ui?.goal_id ?? ''); render_debug_popout(player) }
 function render_all() { for (const player of game.connected_players) { ensure_button(player); render_panel(player); render_skills_popout(player); project_ui.render_projects_popout(player, task_board_ui_is_open(player.index), storage.airi_task_board_ui?.goal_id ?? ''); render_debug_popout(player) } }
 function prompt_field(player: LuaPlayer) { const root = player.gui.screen[ROOT_NAME]; const columns = root?.valid ? root[COLUMNS_NAME] : undefined; const left = columns?.valid ? columns[LEFT_COLUMN_NAME] : undefined; const section = left?.valid ? left[PROMPT_SECTION_NAME] : undefined; const row = section?.valid ? section[PROMPT_FLOW_NAME] : undefined; const field = row?.valid ? row[PROMPT_FIELD_NAME] : undefined; return field?.valid ? field as TextFieldGuiElement : undefined }
