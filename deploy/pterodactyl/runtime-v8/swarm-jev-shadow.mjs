@@ -5,6 +5,10 @@ import {
 import { sanitizeStrategicProjectBoard } from './strategic-project-board.mjs'
 import { evaluateSwarmOutcomeSnapshot } from './swarm-outcome-verdict.mjs'
 import { summarizeSwarmConditionWait } from './swarm-condition-wait.mjs'
+import {
+  buildSwarmRecoveryCapsule,
+  swarmRecoveryDecisionQuestions,
+} from './swarm-recovery-route.mjs'
 
 const MAX_ITEMS = 12
 const MAX_TEXT = 240
@@ -32,6 +36,10 @@ function summarizeRecords(records, idKeys = ['id']) {
 
 export function swarmJevShadowQuestions() {
   return decisionEnvelopeQuestions()
+}
+
+export function swarmJevRecoveryShadowQuestions() {
+  return swarmRecoveryDecisionQuestions()
 }
 
 export function buildSwarmJevShadowContext(snapshot = {}) {
@@ -74,6 +82,19 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
     requests: requestSource,
     work: workSource,
   })
+  const recoverySource = snapshot.recovery && typeof snapshot.recovery === 'object'
+    ? snapshot.recovery
+    : undefined
+  const recoveryCapsule = recoverySource
+    ? buildSwarmRecoveryCapsule({
+        reason: recoverySource.reason,
+        reconciliationActions: recoverySource.reconciliationActions,
+        runtime: recoverySource.runtime,
+        outcome: recoverySource.outcome,
+        observationBudgetAvailable: recoverySource.observationBudgetAvailable,
+        blockerGrounded: recoverySource.blockerGrounded,
+      })
+    : undefined
 
   return {
     schema: 'swarm_jev_shadow_v1',
@@ -99,6 +120,7 @@ export function buildSwarmJevShadowContext(snapshot = {}) {
       : undefined,
     outcome_verdict: outcomeVerdict,
     condition_wait: conditionWait,
+    recovery: recoveryCapsule,
     counts: {
       missions: missionSource.length,
       objectives: objectiveSource.length,
