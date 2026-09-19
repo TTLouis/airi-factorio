@@ -566,3 +566,74 @@ test('project status follows durable goal lifecycle authority', () => {
   memory.pausePlan('npc:airi', 'user_pause')
   assert.equal(memory.planByNpc.get('npc:airi').project_board.status, 'paused')
 })
+
+
+test('final Plan Tracker step completes the milestone without completing the long-horizon project', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const oneStepBoard = createTaskBoard(['Establish burner production'], 0, { goalId: 'goal_long', now: 1 })
+  memory.planByNpc.set('npc:airi', planState({
+    goal_id: 'goal_long',
+    objective: 'Launch a rocket',
+    plan: ['Establish burner production'],
+    current_step: 0,
+    task_board: oneStepBoard,
+    project_board: {
+      kind: 'project_board_v1',
+      project_id: 'goal_long',
+      title: 'Launch a rocket',
+      status: 'active',
+      completed_milestones: [],
+      current_milestone: { title: 'Establish burner production', status: 'active' },
+      next_milestones: [{ title: 'Reach Automation', status: 'tentative' }],
+      development_direction: 'vertical',
+      transition_state: '',
+      revision: 1,
+      updated_at: 1,
+    },
+  }))
+
+  const result = memory.applyOutcomeAuthority('npc:airi', {
+    kind: 'verified_complete',
+    source: 'step_checkpoint_gate',
+    reason_code: 'checkpoint_satisfied',
+    evidence: [{ kind: 'deterministic_verification', ref: 'milestone-final', summary: 'verified' }],
+    metadata: { scope: 'step' },
+  })
+
+  assert.equal(result.decision.accepted, true)
+  assert.equal(result.milestoneCompleted, true)
+  assert.equal(result.state.status, 'active')
+  assert.equal(result.state.milestone_transition_pending, true)
+  assert.equal(result.state.project_board.current_milestone, undefined)
+  assert.equal(result.state.project_board.completed_milestones.at(-1).title, 'Establish burner production')
+  assert.equal(result.state.project_board.transition_state, 'awaiting_next_milestone')
+  assert.equal(memory.currentPlan('npc:airi').goal_id, 'goal_long')
+})
+
+test('activating a tentative next milestone resets the Plan Tracker for a fresh milestone plan', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const state = planState({
+    goal_id: 'goal_long',
+    objective: 'Launch a rocket',
+    project_board: {
+      kind: 'project_board_v1',
+      project_id: 'goal_long',
+      title: 'Launch a rocket',
+      status: 'active',
+      completed_milestones: [{ title: 'Establish burner production', status: 'completed' }],
+      current_milestone: undefined,
+      next_milestones: [{ title: 'Reach Automation', status: 'tentative' }],
+      development_direction: 'vertical',
+      transition_state: 'awaiting_next_milestone',
+      revision: 2,
+      updated_at: 2,
+    },
+  })
+  memory.planByNpc.set('npc:airi', state)
+  const advanced = memory.activateNextMilestone('npc:airi')
+  assert.equal(advanced.changed, true)
+  assert.equal(advanced.state.project_board.current_milestone.title, 'Reach Automation')
+  assert.equal(advanced.state.project_board.transition_state, '')
+  assert.equal(advanced.state.task_board.total_steps, 0)
+  assert.equal(advanced.state.plan.length, 0)
+})
