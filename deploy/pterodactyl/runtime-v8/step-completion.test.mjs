@@ -111,7 +111,7 @@ test('passive progress wait stays active while machine progresses and wakes when
   assert.equal(active.wait.state, 'active')
   const stopped = applyConditionObservation(active.wait, { satisfied: false, progressing: false, progress_known: true })
   assert.equal(stopped.action, 'wake')
-  assert.equal(stopped.wait.state, 'satisfied')
+  assert.equal(stopped.wait.state, 'failed')
 })
 
 test('completion wait verifies once and duplicate observations are stale after satisfaction', () => {
@@ -136,4 +136,47 @@ test('timeout and exact-identity loss never fake completion', () => {
   const stale = applyConditionObservation(wait, { stale: true })
   assert.equal(stale.action, 'failed')
   assert.equal(stale.reason, 'stale_exact_identity')
+})
+
+
+test('passive progress wait is bounded by checks and elapsed timeout without treating time as completion', () => {
+  const byChecks = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    { mode: 'passive_progress', goalId: 'goal_1', stepId: 'step_2', maxChecks: 1, timeoutMs: 60000, now: 1000 },
+  )
+  const checkTimeout = applyConditionObservation(byChecks, {
+    satisfied: true,
+    progressing: true,
+    progress_known: true,
+  }, { now: 1500 })
+  assert.equal(checkTimeout.action, 'timeout')
+  assert.equal(checkTimeout.wait.state, 'timeout')
+
+  const byTime = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    { mode: 'passive_progress', goalId: 'goal_1', stepId: 'step_2', maxChecks: 10, timeoutMs: 1000, now: 1000 },
+  )
+  const elapsedTimeout = applyConditionObservation(byTime, {
+    satisfied: true,
+    progressing: true,
+    progress_known: true,
+  }, { now: 2000 })
+  assert.equal(elapsedTimeout.action, 'timeout')
+  assert.notEqual(elapsedTimeout.wait.state, 'satisfied')
+})
+
+test('condition wait carries bounded lifecycle identity when supplied', () => {
+  const wait = makeConditionWait(
+    { kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 },
+    {
+      goalId: 'goal_1',
+      stepId: 'step_2',
+      actorId: 18,
+      actorEpoch: 3,
+      timeoutMs: 999999999,
+    },
+  )
+  assert.equal(wait.actor_id, 18)
+  assert.equal(wait.actor_epoch, 3)
+  assert.ok(wait.timeout_ms <= 2 * 60 * 60 * 1000)
 })

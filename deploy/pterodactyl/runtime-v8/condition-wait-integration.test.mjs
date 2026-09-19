@@ -79,10 +79,14 @@ class ConditionRcon {
     this.working = true
     this.inventoryCount = 0
     this.pendingCondition = null
+    this.actorId = 18
+    this.actorEpoch = 3
   }
 
   async command(text) {
-    if (text.includes('remote.call("airi_deployment","status")')) return JSON.stringify(deployment())
+    if (text.includes('remote.call("airi_deployment","status")')) {
+      return JSON.stringify({ ...deployment(), actor_id: this.actorId, epoch: this.actorEpoch })
+    }
     if (text.includes('remote.call("autorio_follow","status")')) {
       return JSON.stringify({ active: false, healthy: false, controller_live: false, state: 'idle' })
     }
@@ -112,6 +116,17 @@ class ConditionRcon {
       })
     }
     return '{}'
+  }
+}
+
+function postStepDecisionResponse(route = 'wait_runtime') {
+  return {
+    model: 'jev-latest',
+    provider: 'TypeSafe',
+    answers: {
+      route: { type: 'choice', choice: route, confidence: 0.95 },
+    },
+    usage: { input_tokens: 40, output_tokens: 4, cost: 0.000002 },
   }
 }
 
@@ -188,6 +203,9 @@ test('live exact machine passive progress suppresses action omission without a m
   assert.equal(durable.task_board.proposed_focus_index, 1)
   assert.equal(durable.condition_wait?.state, 'active')
   assert.equal(durable.condition_wait?.mode, 'passive_progress')
+  assert.equal(durable.condition_wait?.actor_id, 18)
+  assert.equal(durable.condition_wait?.actor_epoch, 3)
+  assert.equal(agent.actionOmissionRepairActive, false)
   assert.equal(mainCalls(), 0)
 })
 
@@ -196,7 +214,7 @@ test('unchanged passive progress polls without waking the main planner', async (
   const durable = memory.planByNpc.get('npc:airi')
   durable.condition_wait = makeConditionWait(
     { kind: 'entity_state', unit_number: 582, expected: 'working' },
-    { goalId: durable.goal_id, stepId: durable.task_board.active_step_id, mode: 'passive_progress', maxChecks: 10 },
+    { goalId: durable.goal_id, stepId: durable.task_board.active_step_id, actorId: agent.epoch.actor_id, actorEpoch: agent.epoch.epoch, mode: 'passive_progress', maxChecks: 10 },
   )
 
   const polled = await agent.pollConditionWait()
@@ -211,7 +229,7 @@ test('grounded inventory condition advances exactly one canonical step once sati
   const durable = memory.planByNpc.get('npc:airi')
   durable.condition_wait = makeConditionWait(
     { kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 },
-    { goalId: durable.goal_id, stepId: durable.task_board.active_step_id, maxChecks: 10 },
+    { goalId: durable.goal_id, stepId: durable.task_board.active_step_id, actorId: agent.epoch.actor_id, actorEpoch: agent.epoch.epoch, maxChecks: 10 },
   )
 
   rcon.inventoryCount = 0
@@ -239,7 +257,7 @@ test('Jev wait_runtime remains valid with idle Autorio while a condition watcher
   const durable = memory.planByNpc.get('npc:airi')
   durable.condition_wait = makeConditionWait(
     { kind: 'entity_state', unit_number: 582, expected: 'working' },
-    { goalId: durable.goal_id, stepId: durable.task_board.active_step_id, mode: 'passive_progress', maxChecks: 10 },
+    { goalId: durable.goal_id, stepId: durable.task_board.active_step_id, actorId: agent.epoch.actor_id, actorEpoch: agent.epoch.epoch, mode: 'passive_progress', maxChecks: 10 },
   )
 
   const result = await agent.recoverPlan(agent.generation, new Error('invalid provider JSON'), 1)
@@ -254,7 +272,7 @@ test('condition timeout or stopped passive progress never fakes completion', asy
   const durable = memory.planByNpc.get('npc:airi')
   durable.condition_wait = makeConditionWait(
     { kind: 'entity_state', unit_number: 582, expected: 'working' },
-    { goalId: durable.goal_id, stepId: durable.task_board.active_step_id, mode: 'passive_progress', maxChecks: 10 },
+    { goalId: durable.goal_id, stepId: durable.task_board.active_step_id, actorId: agent.epoch.actor_id, actorEpoch: agent.epoch.epoch, mode: 'passive_progress', maxChecks: 10 },
   )
   rcon.working = false
 
@@ -270,7 +288,7 @@ test('stale condition result cannot mutate a replacement task', async () => {
   const old = memory.planByNpc.get('npc:airi')
   old.condition_wait = makeConditionWait(
     { kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 },
-    { goalId: old.goal_id, stepId: old.task_board.active_step_id, maxChecks: 10 },
+    { goalId: old.goal_id, stepId: old.task_board.active_step_id, actorId: agent.epoch.actor_id, actorEpoch: agent.epoch.epoch, maxChecks: 10 },
   )
 
   let release
@@ -296,4 +314,160 @@ test('stale condition result cannot mutate a replacement task', async () => {
   assert.equal(replacement.goal_id, 'goal_replacement')
   assert.equal(replacement.task_board.completed_count, 0)
   assert.equal(replacement.task_board.active_index, 0)
+})
+
+
+test('post-step Jev wait_runtime accepts idle Autorio only after deterministic watcher validation', async () => {
+  const { agent, memory, mainCalls } = makeAgent({
+    decisionProvider: async () => postStepDecisionResponse('wait_runtime'),
+  })
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.condition_wait = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    {
+      goalId: durable.goal_id,
+      stepId: durable.task_board.active_step_id,
+      actorId: agent.epoch.actor_id,
+      actorEpoch: agent.epoch.epoch,
+      mode: 'passive_progress',
+      maxChecks: 10,
+    },
+  )
+
+  const routed = await agent.routePostStepDecision({
+    view: { task_state: 'idle', queue_length: 0 },
+  })
+  assert.equal(routed.route, 'wait_runtime')
+  assert.equal(routed.runtime_reason, 'condition_wait_active')
+  assert.equal(mainCalls(), 0)
+})
+
+test('idle Autorio plus Jev wait_runtime is rejected when no valid watcher exists', async () => {
+  const { agent, memory, mainCalls } = makeAgent({
+    decisionProvider: async () => decisionResponse('wait_runtime'),
+  })
+  const result = await agent.recoverPlan(agent.generation, new Error('provider timeout'), 1)
+  assert.equal(result.goalStatus, 'paused')
+  assert.equal(memory.planByNpc.get('npc:airi').condition_wait, undefined)
+  assert.equal(mainCalls(), 0)
+})
+
+test('provider and recovery failures preserve a healthy watcher and never wake the main planner', async () => {
+  for (const reason of [
+    'invalid provider JSON',
+    'finish=length output budget exhausted',
+    'provider timeout',
+    'recovery provider failed',
+  ]) {
+    const { agent, memory, mainCalls } = makeAgent({
+      decisionProvider: async () => {
+        throw new Error('decision provider unavailable')
+      },
+    })
+    const durable = memory.planByNpc.get('npc:airi')
+    durable.condition_wait = makeConditionWait(
+      { kind: 'entity_state', unit_number: 582, expected: 'working' },
+      {
+        goalId: durable.goal_id,
+        stepId: durable.task_board.active_step_id,
+        actorId: agent.epoch.actor_id,
+        actorEpoch: agent.epoch.epoch,
+        mode: 'passive_progress',
+        maxChecks: 10,
+      },
+    )
+
+    const result = await agent.recoverPlan(agent.generation, new Error(reason), 1)
+    assert.equal(result.goalStatus, 'active')
+    assert.equal(memory.planByNpc.get('npc:airi').status, 'active')
+    assert.equal(memory.planByNpc.get('npc:airi').condition_wait?.state, 'active')
+    assert.equal(agent.actionOmissionRepairActive, false)
+    assert.equal(mainCalls(), 0)
+  }
+})
+
+test('stale exact entity identity invalidates the watcher without completion', async () => {
+  const { agent, memory, rcon } = makeAgent()
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.condition_wait = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    {
+      goalId: durable.goal_id,
+      stepId: durable.task_board.active_step_id,
+      actorId: agent.epoch.actor_id,
+      actorEpoch: agent.epoch.epoch,
+      mode: 'passive_progress',
+      maxChecks: 10,
+    },
+  )
+  rcon.pendingCondition = JSON.stringify({
+    ok: false,
+    stale: true,
+    error: 'stale_exact_identity',
+  })
+
+  const result = await agent.pollConditionWait()
+  assert.equal(result.action, 'failed')
+  assert.equal(result.reason, 'stale_exact_identity')
+  assert.equal(memory.planByNpc.get('npc:airi').condition_wait, undefined)
+  assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 0)
+})
+
+test('healthy passive progress times out at its bounded check limit without fake completion', async () => {
+  const { agent, memory } = makeAgent()
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.condition_wait = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    {
+      goalId: durable.goal_id,
+      stepId: durable.task_board.active_step_id,
+      actorId: agent.epoch.actor_id,
+      actorEpoch: agent.epoch.epoch,
+      mode: 'passive_progress',
+      maxChecks: 1,
+    },
+  )
+
+  const result = await agent.pollConditionWait()
+  assert.equal(result.action, 'timeout')
+  assert.equal(memory.planByNpc.get('npc:airi').condition_wait, undefined)
+  assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 0)
+})
+
+test('actor epoch change cancels the watcher and a stale poll cannot complete the task', async () => {
+  const { agent, memory, rcon } = makeAgent()
+  const durable = memory.planByNpc.get('npc:airi')
+  durable.condition_wait = makeConditionWait(
+    { kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 },
+    {
+      goalId: durable.goal_id,
+      stepId: durable.task_board.active_step_id,
+      actorId: agent.epoch.actor_id,
+      actorEpoch: agent.epoch.epoch,
+      maxChecks: 10,
+    },
+  )
+
+  let release
+  rcon.pendingCondition = new Promise(resolve => {
+    release = () => resolve(JSON.stringify({
+      ok: true,
+      kind: 'inventory_count',
+      satisfied: true,
+      current: 99,
+      minimum: 9,
+      progress_known: false,
+    }))
+  })
+
+  const polling = agent.pollConditionWait()
+  await new Promise(resolve => setImmediate(resolve))
+  rcon.actorEpoch = 4
+  release()
+  const result = await polling
+
+  assert.equal(result.action, 'failed')
+  assert.equal(result.reason, 'condition_lifecycle_changed')
+  assert.equal(memory.planByNpc.get('npc:airi').condition_wait, undefined)
+  assert.equal(memory.planByNpc.get('npc:airi').task_board.completed_count, 0)
 })

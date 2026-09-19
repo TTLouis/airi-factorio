@@ -16,6 +16,19 @@ function positiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
+function nonNegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+const DEFAULT_CONDITION_TIMEOUT_MS = 30 * 60 * 1000
+const MAX_CONDITION_TIMEOUT_MS = 2 * 60 * 60 * 1000
+
+function boundedTimeoutMs(value) {
+  return Number.isSafeInteger(value)
+    ? Math.max(1000, Math.min(value, MAX_CONDITION_TIMEOUT_MS))
+    : DEFAULT_CONDITION_TIMEOUT_MS
+}
+
 function boundedRequirement(raw, index) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const kind = String(raw.kind ?? '')
@@ -196,19 +209,27 @@ export function makeConditionWait(requirement, {
   goalId,
   mode = 'completion',
   maxChecks = 900,
+  timeoutMs = DEFAULT_CONDITION_TIMEOUT_MS,
+  actorId,
+  actorEpoch,
   now = Date.now(),
 } = {}) {
   const condition = conditionFromRequirement(requirement)
   if (!condition) return undefined
+  const lifecycleActorId = positiveInteger(actorId)
+  const lifecycleActorEpoch = nonNegativeInteger(actorEpoch)
   return {
     id: clean(id || `condition_${now.toString(36)}`, 100),
     goal_id: clean(goalId, 100),
     step_id: clean(stepId, 80),
+    ...(lifecycleActorId !== undefined ? { actor_id: lifecycleActorId } : {}),
+    ...(lifecycleActorEpoch !== undefined ? { actor_epoch: lifecycleActorEpoch } : {}),
     mode: mode === 'passive_progress' ? 'passive_progress' : 'completion',
     condition,
     state: 'active',
     checks: 0,
     max_checks: Number.isSafeInteger(maxChecks) ? Math.max(1, Math.min(maxChecks, 7200)) : 900,
+    timeout_ms: boundedTimeoutMs(timeoutMs),
     registered_at: now,
     updated_at: now,
   }
@@ -221,13 +242,22 @@ export function applyConditionObservation(wait, observation, { now = Date.now() 
   if (observation?.stale === true) return { wait: { ...base, state: 'failed' }, action: 'failed', reason: 'stale_exact_identity' }
   if (observation?.error) return { wait: { ...base, state: 'failed' }, action: 'failed', reason: clean(observation.error, 160) }
 
+  const timedOut = Number.isFinite(wait.registered_at)
+    && Number.isSafeInteger(wait.timeout_ms)
+    && now - wait.registered_at >= wait.timeout_ms
+
   if (wait.mode === 'passive_progress') {
+    if (timedOut || checks >= wait.max_checks) {
+      return { wait: { ...base, state: 'timeout' }, action: 'timeout', reason: 'condition_timeout' }
+    }
     if (observation?.progressing === true) return { wait: base, action: 'waiting' }
-    return { wait: { ...base, state: 'satisfied' }, action: 'wake', reason: 'passive_progress_stopped' }
+    return { wait: { ...base, state: 'failed' }, action: 'wake', reason: 'passive_progress_stopped' }
   }
 
   if (observation?.satisfied === true) return { wait: { ...base, state: 'satisfied' }, action: 'verified' }
-  if (checks >= wait.max_checks) return { wait: { ...base, state: 'timeout' }, action: 'timeout', reason: 'condition_timeout' }
+  if (timedOut || checks >= wait.max_checks) {
+    return { wait: { ...base, state: 'timeout' }, action: 'timeout', reason: 'condition_timeout' }
+  }
   if (observation?.progressing === false && observation?.progress_known === true) {
     return { wait: { ...base, state: 'failed' }, action: 'failed', reason: 'condition_unsatisfied_and_not_progressing' }
   }

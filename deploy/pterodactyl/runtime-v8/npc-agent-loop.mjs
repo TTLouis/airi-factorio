@@ -302,18 +302,53 @@ function safeConditionWait(value) {
   if (['inventory_count', 'entity_inventory_count'].includes(condition.kind)
     && (typeof condition.item_name !== 'string' || !Number.isSafeInteger(condition.minimum) || condition.minimum < 1)) return undefined
   if (condition.kind === 'entity_state' && !['working', 'not_working', 'exists'].includes(condition.expected)) return undefined
+  if (!Number.isSafeInteger(value.actor_id) || value.actor_id < 1) return undefined
+  if (!Number.isSafeInteger(value.actor_epoch) || value.actor_epoch < 0) return undefined
   return {
     id: cleanMemoryText(value.id, 100),
     goal_id: cleanMemoryText(value.goal_id, 100),
     step_id: cleanMemoryText(value.step_id, 80),
+    actor_id: value.actor_id,
+    actor_epoch: value.actor_epoch,
     mode: value.mode === 'passive_progress' ? 'passive_progress' : 'completion',
     condition: sanitizeDurableModelValue(condition),
     state: 'active',
     checks: Number.isSafeInteger(value.checks) ? Math.max(0, value.checks) : 0,
     max_checks: Number.isSafeInteger(value.max_checks) ? Math.max(1, Math.min(value.max_checks, 7200)) : 900,
+    timeout_ms: Number.isSafeInteger(value.timeout_ms) ? Math.max(1000, Math.min(value.timeout_ms, 2 * 60 * 60 * 1000)) : 30 * 60 * 1000,
     registered_at: Number.isFinite(value.registered_at) ? value.registered_at : Date.now(),
     updated_at: Number.isFinite(value.updated_at) ? value.updated_at : Date.now(),
   }
+}
+
+function conditionWaitLifecycleMatches(wait, deployment) {
+  return Boolean(wait
+    && deployment
+    && Number.isSafeInteger(wait.actor_id)
+    && Number.isSafeInteger(wait.actor_epoch)
+    && wait.actor_id === deployment.actor_id
+    && wait.actor_epoch === deployment.epoch)
+}
+
+function normalizedConditionObservation(observation) {
+  return observation?.ok === true
+    ? {
+        satisfied: observation.satisfied === true,
+        progressing: observation.progressing === true,
+        progress_known: observation.progress_known === true,
+        summary: cleanMemoryText(JSON.stringify({
+          kind: observation.kind,
+          current: observation.current,
+          minimum: observation.minimum,
+          unit_number: observation.unit_number,
+          entity_status: observation.entity_status,
+          progressing: observation.progressing,
+        }), 600),
+      }
+    : {
+        stale: observation?.stale === true,
+        error: cleanMemoryText(observation?.error || 'condition_evaluation_failed', 160),
+      }
 }
 
 function visibleTaskBoard(board) {
@@ -555,6 +590,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       state.blocker = cleanMemoryText(decision.blocker || candidate?.candidate_blocker || decision.reason_code, 500)
       state.pause_reason = ''
       state.persistent_runtime = undefined
+      state.condition_wait = undefined
       board = setTaskBoardStatus(board, 'blocked', { blocker: state.blocker, now })
     }
     else if (decision.durable_status === 'paused') {
@@ -562,6 +598,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       state.blocker = ''
       state.pause_reason = cleanMemoryText(decision.pause_reason || decision.reason_code, 300)
       state.persistent_runtime = undefined
+      state.condition_wait = undefined
       board = setTaskBoardStatus(board, 'paused', { pauseReason: state.pause_reason, now })
     }
     else if (decision.durable_status === 'completed') {
@@ -1883,61 +1920,169 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         stepId: state.task_board.active_step_id,
         mode: 'passive_progress',
         maxChecks: 900,
+        actorId: this.epoch?.actor_id,
+        actorEpoch: this.epoch?.epoch,
       },
     )
+  }
+
+  async inspectConditionWait() {
+    const key = this.activePlanKey()
+    const state = this.memory.planByNpc?.get?.(key) ?? this.memory.currentPlan?.(key)
+    const rawWait = state?.condition_wait
+    if (!state || state.status !== 'active' || !rawWait || rawWait.state !== 'active') {
+      return { action: 'absent', healthy: false, state }
+    }
+
+    const wait = safeConditionWait(rawWait)
+    const identity = {
+      goal_id: state.goal_id,
+      step_id: state.task_board?.active_step_id,
+      wait_id: rawWait.id,
+    }
+    if (!wait) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state,
+        wait: rawWait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: 'invalid_condition_wait',
+          wait: { ...rawWait, state: 'failed' },
+        },
+      }
+    }
+
+    identity.actor_id = wait.actor_id
+    identity.actor_epoch = wait.actor_epoch
+
+    let before
+    try {
+      before = await this.captureEpoch()
+    }
+    catch (error) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state,
+        wait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: `condition_lifecycle_status_error:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}`,
+          wait: { ...wait, state: 'failed' },
+        },
+      }
+    }
+    if (!conditionWaitLifecycleMatches(wait, before)) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state,
+        wait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: 'condition_lifecycle_changed',
+          wait: { ...wait, state: 'failed' },
+        },
+      }
+    }
+
+    let observation
+    try {
+      observation = JSON.parse(String(await this.rcon.command(runtimeConditionCommand(wait.condition))).trim())
+    }
+    catch (error) {
+      observation = { error: `condition_transport_error:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}` }
+    }
+
+    let after
+    try {
+      after = await this.captureEpoch()
+    }
+    catch (error) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state,
+        wait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: `condition_lifecycle_status_error:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}`,
+          wait: { ...wait, state: 'failed' },
+        },
+      }
+    }
+
+    const current = this.memory.planByNpc?.get?.(key)
+    if (!current
+      || current.goal_id !== identity.goal_id
+      || current.task_board?.active_step_id !== identity.step_id
+      || current.condition_wait?.id !== identity.wait_id) {
+      return { action: 'stale', healthy: false, state: current, wait, identity }
+    }
+    if (!conditionWaitLifecycleMatches(wait, after)) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state: current,
+        wait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: 'condition_lifecycle_changed',
+          wait: { ...wait, state: 'failed' },
+        },
+      }
+    }
+
+    const normalizedObservation = normalizedConditionObservation(observation)
+    const result = applyConditionObservation(wait, normalizedObservation)
+    return {
+      action: result.action,
+      healthy: result.action === 'waiting',
+      state: current,
+      wait,
+      identity,
+      observation: normalizedObservation,
+      result,
+    }
+  }
+
+  async validateConditionWaitHealth() {
+    const inspected = await this.inspectConditionWait()
+    return {
+      healthy: inspected.healthy === true,
+      action: inspected.action,
+      reason: inspected.result?.reason,
+      wait: inspected.wait,
+      observation: inspected.observation,
+      state: inspected.state,
+    }
   }
 
   async pollConditionWait() {
     if (this.conditionPollPromise) return this.conditionPollPromise
     this.conditionPollPromise = (async () => {
+      const inspected = await this.inspectConditionWait()
+      if (!inspected || inspected.action === 'absent') return null
+
       const key = this.activePlanKey()
-      const state = this.memory.planByNpc?.get?.(key) ?? this.memory.currentPlan?.(key)
-      const wait = state?.condition_wait
-      if (!state || state.status !== 'active' || !wait || wait.state !== 'active') return null
-      const identity = {
-        goal_id: state.goal_id,
-        step_id: state.task_board?.active_step_id,
-        wait_id: wait.id,
-      }
-      if (!identity.goal_id || !identity.step_id || !identity.wait_id) return null
-
-      let observation
-      try {
-        observation = JSON.parse(String(await this.rcon.command(runtimeConditionCommand(wait.condition))).trim())
-      }
-      catch (error) {
-        observation = { error: `condition_transport_error:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}` }
-      }
-
-      const current = this.memory.planByNpc?.get?.(key)
-      if (!current
-        || current.goal_id !== identity.goal_id
-        || current.task_board?.active_step_id !== identity.step_id
-        || current.condition_wait?.id !== identity.wait_id) {
+      const identity = inspected.identity ?? {}
+      if (inspected.action === 'stale') {
         await this.traceEvent('runtime.condition_stale', identity)
         return { action: 'stale', wait_id: identity.wait_id }
       }
 
-      const normalizedObservation = observation?.ok === true
-        ? {
-            satisfied: observation.satisfied === true,
-            progressing: observation.progressing === true,
-            progress_known: observation.progress_known === true,
-            summary: cleanMemoryText(JSON.stringify({
-              kind: observation.kind,
-              current: observation.current,
-              minimum: observation.minimum,
-              unit_number: observation.unit_number,
-              entity_status: observation.entity_status,
-              progressing: observation.progressing,
-            }), 600),
-          }
-        : {
-            stale: observation?.stale === true,
-            error: cleanMemoryText(observation?.error || 'condition_evaluation_failed', 160),
-          }
+      const wait = inspected.wait
+      const result = inspected.result
+      const normalizedObservation = inspected.observation
+      if (!result) return null
 
-      const result = applyConditionObservation(wait, normalizedObservation)
       if (result.action === 'waiting') {
         const updated = this.memory.updateConditionWait?.(key, result.wait)
         await this.persistState()
@@ -1981,7 +2126,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         return { action: 'verified', wait_id: identity.wait_id, state: reduced?.state, observation: normalizedObservation }
       }
 
-      const updated = this.memory.updateConditionWait?.(key, result.wait)
+      const updated = result.wait
+        ? this.memory.updateConditionWait?.(key, result.wait)
+        : this.memory.clearConditionWait?.(key, identity.wait_id)
       await this.persistState()
       const event = result.action === 'timeout'
         ? 'runtime.condition_timeout'
@@ -1990,7 +2137,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           : 'runtime.condition_failed'
       await this.traceEvent(event, {
         wait_id: identity.wait_id,
-        condition: wait.condition,
+        condition: wait?.condition,
         reason: result.reason,
         observation: normalizedObservation,
       })
@@ -2004,65 +2151,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
-  observedMiningTargets(entityName) {
-    const byReference = new Map()
-    const remember = (entity, actorPosition) => {
-      if (!entity || entity.name !== entityName) return
-      const reference = Number.isSafeInteger(entity.unit_number)
-        ? `entity:${entity.unit_number}`
-        : `fallback:${entity.name}:${entity.type ?? 'unknown'}:${entity.position?.x ?? '?'}:${entity.position?.y ?? '?'}`
-      let distance = Number.isFinite(entity.distance) ? entity.distance : undefined
-      if (distance === undefined && actorPosition && entity.position
-        && Number.isFinite(actorPosition.x) && Number.isFinite(actorPosition.y)
-        && Number.isFinite(entity.position.x) && Number.isFinite(entity.position.y)) {
-        distance = Math.hypot(entity.position.x - actorPosition.x, entity.position.y - actorPosition.y)
-      }
-      byReference.set(reference, {
-        name: entity.name,
-        type: entity.type,
-        unit_number: Number.isSafeInteger(entity.unit_number) ? entity.unit_number : undefined,
-        position: entity.position,
-        distance,
-      })
-    }
-
-    for (const entity of this.liveEntityObservations?.values?.() ?? []) remember(entity, undefined)
-    return [...byReference.values()]
-  }
-
-  legacyMiningApproachVerified(entityName) {
-    const state = this.memory.currentPlan?.(this.activePlanKey())
-    if (state?.last_mutation_verified !== true || !Array.isArray(state.last_operations)) return false
-    return state.last_operations.some((value) => {
-      const separator = typeof value === 'string' ? value.indexOf(' ') : -1
-      if (separator < 1 || value.slice(0, separator) !== 'walk_to_entity') return false
-      try {
-        const args = JSON.parse(value.slice(separator + 1))
-        return args?.entity_name === entityName
-      }
-      catch {
-        return false
-      }
-    })
-  }
-
-  failureSnapshot(stage, message) {
-    const request = this.traceRequest
-    const planState = this.memory.currentPlan?.(this.activePlanKey())
-    return {
-      stage,
-      message: cleanMemoryText(message, 2000),
-      request_id: request?.id,
-      turn: request ? this.continuations + 1 : undefined,
-      actor_id: this.epoch?.actor_id,
-      epoch: this.epoch?.epoch,
-      provider: request?.last_provider_event,
-      recovery: request?.recovery,
-      last_tool: request?.last_tool,
-      plan: compactPlanFailureState(planState),
-      usage: request?.usage,
-    }
-  }
 
   async readInteractionTaskStatus() {
     try {
@@ -2427,8 +2515,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   async routePostStepDecision(receipt, { boundary = 'completion', failure = '' } = {}) {
-    if (!this.interactionDecisionProvider) return { route: 'fallback_planner', decision_called: false }
-
     const generation = this.generation
     const current = await this.assertCurrent()
     const persistentRuntime = await this.persistentRuntimeStatus()
@@ -2438,15 +2524,35 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const autorioRuntimeHealthy = interactionRuntimeHealthy(autorioStatus)
     const persistentControllerHealthy = persistentRuntimeHealthy(persistentRuntime)
     const planState = this.memory.planByNpc?.get?.(this.activePlanKey()) ?? this.memory.currentPlan?.(this.activePlanKey())
-    const conditionWaitHealthy = planState?.condition_wait?.state === 'active'
-    const runtimeHealthy = autorioRuntimeHealthy || persistentControllerHealthy || conditionWaitHealthy
-    const runtimeReason = autorioRuntimeHealthy
+    let conditionValidation = await this.validateConditionWaitHealth()
+    let conditionWaitHealthy = conditionValidation.healthy === true
+    let runtimeHealthy = autorioRuntimeHealthy || persistentControllerHealthy || conditionWaitHealthy
+    let runtimeReason = autorioRuntimeHealthy
       ? 'autorio_active_work'
       : persistentControllerHealthy
         ? 'persistent_controller_active'
         : conditionWaitHealthy
           ? 'condition_wait_active'
           : ''
+
+    if (!this.interactionDecisionProvider) {
+      if (conditionWaitHealthy) {
+        await this.traceEvent('planner.skipped', {
+          source: 'condition_wait',
+          route: 'wait_runtime',
+          authoritative_runtime_reason: 'condition_wait_active',
+        })
+        return {
+          route: 'wait_runtime',
+          decision_called: false,
+          runtime: persistentRuntime,
+          runtime_reason: 'condition_wait_active',
+          condition_wait: conditionValidation.wait,
+        }
+      }
+      return { route: 'fallback_planner', decision_called: false }
+    }
+
     const board = planState?.task_board
     const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
     const skills = this.loadedSkillContext instanceof Map
@@ -2500,6 +2606,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       ...(skills.length > 0 ? { skills } : {}),
       persistent_runtime: sanitizeDurableModelValue(persistentRuntime),
       persistent_runtime_healthy: persistentControllerHealthy,
+      condition_wait_active: conditionWaitHealthy,
+      ...(conditionWaitHealthy ? { condition_wait: sanitizeDurableModelValue(conditionValidation.wait) } : {}),
       ...(failure ? { failure: cleanMemoryText(failure, 1200) } : {}),
     }
     const questions = postStepDecisionQuestions()
@@ -2532,6 +2640,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       await this.assertCurrent()
       const decision = parsePostStepDecision(response)
       const latency_ms = Date.now() - startedAt
+      if (decision.route === 'wait_runtime' && conditionWaitHealthy) {
+        conditionValidation = await this.validateConditionWaitHealth()
+        conditionWaitHealthy = conditionValidation.healthy === true
+        runtimeHealthy = autorioRuntimeHealthy || persistentControllerHealthy || conditionWaitHealthy
+        runtimeReason = autorioRuntimeHealthy
+          ? 'autorio_active_work'
+          : persistentControllerHealthy
+            ? 'persistent_controller_active'
+            : conditionWaitHealthy
+              ? 'condition_wait_active'
+              : ''
+      }
       let appliedRoute = decision.route
       let fallbackReason = ''
       if (decision.route === 'wait_runtime' && !runtimeHealthy) {
@@ -4121,11 +4241,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   async routeRecoveryDecision(reason, roundBase = 0) {
-    if (!this.interactionDecisionProvider) return { route: 'fallback_runtime', decision_called: false }
-
     const generation = this.generation
     const current = await this.assertCurrent()
     const reasonText = cleanMemoryText(reason instanceof Error ? reason.message : String(reason), 1600)
+    let conditionValidation = await this.validateConditionWaitHealth()
     const planState = this.memory.currentPlan?.(this.activePlanKey())
     const board = planState?.task_board
     const runtime = await this.readInteractionTaskStatus()
@@ -4143,6 +4262,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       board?.revision ?? 0,
       roundBase,
       failureClass,
+      conditionValidation.healthy ? `wait:${conditionValidation.wait?.id ?? ''}` : `wait:${conditionValidation.action ?? 'none'}`,
       reasonText.slice(0, 240),
     ].join('|')
     if (this.lastRecoveryDecisionKey === key && this.lastRecoveryDecision) {
@@ -4151,6 +4271,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         route: this.lastRecoveryDecision.route,
       })
       return { ...this.lastRecoveryDecision, duplicate: true }
+    }
+
+    if (!this.interactionDecisionProvider) {
+      const result = {
+        route: conditionValidation.healthy ? 'wait_runtime' : 'fallback_runtime',
+        failure_class: failureClass,
+        runtime,
+        persistentRuntime,
+        conditionWaitHealthy: conditionValidation.healthy === true,
+        conditionWait: conditionValidation.wait,
+        decision_called: false,
+      }
+      this.lastRecoveryDecisionKey = key
+      this.lastRecoveryDecision = result
+      return result
     }
 
     const state = {
@@ -4177,8 +4312,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         task_state: cleanMemoryText(runtime?.task_state, 64),
         queue_length: Number.isSafeInteger(runtime?.queue_length) ? runtime.queue_length : undefined,
         persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
-        condition_wait_active: planState?.condition_wait?.state === 'active',
-        condition_wait: planState?.condition_wait,
+        condition_wait_active: conditionValidation.healthy === true,
+        condition_wait: conditionValidation.healthy ? conditionValidation.wait : undefined,
       },
       evidence: {
         latest_relevant_deterministic_evidence: evidence.map(item => sanitizeDurableModelValue(item)),
@@ -4220,11 +4355,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
       await this.assertCurrent()
       const decision = parseRecoveryDecision(response)
+      if (decision.route === 'wait_runtime' && conditionValidation.healthy) {
+        conditionValidation = await this.validateConditionWaitHealth()
+      }
       const validated = validateRecoveryRoute(decision, {
         world: {
           ...runtime,
           persistent_runtime: persistentRuntime,
           persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
+          condition_wait_active: conditionValidation.healthy === true,
+          condition_wait: conditionValidation.healthy ? conditionValidation.wait : undefined,
         },
         finalCompletionProven,
         observationBudgetAvailable: this.actionOmissionObservationUsed !== true,
@@ -4237,6 +4377,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         rejection_reason: validated.rejection_reason,
         runtime,
         persistentRuntime,
+        conditionWaitHealthy: conditionValidation.healthy === true,
+        conditionWait: conditionValidation.wait,
         runtime_state: validated.runtime,
         decision,
         decision_called: true,
@@ -4284,6 +4426,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     catch (error) {
       if (generation !== this.generation || controller.signal.aborted) throw new AgentLoopError('Model turn was cancelled or superseded')
+      if (conditionValidation.healthy) conditionValidation = await this.validateConditionWaitHealth()
       const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
       await this.decisionTraceEvent('decision.fallback', {
         decision_id: decisionId,
@@ -4301,10 +4444,12 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         decision_latency_ms: Date.now() - startedAt,
       })
       const result = {
-        route: 'fallback_runtime',
+        route: conditionValidation.healthy ? 'wait_runtime' : 'fallback_runtime',
         failure_class: failureClass,
         runtime,
         persistentRuntime,
+        conditionWaitHealthy: conditionValidation.healthy === true,
+        conditionWait: conditionValidation.wait,
         error: message,
         decision_called: true,
       }
@@ -4416,8 +4561,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           ...(routed.runtime ?? {}),
           persistent_runtime: routed.persistentRuntime,
           persistent_runtime_healthy: persistentRuntimeHealthy(routed.persistentRuntime),
-          condition_wait_active: this.memory.planByNpc?.get?.(this.activePlanKey())?.condition_wait?.state === 'active',
-          condition_wait: this.memory.planByNpc?.get?.(this.activePlanKey())?.condition_wait,
+          condition_wait_active: routed.conditionWaitHealthy === true,
+          condition_wait: routed.conditionWaitHealthy ? routed.conditionWait : undefined,
         },
       })
       if (reduced?.decision?.accepted) {
