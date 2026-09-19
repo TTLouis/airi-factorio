@@ -118,3 +118,91 @@ test('restored board is sanitized instead of trusted as arbitrary durable data',
   assert.equal(board.development_direction, '')
   assert.equal(board.revision, 7)
 })
+
+
+test('next strategic goal cannot replace active blocked or paused goal identity', () => {
+  for (const status of ['active', 'blocked', 'paused']) {
+    const store = new SwarmStrategicProjectStore({
+      goalId: `goal-${status}`,
+      objective: `Existing ${status} goal`,
+    })
+    store.bindGoal({
+      goalId: `goal-${status}`,
+      objective: `Existing ${status} goal`,
+      status,
+    })
+
+    assert.throws(
+      () => store.startNextGoal({
+        goalId: `goal-next-${status}`,
+        objective: 'New goal must not overwrite unfinished work',
+      }),
+      /requires completed prior goal/,
+    )
+    assert.equal(store.current().goal_id, `goal-${status}`)
+    assert.equal(store.current().status, status)
+  }
+})
+
+test('completed strategic goal can explicitly start a fresh next goal', () => {
+  let clock = 100
+  const store = new SwarmStrategicProjectStore({
+    goalId: 'goal-red-science',
+    objective: 'Automate red science',
+    now: () => clock,
+  })
+  store.update({
+    current_milestone: { title: 'Build red science line' },
+    next_milestones: [{ title: 'Expand iron supply' }],
+    development_direction: 'vertical',
+  })
+  store.bindGoal({
+    goalId: 'goal-red-science',
+    objective: 'Automate red science',
+    status: 'completed',
+  })
+
+  clock = 200
+  const next = store.startNextGoal({
+    goalId: 'goal-green-science',
+    objective: 'Automate green science',
+  })
+
+  assert.equal(next.goal_id, 'goal-green-science')
+  assert.equal(next.title, 'Automate green science')
+  assert.equal(next.status, 'active')
+  assert.equal(next.revision, 1)
+  assert.equal(next.updated_at, 200)
+  assert.equal(next.current_milestone, undefined)
+  assert.deepEqual(next.next_milestones, [])
+  assert.deepEqual(next.completed_milestones, [])
+  assert.equal(next.development_direction, '')
+  assert.equal(next.transition_state, '')
+})
+
+test('next strategic goal requires a new non-empty identity and objective', () => {
+  const store = new SwarmStrategicProjectStore({
+    goalId: 'goal-done',
+    objective: 'Finished goal',
+  })
+  store.bindGoal({
+    goalId: 'goal-done',
+    objective: 'Finished goal',
+    status: 'completed',
+  })
+
+  assert.throws(
+    () => store.startNextGoal({ goalId: '', objective: 'Missing identity' }),
+    /requires goal identity/,
+  )
+  assert.throws(
+    () => store.startNextGoal({ goalId: 'goal-next', objective: '' }),
+    /requires objective/,
+  )
+  assert.throws(
+    () => store.startNextGoal({ goalId: 'goal-done', objective: 'Reuse same identity' }),
+    /identity must differ/,
+  )
+  assert.equal(store.current().goal_id, 'goal-done')
+  assert.equal(store.current().status, 'completed')
+})
