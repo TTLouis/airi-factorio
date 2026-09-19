@@ -1023,3 +1023,59 @@ test('verified final completion is not mistaken for an action omission', async (
   assert.match(resetContext, /No active durable goal/)
   assert.doesNotMatch(resetContext, /place one furnace|requested furnace/i)
 })
+
+
+test('runtime accepts an optional bounded project hierarchy while preserving the strict operation-plan surface', () => {
+  const agent = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    memory: new CanonicalTaskBoardMemory(),
+    npcId: 'airi',
+    systemPrompt: 'project hierarchy parse test',
+    stateFile: null,
+    traceFile: null,
+    decisionTraceFile: null,
+    provider: async () => { throw new Error('unused') },
+  })
+  const parsed = agent.parsePlanMessage({
+    content: JSON.stringify({
+      chatMessage: 'Starting with burner production.',
+      project: {
+        currentMilestone: {
+          title: 'Establish burner production',
+          completionSummary: 'Stable early iron and copper production is available.',
+        },
+        nextMilestones: [{ title: 'Reach Automation' }],
+        developmentDirection: 'vertical',
+      },
+      plan: ['Gather stone for the first furnaces'],
+      currentStep: 0,
+      operations: [{ name: 'gather_resource', args: { resource_name: 'stone', count: 20, search_radius: 256 } }],
+    }),
+  })
+  assert.equal(parsed.project.current_milestone.title, 'Establish burner production')
+  assert.equal(parsed.project.next_milestones[0].title, 'Reach Automation')
+  assert.equal(parsed.project.development_direction, 'vertical')
+  assert.equal(parsed.plan[0], 'Gather stone for the first furnaces')
+  assert.equal(parsed.operations[0].name, 'gather_resource')
+})
+
+test('ordinary short-task responses remain backward compatible without project hierarchy', () => {
+  const agent = new NpcAgentLoop({
+    rcon: new FakeRcon(),
+    memory: new CanonicalTaskBoardMemory(),
+    npcId: 'airi',
+    systemPrompt: 'project hierarchy compatibility test',
+    stateFile: null,
+    traceFile: null,
+    decisionTraceFile: null,
+    provider: async () => { throw new Error('unused') },
+  })
+  const parsed = agent.parsePlanMessage(planMessage({
+    chatMessage: 'Gathering stone.',
+    plan: ['Gather 20 stone'],
+    currentStep: 0,
+    operations: [{ name: 'gather_resource', args: { resource_name: 'stone', count: 20, search_radius: 256 } }],
+  }))
+  assert.equal(parsed.project, undefined)
+  assert.equal(parsed.plan[0], 'Gather 20 stone')
+})
