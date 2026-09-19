@@ -4,6 +4,7 @@ const FAMILY_CHOICES = Object.freeze({
   completion: ['incomplete', 'progress', 'completed', 'invalidated'],
   routing: ['wait_runtime', 'continue_runtime', 'wake_planner'],
   reasoning_budget: ['micro', 'normal', 'deep', 'strategic'],
+  milestone_transition: ['advance_next', 'replan_project', 'project_complete_candidate'],
 })
 
 const PLANNING_HORIZONS = new Set(['immediate', 'checkpoint', 'subgoal', 'strategic'])
@@ -86,6 +87,24 @@ export function routingDecisionQuestions() {
       },
     },
   }
+}
+
+export function milestoneTransitionDecisionQuestions() {
+  return {
+    milestone_transition: {
+      type: 'choice',
+      instructions: 'The current milestone has already been authoritatively verified complete by runtime outcome authority. Decide what strategic transition is needed next. Do not claim project completion yourself and do not invent milestone content.',
+      criteria: {
+        advance_next: 'The first tentative next milestone is still a sensible immediate continuation of the user project from the current world state.',
+        replan_project: 'The queued next milestone is missing, stale, poorly scoped, or no longer the best immediate continuation; wake the Main LLM to choose a new bounded milestone.',
+        project_complete_candidate: 'The evidence suggests the user-level project goal itself may now be satisfied; wake the Main LLM for grounded final-goal verification rather than completing it here.',
+      },
+    },
+  }
+}
+
+export function parseMilestoneTransitionDecision(response) {
+  return parseDecisionFamily(response, 'milestone_transition', 'replan_project')
 }
 
 export function reasoningBudgetDecisionQuestions() {
