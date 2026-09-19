@@ -85,6 +85,9 @@ export interface TaskBoardUiDebugSnapshot {
   decision_reasoning_confidence_percent: number
   decision_planning_horizon: string
   decision_observation_budget: number
+  decision_milestone_transition: string
+  decision_milestone_transition_confidence_percent: number
+  decision_hierarchy_action: string
   decision_confidence_percent: number
   decision_queue_conflict_percent: number
   decision_latency_ms: number
@@ -173,6 +176,9 @@ export function sanitize_debug_snapshot(value: any): TaskBoardUiDebugSnapshot {
     decision_reasoning_confidence_percent: math.min(100, integer(debug.decision_reasoning_confidence_percent)),
     decision_planning_horizon: clean_text(debug.decision_planning_horizon, 32),
     decision_observation_budget: math.min(8, integer(debug.decision_observation_budget)),
+    decision_milestone_transition: clean_text(debug.decision_milestone_transition, 48),
+    decision_milestone_transition_confidence_percent: math.min(100, integer(debug.decision_milestone_transition_confidence_percent)),
+    decision_hierarchy_action: clean_text(debug.decision_hierarchy_action, 80),
     decision_confidence_percent: math.min(100, integer(debug.decision_confidence_percent)),
     decision_queue_conflict_percent: math.min(100, integer(debug.decision_queue_conflict_percent)),
     decision_latency_ms: integer(debug.decision_latency_ms),
@@ -621,6 +627,9 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   const decision_reasoning_confidence = math.min(100, integer(debug.decision_reasoning_confidence_percent))
   const decision_planning_horizon = clean_text(debug.decision_planning_horizon, 32)
   const decision_observation_budget = math.min(8, integer(debug.decision_observation_budget))
+  const decision_milestone_transition = clean_text(debug.decision_milestone_transition, 48)
+  const decision_milestone_transition_confidence = math.min(100, integer(debug.decision_milestone_transition_confidence_percent))
+  const decision_hierarchy_action = clean_text(debug.decision_hierarchy_action, 80)
   const decision_confidence = math.min(100, integer(debug.decision_confidence_percent))
   const decision_conflict = math.min(100, integer(debug.decision_queue_conflict_percent))
   const decision_latency = integer(debug.decision_latency_ms)
@@ -669,6 +678,9 @@ function fill_debug_body(body: LuaGuiElement, board: any, runtime: any, synced_t
   add_row(table, 'Jev ACTIVE post-step', decision_post_step.length > 0 ? `${decision_post_step}${decision_post_step_applied.length > 0 && decision_post_step_applied !== decision_post_step ? ` → ${decision_post_step_applied}` : ''} · ${decision_post_step_confidence}% · ${decision_post_step_latency} ms${decision_post_step_fallback.length > 0 ? ` · ${decision_post_step_fallback}` : ''}` : '—')
   add_row(table, 'Jev hierarchy · gate', decision_granularity.length > 0 || decision_development.length > 0 || decision_reasoning_budget.length > 0
     ? `granularity ${decision_granularity || '—'} ${decision_granularity_confidence}% · development ${decision_development || '—'} ${decision_development_confidence}% · budget(shadow) ${decision_reasoning_budget || '—'} ${decision_reasoning_confidence}% · horizon(shadow) ${decision_planning_horizon || '—'} · observations(shadow) ${decision_observation_budget}`
+    : '—')
+  add_row(table, 'Jev milestone transition', decision_milestone_transition.length > 0
+    ? `${decision_milestone_transition} · ${decision_milestone_transition_confidence}%${decision_hierarchy_action.length > 0 ? ` → ${decision_hierarchy_action}` : ''}`
     : '—')
   add_row(table, 'Decision usage', decision_shadow.length > 0 || decision_post_step.length > 0 ? `${decision_input} in / ${decision_output} out · ${decision_latency || decision_post_step_latency} ms${decision_cost > 0 ? ` · ${decision_cost} µUSD` : ''}` : '—')
   add_row(table, 'Decision totals', decision_calls_total > 0 ? `${decision_calls_total} calls · ${decision_input_total} in / ${decision_output_total} out${decision_cost_total > 0 ? ` · ${decision_cost_total} µUSD` : ''} · shadow ${decision_matches} match / ${decision_mismatches} differ` : '—')
