@@ -306,3 +306,43 @@ test('strategic board revision changes invalidate project Jev reuse', async () =
 
   assert.equal(providerCalls, 2)
 })
+
+
+test('coordination event cursor change invalidates reused project Jev decision', async () => {
+  let providerCalls = 0
+  let cursor = 'event-1'
+  const controller = new SwarmProjectJevShadowController({
+    rcon: {
+      async command() {
+        const value = globalSnapshot()
+        value.eventCursor = cursor
+        return JSON.stringify(value)
+      },
+    },
+    decisionProvider: async () => {
+      providerCalls += 1
+      return { answers: {} }
+    },
+  })
+
+  const first = await controller.observe()
+  cursor = 'event-2'
+  const second = await controller.observe()
+
+  assert.equal(first.reused, false)
+  assert.equal(second.reused, false)
+  assert.equal(providerCalls, 2)
+})
+
+test('historical claim totals do not imply runtime activity when activeClaims is zero', () => {
+  const source = globalSnapshot()
+  source.counts.claims = 9
+  source.counts.activeClaims = 0
+  source.counts.activeWarnings = 0
+  source.work = [{ id: 'work-complete', status: 'completed' }]
+  source.warnings = []
+
+  const projected = buildProjectJevShadowSnapshot(source)
+  assert.equal(projected.runtime.active, false)
+  assert.equal(projected.runtime.reason, 'swarm_idle')
+})
