@@ -206,9 +206,22 @@ export interface TaskBoardUiActivity { id?: string, kind: TaskBoardUiActivityKin
 export interface TaskBoardUiWantedItem { name: string, count: number, reason: string }
 export interface TaskBoardUiConversationMessage { id: string, role: 'user' | 'assistant', sender: string, text: string }
 export interface TaskBoardUiAgentStatus { phase: TaskBoardUiAgentPhase, detail: string }
+export interface TaskBoardUiProjectMilestone { id: string, title: string, completion_summary: string, status: string }
+export interface TaskBoardUiProject {
+  kind: 'project_board_v1'
+  project_id: string
+  title: string
+  status: string
+  completed_milestones: TaskBoardUiProjectMilestone[]
+  current_milestone?: TaskBoardUiProjectMilestone
+  next_milestones: TaskBoardUiProjectMilestone[]
+  development_direction: string
+  transition_state: string
+}
 export interface TaskBoardUiSnapshot {
   goal_id: string
   objective: string
+  project?: TaskBoardUiProject
   response: string
   status: 'idle' | 'active' | 'blocked' | 'paused' | 'completed'
   blocker: string
@@ -277,6 +290,46 @@ function step_status(value: unknown): TaskBoardUiStep['status'] { return value =
 function activity_kind(value: unknown): TaskBoardUiActivityKind { return value === 'observation' || value === 'decision' || value === 'action' || value === 'result' || value === 'blocker' || value === 'system' ? value : 'note' }
 function agent_phase(value: unknown): TaskBoardUiAgentPhase { return value === 'thinking' || value === 'observing' || value === 'executing' || value === 'waiting' || value === 'error' ? value : 'idle' }
 
+function sanitize_project_milestone(value: any, fallback_status: string): TaskBoardUiProjectMilestone | undefined {
+  if (value === undefined || value === null || typeof value !== 'object') return undefined
+  const title = text(value.title, 500)
+  if (title.length === 0) return undefined
+  return {
+    id: text(value.id, 100),
+    title,
+    completion_summary: text(value.completion_summary, 800),
+    status: text(value.status || fallback_status, 32),
+  }
+}
+
+function sanitize_project(value: any): TaskBoardUiProject | undefined {
+  if (value === undefined || value === null || typeof value !== 'object' || value.kind !== 'project_board_v1') return undefined
+  const raw_completed = (Array.isArray(value.completed_milestones) ? value.completed_milestones : []) as any[]
+  const completed_milestones: TaskBoardUiProjectMilestone[] = []
+  for (let index = math.max(0, raw_completed.length - 12); index < raw_completed.length; index++) {
+    const milestone = sanitize_project_milestone(raw_completed[index], 'completed')
+    if (milestone !== undefined) completed_milestones.push(milestone)
+  }
+  const raw_next = (Array.isArray(value.next_milestones) ? value.next_milestones : []) as any[]
+  const next_milestones: TaskBoardUiProjectMilestone[] = []
+  for (let index = 0; index < raw_next.length && index < 3; index++) {
+    const milestone = sanitize_project_milestone(raw_next[index], 'tentative')
+    if (milestone !== undefined) next_milestones.push(milestone)
+  }
+  const current_milestone = sanitize_project_milestone(value.current_milestone, 'active')
+  return {
+    kind: 'project_board_v1',
+    project_id: text(value.project_id, 100),
+    title: text(value.title, 500),
+    status: text(value.status, 32),
+    completed_milestones,
+    current_milestone,
+    next_milestones,
+    development_direction: text(value.development_direction, 32),
+    transition_state: text(value.transition_state, 48),
+  }
+}
+
 export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot | undefined {
   if (value === undefined || value === null || typeof value !== 'object' || !Array.isArray(value.steps)) return undefined
 
@@ -335,10 +388,11 @@ export function sanitize_task_board_ui_snapshot(value: any): TaskBoardUiSnapshot
   }
 
   const total = integer(value.total_steps, steps.length)
+  const project = sanitize_project(value.project)
   const agent = value.agent !== null && typeof value.agent === 'object' ? value.agent : undefined
   const debug = value.debug !== undefined ? debug_ui.sanitize_debug_snapshot(value.debug) : undefined
   return {
-    goal_id: text(value.goal_id, 100), objective: text(value.objective, 500), response: text(value.response, 2000), status: status(value.status), blocker: text(value.blocker, 500), blocker_summary: text(value.blocker_summary, 500), pause_reason: text(value.pause_reason, 300), pause_summary: text(value.pause_summary, 500),
+    goal_id: text(value.goal_id, 100), objective: text(value.objective, 500), project, response: text(value.response, 2000), status: status(value.status), blocker: text(value.blocker, 500), blocker_summary: text(value.blocker_summary, 500), pause_reason: text(value.pause_reason, 300), pause_summary: text(value.pause_summary, 500),
     completed_count: math.min(integer(value.completed_count), total), total_steps: total, active_index: math.min(integer(value.active_index), math.max(0, total - 1)), steps, activity, wanted_items,
     conversation_id: text(value.conversation_id, 120), conversation,
     agent: { phase: agent_phase(agent?.phase), detail: text(agent?.detail, 300) }, debug,
@@ -785,6 +839,38 @@ function refresh_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntim
   return true
 }
 
+function project_direction_caption(direction: string) {
+  if (direction === 'vertical') return 'VERTICAL · advancing the active critical path'
+  if (direction === 'horizontal') return 'HORIZONTAL · strengthening existing capability'
+  if (direction === 'recover') return 'RECOVER · restoring a valid capability/state'
+  if (direction === 'maintain') return 'MAINTAIN · current path remains valid'
+  return 'UNSET · planner has not selected a development direction'
+}
+
+function render_project_board(parent: LuaGuiElement, board: TaskBoardUiSnapshot | undefined) {
+  const project = board?.project
+  if (project === undefined || project.title.length === 0) return
+  const { body } = create_section(parent, 'Project Board', LEFT_COLUMN_WIDTH, 'Long-horizon intent. Future milestones are tentative; Plan Tracker below is the current execution contract.', true)
+  const table = body.add({ type: 'table', column_count: 2 }); table.style.horizontal_spacing = 10; table.style.vertical_spacing = 4
+  add_key_value(table, 'PROJECT', project.title, { width: LEFT_COLUMN_WIDTH - 145 })
+
+  const current = project.current_milestone
+  const waiting = project.transition_state === 'awaiting_next_milestone'
+  add_key_value(
+    table,
+    'MILESTONE',
+    current?.title || (waiting ? 'Verified milestone complete · selecting what comes next' : 'Not selected yet'),
+    { width: LEFT_COLUMN_WIDTH - 145 },
+  )
+  add_key_value(table, 'DEVELOPMENT', project_direction_caption(project.development_direction), { width: LEFT_COLUMN_WIDTH - 145 })
+  add_key_value(table, 'PROGRESS', `${project.completed_milestones.length} milestones verified`, { width: LEFT_COLUMN_WIDTH - 145 })
+
+  if (project.next_milestones.length > 0) {
+    const next = project.next_milestones.map((milestone, index) => `${index + 1}. ${milestone.title}`).join('  ·  ')
+    add_key_value(table, 'UP NEXT', next, { width: LEFT_COLUMN_WIDTH - 145 })
+  }
+}
+
 function render_world_preview(parent: LuaGuiElement, runtime: TaskBoardUiRuntimeSnapshot, player: LuaPlayer) {
   const { header, body } = create_section(parent, 'NPC World Preview', PREVIEW_COLUMN_WIDTH, undefined, true, { section: PREVIEW_SECTION_NAME, header: PREVIEW_HEADER_NAME, body: PREVIEW_BODY_NAME })
   const preview = runtime.preview
@@ -1017,6 +1103,7 @@ function render_titlebar(root: FrameGuiElement, caption = 'SGLuna NPC Console', 
 }
 function build_left_dynamic(parent: LuaGuiElement, player: LuaPlayer, board: TaskBoardUiSnapshot | undefined, synced_tick: number | undefined, runtime: TaskBoardUiRuntimeSnapshot) {
   const top = parent.add({ type: 'flow', direction: 'horizontal' }); top.style.horizontal_spacing = COLUMN_SPACING; top.style.vertical_align = 'top'; render_status_panel(top, board, runtime, synced_tick); render_controls_panel(top, player, board, runtime)
+  render_project_board(parent, board)
 }
 function build_columns(columns: LuaGuiElement, player: LuaPlayer) {
   const board = storage.airi_task_board_ui; const synced_tick = storage.airi_task_board_ui_synced_tick; const runtime = runtime_snapshot()
