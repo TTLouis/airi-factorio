@@ -687,3 +687,35 @@ test('activated next milestone stays pending until a fresh milestone-local plan 
   assert.equal(reconciled.state.task_board.steps.length, 2)
   assert.equal(reconciled.state.project_board.current_milestone.title, 'Reach Automation')
 })
+
+
+test('planner cannot silently replace an already-activated next milestone', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const key = 'npc:airi'
+  memory.planByNpc.set(key, planState({
+    goal_id: 'goal_long',
+    objective: 'Launch a rocket',
+    project_board: {
+      kind: 'project_board_v1',
+      project_id: 'goal_long',
+      title: 'Launch a rocket',
+      status: 'active',
+      completed_milestones: [{ title: 'Establish burner production', status: 'completed' }],
+      current_milestone: { id: 'automation', title: 'Reach Automation', status: 'active' },
+      next_milestones: [{ title: 'Establish electric power', status: 'tentative' }],
+      development_direction: 'vertical',
+      transition_state: '',
+      revision: 3,
+      updated_at: 1,
+    },
+  }))
+
+  const updated = memory.updateProjectBoard(key, {
+    current_milestone: { title: 'Skip ahead to oil processing' },
+    next_milestones: [{ title: 'Automate red and green science' }],
+    development_direction: 'vertical',
+  }, { preserveCurrentMilestone: true })
+
+  assert.equal(updated.current_milestone.title, 'Reach Automation')
+  assert.deepEqual(updated.next_milestones.map(item => item.title), ['Automate red and green science'])
+})
