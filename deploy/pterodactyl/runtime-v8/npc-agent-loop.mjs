@@ -4041,21 +4041,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       0,
     )
     if (!this.actionOmissionRepairActive && Number.isSafeInteger(this.observationBudgetRemaining) && freshRequestedCount > this.observationBudgetRemaining) {
-      const reason = `Jev observation budget has ${this.observationBudgetRemaining} fresh call(s) remaining, but the provider requested ${freshRequestedCount} fresh observation(s).`
-      this.messages.push({
-        role: 'user',
-        content: `[HARNESS] ${reason} No observation from this batch was executed. Reuse existing grounded evidence and act, or report the exact still-missing fact/blocker.`,
-      })
-      this.observationDecisionPressure = true
-      this.observationDecisionPressureRemaining = 0
-      await this.recoveryDiagnostic({
-        failure_class: 'observation_no_progress',
-        reason_code: 'jev_observation_budget_exhausted',
-        reason,
-        retry: 1,
-        retry_limit: 1,
-        tools_enabled: false,
-      })
+      const reason = `Jev observation budget had ${this.observationBudgetRemaining} fresh call(s) remaining, but the provider requested ${freshRequestedCount} fresh observation(s).`
+      await this.forceDecisionFromObservations(reason, 'jev_observation_budget_exhausted')
       return
     }
     for (let index = 0; index < prepared.length; index++) {
@@ -4086,10 +4073,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (!this.actionOmissionRepairActive && Number.isSafeInteger(this.observationBudgetRemaining) && freshRequestedCount > 0) {
       this.observationBudgetRemaining = Math.max(0, this.observationBudgetRemaining - freshRequestedCount)
       if (this.observationBudgetRemaining === 0) {
-        this.messages.push({
-          role: 'user',
-          content: '[HARNESS] Jev observation budget is exhausted for this decision. Reuse the evidence already collected and return the next executable action or a truthful blocker; do not request another read-only observation.',
-        })
+        await this.forceDecisionFromObservations(
+          'Jev observation budget is exhausted for this decision.',
+          'jev_observation_budget_complete',
+        )
       }
     }
     const freshResultObserved = results.some((_, index) => cachedBefore[index] !== true && staticCachedBefore[index] !== true)
