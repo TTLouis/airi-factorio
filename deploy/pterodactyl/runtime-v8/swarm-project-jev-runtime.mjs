@@ -89,6 +89,7 @@ export class SwarmProjectJevRuntime {
       status: 'active',
     })
     await this.persistence.save()
+    this.monitor.resetBaseline()
     return board
   }
 
@@ -96,6 +97,7 @@ export class SwarmProjectJevRuntime {
     await this.initialize()
     const board = this.store.startNextGoal(goal)
     await this.persistence.save()
+    this.monitor.resetBaseline()
     return board
   }
 
