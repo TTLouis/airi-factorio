@@ -34,7 +34,14 @@ import {
   stepCheckpointDecisionQuestions,
   stepRelationAllowsAdmission,
 } from './step-completion.mjs'
-import { isObservationToolName, renderOperation, renderOperationPreflight, runtimeConditionCommand, toolCommand } from './structured-policy.mjs'
+import {
+  isObservationToolName,
+  plannerControlPayloadFromMessage,
+  renderOperation,
+  renderOperationPreflight,
+  runtimeConditionCommand,
+  toolCommand,
+} from './structured-policy.mjs'
 
 export { AgentLoopError }
 
@@ -44,7 +51,7 @@ const SENSITIVE_TRACE_KEY = /(?:authorization|api.?key|token|password|secret|coo
 const STATE_SCHEMA = 1
 const PLAN_HISTORY_LIMIT = 24
 const DUPLICATE_OBSERVATION_MESSAGE = '[HARNESS] Duplicate observation suppressed. The result is unchanged from the earlier identical tool call already present in this decision context; reuse it and act or report a blocker.'
-const OUTPUT_BUDGET_RECOVERY_MESSAGE = '[HARNESS] The immediately preceding provider response exhausted its output budget before emitting content or tool calls. Continue the same logical request and goal from this unchanged harness context. Tools remain available. Do not treat the empty response as an action, plan update, completion, or evidence. Do not replay any world mutation already proven complete by the supplied receipts or canonical Task Board. Return the next necessary tool call(s) or one valid strict-JSON plan.'
+const OUTPUT_BUDGET_RECOVERY_MESSAGE = '[HARNESS] The immediately preceding provider response exhausted its output budget before emitting content or tool calls. Continue the same logical request and goal from this unchanged harness context. Tools remain available. Do not treat the empty response as an action, plan update, completion, or evidence. Do not replay any world mutation already proven complete by the supplied receipts or canonical Task Board. Return the next necessary observation tool call(s), or use submitPlan for the planner decision. Legacy strict-JSON content remains a compatibility fallback only.'
 const ACTION_OMISSION_MAX_TOKENS = 700
 const ACTION_OMISSION_BLOCKER_PREFIX = 'BLOCKED:'
 const ACTION_OMISSION_REPAIR_MESSAGE = 'Finite canonical work remains, but no executable operation was submitted. Reuse the authoritative evidence already collected and do not repeat completed observations. If that evidence already parameterizes the next action, submit the next executable operation now. If exactly one mutable fact is genuinely missing, use exactly one targeted observation for that fact; after it, no more observation turns are allowed. Do not stop and wait for a human "continue" message. Otherwise keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or truthful blocker.'
@@ -70,6 +77,7 @@ const JEV_PIPELINE_RUNTIME_GUARDS = [
   ['parseProjectProposal', typeof parseProjectProposal],
   ['completionContractSupported', typeof completionContractSupported],
   ['sanitizeStepCompletionContract', typeof sanitizeStepCompletionContract],
+  ['plannerControlPayloadFromMessage', typeof plannerControlPayloadFromMessage],
 ]
 for (const [name, type] of JEV_PIPELINE_RUNTIME_GUARDS) {
   if (type !== 'function') throw new Error(`Jev pipeline dependency ${name} is unavailable`)
@@ -77,6 +85,14 @@ for (const [name, type] of JEV_PIPELINE_RUNTIME_GUARDS) {
 
 const DURABLE_PLAN_PROMPT = `
 ## Durable goal and plan state
+
+### Planner submission protocol
+
+When tools are available, prefer the `submitPlan` control tool for the planner decision instead of serializing the whole decision as assistant JSON content. Your normal assistant content may be concise natural-language text for the human. Put canonical plan/currentStep/operations plus optional checkpoint/project proposals in `submitPlan`.
+
+`submitPlan` is a proposal boundary, not execution authority: Jev checks semantic alignment, the harness validates checkpoint/project shapes, Outcome Authority owns durable completion/blocking truth, and Autorio validates mutations before admission. Do not mix `submitPlan` with observation tool calls in the same assistant message. Observe first when needed, then submit one control decision.
+
+Strict JSON assistant content is retained only as a compatibility/fallback path, especially when tools are disabled during bounded recovery. It is no longer the preferred normal-path protocol.
 
 The Pterodactyl harness may provide a [PLAN_STATE] message. It is harness-owned durable goal/plan context for this logical NPC and survives ordinary model turns and server restarts. Use it to resume a prior task, answer what you were doing, or continue after a pause. It is not authoritative live Factorio state: re-observe mutable game state before depending on it.
 
@@ -3938,6 +3954,24 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     if (generation !== this.generation || !this.active) throw new AgentLoopError('Model turn was cancelled or superseded')
     await this.assertCurrent()
     if (!message || typeof message !== 'object') throw new AgentLoopError('Provider returned no message')
+
+    const plannerSubmission = plannerControlPayloadFromMessage(message)
+    if (plannerSubmission) {
+      await this.traceEvent('provider.plan_submission', {
+        source: 'submitPlan',
+        plan_steps: Array.isArray(plannerSubmission.plan) ? plannerSubmission.plan.length : 0,
+        operation_count: Array.isArray(plannerSubmission.operations) ? plannerSubmission.operations.length : 0,
+        has_checkpoint: plannerSubmission.checkpoint !== undefined,
+        has_project: plannerSubmission.project !== undefined,
+        natural_content_chars: typeof message.content === 'string' ? message.content.length : 0,
+      })
+      message = {
+        ...message,
+        tool_calls: undefined,
+        content: JSON.stringify(plannerSubmission),
+      }
+    }
+
     if (omissionRepair && !effectiveAllowTools && message.tool_calls !== undefined) {
       const state = this.memory.currentPlan?.(this.activePlanKey())
       await this.traceEvent('recovery.action_omission_observation_rejected', {
