@@ -50,9 +50,9 @@
         },
         {
             "name": "SGLuna Chat Players",
-            "description": "Players allowed to issue !luna commands. Leave blank or use * to allow everyone. Enter comma-separated exact player names for an allowlist. Use none to disable in-game commands. Legacy !airi remains accepted as a compatibility alias.",
+            "description": "Players allowed to issue !luna commands. Default none disables in-game commands until an allowlist is configured. Enter comma-separated exact player names for an allowlist, or use * to explicitly allow everyone. Legacy !airi remains accepted as a compatibility alias.",
             "env_variable": "SGLUNA_CHAT_PLAYERS",
-            "default_value": "",
+            "default_value": "none",
             "user_viewable": true,
             "user_editable": true,
             "rules": "nullable|string|max:512",
