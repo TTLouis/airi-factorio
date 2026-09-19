@@ -1357,3 +1357,21 @@ The runtime now keeps the same pressure trigger, but the final targeted observat
 For a new broad goal, the interaction-side Jev request now returns `reasoning_budget`, `planning_horizon`, and `observation_budget` together with granularity, so the first planner turn is not forced back onto the old one-observation behavior. Post-step planner wakes use the same envelope.
 
 The planning horizon remains semantic context/telemetry for now; it does not authorize the planner to rewrite the durable user project or verified milestone history.
+
+
+### Edge-case audit ownership
+
+Edge-case discovery for hierarchy promotion is owned by this branch work, not by manual user discovery. Before long-task E2E, the implementation should proactively audit transitions, provider contracts, lifecycle interruption, budget enforcement, and authority boundaries.
+
+The current audit has already found and hardened these cases:
+
+- **Unsupported decision-provider schema:** `observation_budget` initially used an ad-hoc `number` question even though the TypeSafe adapter only accepts `choice | score | noul`. It now uses a supported 0-8 score rubric, with fractional provider scores normalized to a bounded integer allowance.
+- **Observation budget only applied after pressure:** the first adaptive version still allowed unrestricted observations before the old three-round pressure threshold. The runtime now counts fresh observation calls from the start of the Jev-scoped planner decision; cached/static reuse does not consume fresh budget.
+- **Reasoning budget defeated by compact output limits:** `normal/deep/strategic` Jev planner wakes could still inherit the 1000-token completion continuation cap. Explicit semantic budgets now select the corresponding full planner output budget; `micro` retains the compact path.
+- **Shadow-intent disagreement steering a real new goal:** hierarchy split/budget output from the Jev side classifier is now applied to the initial planner only when Jev also classifies the message as `new_goal`; disagreement falls back to the normal authoritative interaction route rather than under/over-budgeting the planner.
+- **Milestone activation interrupted before fresh planning:** an activated tentative milestone now sets `milestone_plan_pending=true` until a new milestone-local Plan Tracker is committed, so a provider failure cannot make an active project look like it has no remaining canonical work.
+- **Planner rewriting an already activated milestone:** after Jev approves `advance_next`, the activated current milestone identity is preserved during the bounded planner handoff. The planner may refresh tentative future milestones but cannot silently substitute a different current milestone.
+- **Structural hierarchy flattening:** `hierarchy_initial_split`, `hierarchy_split`, and `hierarchy_replan_project` now require a real `project.currentMilestone` proposal instead of accepting a flat Plan Tracker fallback. A non-complete `project_complete_candidate` path has the same requirement.
+- **Unused `collapse` taxonomy branch:** `granularity=collapse` now has an explicit bounded replan path that simplifies the unverified current scope while preserving active milestone identity and verified history.
+
+These fixes are regression targets, not one-off patches. Future hierarchy changes should add tests for the failure mode that motivated each guard.
