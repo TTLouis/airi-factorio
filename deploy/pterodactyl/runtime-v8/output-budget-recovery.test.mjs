@@ -606,3 +606,79 @@ test('terminal provider budget becomes a Jev-directed fresh planner generation i
   assert.equal(agent.providerBudgetHandoffCount, 1)
   assert.equal(agent.memory.currentPlan('npc:airi').provider_recovery, undefined)
 })
+
+
+test('provider-budget split scope persists the hierarchy transaction before the fresh planner generation', async () => {
+  const calls = []
+  let pendingObserved = false
+  const canonical = ['Run one bounded machine cycle', 'Inspect the output']
+  const agent = makeAgent({
+    maxProviderOutputUnits: 3000,
+    interactionDecisionProvider: async (state, questions) => {
+      assert.equal(state.failure.class, 'provider_budget')
+      assert.ok(questions.semantic_scope)
+      return {
+        model: 'jev-latest',
+        provider: 'TypeSafe',
+        answers: {
+          failure_class: { type: 'choice', choice: 'provider_budget', confidence: 0.99 },
+          next_recovery: { type: 'choice', choice: 'replan_high', confidence: 0.97 },
+          semantic_scope: { type: 'choice', choice: 'split_milestone', confidence: 0.96 },
+          world_failure_supported: { type: 'noul', noul: 0.01 },
+          need_fresh_observation: { type: 'noul', noul: 0.05 },
+          need_semantic_replan: { type: 'noul', noul: 0.99 },
+        },
+        usage: { input_tokens: 44, output_tokens: 9, cost: 0 },
+      }
+    },
+    provider: async (messages, context) => {
+      calls.push({ messages, context })
+      if (calls.length === 1) {
+        return planMessage({
+          chatMessage: 'Running one bounded cycle first.',
+          plan: canonical,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 60 } }],
+        })
+      }
+      if (calls.length === 2 || calls.length === 3) return exhaustedMessage()
+
+      assert.equal(context.triggerSource, 'hierarchy_split')
+      assert.match(messages.at(-1).content, /split_milestone/)
+      const duringHandoff = agent.memory.currentPlan('npc:airi')
+      assert.equal(duringHandoff.hierarchy_split_pending?.kind, 'split_current_milestone')
+      assert.equal(duringHandoff.hierarchy_split_pending?.reason_code, 'provider_budget_handoff_split')
+      pendingObserved = true
+
+      return {
+        content: JSON.stringify({
+          chatMessage: 'Continuing with a smaller bounded milestone.',
+          project: {
+            currentMilestone: {
+              title: 'Inspect one machine output cycle',
+              completionSummary: 'The output of one bounded machine cycle is authoritatively inspected.',
+            },
+            nextMilestones: [],
+            developmentDirection: 'maintain',
+          },
+          plan: ['Inspect one machine output cycle'],
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        }),
+      }
+    },
+  })
+
+  await agent.request('run a long task whose current scope may need splitting', { sender: 'TTLouis' })
+  const result = await agent.completed()
+  const state = agent.memory.currentPlan('npc:airi')
+
+  assert.equal(pendingObserved, true)
+  assert.equal(calls.length, 4)
+  assert.equal(result.goalStatus, 'active')
+  assert.equal(state.hierarchy_split_pending, undefined)
+  assert.equal(state.project_board.current_milestone?.title, 'Inspect one machine output cycle')
+  assert.equal(state.task_board.steps[0]?.description, 'Inspect one machine output cycle')
+  assert.equal(agent.providerBudgetGeneration, 2)
+  assert.equal(agent.providerBudgetHandoffCount, 1)
+})
