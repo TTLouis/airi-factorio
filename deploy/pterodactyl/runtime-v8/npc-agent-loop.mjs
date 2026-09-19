@@ -2383,6 +2383,187 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
+  async routeStepCheckpointDecision(plan) {
+    const key = this.activePlanKey()
+    const planState = this.memory.planByNpc?.get?.(key) ?? this.memory.currentPlan?.(key)
+    const board = planState?.task_board
+    const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
+    const step = activeIndex === undefined ? undefined : board?.steps?.[activeIndex]
+    if (!planState || planState.status !== 'active' || !step || !Array.isArray(plan?.operations) || plan.operations.length === 0) {
+      return { boundary: 'keep_step_open', state: planState }
+    }
+
+    const existing = persistedStepCheckpoint(board, step.id)
+    if (existing?.boundary === 'checkpoint_here' && existing.contract?.mode !== 'semantic_unknown') {
+      return { ...existing, state: planState, reused: true }
+    }
+
+    const candidates = completionCandidatesFromOperations(plan.operations)
+    const questions = stepCheckpointDecisionQuestions(candidates)
+    if (!this.interactionDecisionProvider) {
+      return { boundary: 'keep_step_open', state: planState, reason: 'decision_provider_unavailable' }
+    }
+
+    const current = await this.assertCurrent()
+    const generation = this.generation
+    const decisionState = {
+      contract: 'step_checkpoint_normalizer',
+      goal: {
+        goal_id: sanitizeDurableModelText(planState.goal_id, 100),
+        objective: sanitizeDurableModelText(planState.objective, 500),
+      },
+      step: {
+        id: step.id,
+        description: sanitizeDurableModelText(step.description, 400),
+        active_index: activeIndex,
+      },
+      proposed_operations: plan.operations.slice(0, 8).map(operation => ({
+        name: cleanMemoryText(operation?.name, 100),
+        args: sanitizeDurableModelValue(operation?.args),
+      })),
+      remaining_steps: (Array.isArray(board?.steps) ? board.steps : [])
+        .slice(activeIndex, activeIndex + 6)
+        .map(item => ({
+          id: sanitizeDurableModelText(item?.id, 80),
+          description: sanitizeDurableModelText(item?.description, 400),
+        })),
+      supported_requirement_kinds: [
+        'inventory_count',
+        'entity_inventory_count',
+        'entity_exists',
+        'entity_state',
+        'authoritative_operation_receipt',
+        'runtime_controller_state',
+      ],
+    }
+    const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
+    const controller = new AbortController()
+    const startedAt = Date.now()
+    await this.decisionTraceEvent('decision.request', {
+      decision_id: decisionId,
+      contract: 'step_checkpoint_normalizer',
+      mode: 'active',
+      active_step_id: step.id,
+      question_ids: Object.keys(questions),
+    })
+
+    try {
+      const response = await this.interactionDecisionProvider(decisionState, questions, {
+        epoch: current.epoch,
+        actorId: current.actor_id,
+        signal: controller.signal,
+      })
+      if (generation !== this.generation || controller.signal.aborted) {
+        throw new AgentLoopError('Model turn was cancelled or superseded')
+      }
+      await this.assertCurrent()
+      const normalized = parseStepCheckpointDecision(response, candidates)
+      const confidenceAccepted = normalized.contract?.confidence >= 0.7
+      const contract = confidenceAccepted
+        ? sanitizeStepCompletionContract(normalized.contract)
+        : { mode: 'semantic_unknown', requirements: [], confidence: normalized.contract?.confidence ?? 0 }
+      const boundary = normalized.boundary === 'checkpoint_here' && contract.mode === 'semantic_unknown'
+        ? 'keep_step_open'
+        : normalized.boundary
+
+      this.memory.recordBoardEvidence?.(key, {
+        kind: 'step_checkpoint_contract',
+        ref: `checkpoint/${step.id}`,
+        summary: JSON.stringify({
+          contract,
+          boundary,
+          compound_probability: normalized.compound_probability,
+          provider: normalized.provider,
+          model: normalized.model,
+        }),
+      })
+      await this.persistState()
+      await this.traceEvent('step.checkpoint_created', {
+        active_step_id: step.id,
+        boundary,
+        contract,
+        compound_probability: normalized.compound_probability,
+      })
+      await this.decisionTraceEvent('decision.response', {
+        decision_id: decisionId,
+        contract: 'step_checkpoint_normalizer',
+        mode: 'active',
+        provider: normalized.provider,
+        model: normalized.model,
+        boundary,
+        confidence: contract.confidence,
+        latency_ms: Date.now() - startedAt,
+        input_units: Number.isFinite(normalized.usage?.input_tokens) ? Math.max(0, Math.trunc(normalized.usage.input_tokens)) : 0,
+        output_units: Number.isFinite(normalized.usage?.output_tokens) ? Math.max(0, Math.trunc(normalized.usage.output_tokens)) : 0,
+        cost_usd: Number.isFinite(normalized.usage?.cost) && normalized.usage.cost >= 0 ? normalized.usage.cost : 0,
+      })
+      return { boundary, contract, state: this.memory.currentPlan?.(key), compound_probability: normalized.compound_probability }
+    }
+    catch (error) {
+      const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+      await this.traceEvent('step.checkpoint_failed', {
+        active_step_id: step.id,
+        reason: 'checkpoint_decision_failed',
+        error: message,
+      })
+      await this.decisionTraceEvent('decision.fallback', {
+        decision_id: decisionId,
+        contract: 'step_checkpoint_normalizer',
+        mode: 'active',
+        fallback_target: 'keep_step_open',
+        reason: message,
+        latency_ms: Date.now() - startedAt,
+      })
+      return { boundary: 'keep_step_open', state: planState, reason: 'checkpoint_decision_failed' }
+    }
+    finally {
+      controller.abort()
+    }
+  }
+
+  async completionFactsForContract(contract, verification, operationNames) {
+    const facts = {}
+    const normalized = sanitizeStepCompletionContract(contract)
+    for (const requirement of normalized.requirements ?? []) {
+      if (requirement.kind === 'authoritative_operation_receipt') {
+        facts[requirement.id] = {
+          kind: requirement.kind,
+          authoritative: verification !== undefined,
+          operation_name: operationNames.length === 1 ? operationNames[0] : undefined,
+          operation_names: operationNames,
+          summary: cleanMemoryText(verification?.summary, 600),
+        }
+        continue
+      }
+      if (['inventory_count', 'entity_inventory_count', 'entity_exists', 'entity_state'].includes(requirement.kind)) {
+        const { id: _id, ...condition } = requirement
+        try {
+          const raw = JSON.parse(String(await this.rcon.command(runtimeConditionCommand(condition))).trim())
+          const observation = normalizedConditionObservation(raw)
+          facts[requirement.id] = {
+            kind: requirement.kind,
+            ...(Number.isSafeInteger(requirement.unit_number) ? { unit_number: requirement.unit_number } : {}),
+            ...(typeof requirement.item_name === 'string' ? { item_name: requirement.item_name } : {}),
+            ...(Number.isFinite(raw?.current) ? { current: raw.current } : {}),
+            ...(raw?.exists !== undefined ? { exists: raw.exists === true } : {}),
+            ...(raw?.working !== undefined ? { working: raw.working === true } : {}),
+            ...(raw?.stale !== undefined ? { stale: raw.stale === true } : {}),
+            satisfied: observation.satisfied === true,
+            progressing: observation.progressing === true,
+            summary: observation.summary,
+          }
+        }
+        catch (error) {
+          facts[requirement.id] = {
+            kind: requirement.kind,
+            summary: `condition_observation_failed:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}`,
+          }
+        }
+      }
+    }
+    return facts
+  }
+
   async routeStepCompletionDecision(receipt) {
     const key = this.activePlanKey()
     const planState = this.memory.planByNpc?.get?.(key) ?? this.memory.currentPlan?.(key)
@@ -2409,6 +2590,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return { verified: false, reason: 'no_authoritative_operation_receipt', state: planState }
     }
 
+    const checkpoint = persistedStepCheckpoint(board, step.id)
+    if (!checkpoint || checkpoint.boundary !== 'checkpoint_here' || checkpoint.contract?.mode === 'semantic_unknown') {
+      const reason = checkpoint?.boundary === 'split_recommended'
+        ? 'checkpoint_split_recommended'
+        : checkpoint?.boundary === 'keep_step_open'
+          ? 'checkpoint_kept_open'
+          : 'missing_pre_admission_checkpoint'
+      await this.traceEvent('step.completion_rejected', {
+        active_step_id: step.id,
+        reason,
+        checkpoint_boundary: checkpoint?.boundary,
+      })
+      return { verified: false, reason, state: planState, contract: checkpoint?.contract }
+    }
+
     let operationNames = []
     try {
       const parsed = JSON.parse(verification.summary)
@@ -2416,194 +2612,48 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     catch {}
 
-    const candidates = operationNames.length === 1
-      ? [{
-          mode: 'all',
-          source: 'runtime_receipt',
-          requirements: [{
-            id: 'operation_receipt',
-            kind: 'authoritative_operation_receipt',
-            operation_name: operationNames[0],
-          }],
-        }]
-      : []
-    const questions = stepCompletionDecisionQuestions(candidates)
-
-    if (!this.interactionDecisionProvider) {
-      await this.traceEvent('step.contract_created', {
-        active_step_id: step.id,
-        contract: { mode: 'semantic_unknown', requirements: [], confidence: 0 },
-        source: 'decision_provider_unavailable',
-      })
-      await this.traceEvent('step.completion_rejected', {
-        active_step_id: step.id,
-        reason: 'semantic_unknown_without_decision_provider',
-      })
-      return { verified: false, reason: 'semantic_unknown_without_decision_provider', state: planState }
-    }
-
-    const current = await this.assertCurrent()
-    const generation = this.generation
-    const skills = this.loadedSkillContext instanceof Map
-      ? [...this.loadedSkillContext.values()].slice(-SKILL_CONTEXT_MAX_SKILLS).map(skill => ({
-          id: typeof skill?.id === 'string' ? cleanMemoryText(skill.id, 80) : undefined,
-          name: typeof skill?.name === 'string' ? cleanMemoryText(skill.name, 160) : undefined,
-          summary: typeof skill?.summary === 'string' ? cleanMemoryText(skill.summary, 800) : undefined,
-          verification: sanitizeDurableModelValue(skill?.verification),
-        }))
-      : []
-    const decisionState = {
-      contract: 'step_completion_contract',
-      goal: {
-        goal_id: sanitizeDurableModelText(planState.goal_id, 100),
-        objective: sanitizeDurableModelText(planState.objective, 500),
-      },
-      step: {
-        id: step.id,
-        description: sanitizeDurableModelText(step.description, 400),
-        active_index: activeIndex,
-      },
-      supported_requirement_kinds: [
-        'inventory_count',
-        'entity_inventory_count',
-        'entity_exists',
-        'entity_state',
-        'authoritative_operation_receipt',
-        'runtime_controller_state',
-      ],
-      authoritative_evidence: [sanitizeDurableModelValue(verification)],
-      ...(skills.length > 0 ? { skills } : {}),
-    }
-    const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
-    const controller = new AbortController()
-    const startedAt = Date.now()
-    await this.decisionTraceEvent('decision.request', {
-      decision_id: decisionId,
-      contract: 'step_completion_contract',
-      mode: 'active',
+    const facts = await this.completionFactsForContract(checkpoint.contract, verification, operationNames)
+    const evaluation = evaluateCompletionContract(checkpoint.contract, facts)
+    await this.traceEvent('step.completion_checked', {
       active_step_id: step.id,
-      question_ids: Object.keys(questions),
+      status: evaluation.status,
+      contract: evaluation.contract,
+      evidence: evaluation.results,
+      checkpoint_boundary: checkpoint.boundary,
     })
-
-    try {
-      const response = await this.interactionDecisionProvider(decisionState, questions, {
-        epoch: current.epoch,
-        actorId: current.actor_id,
-        signal: controller.signal,
-      })
-      if (generation !== this.generation || controller.signal.aborted) {
-        throw new AgentLoopError('Model turn was cancelled or superseded')
-      }
-      await this.assertCurrent()
-      const normalized = parseStepCompletionDecision(response, candidates)
-      const confidenceAccepted = normalized.contract?.confidence >= 0.7
-      const compoundAssessmentKnown = typeof normalized.compound_probability === 'number'
-      const compoundNeedsStrongProof = !compoundAssessmentKnown || normalized.compound_probability >= 0.5
-      const compoundProofStrongEnough = normalized.contract?.mode === 'all'
-        && Array.isArray(normalized.contract?.requirements)
-        && normalized.contract.requirements.length > 1
-      const semanticShapeAccepted = !compoundNeedsStrongProof || compoundProofStrongEnough
-      const contract = confidenceAccepted && semanticShapeAccepted
-        ? normalized.contract
-        : { mode: 'semantic_unknown', requirements: [], confidence: normalized.contract?.confidence ?? 0 }
-
-      this.memory.recordBoardEvidence?.(key, {
-        kind: 'step_completion_contract',
-        ref: `${ref}/${step.id}`,
-        summary: JSON.stringify({
-          contract,
-          compound_probability: normalized.compound_probability,
-          provider: normalized.provider,
-          model: normalized.model,
-        }),
-      })
-      await this.traceEvent('step.contract_created', {
-        active_step_id: step.id,
-        contract,
-        confidence: contract.confidence,
-        compound_probability: normalized.compound_probability,
-      })
-
-      const evaluation = evaluateCompletionContract(contract, {
-        operation_receipt: {
-          kind: 'authoritative_operation_receipt',
-          authoritative: verification !== undefined,
-          operation_name: operationNames.length === 1 ? operationNames[0] : undefined,
-          operation_names: operationNames,
-          summary: cleanMemoryText(verification.summary, 600),
-        },
-      })
-      await this.traceEvent('step.completion_checked', {
-        active_step_id: step.id,
-        status: evaluation.status,
-        contract: evaluation.contract,
-        evidence: evaluation.results,
-      })
-
-      if (!evaluation.satisfied) {
-        await this.persistState()
-        await this.traceEvent('step.completion_rejected', {
-          active_step_id: step.id,
-          reason: contract.mode === 'semantic_unknown' ? 'semantic_unknown' : 'grounded_requirements_unsatisfied',
-          contract,
-        })
-        return { verified: false, reason: contract.mode === 'semantic_unknown' ? 'semantic_unknown' : 'grounded_requirements_unsatisfied', state: planState, contract }
-      }
-
-      const reduced = this.memory.applyOutcomeAuthority?.(key, {
-        kind: 'verified_complete',
-        source: 'step_completion_gate',
-        reason_code: 'authoritative_operation_receipt_satisfies_contract',
-        evidence: [verification],
-        metadata: { scope: 'step' },
-      })
-      await this.persistState()
-      if (reduced?.decision?.accepted !== true) {
-        const reason = reduced?.decision?.rejection_reason || 'outcome_authority_rejected_completion'
-        await this.traceEvent('step.completion_rejected', { active_step_id: step.id, reason, contract })
-        return { verified: false, reason, state: reduced?.state ?? planState, contract }
-      }
-      await this.traceEvent('step.verified', {
-        active_step_id: step.id,
-        source: 'step_completion_gate',
-        contract,
-        task_board: visibleTaskBoard(reduced?.state?.task_board),
-      })
-      await this.decisionTraceEvent('decision.response', {
-        decision_id: decisionId,
-        contract: 'step_completion_contract',
-        mode: 'active',
-        provider: normalized.provider,
-        model: normalized.model,
-        selected_mode: contract.mode,
-        verified: true,
-        latency_ms: Date.now() - startedAt,
-        input_units: Number.isFinite(normalized.usage?.input_tokens) ? Math.max(0, Math.trunc(normalized.usage.input_tokens)) : 0,
-        output_units: Number.isFinite(normalized.usage?.output_tokens) ? Math.max(0, Math.trunc(normalized.usage.output_tokens)) : 0,
-        cost_usd: Number.isFinite(normalized.usage?.cost) && normalized.usage.cost >= 0 ? normalized.usage.cost : 0,
-      })
-      return { verified: true, state: reduced?.state, contract }
-    }
-    catch (error) {
-      const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+    if (!evaluation.satisfied) {
       await this.traceEvent('step.completion_rejected', {
         active_step_id: step.id,
-        reason: 'completion_contract_decision_failed',
-        error: message,
+        reason: 'checkpoint_requirements_unsatisfied',
+        contract: checkpoint.contract,
       })
-      await this.decisionTraceEvent('decision.fallback', {
-        decision_id: decisionId,
-        contract: 'step_completion_contract',
-        mode: 'active',
-        fallback_target: 'semantic_unknown',
-        reason: message,
-        latency_ms: Date.now() - startedAt,
-      })
-      return { verified: false, reason: 'completion_contract_decision_failed', error: message, state: planState }
+      return { verified: false, reason: 'checkpoint_requirements_unsatisfied', state: planState, contract: checkpoint.contract }
     }
-    finally {
-      controller.abort()
+
+    const reduced = this.memory.applyOutcomeAuthority?.(key, {
+      kind: 'verified_complete',
+      source: 'step_checkpoint_gate',
+      reason_code: 'pre_admission_checkpoint_satisfied',
+      evidence: [verification, {
+        kind: 'verified_world_state',
+        ref: `checkpoint/${step.id}`,
+        summary: JSON.stringify({ contract: checkpoint.contract, results: evaluation.results }),
+      }],
+      metadata: { scope: 'step' },
+    })
+    await this.persistState()
+    if (reduced?.decision?.accepted !== true) {
+      const reason = reduced?.decision?.rejection_reason || 'outcome_authority_rejected_completion'
+      await this.traceEvent('step.completion_rejected', { active_step_id: step.id, reason, contract: checkpoint.contract })
+      return { verified: false, reason, state: reduced?.state ?? planState, contract: checkpoint.contract }
     }
+    await this.traceEvent('step.verified', {
+      active_step_id: step.id,
+      source: 'step_checkpoint_gate',
+      contract: checkpoint.contract,
+      task_board: visibleTaskBoard(reduced?.state?.task_board),
+    })
+    return { verified: true, state: reduced?.state, contract: checkpoint.contract }
   }
 
   async routePostStepDecision(receipt, { boundary = 'completion', failure = '' } = {}) {
