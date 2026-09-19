@@ -884,13 +884,15 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return { state, blockedByHarness: false, changed: incomingPlan.length > 0 }
   }
 
-  reconcileTaskBoard(key, previousBoard, plan, stateResult, { allowReplan = false, authoritativeAdvance = false } = {}) {
+  reconcileTaskBoard(key, previousBoard, plan, stateResult, { allowReplan = false, authoritativeAdvance = false, newMilestone = false } = {}) {
     const state = stateResult?.state
     if (!state) return stateResult
     const now = state.updated_at ?? Date.now()
-    let board = previousBoard
-      ? sanitizeTaskBoard(previousBoard, { fallbackPlan: state.plan, fallbackCurrentStep: state.current_step, goalId: state.goal_id, now })
-      : sanitizeTaskBoard(state.task_board, { fallbackPlan: state.plan, fallbackCurrentStep: state.current_step, goalId: state.goal_id, now })
+    let board = newMilestone
+      ? sanitizeTaskBoard(undefined, { fallbackPlan: plan.plan, fallbackCurrentStep: 0, goalId: state.goal_id, now })
+      : previousBoard
+        ? sanitizeTaskBoard(previousBoard, { fallbackPlan: state.plan, fallbackCurrentStep: state.current_step, goalId: state.goal_id, now })
+        : sanitizeTaskBoard(state.task_board, { fallbackPlan: state.plan, fallbackCurrentStep: state.current_step, goalId: state.goal_id, now })
 
     if (state.status === 'completed') {
       board = setTaskBoardStatus(board, 'completed', { now })
@@ -4733,7 +4735,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
         allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason) || ['hierarchy_initial_split', 'hierarchy_split', 'hierarchy_collapse', 'hierarchy_advance', 'hierarchy_replan_project', 'hierarchy_project_complete_candidate'].includes(triggerSource),
-        newMilestone: ['hierarchy_advance', 'hierarchy_replan_project'].includes(triggerSource)
+        newMilestone: ['hierarchy_initial_split', 'hierarchy_split', 'hierarchy_advance', 'hierarchy_replan_project'].includes(triggerSource)
           || (triggerSource === 'hierarchy_project_complete_candidate' && durablePlan.plan.length > 0),
         previousState,
       }) ?? stateResult
