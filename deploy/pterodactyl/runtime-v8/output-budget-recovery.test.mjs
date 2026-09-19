@@ -412,3 +412,32 @@ test('fresh observation still cannot authorize replay of an already completed mu
     operations: [{ name: 'wait', args: { ticks: 60 } }],
   })), /attempted to replay a completed world mutation/)
 })
+
+
+test('each independent provider decision gets one bounded output-budget recovery in the same request', async () => {
+  const calls = []
+  const agent = makeAgent({
+    provider: async (_messages, context) => {
+      calls.push(context)
+      if (calls.length === 1 || calls.length === 3) return exhaustedMessage()
+      return planMessage({ chatMessage: 'Recovered.', plan: [], currentStep: 0, operations: [] })
+    },
+  })
+  agent.active = true
+  agent.epoch = deployment()
+  agent.messages = [{ role: 'user', content: '[CHAT] tester: continue' }]
+
+  const current = deployment()
+  const first = await agent.callProvider(current, agent.generation, { round: 0, allowTools: true, recoveryAttempt: 0 })
+  const second = await agent.callProvider(current, agent.generation, { round: 1, allowTools: true, recoveryAttempt: 0 })
+
+  assert.equal(first.content.includes('Recovered.'), true)
+  assert.equal(second.content.includes('Recovered.'), true)
+  assert.equal(calls.length, 4)
+  assert.deepEqual(calls.map(call => call.recoveryKind), [
+    undefined,
+    'output_budget_exhaustion',
+    undefined,
+    'output_budget_exhaustion',
+  ])
+})
