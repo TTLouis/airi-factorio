@@ -3869,8 +3869,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
           ...runtime,
           persistent_runtime: persistentRuntime,
           persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
-          condition_wait_active: planState?.condition_wait?.state === 'active',
-          condition_wait: planState?.condition_wait,
+          condition_wait_active: state?.condition_wait?.state === 'active',
+          condition_wait: state?.condition_wait,
         },
         chatMessage: plan.chatMessage,
       })
