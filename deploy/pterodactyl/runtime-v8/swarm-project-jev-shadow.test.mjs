@@ -63,6 +63,10 @@ test('project Jev snapshot is built from the one canonical global swarm projecti
   assert.equal(projected.missions[0].id, 'mission-1')
   assert.equal(projected.objectives.length, 2)
   assert.equal(projected.projects[0].id, 'project-1')
+  assert.equal(projected.counts.objectives, 2)
+  assert.equal(projected.warnings[0].id, 'warning-1')
+  assert.equal(projected.results[0].id, 'result-1')
+  assert.equal(projected.agents[0].id, 'agent-1')
   assert.equal(projected.runtime.active, true)
   assert.equal(projected.runtime.blocked, true)
   assert.equal(projected.evidence[0].kind, 'result')
@@ -215,4 +219,81 @@ test('claimed or active sampled work remains authoritative runtime activity', ()
   const projected = buildProjectJevShadowSnapshot(source)
   assert.equal(projected.runtime.active, true)
   assert.equal(projected.runtime.reason, 'swarm_active_warnings')
+})
+
+
+test('unchanged swarm state reuses the project Jev decision instead of spending another provider call', async () => {
+  let providerCalls = 0
+  let tick = 900
+  const controller = new SwarmProjectJevShadowController({
+    rcon: {
+      async command() {
+        const value = globalSnapshot()
+        value.tick = tick
+        tick += 1
+        return JSON.stringify(value)
+      },
+    },
+    decisionProvider: async () => {
+      providerCalls += 1
+      return { answers: {} }
+    },
+  })
+
+  const first = await controller.observe()
+  const second = await controller.observe()
+
+  assert.equal(providerCalls, 1)
+  assert.equal(first.reused, false)
+  assert.equal(second.reused, true)
+  assert.equal(first.source_tick, 900)
+  assert.equal(second.source_tick, 901)
+  assert.deepEqual(second.effects, [])
+})
+
+test('force bypasses global Jev decision reuse without granting authority', async () => {
+  let providerCalls = 0
+  const controller = new SwarmProjectJevShadowController({
+    rcon: {
+      async command() {
+        return JSON.stringify(globalSnapshot())
+      },
+    },
+    decisionProvider: async () => {
+      providerCalls += 1
+      return { answers: {} }
+    },
+  })
+
+  await controller.observe()
+  const forced = await controller.observe({ force: true })
+
+  assert.equal(providerCalls, 2)
+  assert.equal(forced.reused, false)
+  assert.equal(forced.authority, 'shadow')
+  assert.deepEqual(forced.effects, [])
+})
+
+test('strategic board revision changes invalidate project Jev reuse', async () => {
+  let providerCalls = 0
+  const controller = new SwarmProjectJevShadowController({
+    rcon: {
+      async command() {
+        return JSON.stringify(globalSnapshot())
+      },
+    },
+    decisionProvider: async () => {
+      providerCalls += 1
+      return { answers: {} }
+    },
+  })
+
+  await controller.observe({
+    strategicBoard: { revision: 1 },
+  })
+  await controller.observe({
+    strategicBoard: { revision: 2 },
+  })
+
+  assert.equal(providerCalls, 2)
 })
