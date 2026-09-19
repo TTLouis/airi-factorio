@@ -101,10 +101,10 @@ test('explicit planner-side board updates persist and survive runtime reconstruc
     objective: 'Launch a rocket',
   })
   await first.initialize()
-  await first.updateBoard({
-    current_milestone: { title: 'Automate red science' },
-    next_milestones: [{ title: 'Automate green science' }],
-    development_direction: 'vertical',
+  await first.applyPlannerProposal({
+    currentMilestone: { title: 'Automate red science' },
+    nextMilestones: [{ title: 'Automate green science' }],
+    developmentDirection: 'vertical',
   })
   await first.flush()
 
@@ -170,9 +170,10 @@ test('milestone completion through runtime still requires explicit verified auth
     objective: 'Launch a rocket',
   })
 
-  await runtime.updateBoard({
-    current_milestone: { title: 'Bootstrap power' },
-    next_milestones: [{ title: 'Automate science' }],
+  await runtime.applyPlannerProposal({
+    currentMilestone: { title: 'Bootstrap power' },
+    nextMilestones: [{ title: 'Automate science' }],
+    developmentDirection: 'vertical',
   })
 
   const rejected = await runtime.completeCurrentMilestone({ verified: false })
@@ -257,4 +258,41 @@ test('provider-supplied board patches and effects remain inert telemetry', async
   assert.equal(telemetry.decision.decision.development, 'recover')
   assert.deepEqual(after, before)
   assert.deepEqual(telemetry.effects, [])
+})
+
+
+test('runtime exposes no raw board patch method that can bypass planner admission', async (t) => {
+  const { dir, filename } = await tempStateFile()
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+
+  const runtime = new SwarmProjectJevRuntime({
+    rcon: {
+      async command() {
+        return JSON.stringify(coordinationFixture())
+      },
+    },
+    stateFile: filename,
+    goalId: 'goal-rocket',
+    objective: 'Launch a rocket',
+  })
+
+  assert.equal(typeof runtime.updateBoard, 'undefined')
+
+  await runtime.applyPlannerProposal({
+    currentMilestone: { title: 'Bootstrap power' },
+    nextMilestones: [{ title: 'Automate science' }],
+    developmentDirection: 'vertical',
+  })
+  const before = runtime.currentBoard()
+
+  const rejected = await runtime.applyPlannerProposal({
+    currentMilestone: { title: 'Skip directly to oil' },
+    nextMilestones: [],
+    developmentDirection: 'horizontal',
+  })
+
+  assert.equal(rejected.accepted, false)
+  assert.equal(rejected.changed, false)
+  assert.equal(rejected.reason, 'active_milestone_replacement_requires_runtime_transition')
+  assert.deepEqual(runtime.currentBoard(), before)
 })
