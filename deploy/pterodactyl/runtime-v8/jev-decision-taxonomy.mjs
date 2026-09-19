@@ -127,6 +127,8 @@ export function reasoningBudgetDecisionQuestions() {
 export function decisionEnvelopeQuestions() {
   return {
     ...routingDecisionQuestions(),
+    ...granularityDecisionQuestions(),
+    ...developmentDecisionQuestions(),
     ...reasoningBudgetDecisionQuestions(),
     planning_horizon: {
       type: 'choice',
