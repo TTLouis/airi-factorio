@@ -683,3 +683,23 @@ test('recovery targeted observation is rejected when the Jev observation budget 
   assert.equal(routed.route, 'fallback_runtime')
   assert.equal(routed.rejection_reason, 'targeted_observation_budget_exhausted')
 })
+
+
+test('continuation boundary clears a previous forced observation-decision state', async () => {
+  let seenOptions
+  const { agent } = makeAgent({
+    provider: async (_messages, options) => {
+      seenOptions = options
+      throw new Error('capture continuation options')
+    },
+  })
+  agent.observationDecisionPressure = true
+  agent.observationDecisionPressureRemaining = 0
+  agent.observationDecisionForced = true
+
+  await assert.rejects(
+    agent.continueFromModMessage('[MOD] synthetic continuation', 'test.synthetic_continuation'),
+    /capture continuation options/,
+  )
+  assert.equal(seenOptions.allowTools, true)
+})
