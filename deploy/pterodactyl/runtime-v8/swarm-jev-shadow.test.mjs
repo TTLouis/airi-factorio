@@ -159,3 +159,50 @@ test('grounded mission verdict can be visible to Jev while the Jev response rema
   assert.equal(decision.authority, 'shadow')
   assert.deepEqual(decision.effects, [])
 })
+
+
+test('shadow exposes coordination wait state without polling or consuming it', () => {
+  const conditionWait = {
+    kind: 'swarm_condition_wait_v1',
+    id: 'wait-1',
+    mode: 'completion',
+    state: 'active',
+    condition: {
+      kind: 'objective_status',
+      record_id: 'objective-1',
+      expected_status: 'satisfied',
+    },
+    checks: 2,
+    max_checks: 10,
+    timeout_ticks: 3600,
+    registered_tick: 100,
+    updated_tick: 120,
+  }
+  const before = structuredClone(conditionWait)
+
+  const context = buildSwarmJevShadowContext({
+    conditionWait,
+    objectives: [{
+      id: 'objective-1',
+      status: 'active',
+      revision: 4,
+      description: 'Establish electric power',
+    }],
+    projects: [{
+      id: 'project-1',
+      status: 'executing',
+      revision: 3,
+      title: 'Build steam power',
+    }],
+  })
+
+  assert.equal(context.condition_wait.id, 'wait-1')
+  assert.equal(context.condition_wait.checks, 2)
+  assert.equal(context.condition_wait.observation.satisfied, false)
+  assert.equal(context.condition_wait.observation.progressing, true)
+  assert.equal(context.counts.objectives, 1)
+  assert.equal(context.counts.projects, 1)
+  assert.equal(context.objectives[0].id, 'objective-1')
+  assert.equal(context.projects[0].id, 'project-1')
+  assert.deepEqual(conditionWait, before)
+})
