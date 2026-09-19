@@ -3,10 +3,13 @@ import test from 'node:test'
 
 import {
   applyConditionObservation,
+  completionCandidatesFromOperations,
   evaluateCompletionContract,
   makeConditionWait,
+  parseStepCheckpointDecision,
   parseStepCompletionDecision,
   sanitizeStepCompletionContract,
+  stepCheckpointDecisionQuestions,
   stepCompletionDecisionQuestions,
 } from './step-completion.mjs'
 
@@ -99,6 +102,52 @@ test('Jev completion decision may only select runtime-supplied candidate contrac
     },
   }, candidates)
   assert.equal(unknown.contract.mode, 'semantic_unknown')
+})
+
+
+test('high-level operation intent produces deterministic checkpoint candidates before execution', () => {
+  const candidates = completionCandidatesFromOperations([
+    { name: 'gather_resource', args: { resource_name: 'stone', count: 10, search_radius: 64 } },
+  ])
+  assert.equal(candidates[0].source, 'operation_intent')
+  assert.deepEqual(candidates[0].requirements[0], {
+    id: 'intent_1',
+    kind: 'inventory_count',
+    item_name: 'stone',
+    minimum: 10,
+  })
+  assert.equal(candidates[1].requirements[0].kind, 'authoritative_operation_receipt')
+  assert.equal(candidates[1].requirements[0].operation_name, 'gather_resource')
+})
+
+test('Jev checkpoint pass chooses semantic boundary separately from the grounded contract', () => {
+  const candidates = completionCandidatesFromOperations([
+    { name: 'craft_item', args: { item_name: 'stone-furnace', count: 2 } },
+  ])
+  const questions = stepCheckpointDecisionQuestions(candidates)
+  assert.ok(questions.checkpoint_boundary.criteria.checkpoint_here)
+  assert.ok(questions.checkpoint_boundary.criteria.keep_step_open)
+  assert.ok(questions.checkpoint_boundary.criteria.split_recommended)
+
+  const selected = parseStepCheckpointDecision({
+    answers: {
+      contract: { type: 'choice', choice: 'candidate_1', confidence: 0.93 },
+      compound_step: { type: 'noul', noul: 0.08 },
+      checkpoint_boundary: { type: 'choice', choice: 'checkpoint_here', confidence: 0.9 },
+    },
+  }, candidates)
+  assert.equal(selected.boundary, 'checkpoint_here')
+  assert.equal(selected.contract.requirements[0].kind, 'inventory_count')
+  assert.equal(selected.contract.requirements[0].item_name, 'stone-furnace')
+
+  const split = parseStepCheckpointDecision({
+    answers: {
+      contract: { type: 'choice', choice: 'candidate_1', confidence: 0.86 },
+      compound_step: { type: 'noul', noul: 0.91 },
+      checkpoint_boundary: { type: 'choice', choice: 'split_recommended', confidence: 0.95 },
+    },
+  }, candidates)
+  assert.equal(split.boundary, 'split_recommended')
 })
 
 test('passive progress wait stays active while machine progresses and wakes when it stops', () => {
