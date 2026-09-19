@@ -193,6 +193,7 @@ export function completionCandidatesFromOperations(operations = []) {
     })
   }
 
+  const hasEffectPredicate = intentRequirements.some(requirement => requirement.kind !== 'authoritative_operation_receipt')
   const receiptRequirements = bounded
     .map((operation, index) => {
       const name = clean(operation?.name, 100)
@@ -201,7 +202,11 @@ export function completionCandidatesFromOperations(operations = []) {
         : undefined
     })
     .filter(Boolean)
-  if (receiptRequirements.length > 0) {
+  // A receipt-only candidate is deliberately weaker than a deterministic
+  // effect predicate such as inventory_count. Do not offer Jev the weaker
+  // escape hatch when the high-level operation intent already gives runtime a
+  // stronger fact to verify.
+  if (!hasEffectPredicate && receiptRequirements.length > 0) {
     candidates.push({
       mode: 'all',
       source: 'operation_receipt',
