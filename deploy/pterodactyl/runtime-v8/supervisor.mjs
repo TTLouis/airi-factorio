@@ -556,6 +556,9 @@ function emptyAgentDebug(fallback = {}) {
     decision_reasoning_confidence_percent: 0,
     decision_planning_horizon: '',
     decision_observation_budget: 0,
+    decision_milestone_transition: '',
+    decision_milestone_transition_confidence_percent: 0,
+    decision_hierarchy_action: '',
     decision_confidence_percent: 0,
     decision_queue_conflict_percent: 0,
     decision_latency_ms: 0,
@@ -608,6 +611,9 @@ function decisionDebugFields(value = {}) {
     decision_reasoning_confidence_percent: debugInteger(value.decision_reasoning_confidence_percent),
     decision_planning_horizon: uiText(value.decision_planning_horizon, 32),
     decision_observation_budget: debugInteger(value.decision_observation_budget),
+    decision_milestone_transition: uiText(value.decision_milestone_transition, 48),
+    decision_milestone_transition_confidence_percent: debugInteger(value.decision_milestone_transition_confidence_percent),
+    decision_hierarchy_action: uiText(value.decision_hierarchy_action, 80),
     decision_confidence_percent: debugInteger(value.decision_confidence_percent),
     decision_queue_conflict_percent: debugInteger(value.decision_queue_conflict_percent),
     decision_latency_ms: debugInteger(value.decision_latency_ms),
@@ -754,6 +760,14 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
       debug.decision_model = uiText(decision.model, 160)
       debug.decision_post_step_confidence_percent = decisionPercent(decision.confidence)
       const hierarchy = decision.hierarchy && typeof decision.hierarchy === 'object' ? decision.hierarchy : undefined
+      const milestoneTransition = decision.milestone_transition && typeof decision.milestone_transition === 'object'
+        ? decision.milestone_transition
+        : undefined
+      if (milestoneTransition) {
+        debug.decision_milestone_transition = uiText(milestoneTransition.decision, 48)
+        debug.decision_milestone_transition_confidence_percent = decisionPercent(milestoneTransition.confidence)
+      }
+      debug.decision_hierarchy_action = uiText(data.hierarchy_action, 80)
       if (hierarchy) {
         debug.decision_granularity = uiText(hierarchy.granularity, 32)
         debug.decision_granularity_confidence_percent = decisionPercent(hierarchy.granularity_confidence)
@@ -992,6 +1006,10 @@ export function taskBoardUiSnapshot(state, live) {
         project_id: uiText(state.project_board.project_id, 100),
         title: uiText(state.project_board.title, 500),
         status: uiText(state.project_board.status, 32),
+        completed_milestones: (Array.isArray(state.project_board.completed_milestones) ? state.project_board.completed_milestones : []).slice(-12).map(item => ({
+          id: uiText(item?.id, 100),
+          title: uiText(item?.title, 500),
+        })),
         current_milestone: state.project_board.current_milestone
           ? {
               id: uiText(state.project_board.current_milestone.id, 100),
@@ -1004,6 +1022,7 @@ export function taskBoardUiSnapshot(state, live) {
           title: uiText(item?.title, 500),
         })),
         development_direction: uiText(state.project_board.development_direction, 32),
+        transition_state: uiText(state.project_board.transition_state, 48),
       }
     : undefined
   return {
