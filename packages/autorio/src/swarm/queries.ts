@@ -445,9 +445,14 @@ export function build_swarm_coordination_snapshot(swarm: SwarmStorage, tick: num
   for (const unused in swarm.agents) agentCount += 1
   for (const unused in swarm.actors) actorCount += 1
 
+  const newestEvent = swarm.board.events.length > 0
+    ? swarm.board.events[swarm.board.events.length - 1]
+    : undefined
+
   return {
     schema: 'swarm_coordination_snapshot_v1' as const,
     tick,
+    eventCursor: newestEvent?.id ?? '',
     limit: bounded,
     counts: {
       missions: missionCount,
