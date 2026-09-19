@@ -17,16 +17,18 @@ export class SwarmProjectJevShadowService {
     this.recovery = typeof recovery === 'function' ? recovery : () => recovery
     this.providerOptions = typeof providerOptions === 'function' ? providerOptions : () => providerOptions
     this.inFlight = null
+    this.pendingReasons = new Set()
     this.sequence = 0
     this.lastCompleted = undefined
   }
 
-  trigger(reason = 'unspecified') {
-    if (this.inFlight) return this.inFlight
+  normalizeReason(reason) {
+    return String(reason ?? 'unspecified').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160) || 'unspecified'
+  }
 
+  async runCycle(reasons) {
     const sequence = ++this.sequence
-    const normalizedReason = String(reason ?? 'unspecified').slice(0, 160)
-    const promise = Promise.resolve().then(async () => {
+    try {
       const result = await this.controller.observe({
         strategicBoard: this.strategicBoard(),
         conditionWait: this.conditionWait(),
@@ -34,16 +36,52 @@ export class SwarmProjectJevShadowService {
         recovery: this.recovery(),
         providerOptions: this.providerOptions(),
       })
-      const completed = {
+      return {
         ...result,
         trigger_sequence: sequence,
-        trigger_reason: normalizedReason,
+        trigger_reason: reasons.join(',').slice(0, 320),
+        trigger_reasons: [...reasons],
       }
+    }
+    catch (error) {
+      const message = String(error instanceof Error ? error.message : error ?? 'unknown error')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 300)
+      return {
+        authority: 'shadow',
+        effects: [],
+        scope: 'swarm_global',
+        status: 'observation_error',
+        error: message,
+        trigger_sequence: sequence,
+        trigger_reason: reasons.join(',').slice(0, 320),
+        trigger_reasons: [...reasons],
+      }
+    }
+  }
+
+  async drain() {
+    let completed
+    while (this.pendingReasons.size > 0) {
+      const reasons = [...this.pendingReasons]
+      this.pendingReasons.clear()
+      completed = await this.runCycle(reasons)
       this.lastCompleted = structuredClone(completed)
-      return completed
-    }).finally(() => {
-      if (this.inFlight === promise) this.inFlight = null
-    })
+    }
+    return completed
+  }
+
+  trigger(reason = 'unspecified') {
+    this.pendingReasons.add(this.normalizeReason(reason))
+    if (this.inFlight) return this.inFlight
+
+    const promise = Promise.resolve()
+      .then(() => this.drain())
+      .finally(() => {
+        if (this.inFlight === promise) this.inFlight = null
+      })
 
     this.inFlight = promise
     return promise
