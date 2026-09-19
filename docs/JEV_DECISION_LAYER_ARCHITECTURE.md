@@ -1052,3 +1052,166 @@ If this split works, SGLuna should feel more autonomous and more natural at the 
 The hierarchy telemetry now has one deliberately narrow behavioral effect. After a successful post-step boundary, a Jev `continue_current` may be converted to `wait_runtime` only when deterministic runtime work is authoritatively healthy and Jev also says `granularity=keep` plus `development=maintain`. A requested `wait_runtime` is rejected back to the planner when Jev simultaneously says the scope should split or the development direction is vertical/horizontal/recover. Failure boundaries never gain this shortcut.
 
 This is intentionally not yet milestone decomposition or reasoning-budget control. `reasoning_budget`, `planning_horizon`, and `observation_budget` remain diagnostic/shadow fields.
+
+## Promotion criteria: when this experiment can graduate
+
+The Jev hierarchy work should remain experimental until it proves that it improves long-horizon autonomy without weakening completion authority, runtime safety, or planner coherence.
+
+Promotion should be considered only after the following gates are satisfied on a frozen candidate SHA.
+
+### 1. Decision quality is observable and stable
+
+The debug/trace stream must show enough real runs to evaluate Jev's hierarchy judgments directly.
+
+Required evidence:
+
+- `granularity` decisions are usually consistent with the actual scope of the active objective;
+- `development` decisions correctly distinguish vertical, horizontal, maintain, and recover by intent relative to the active milestone;
+- contradictory combinations are rare and are either rejected by runtime gates or escalated safely;
+- confidence values do not oscillate materially on unchanged evidence;
+- invalid or unavailable Jev output always falls back conservatively.
+
+The purpose of this gate is not to prove that Jev is always correct. It is to prove that its mistakes are bounded, observable, and recoverable.
+
+### 2. Planner wake/sleep savings are real and safe
+
+Before promotion, collect E2E evidence that Jev actually reduces unnecessary Main LLM wakes in deterministic/passive-progress cases.
+
+Required cases include:
+
+- healthy condition wait;
+- healthy persistent runtime controller;
+- already-started deterministic production;
+- ordinary post-step continuation where no new strategy is needed.
+
+Promotion requires that these skips do not cause:
+
+- stalled canonical work;
+- missed blockers;
+- false completion;
+- stale-plan continuation after material world change.
+
+### 3. Split and development classifications remain non-authoritative until milestone state exists
+
+Do not promote `granularity=split` or vertical/horizontal decisions into direct plan mutation before Project/Milestone durable state exists.
+
+Before these decisions gain behavioral authority:
+
+- project goal state must be durable;
+- current milestone identity must be durable;
+- milestone transitions must be auditable;
+- future milestones must remain tentative;
+- the existing Plan Tracker must remain the current execution contract.
+
+Until then, split/development judgments may gate waits or request planner wake, but they must not rewrite the strategic hierarchy themselves.
+
+### 4. Completion authority remains unchanged
+
+Promotion is blocked if Jev hierarchy work weakens the existing completion contract.
+
+The following must remain true:
+
+- operation occurrence is not semantic completion;
+- deterministic runtime/world evidence is authoritative;
+- Jev may classify or propose checkpoints, but runtime validates supported predicates and evaluates truth;
+- a replan cannot silently erase completion evidence;
+- passive runtime progress cannot be mistaken for completion;
+- compound steps are not closed by weak single-operation evidence.
+
+### 5. Failure and recovery boundaries stay conservative
+
+Failure boundaries must continue to wake the planner/recovery path unless a separately validated recovery contract explicitly permits local handling.
+
+The hierarchy shortcut must never suppress planner/recovery work merely because some unrelated runtime controller is still active.
+
+Promotion requires regression coverage for:
+
+- operation failure;
+- stale exact identity;
+- destroyed/invalidated production;
+- condition-wait timeout;
+- provider failure while runtime is healthy;
+- provider failure while runtime is idle.
+
+### 6. Reasoning-budget routing must remain provider/model aware
+
+`reasoning_budget`, `planning_horizon`, and `observation_budget` should not graduate from shadow telemetry until there is a tested provider-capability mapping layer.
+
+Promotion requires:
+
+- semantic budget classes remain provider-neutral;
+- each provider/model mapping is explicit;
+- unsupported reasoning controls degrade safely;
+- higher budget does not become sticky after one difficult decision;
+- successful progress decays back toward normal/micro;
+- observation budget is enforced by runtime rather than trusted from model output.
+
+### 7. Long-task E2E acceptance
+
+Before merging the experiment into the main NPC integration branch, run at least these long-horizon scenarios:
+
+1. **Reach Automation from a fresh or minimally prepared start**
+   - Jev should request decomposition when needed;
+   - Main LLM should produce bounded milestones/steps rather than one giant plan;
+   - deterministic waits should not wake the planner unnecessarily.
+
+2. **Production bottleneck transition**
+   - demonstrate at least one case where added capacity is correctly treated as vertical because it blocks the active milestone;
+   - demonstrate at least one case where similar expansion is horizontal because the critical path is already viable.
+
+3. **World invalidation / recovery**
+   - remove or invalidate a dependency during execution;
+   - Jev should classify recover/replan rather than maintain.
+
+4. **Manual player intervention**
+   - satisfy a prerequisite manually;
+   - the system should recognize the changed world state and avoid replaying unnecessary work.
+
+5. **Pause / resume / New Task during a long goal**
+   - hierarchy state and current execution state must remain coherent;
+   - no stale milestone or plan step may resume after a destructive lifecycle transition.
+
+### 8. Quantitative promotion signals
+
+Use traces from representative E2E runs to compare against the pre-Jev baseline.
+
+Track at minimum:
+
+- Main LLM calls per completed canonical step;
+- Jev calls per completed canonical step;
+- planner skips that later required corrective wake;
+- false `wait_runtime` admissions;
+- invalid Jev outputs/fallbacks;
+- average decision-provider latency;
+- Main LLM token usage per completed milestone;
+- number of replans per milestone;
+- stalled-work incidents.
+
+No single numeric threshold is required initially, but promotion should require a clear reduction in unnecessary planner calls without an increase in stalled work or semantic completion errors.
+
+### 9. Promotion sequence
+
+Recommended graduation path:
+
+```text
+experiment/jev-agent-architecture
+  ↓
+freeze candidate SHA
+  ↓
+unit + integration + provider-contract tests
+  ↓
+deterministic Factorio harness
+  ↓
+real-provider long-task E2E
+  ↓
+compare traces against pre-Jev baseline
+  ↓
+merge into feat/npc-transition-work
+  ↓
+observe integration branch
+  ↓
+only later consider main promotion
+```
+
+The experiment should not be merged simply because the code is feature-complete. It should be merged when the control-layer behavior is demonstrably safer or more efficient than the previous path under real long-running tasks.
+
