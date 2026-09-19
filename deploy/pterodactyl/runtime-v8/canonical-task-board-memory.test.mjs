@@ -719,3 +719,26 @@ test('planner cannot silently replace an already-activated next milestone', () =
   assert.equal(updated.current_milestone.title, 'Reach Automation')
   assert.deepEqual(updated.next_milestones.map(item => item.title), ['Automate red and green science'])
 })
+
+
+test('hierarchy split transaction survives persistence and stays in model context', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', planState())
+  memory.markHierarchySplitPending('npc:airi', {
+    reason_code: 'hierarchy_split_requested',
+    reasoning_budget: 'deep',
+    planning_horizon: 'subgoal',
+    observation_budget: 2,
+  })
+
+  const snapshot = memory.snapshot()
+  const restored = new CanonicalTaskBoardMemory()
+  restored.restore(snapshot)
+  const state = restored.currentPlan('npc:airi')
+
+  assert.equal(state.hierarchy_split_pending.kind, 'split_current_milestone')
+  assert.equal(state.hierarchy_split_pending.reasoning_budget, 'deep')
+  assert.equal(state.hierarchy_split_pending.observation_budget, 2)
+  assert.match(restored.planContext('npc:airi'), /\[HIERARCHY_TRANSITION\]/)
+  assert.match(restored.planContext('npc:airi'), /Do not continue the old flat Plan Tracker/)
+})
