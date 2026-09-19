@@ -141,6 +141,7 @@ export async function providerRequest(config, messages, options = {}) {
   const semanticBudgetNeedsFullPlanner = ['normal', 'deep', 'strategic'].includes(options.reasoningBudget)
   const structuralHierarchyTrigger = [
     'hierarchy_split',
+    'hierarchy_collapse',
     'hierarchy_advance',
     'hierarchy_replan_project',
     'hierarchy_project_complete_candidate',
