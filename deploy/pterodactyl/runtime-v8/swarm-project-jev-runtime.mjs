@@ -4,6 +4,8 @@ import { SwarmStrategicProjectPersistence } from './swarm-strategic-project-pers
 import { SwarmStrategicProjectStore } from './swarm-strategic-project-store.mjs'
 import { applyStrategicPlannerProposal } from './swarm-strategic-planner-contract.mjs'
 import { authorizeStrategicMilestoneCompletion } from './swarm-strategic-transition-gate.mjs'
+import { readSwarmCoordinationSnapshot } from './swarm-coordination-snapshot.mjs'
+import { authorizeStrategicProjectCompletion } from './swarm-strategic-project-completion-gate.mjs'
 
 export class SwarmProjectJevRuntime {
   constructor({
@@ -19,6 +21,8 @@ export class SwarmProjectJevRuntime {
       throw new TypeError('Project Jev runtime requires stateFile')
     }
 
+    this.rcon = rcon
+    this.snapshotLimit = snapshotLimit
     this.store = new SwarmStrategicProjectStore({
       goalId,
       objective,
@@ -120,6 +124,35 @@ export class SwarmProjectJevRuntime {
     const result = this.store.activateNextMilestone()
     if (result.changed) await this.persistence.save()
     return result
+  }
+
+  async completeProject({ jevDecision } = {}) {
+    await this.initialize()
+    const coordinationSnapshot = await readSwarmCoordinationSnapshot(this.rcon, {
+      limit: this.snapshotLimit,
+    })
+    const authorization = authorizeStrategicProjectCompletion({
+      board: this.store.current(),
+      coordinationSnapshot,
+      jevDecision,
+    })
+    if (!authorization.authorized) {
+      return {
+        changed: false,
+        reason: authorization.reason,
+        board: this.store.current(),
+        authorization,
+        coordination_tick: coordinationSnapshot.tick,
+      }
+    }
+
+    const result = this.store.completeGoal({ verified: true })
+    if (result.changed) await this.persistence.save()
+    return {
+      ...result,
+      authorization,
+      coordination_tick: coordinationSnapshot.tick,
+    }
   }
 
   async trigger(reason) {
