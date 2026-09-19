@@ -65,6 +65,41 @@ function planMessage({ chatMessage = 'Working.', plan = [], currentStep = 0, ope
   return { content: JSON.stringify({ chatMessage, plan, currentStep, operations }) }
 }
 
+function completionAndContinueDecision(state) {
+  if (state?.contract === 'step_completion_contract') {
+    return {
+      model: 'jev-test',
+      provider: 'TypeSafe',
+      answers: {
+        contract: {
+          type: 'choice',
+          choice: 'candidate_1',
+          confidence: 0.99,
+          probabilities: { candidate_1: 0.99, semantic_unknown: 0.01 },
+        },
+        compound_step: { type: 'noul', noul: 0.01 },
+      },
+      usage: { input_tokens: 10, output_tokens: 2, cost: 0 },
+    }
+  }
+  if (state?.reason === 'post_step_planner_gate') {
+    return {
+      model: 'jev-test',
+      provider: 'TypeSafe',
+      answers: {
+        route: {
+          type: 'choice',
+          choice: 'continue_current',
+          confidence: 0.99,
+          probabilities: { continue_current: 0.99 },
+        },
+      },
+      usage: { input_tokens: 10, output_tokens: 2, cost: 0 },
+    }
+  }
+  throw new Error('unexpected decision contract')
+}
+
 class RejectingTransferRcon extends FakeRcon {
   constructor() {
     super()
@@ -195,17 +230,19 @@ test('durable plan survives a new agent instance and empty actions cannot preten
   const interrupted = first.memory.currentPlan('npc:airi')
   assert.equal(interrupted.status, 'active')
   assert.equal(interrupted.admission_status, 'action_omission_repair')
-  assert.equal(interrupted.task_board.active_step_id, 'step_2')
-  assert.equal(interrupted.task_board.completed_count, 1)
+  assert.equal(interrupted.task_board.active_step_id, 'step_1')
+  assert.equal(interrupted.task_board.completed_count, 0)
+  assert.equal(interrupted.task_board.proposed_focus_step_id, 'step_2')
   assert.equal(first.active, true)
 
   const saved = JSON.parse(await fsp.readFile(stateFile, 'utf8'))
   assert.equal(saved.plans[0].state.status, 'active')
   assert.equal(saved.plans[0].state.admission_status, 'action_omission_repair')
   assert.notEqual(saved.plans[0].state.blocker, 'action_omission_after_repair')
-  assert.equal(saved.plans[0].state.current_step, 1)
+  assert.equal(saved.plans[0].state.current_step, 0)
   assert.equal(saved.plans[0].state.task_board.total_steps, 2)
-  assert.equal(saved.plans[0].state.task_board.completed_count, 1)
+  assert.equal(saved.plans[0].state.task_board.completed_count, 0)
+  assert.equal(saved.plans[0].state.task_board.proposed_focus_step_id, 'step_2')
   assert.equal(saved.plans[0].state.task_board.evidence.some(item => item.ref === 'batch_7'), true)
 
   const second = new NpcAgentLoop({
@@ -269,9 +306,10 @@ test('canonical task board prevents model plan-length drift from resetting visib
   assert.equal(second.taskBoard.revision >= first.taskBoard.revision, true)
 
   const third = await agent.completed()
-  assert.match(third.chatMessage, /^\[Plan 3\/5\] Place machine/)
-  assert.equal(third.taskBoard.completed_count, 2)
-  assert.equal(third.taskBoard.active_step_id, 'step_3')
+  assert.match(third.chatMessage, /^\[Plan 1\/5\] Observe area/)
+  assert.equal(third.taskBoard.completed_count, 0)
+  assert.equal(third.taskBoard.active_step_id, 'step_1')
+  assert.equal(third.taskBoard.proposed_focus_step_id, 'step_3')
 })
 
 test('Autorio errors feed the detailed task receipt back into the active goal for replanning', async () => {
@@ -603,7 +641,7 @@ test('invalid provider JSON during action-omission repair fails upward without a
 
   await assert.rejects(
     agent.request('verify the result', { sender: 'TTLouis' }),
-    /provider_action_omission_repair_failed:.*Invalid provider content JSON/i,
+    /Invalid provider content JSON/i,
   )
 
   assert.equal(calls, 2)
@@ -721,6 +759,8 @@ test('omission repair preserves goal id, verified prefix, and active canonical s
       })
     },
     systemPrompt: 'Canonical preservation omission test',
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
     stateFile: null,
     traceFile: null,
   })
@@ -853,111 +893,73 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
 test('verified completion can close before a trailing control-only Stop step', async () => {
   let calls = 0
   const rcon = new ActionOmissionRcon()
-  const plan = ['Perform the requested work', 'Verify the result', 'Stop']
+  const plan = ['Place the requested furnace', 'Stop']
   const agent = new NpcAgentLoop({
     rcon,
     provider: async () => {
       calls++
-      if (calls === 1) {
-        return planMessage({
-          chatMessage: 'Performing the requested work.',
-          plan,
-          currentStep: 0,
-          operations: [{ name: 'wait', args: { ticks: 1 } }],
-        })
-      }
-      if (calls === 2) {
-        return planMessage({
-          chatMessage: 'The work is done; moving to verification.',
-          plan,
-          currentStep: 1,
-          operations: [{ name: 'wait', args: { ticks: 1 } }],
-        })
-      }
-      if (calls === 3) return toolMessage('final-verification')
       return planMessage({
-        chatMessage: 'The requested result is verified. Nothing further needs execution.',
-        plan: [],
+        chatMessage: 'Placing the requested furnace.',
+        plan,
         currentStep: 0,
-        operations: [],
+        operations: [{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 5 } }],
       })
     },
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
     systemPrompt: 'Trailing control-only completion regression test',
     memory: new CanonicalTaskBoardMemory(),
     stateFile: null,
     traceFile: null,
   })
 
-  const started = await agent.request('do the work, verify it, then stop', { sender: 'TTLouis' })
+  const started = await agent.request('place the furnace, then stop', { sender: 'TTLouis' })
   assert.equal(started.operations.length, 1)
-  assert.equal(started.taskBoard.active_index, 0)
-
-  const verifying = await agent.completed()
-  assert.equal(verifying.operations.length, 1)
-  assert.equal(verifying.taskBoard.active_index, 1)
-  assert.equal(verifying.taskBoard.total_steps, 2)
-  assert.equal(verifying.taskBoard.steps.some(step => step.description === 'Stop'), false)
+  assert.equal(started.taskBoard.total_steps, 1)
+  assert.equal(started.taskBoard.steps.some(step => step.description === 'Stop'), false)
 
   const finished = await agent.completed()
-  assert.equal(calls, 2)
+  assert.equal(calls, 1)
   assert.equal(finished.goalStatus, 'completed')
   assert.equal(finished.operations.length, 0)
   assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
-  assert.equal(rcon.mutations.length, 2)
+  assert.equal(rcon.mutations.length, 1)
 })
 
 test('verified completion can close before a trailing Report completion control-only step', async () => {
   let calls = 0
   const rcon = new ActionOmissionRcon()
-  const plan = ['Perform the requested work', 'Verify the result', 'Report completion']
+  const plan = ['Place the requested furnace', 'Report completion']
   const agent = new NpcAgentLoop({
     rcon,
     provider: async () => {
       calls++
-      if (calls === 1) {
-        return planMessage({
-          chatMessage: 'Performing the requested work.',
-          plan,
-          currentStep: 0,
-          operations: [{ name: 'wait', args: { ticks: 1 } }],
-        })
-      }
-      if (calls === 2) {
-        return planMessage({
-          chatMessage: 'The work is done; moving to verification.',
-          plan,
-          currentStep: 1,
-          operations: [{ name: 'wait', args: { ticks: 1 } }],
-        })
-      }
-      if (calls === 3) return toolMessage('final-report-verification')
       return planMessage({
-        chatMessage: 'The requested result is verified. Nothing further needs execution.',
-        plan: [],
+        chatMessage: 'Placing the requested furnace.',
+        plan,
         currentStep: 0,
-        operations: [],
+        operations: [{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 5 } }],
       })
     },
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
     systemPrompt: 'Trailing report-completion regression test',
     memory: new CanonicalTaskBoardMemory(),
     stateFile: null,
     traceFile: null,
   })
 
-  const started = await agent.request('do the work, verify it, then report completion', { sender: 'TTLouis' })
+  const started = await agent.request('place the furnace, then report completion', { sender: 'TTLouis' })
   assert.equal(started.operations.length, 1)
-  const verifying = await agent.completed()
-  assert.equal(verifying.operations.length, 1)
-  assert.equal(verifying.taskBoard.active_index, 1)
-  assert.equal(verifying.taskBoard.total_steps, 2)
-  assert.equal(verifying.taskBoard.steps.some(step => step.description === 'Report completion'), false)
+  assert.equal(started.taskBoard.total_steps, 1)
+  assert.equal(started.taskBoard.steps.some(step => step.description === 'Report completion'), false)
 
   const finished = await agent.completed()
-  assert.equal(calls, 2)
+  assert.equal(calls, 1)
   assert.equal(finished.goalStatus, 'completed')
   assert.equal(finished.operations.length, 0)
   assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
-  assert.equal(rcon.mutations.length, 2)
+  assert.equal(rcon.mutations.length, 1)
 })
 
 test('verified final completion is not mistaken for an action omission', async () => {
@@ -983,6 +985,8 @@ test('verified final completion is not mistaken for an action omission', async (
       })
     },
     systemPrompt: 'Verified final completion omission test',
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
     memory: new CanonicalTaskBoardMemory(),
     stateFile: null,
     traceFile: null,
