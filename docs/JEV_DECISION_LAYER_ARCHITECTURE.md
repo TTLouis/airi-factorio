@@ -1545,3 +1545,64 @@ For quantity/delta mutations, absence of a safe semantic checkpoint fails closed
 - `strategic`: choose/revise bounded milestone direction while keeping future milestones tentative.
 
 It still does not grant permission to rewrite verified history or the durable user goal.
+
+## Root-cause invariant: provider/control-plane failure is never world truth
+
+The 2026-09-19 real task trace exposed another authority leak:
+
+```text
+provider response exhausts output budget
+↓
+follow-up response is invalid / empty strict JSON
+↓
+recovery classifies a provider-format failure
+↓
+Jev proposes blocker
+↓
+runtime inspects recent Task Board evidence
+↓
+unrelated or stale deterministic evidence is reused
+↓
+durable Task Board becomes BLOCKED
+```
+
+The visible symptom was an active Factorio goal becoming `BLOCKED` with the last error `Invalid provider content JSON`. That state transition is architecturally invalid. A provider/control-plane failure describes the planner transport/protocol path; it is not evidence that the Factorio world is blocked.
+
+The durable outcome authority must therefore enforce these invariants:
+
+1. `provider_format`, `provider_budget`, strict-recovery failure, malformed JSON, and equivalent control-plane failures can never directly authorize `WORLD_BLOCKED`.
+2. A Jev `propose_blocker` route is admissible only for a `grounded_world_failure` classification and only when authoritative blocker evidence for the **current semantic step** exists.
+3. Recovery must not scan arbitrary recent Task Board evidence. Evidence supplied to Jev/outcome authority is scoped to the active semantic step unless an explicit cross-step authority contract says otherwise.
+4. Recoverable preflight rejection and terminal world blocking are distinct evidence classes. A retryable dependency/preflight condition must not become durable blocker authority merely because it was emitted by deterministic code.
+5. Provider output-budget recovery is bounded **per provider decision**, not once per long-lived human request. Each independent planner decision may receive one bounded recovery attempt; the recovery attempt itself may not recursively recover again.
+
+### Semantic step identity is durable identity, not array position
+
+A replan may replace the meaning of the active step while keeping it at the same list index. Reusing positional ids such as `step_2` for both meanings makes old evidence appear to belong to the new step.
+
+Required rule:
+
+```text
+unchanged semantic step  → preserve step id
+changed/new semantic step → allocate a new step id
+old evidence              → remains bound to the old id
+```
+
+This is required for completion proof, blocker proof, condition waits, Jev routing, and auditability. Step ids are semantic identities; list position is only presentation/order.
+
+### Upgrade recovery for previously poisoned durable state
+
+Older builds may already have persisted provider/control-plane text as a durable blocker. On resume/continue, the runtime should detect known provider-failure blocker signatures and demote them through Outcome Authority to a recoverable provider failure before interaction routing. The verified Task Board prefix must be preserved; the runtime must not require manual memory deletion to recover from an older authority bug.
+
+### Regression requirements
+
+Add regression coverage for at least:
+
+- invalid provider JSON plus unrelated older world evidence cannot become `BLOCKED`;
+- provider-budget failure plus older blocker evidence cannot become `BLOCKED`;
+- recoverable preflight evidence is not blocker authority;
+- changed semantic steps receive new ids and cannot inherit evidence through index reuse;
+- unchanged semantic steps may keep their ids across replan;
+- two independent provider decisions in one long request may each use one bounded output-budget recovery;
+- previously persisted provider-derived `BLOCKED` state self-heals to a recoverable state on continue.
+
