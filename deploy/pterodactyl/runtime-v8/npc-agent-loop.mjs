@@ -2927,6 +2927,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         hierarchyAction = 'split_current_milestone'
         fallbackReason = 'hierarchy_split_requested'
       }
+      else if (state.boundary === 'completion' && hierarchyTelemetry.granularity === 'collapse') {
+        appliedRoute = 'replan'
+        hierarchyAction = 'collapse_current_scope'
+        fallbackReason = 'hierarchy_collapse_requested'
+      }
       else if (hierarchyGate.allow_runtime_continuation && decision.route === 'continue_current') {
         appliedRoute = 'wait_runtime'
         fallbackReason = 'hierarchy_maintain_authoritative_runtime'
@@ -3565,6 +3570,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     this.reasoningTriggerSource = routed.hierarchy_action === 'split_current_milestone'
       ? 'hierarchy_split'
+      : routed.hierarchy_action === 'collapse_current_scope'
+        ? 'hierarchy_collapse'
       : routed.hierarchy_action === 'advance_next_milestone'
         ? 'hierarchy_advance'
         : routed.hierarchy_action === 'development_vertical'
@@ -3596,6 +3603,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     try {
       const hierarchyInstruction = routed.hierarchy_action === 'split_current_milestone'
         ? ' [HIERARCHY] Jev determined the current milestone is too broad. Preserve the user project goal and verified Plan Tracker progress, replace currentMilestone with a smaller bounded strategic outcome, keep at most three tentative nextMilestones, and make plan contain only executable/verifiable steps for the new current milestone.'
+        : routed.hierarchy_action === 'collapse_current_scope'
+          ? ' [HIERARCHY] Jev determined the current scope is unnecessarily fragmented. Preserve the active milestone identity and every verified Plan Tracker result, but simplify the remaining unverified steps into the smallest coherent bounded plan. Do not merge across a verified milestone boundary.'
         : routed.hierarchy_action === 'advance_next_milestone'
           ? ' [HIERARCHY] The previous milestone is authoritatively verified complete and Jev approved the first tentative next milestone. Build a fresh bounded Plan Tracker only for the newly active currentMilestone. You may refresh the tentative nextMilestones if needed, but do not rewrite the user project goal.'
           : routed.hierarchy_action === 'development_vertical'
@@ -3887,6 +3896,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const plan = super.parsePlanMessage(baseMessage)
     if (project) plan.project = project
     const normalizedPlan = normalizeCanonicalPlan(plan.plan, plan.currentStep)
+    const triggerSource = this.reasoningTriggerSource ?? this.planUpdateReason
+    const structuralHierarchyRequiresProject = [
+      'hierarchy_initial_split',
+      'hierarchy_split',
+      'hierarchy_replan_project',
+    ].includes(triggerSource)
+      || (triggerSource === 'hierarchy_project_complete_candidate' && normalizedPlan.plan.length > 0)
+    if (structuralHierarchyRequiresProject && !plan.project?.current_milestone) {
+      const error = new AgentLoopError(
+        'This hierarchy transition requires a bounded project.currentMilestone proposal. Do not flatten the long-horizon project into Plan Tracker steps.',
+      )
+      error.failureClass = 'plan_category'
+      error.code = 'hierarchy_project_proposal_required'
+      throw error
+    }
     plan.plan = normalizedPlan.plan
     plan.currentStep = normalizedPlan.currentStep
     for (const operation of plan.operations) {
@@ -4484,7 +4508,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         completionEvidence,
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
-        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason) || ['hierarchy_split', 'hierarchy_advance', 'hierarchy_replan_project', 'hierarchy_project_complete_candidate'].includes(triggerSource),
+        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason) || ['hierarchy_split', 'hierarchy_collapse', 'hierarchy_advance', 'hierarchy_replan_project', 'hierarchy_project_complete_candidate'].includes(triggerSource),
         newMilestone: ['hierarchy_advance', 'hierarchy_replan_project'].includes(triggerSource)
           || (triggerSource === 'hierarchy_project_complete_candidate' && durablePlan.plan.length > 0),
         previousState,
