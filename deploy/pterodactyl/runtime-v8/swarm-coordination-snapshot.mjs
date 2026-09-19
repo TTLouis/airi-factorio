@@ -1,8 +1,11 @@
 const SNAPSHOT_SCHEMA = 'swarm_coordination_snapshot_v1'
 const SNAPSHOT_ARRAY_FIELDS = Object.freeze([
   'missions',
+  'incompleteMissions',
   'objectives',
+  'incompleteObjectives',
   'projects',
+  'incompleteProjects',
   'work',
   'requests',
   'warnings',
