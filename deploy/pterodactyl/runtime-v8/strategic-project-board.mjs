@@ -2,6 +2,7 @@ const NEXT_MILESTONE_LIMIT = 3
 const COMPLETED_MILESTONE_LIMIT = 12
 const BOARD_STATUSES = new Set(['active', 'blocked', 'paused', 'completed', 'terminated'])
 const DEVELOPMENT_DIRECTIONS = new Set(['vertical', 'horizontal', 'maintain', 'recover'])
+const TRANSITION_STATES = new Set(['', 'awaiting_next_milestone', 'awaiting_project_replan', 'awaiting_project_review'])
 
 function clean(value, max = 500) {
   const text = String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
@@ -60,8 +61,8 @@ export function sanitizeStrategicProjectBoard(value, {
     development_direction: DEVELOPMENT_DIRECTIONS.has(source.development_direction)
       ? source.development_direction
       : '',
-    transition_state: source.transition_state === 'awaiting_next_milestone'
-      ? 'awaiting_next_milestone'
+    transition_state: TRANSITION_STATES.has(source.transition_state)
+      ? source.transition_state
       : '',
     revision: Number.isSafeInteger(source.revision) && source.revision > 0 ? source.revision : 1,
     updated_at: Number.isFinite(source.updated_at) ? source.updated_at : now,
