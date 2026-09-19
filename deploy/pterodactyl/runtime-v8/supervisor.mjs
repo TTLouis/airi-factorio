@@ -32,6 +32,7 @@ import { NpcAgentLoop } from './npc-agent-loop.mjs'
 import { providerEndpoint, providerRequest } from './provider.mjs'
 import { configureNpcSession } from './supervisor-adapter.mjs'
 import { luaString } from './structured-policy.mjs'
+import { createSwarmProjectJevControlPlane } from './swarm-project-jev-bootstrap.mjs'
 
 const UI_CONTROL_MARKER = '[AIRI_UI_CONTROL]'
 const UI_CONTROL_ACTIONS = new Set(['pause', 'terminate', 'follow', 'stop_follow'])
@@ -372,6 +373,7 @@ export async function executeUiControl(session, event) {
   if (event.action === 'terminate') {
     await terminatePlan(session, 'ui_terminate')
     await stopWorldWork(session)
+    if (session.projectJev) await session.projectJev.runtime.terminateProject()
     await session.clearTaskBoardUi()
     await session.printChat('Terminated the current AIRI goal. Its durable plan was discarded and will not resume.')
     return true
@@ -435,6 +437,7 @@ export class Session {
     this.authorizationPromise = null
     this.npcName = 'AIRI'
     this.npcId = 'airi'
+    this.projectJev = null
   }
 
   updateNpcIdentity(status) {
@@ -522,6 +525,27 @@ export class Session {
     return this.agent.memory.currentPlan(key)
   }
 
+  async syncProjectJevGoalFromPlan(state = this.currentPlanState()) {
+    if (!this.projectJev || !state || typeof state !== 'object') return false
+    const goalId = uiText(state.goal_id, 100)
+    const objective = uiText(state.objective, 500)
+    if (!goalId || !objective) return false
+
+    const board = this.projectJev.currentBoard()
+    if (!board.goal_id) {
+      await this.projectJev.runtime.bindGoal({ goalId, objective })
+      return true
+    }
+    if (board.goal_id === goalId) return false
+    if (board.status === 'completed' || board.status === 'terminated') {
+      await this.projectJev.runtime.startNextGoal({ goalId, objective })
+      return true
+    }
+
+    this.log(`[Project Jev] Deferred goal switch ${board.goal_id} -> ${goalId}; prior strategic goal is still ${board.status}`)
+    return false
+  }
+
   async clearTaskBoardUi() {
     if (!this.rcon) return false
     try {
@@ -564,7 +588,8 @@ export class Session {
 
   async start() {
     const rconPort = await freeTcpPort([this.config.gamePort])
-    const secrets = [this.config.key, this.rconPassword, this.session, this.config.factorio.token]
+    const decisionProviderKey = process.env.DECISION_PROVIDER_API_KEY ?? process.env.TYPESAFE_API_KEY ?? ''
+    const secrets = [this.config.key, decisionProviderKey, this.rconPassword, this.session, this.config.factorio.token]
     const gameLog = line => {
       this.log(redact(secrets, line))
       this.onGameLine(line)
@@ -614,6 +639,23 @@ export class Session {
     })
     await this.agent.loadPersistentState()
     await this.syncTaskBoardUi()
+
+    this.projectJev = createSwarmProjectJevControlPlane({
+      rcon: this.rcon,
+      root: this.root,
+      snapshotLimit: 12,
+      pollIntervalMs: 2000,
+      log: message => this.log(`[Project Jev] ${redact(secrets, message)}`),
+    })
+    await this.projectJev.runtime.initialize()
+    await this.syncProjectJevGoalFromPlan()
+    if (this.projectJev.decisionProviderConfigured) {
+      await this.projectJev.start()
+      this.log('[Project Jev] Global strategic shadow monitor started')
+    }
+    else {
+      this.log('[Project Jev] Decision provider not configured; durable strategic state remains available but shadow monitor is disabled')
+    }
 
     this.ready = true
     this.poll = setInterval(() => {
@@ -672,6 +714,7 @@ export class Session {
       await this.applyNavigationObstaclePolicy(text)
       const result = await this.agent.request(text, { sender })
       await this.syncTaskBoardUi()
+      await this.syncProjectJevGoalFromPlan()
       if (result?.chatMessage) await this.printChat(result.chatMessage)
     }, { reportError: true })
     return true
@@ -774,6 +817,14 @@ export class Session {
           this.log(`Unable to persist active AIRI plan before shutdown: ${error instanceof Error ? error.message : error}`)
         }
       }
+      if (this.projectJev) {
+        try { await this.projectJev.stop() }
+        catch (error) {
+          clean = false
+          this.log(`Project Jev shutdown failed: ${error instanceof Error ? error.message : error}`)
+        }
+      }
+
       if (this.rcon && this.gameChild?.alive()) {
         this.rcon.timeout = Math.min(this.config.stopMs, 30000)
         try { await this.rcon.command('/silent-command remote.call("airi_deployment","cancel")') }
