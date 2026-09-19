@@ -2,6 +2,8 @@
 
 This handoff narrows the first implementation pass from `PROJECT_COHERENCE_AUDIT_2026-09-16.md` to two bounded correctness fixes. Do not combine this work with the larger benchmark, learning-sandbox, swarm, authorization, or tool-contract projects.
 
+> Status update (2026-09-19): both bounded fixes are implemented on `experiment/jev-agent-architecture`. Restart-safe operation identity landed in `a1315c4`; shared entity-to-placement-item resolution landed in `270087d` with failure-code follow-up `ad6cade`. Keep the detailed requirements below as regression/upgrade contracts, not as open implementation work.
+
 Base all implementation work on the latest `feat/npc-transition-work`.
 
 ## Fix A — restart-safe operation batch identity

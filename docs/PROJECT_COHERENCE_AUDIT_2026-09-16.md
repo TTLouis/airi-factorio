@@ -4,6 +4,18 @@ This document records the current architecture/coherence audit for `TTLouis/fact
 
 The purpose is to separate intentional branch strategy from real architecture debt, preserve evidence for later implementation, and prevent future coding agents from “cleaning up” project-owned functionality that is actually current.
 
+## Implementation status update — 2026-09-19
+
+This audit remains the historical finding record, but several items have since moved:
+
+- restart-safe operation/batch identity is implemented on the Jev experiment branch, including persisted sequence/generation, stable `batch_ref`, verifier stale-generation reconciliation, and Task Board receipt identity;
+- entity-to-placement-item resolution is implemented through one prototype-backed resolver shared by local validation, physical placement, and remote construction;
+- Pterodactyl tool-contract drift now has a canonical manifest/parity regression layer, although full generated single-source ownership remains future cleanup;
+- the canonical repository metadata now points at `TTLouis/factorio-npc`;
+- fresh generated Pterodactyl eggs default `SGLUNA_CHAT_PLAYERS` to `none`; `*` remains the explicit opt-in for allow-everyone compatibility.
+
+Treat the original finding text below as rationale and regression history where a status update above says implementation is complete.
+
 ## Branch model
 
 The intended development model is:

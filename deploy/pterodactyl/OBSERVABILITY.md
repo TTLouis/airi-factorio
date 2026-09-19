@@ -46,10 +46,13 @@ A structured-output failure normally follows:
 
 Important diagnostic codes include:
 
-- `provider_output_truncated_empty_content`
+- `provider_output_budget_exhausted`
 - `provider_output_truncated`
 - `provider_empty_content`
+- `provider_content_invalid_json`
+- `provider_content_schema_invalid`
 - `provider_body_invalid_json`
+- `provider_missing_response_body`
 - `provider_missing_assistant_message`
 - `provider_response_too_large`
 - `provider_http_error`
@@ -109,11 +112,7 @@ At the latest inspected `experiment/jev-agent-architecture` state, the following
 
 ### Unfinished observability work
 
-1. **Provider structured-content diagnostic codes can be more explicit.** Today a non-empty, non-truncated response can still have `diagnostic_code=ok` while `structured_content.json_valid=false` or while JSON is valid but the AIRI plan schema is invalid. A follow-up may add explicit classes such as `provider_content_invalid_json` and `provider_content_schema_invalid`, preserving the existing structured diagnostics as the source of truth.
-
-2. **Missing response-body tracing is still coarse.** `response.body` absence currently fails through the generic guard after the HTTP-status path. If this edge case matters in real E2E, add a dedicated `provider_missing_response_body` trace before throwing.
-
-3. **Real-provider reproduction is still required before closing the original incident.** Unit/regression coverage proves that truncation, empty visible content, reasoning-only output, UTF-8 replacement evidence, JSON failure, schema failure, and output-cap enforcement anomalies are distinguishable. It does not prove which one the production provider returns for the original Chinese request. Reproduce one real failing/successful request and capture the correlated debug report before changing provider budgets or language behavior.
+1. **Real-provider reproduction is still required before closing the original incident.** Unit/regression coverage proves that truncation, empty visible content, reasoning-only output, UTF-8 replacement evidence, JSON failure, schema failure, and output-cap enforcement anomalies are distinguishable. It does not prove which one the production provider returns for the original Chinese request. Reproduce one real failing/successful request and capture the correlated debug report before changing provider budgets or language behavior.
 
 The former `obs/debug-ui-second-layer` isolation branch is no longer present and is not an implementation authority. The production second-layer projection is maintained directly with the current Jev branch observability code and its regression tests.
 
