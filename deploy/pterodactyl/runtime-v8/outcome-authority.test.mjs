@@ -45,7 +45,7 @@ test('provider or Jev blocker claims are rejected without grounded evidence', ()
 })
 
 test('authoritative preflight and Autorio failure evidence may ground WORLD_BLOCKED', () => {
-  for (const kind of ['operation_preflight_rejection', 'operation_admission_failure', 'operation_error_receipt']) {
+  for (const kind of ['operation_preflight_blocker', 'operation_admission_failure', 'operation_error_receipt']) {
     const decision = validateOutcomeCandidate({
       kind: 'world_blocked',
       source: 'deterministic_runtime',
@@ -111,4 +111,31 @@ test('authority evidence classes remain intentionally narrow', () => {
   assert.equal(hasAuthoritativeCompletionEvidence([{ kind: 'operation_receipt' }]), false)
   assert.equal(hasAuthoritativeCompletionEvidence([{ kind: 'deterministic_verification' }]), true)
   assert.equal(authoritativeRuntimeState({ task_state: 'idle', queue_length: 0 }).idle, true)
+})
+
+
+test('recoverable preflight evidence cannot ground WORLD_BLOCKED', () => {
+  const decision = validateOutcomeCandidate({
+    kind: 'world_blocked',
+    source: 'jev',
+    reason_code: 'grounded_world_failure',
+    candidate_blocker: 'bootstrap dependency unresolved',
+    evidence: [{ kind: 'operation_preflight_recoverable', summary: 'retryable dependency repair' }],
+  })
+  assert.equal(decision.accepted, false)
+  assert.equal(decision.rejection_reason, 'world_blocked_without_authoritative_evidence')
+})
+
+test('provider failures cannot become WORLD_BLOCKED even when blocker evidence exists', () => {
+  for (const reasonCode of ['provider_format', 'provider_budget']) {
+    const decision = validateOutcomeCandidate({
+      kind: 'world_blocked',
+      source: 'jev',
+      reason_code: reasonCode,
+      candidate_blocker: 'Invalid provider content JSON',
+      evidence: [{ kind: 'operation_preflight_blocker', summary: 'older deterministic world failure' }],
+    })
+    assert.equal(decision.accepted, false)
+    assert.equal(decision.rejection_reason, 'provider_failure_cannot_be_world_blocker')
+  }
 })
