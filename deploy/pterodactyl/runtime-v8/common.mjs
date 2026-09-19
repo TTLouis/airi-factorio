@@ -482,11 +482,14 @@ function taskBoardStepStatus(index, activeIndex, boardStatus) {
 
 function applyTaskBoardStatuses(board, activeIndex = board.active_index ?? 0) {
   const safeIndex = clampTaskBoardIndex(activeIndex, board.steps.length)
+  const proposedIndex = clampTaskBoardIndex(board.proposed_focus_index, board.steps.length)
   return {
     ...board,
     active_index: safeIndex,
     active_step_id: board.status === 'completed' || board.steps.length === 0 ? undefined : board.steps[safeIndex]?.id,
     completed_count: board.status === 'completed' ? board.steps.length : safeIndex,
+    proposed_focus_index: board.status === 'completed' || board.steps.length === 0 ? undefined : proposedIndex,
+    proposed_focus_step_id: board.status === 'completed' || board.steps.length === 0 ? undefined : board.steps[proposedIndex]?.id,
     total_steps: board.steps.length,
     steps: board.steps.map((step, index) => ({ ...step, status: taskBoardStepStatus(index, safeIndex, board.status) })),
   }
@@ -494,7 +497,8 @@ function applyTaskBoardStatuses(board, activeIndex = board.active_index ?? 0) {
 
 export function createTaskBoard(plan, currentStep, { goalId = '', now = Date.now() } = {}) {
   const descriptions = boundedTaskBoardPlan(plan)
-  const activeIndex = clampTaskBoardIndex(currentStep, descriptions.length)
+  const activeIndex = 0
+  const proposedFocusIndex = clampTaskBoardIndex(currentStep, descriptions.length)
   let board = {
     kind: 'task_board_lite',
     goal_id: taskBoardText(goalId, 100),
@@ -505,7 +509,9 @@ export function createTaskBoard(plan, currentStep, { goalId = '', now = Date.now
     event_sequence: 0,
     active_index: activeIndex,
     active_step_id: undefined,
-    completed_count: descriptions.length ? activeIndex : 0,
+    proposed_focus_index: descriptions.length ? proposedFocusIndex : undefined,
+    proposed_focus_step_id: undefined,
+    completed_count: 0,
     total_steps: descriptions.length,
     steps: descriptions.map((description, index) => ({ id: taskBoardStepId(index), description, status: 'pending', revision: 1 })),
     evidence: [],
@@ -534,7 +540,8 @@ function taskBoardCompletedPrefixMatches(board, incoming) {
 
 function replanTaskBoardRemaining(board, incoming, incomingIndex, now) {
   const completed = board.steps.slice(0, board.completed_count).map(step => ({ ...step, status: 'completed' }))
-  const remainingDescriptions = incoming.slice(Math.max(incomingIndex, board.completed_count))
+  const incomingIncludesCompletedPrefix = taskBoardCompletedPrefixMatches(board, incoming)
+  const remainingDescriptions = incoming.slice(incomingIncludesCompletedPrefix ? board.completed_count : 0)
   if (remainingDescriptions.length === 0) return board
   const steps = [
     ...completed,
@@ -545,6 +552,10 @@ function replanTaskBoardRemaining(board, incoming, incomingIndex, now) {
       revision: 1,
     })),
   ].slice(0, TASK_BOARD_MAX_STEPS)
+  const proposedDescription = incoming[incomingIndex]
+  const proposedFocusIndex = proposedDescription === undefined
+    ? completed.length
+    : steps.findIndex(step => normalizeTaskBoardStep(step.description) === normalizeTaskBoardStep(proposedDescription))
   let next = {
     ...board,
     status: 'active',
@@ -553,13 +564,14 @@ function replanTaskBoardRemaining(board, incoming, incomingIndex, now) {
     revision: board.revision + 1,
     steps,
     active_index: completed.length,
+    proposed_focus_index: proposedFocusIndex >= 0 ? proposedFocusIndex : completed.length,
     updated_at: now,
   }
   next = applyTaskBoardStatuses(next, completed.length)
   return taskBoardEvent(next, 'replanned', now, { preserved_completed: completed.length, total_steps: next.total_steps })
 }
 
-export function reconcileTaskBoard(board, plan, currentStep, { now = Date.now(), allowReplan = false } = {}) {
+export function reconcileTaskBoard(board, plan, currentStep, { now = Date.now(), allowReplan = false, authoritativeAdvance = false } = {}) {
   const incoming = boundedTaskBoardPlan(plan)
   if (!board || board.kind !== 'task_board_lite') return createTaskBoard(incoming, currentStep, { now })
   if (incoming.length === 0) return board
@@ -568,27 +580,61 @@ export function reconcileTaskBoard(board, plan, currentStep, { now = Date.now(),
   const incomingActive = incoming[incomingIndex]
   const matchedIndex = findTaskBoardStep(board, incomingActive)
   const currentIndex = board.active_index ?? 0
+  const exactSamePlan = incoming.length === board.steps.length
+    && incoming.every((description, index) => normalizeTaskBoardStep(description) === normalizeTaskBoardStep(board.steps[index]?.description))
 
-  if (matchedIndex >= currentIndex) {
-    if (matchedIndex === currentIndex) return board
+  if (allowReplan && !exactSamePlan) {
+    return replanTaskBoardRemaining(board, incoming, incomingIndex, now)
+  }
+
+  if (matchedIndex >= 0) {
+    const proposedChanged = board.proposed_focus_index !== matchedIndex
+    if (authoritativeAdvance && matchedIndex > currentIndex) {
+      let next = {
+        ...board,
+        status: 'active',
+        blocker: '',
+        pause_reason: '',
+        proposed_focus_index: matchedIndex,
+        revision: board.revision + 1,
+        updated_at: now,
+      }
+      next = applyTaskBoardStatuses(next, matchedIndex)
+      return taskBoardEvent(next, 'advanced', now, { from_step: board.active_step_id, to_step: next.active_step_id })
+    }
+    if (proposedChanged) {
+      let next = {
+        ...board,
+        proposed_focus_index: matchedIndex,
+        revision: board.revision + 1,
+        updated_at: now,
+      }
+      next = applyTaskBoardStatuses(next, currentIndex)
+      return taskBoardEvent(next, 'focus_proposed', now, {
+        active_step_id: next.active_step_id,
+        proposed_focus_step_id: next.proposed_focus_step_id,
+      })
+    }
+    if (matchedIndex >= currentIndex) return board
+  }
+
+  if (exactSamePlan && incomingIndex > currentIndex) {
     let next = {
       ...board,
-      status: 'active',
-      blocker: '',
-      pause_reason: '',
+      proposed_focus_index: incomingIndex,
       revision: board.revision + 1,
       updated_at: now,
     }
-    next = applyTaskBoardStatuses(next, matchedIndex)
-    return taskBoardEvent(next, 'advanced', now, { from_step: board.active_step_id, to_step: next.active_step_id })
-  }
-
-  const exactSamePlan = incoming.length === board.steps.length
-    && incoming.every((description, index) => normalizeTaskBoardStep(description) === normalizeTaskBoardStep(board.steps[index]?.description))
-  if (exactSamePlan && incomingIndex > currentIndex) {
-    let next = { ...board, status: 'active', blocker: '', pause_reason: '', revision: board.revision + 1, updated_at: now }
-    next = applyTaskBoardStatuses(next, incomingIndex)
-    return taskBoardEvent(next, 'advanced', now, { from_step: board.active_step_id, to_step: next.active_step_id })
+    if (authoritativeAdvance) {
+      next = { ...next, status: 'active', blocker: '', pause_reason: '' }
+      next = applyTaskBoardStatuses(next, incomingIndex)
+      return taskBoardEvent(next, 'advanced', now, { from_step: board.active_step_id, to_step: next.active_step_id })
+    }
+    next = applyTaskBoardStatuses(next, currentIndex)
+    return taskBoardEvent(next, 'focus_proposed', now, {
+      active_step_id: next.active_step_id,
+      proposed_focus_step_id: next.proposed_focus_step_id,
+    })
   }
 
   if ((allowReplan || taskBoardCompletedPrefixMatches(board, incoming)) && incomingActive && normalizeTaskBoardStep(incomingActive) !== normalizeTaskBoardStep(board.steps[currentIndex]?.description)) {
@@ -644,6 +690,8 @@ export function taskBoardProgress(board) {
     index: board.status === 'completed' ? board.steps.length : (board.active_index ?? 0) + 1,
     step_id: board.active_step_id,
     step: active?.description ?? '',
+    proposed_focus_index: Number.isSafeInteger(board.proposed_focus_index) ? board.proposed_focus_index : board.active_index ?? 0,
+    proposed_focus_step_id: board.proposed_focus_step_id,
     blocker: board.blocker ?? '',
     pause_reason: board.pause_reason ?? '',
     revision: board.revision,
@@ -652,6 +700,9 @@ export function taskBoardProgress(board) {
 
 export function sanitizeTaskBoard(value, { fallbackPlan = [], fallbackCurrentStep = 0, goalId = '', now = Date.now() } = {}) {
   if (!value || value.kind !== 'task_board_lite' || !Array.isArray(value.steps)) {
+    // Historical planner current_step is not grounded completion evidence.
+    // Preserve it only as proposed focus when migrating a legacy plan; verified
+    // canonical progress must come from a persisted Task Board and its evidence.
     return createTaskBoard(fallbackPlan, fallbackCurrentStep, { goalId, now })
   }
   const descriptions = value.steps.slice(0, TASK_BOARD_MAX_STEPS).map(step => taskBoardText(step?.description, 500)).filter(Boolean)
@@ -661,6 +712,9 @@ export function sanitizeTaskBoard(value, { fallbackPlan = [], fallbackCurrentSte
     status: ['active', 'blocked', 'paused', 'completed'].includes(value.status) ? value.status : board.status,
     blocker: taskBoardText(value.blocker, 500),
     pause_reason: taskBoardText(value.pause_reason, 300),
+    proposed_focus_index: Number.isSafeInteger(value.proposed_focus_index)
+      ? clampTaskBoardIndex(value.proposed_focus_index, descriptions.length)
+      : clampTaskBoardIndex(value.active_index, descriptions.length),
     revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : board.revision,
     event_sequence: Number.isSafeInteger(value.event_sequence) && value.event_sequence >= 0 ? value.event_sequence : board.event_sequence,
     evidence_sequence: Number.isSafeInteger(value.evidence_sequence) && value.evidence_sequence >= 0 ? value.evidence_sequence : 0,
@@ -684,6 +738,7 @@ export function sanitizeTaskBoard(value, { fallbackPlan = [], fallbackCurrentSte
       to_step: taskBoardText(item?.to_step, 80) || undefined,
       evidence_id: taskBoardText(item?.evidence_id, 80) || undefined,
       step_id: taskBoardText(item?.step_id, 80) || undefined,
+      proposed_focus_step_id: taskBoardText(item?.proposed_focus_step_id, 80) || undefined,
     })),
     created_at: Number.isFinite(value.created_at) ? value.created_at : now,
     updated_at: Number.isFinite(value.updated_at) ? value.updated_at : now,

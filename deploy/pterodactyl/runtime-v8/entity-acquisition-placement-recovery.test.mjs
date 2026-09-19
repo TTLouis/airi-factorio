@@ -39,6 +39,41 @@ function planMessage(operations, {
   }
 }
 
+function completionAndContinueDecision(state) {
+  if (state?.contract === 'step_completion_contract') {
+    return {
+      model: 'jev-test',
+      provider: 'TypeSafe',
+      answers: {
+        contract: {
+          type: 'choice',
+          choice: 'candidate_1',
+          confidence: 0.99,
+          probabilities: { candidate_1: 0.99, semantic_unknown: 0.01 },
+        },
+        compound_step: { type: 'noul', noul: 0.01 },
+      },
+      usage: { input_tokens: 10, output_tokens: 2, cost: 0 },
+    }
+  }
+  if (state?.reason === 'post_step_planner_gate') {
+    return {
+      model: 'jev-test',
+      provider: 'TypeSafe',
+      answers: {
+        route: {
+          type: 'choice',
+          choice: 'continue_current',
+          confidence: 0.99,
+          probabilities: { continue_current: 0.99 },
+        },
+      },
+      usage: { input_tokens: 10, output_tokens: 2, cost: 0 },
+    }
+  }
+  throw new Error('unexpected decision contract')
+}
+
 class E2eRcon {
   constructor() {
     this.commands = []
@@ -260,6 +295,8 @@ test('remote name-only entity requires approach and navigation completion automa
     rcon,
     memory,
     systemPrompt: 'name-only mining continuation test',
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
     provider: async (messages, context) => {
       calls++
       assert.equal(context.allowTools, true)
@@ -323,7 +360,7 @@ test('alternating distinct read-only observations trigger generic decision press
       calls++
       if (calls <= observations.length) return { content: null, tool_calls: [observations[calls - 1]] }
       const text = messages.map(message => String(message.content ?? '')).join('\n')
-      assert.match(text, /Decision pressure after 4 consecutive observation-only rounds/)
+      assert.match(text, /Decision pressure after 3 consecutive observation-only rounds/)
       return planMessage([{ name: 'wait', args: { ticks: 1 } }])
     },
   })
@@ -349,7 +386,7 @@ test('wood collection flow uses exact mining, verifies inventory twenty, and com
   }
   rcon.inventory = { items: [] }
   const memory = new CanonicalTaskBoardMemory()
-  const canonicalPlan = ['Collect enough wood', 'Verify inventory has at least 20 wood']
+  const canonicalPlan = ['Collect at least 20 wood']
   let calls = 0
   const agent = new NpcAgentLoop({
     rcon,
@@ -369,7 +406,8 @@ test('wood collection flow uses exact mining, verifies inventory twenty, and com
       }
       if (calls === 3) {
         const text = messages.map(message => String(message.content ?? '')).join('\n')
-        assert.match(text, /"completed_count":1/)
+        assert.match(text, /"completed_count":0/)
+        assert.match(text, /deterministic_verification/)
         return { content: null, tool_calls: [toolCall('wood-inventory', 'getInventoryItems')] }
       }
       const text = messages.map(message => String(message.content ?? '')).join('\n')

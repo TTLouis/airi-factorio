@@ -1,3 +1,4 @@
+import { check, DeploymentError } from './common.mjs'
 import { providerEndpoint, providerRequest as baseProviderRequest } from './provider-base.mjs'
 
 export * from './provider-base.mjs'
@@ -69,6 +70,18 @@ export function selectReasoningPolicy(config, messages, options = {}) {
   if (options.triggerSource === 'new_goal') {
     return { effort: 'high', reason: 'new_goal' }
   }
+  if (options.triggerSource === 'post_step_continue') {
+    return { effort: 'low', reason: 'jev_post_step_continue' }
+  }
+  if (options.triggerSource === 'post_step_replan') {
+    return { effort: 'high', reason: 'jev_post_step_replan' }
+  }
+  if (options.triggerSource === 'recovery_continue_low') {
+    return { effort: 'low', reason: 'jev_recovery_continue' }
+  }
+  if (options.triggerSource === 'recovery_replan_high') {
+    return { effort: 'high', reason: 'jev_recovery_replan' }
+  }
   if (completionContinuation(messages, options)) {
     return { effort: 'low', reason: 'deterministic_completion' }
   }
@@ -83,6 +96,12 @@ export function selectReasoningPolicy(config, messages, options = {}) {
     return { effort: 'low', reason: 'same_goal_continue' }
   }
   return { effort: 'high', reason: 'ordinary_planning' }
+}
+
+function reasoningOutputBudget(policy) {
+  if (policy?.effort === 'max') return 6000
+  if (policy?.effort === 'high') return 4000
+  return undefined
 }
 
 function reasoningBodyPatch(policy) {
@@ -106,17 +125,23 @@ export async function providerRequest(config, messages, options = {}) {
 
   const actualFetch = options.fetchImpl ?? fetch
   const actualEndpoint = providerEndpoint(config.base)
+  const compactPath = options.recoveryKind === 'output_budget_exhaustion'
+    || (completionContinuation(messages, options) && options.triggerSource !== 'post_step_replan')
+  const callerPatch = options.requestBodyPatch && typeof options.requestBodyPatch === 'object' && !Array.isArray(options.requestBodyPatch)
+    ? options.requestBodyPatch
+    : {}
+  const policyBudget = !compactPath && callerPatch.max_tokens === undefined
+    ? reasoningOutputBudget(policy)
+    : undefined
   const requestOptions = {
     ...options,
     requestBodyPatch: {
-      ...(options.requestBodyPatch && typeof options.requestBodyPatch === 'object' && !Array.isArray(options.requestBodyPatch)
-        ? options.requestBodyPatch
-        : {}),
+      ...(policyBudget !== undefined ? { max_tokens: policyBudget } : {}),
+      ...callerPatch,
       ...reasoningBodyPatch(policy),
     },
     providerPolicy: policy,
   }
-  const compactPath = options.recoveryKind === 'output_budget_exhaustion' || completionContinuation(messages, options)
 
   if (!compactPath) return baseProviderRequest(config, messages, requestOptions)
 
@@ -129,4 +154,222 @@ export async function providerRequest(config, messages, options = {}) {
     messages,
     { ...requestOptions, fetchImpl: routedFetch },
   )
+}
+
+
+export const DECISION_PROVIDER_DEFAULTS = Object.freeze({
+  provider: 'typesafe',
+  url: 'https://api.typesafe.ai/v1/systemone',
+  model: 'jev-latest',
+  timeoutMs: 5000,
+  maxRequestsPerHour: 180,
+  maxInputChars: 16000,
+  maxQuestions: 16,
+})
+
+function decisionProviderInteger(value, fallback, name, min, max) {
+  const parsed = value === undefined ? fallback : Number(value)
+  check(Number.isSafeInteger(parsed) && parsed >= min && parsed <= max, `${name} must be an integer from ${min} to ${max}`)
+  return parsed
+}
+
+export function decisionProviderEndpoint(value) {
+  let url
+  try { url = new URL(String(value ?? '')) }
+  catch { throw new DeploymentError('Invalid decision provider URL') }
+  check(!url.username && !url.password && !url.search && !url.hash, 'Decision provider URL cannot contain credentials, query, or fragment')
+  check(url.protocol === 'https:' || (url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)), 'Remote decision provider URL requires HTTPS')
+  check(url.pathname && url.pathname !== '/', 'Decision provider URL must include an API endpoint path')
+  return url.toString()
+}
+
+export function decisionProviderConfiguration(env = process.env) {
+  const key = env.DECISION_PROVIDER_API_KEY ?? env.TYPESAFE_API_KEY ?? ''
+  if (typeof key !== 'string' || key.trim().length === 0) return undefined
+
+  check(!/[\r\n\0]/.test(key), 'Decision provider API key is malformed')
+
+  const url = decisionProviderEndpoint(env.DECISION_PROVIDER_API_URL ?? DECISION_PROVIDER_DEFAULTS.url)
+  const model = String(env.DECISION_PROVIDER_MODEL ?? DECISION_PROVIDER_DEFAULTS.model).trim()
+  check(/^[a-zA-Z0-9._:/-]{1,200}$/.test(model), 'Invalid decision provider model identifier')
+
+  return {
+    provider: DECISION_PROVIDER_DEFAULTS.provider,
+    key,
+    url,
+    model,
+    timeoutMs: decisionProviderInteger(
+      env.DECISION_PROVIDER_TIMEOUT_MS,
+      DECISION_PROVIDER_DEFAULTS.timeoutMs,
+      'DECISION_PROVIDER_TIMEOUT_MS',
+      100,
+      30000,
+    ),
+    maxRequestsPerHour: decisionProviderInteger(
+      env.MAX_DECISION_PROVIDER_REQUESTS_PER_HOUR,
+      DECISION_PROVIDER_DEFAULTS.maxRequestsPerHour,
+      'MAX_DECISION_PROVIDER_REQUESTS_PER_HOUR',
+      1,
+      1200,
+    ),
+    maxInputChars: decisionProviderInteger(
+      env.DECISION_PROVIDER_MAX_INPUT_CHARS,
+      DECISION_PROVIDER_DEFAULTS.maxInputChars,
+      'DECISION_PROVIDER_MAX_INPUT_CHARS',
+      1024,
+      150000,
+    ),
+    maxQuestions: decisionProviderInteger(
+      env.DECISION_PROVIDER_MAX_QUESTIONS,
+      DECISION_PROVIDER_DEFAULTS.maxQuestions,
+      'DECISION_PROVIDER_MAX_QUESTIONS',
+      1,
+      64,
+    ),
+  }
+}
+
+function validateDecisionQuestion(id, question) {
+  check(/^[A-Za-z0-9_.-]{1,80}$/.test(id), 'Invalid decision question identifier')
+  check(question && typeof question === 'object' && !Array.isArray(question), `Decision question ${id} must be an object`)
+  check(['choice', 'score', 'noul'].includes(question.type), `Decision question ${id} has an unsupported type`)
+  check(typeof question.instructions === 'string' && question.instructions.trim().length > 0 && question.instructions.length <= 2000, `Decision question ${id} has invalid instructions`)
+
+  if (question.type === 'choice') {
+    check(question.criteria && typeof question.criteria === 'object' && !Array.isArray(question.criteria), `Choice question ${id} requires criteria`)
+    const entries = Object.entries(question.criteria)
+    check(entries.length >= 2 && entries.length <= 255, `Choice question ${id} must have 2 to 255 criteria`)
+    for (const [key, description] of entries) {
+      check(/^[A-Za-z0-9_.-]{1,80}$/.test(key), `Choice question ${id} has an invalid criterion key`)
+      check(typeof description === 'string' && description.trim().length > 0 && description.length <= 1000, `Choice question ${id} has an invalid criterion description`)
+    }
+  }
+
+  if (question.type === 'score') {
+    check(Array.isArray(question.criteria) && question.criteria.length >= 2 && question.criteria.length <= 64, `Score question ${id} must have 2 to 64 criteria`)
+    for (const description of question.criteria) {
+      check(typeof description === 'string' && description.trim().length > 0 && description.length <= 1000, `Score question ${id} has an invalid criterion description`)
+    }
+  }
+
+  if (question.type === 'noul' && question.criteria !== undefined) {
+    check(question.criteria && typeof question.criteria === 'object' && !Array.isArray(question.criteria), `Noul question ${id} criteria must be an object when provided`)
+  }
+}
+
+export function normalizeDecisionProviderRequest(config, state, questions) {
+  check(config && typeof config === 'object', 'Decision provider is not configured')
+  check(questions && typeof questions === 'object' && !Array.isArray(questions), 'Decision questions must be an object')
+
+  const entries = Object.entries(questions)
+  check(entries.length >= 1 && entries.length <= config.maxQuestions, `Decision request must contain 1 to ${config.maxQuestions} questions`)
+  for (const [id, question] of entries) validateDecisionQuestion(id, question)
+
+  const body = {
+    state,
+    model: config.model,
+    questions,
+  }
+
+  let serialized
+  try { serialized = JSON.stringify(body) }
+  catch { throw new DeploymentError('Decision provider request is not JSON serializable') }
+
+  check(serialized.length <= config.maxInputChars, `Decision provider request exceeds ${config.maxInputChars} characters`)
+  return { body, serialized }
+}
+
+function validProbability(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+}
+
+function validateDecisionAnswer(id, question, answer) {
+  check(answer && typeof answer === 'object' && !Array.isArray(answer), `Decision provider answer ${id} is missing`)
+  check(answer.type === question.type, `Decision provider answer ${id} has the wrong type`)
+
+  if (question.type === 'choice') {
+    check(typeof answer.choice === 'string' && Object.prototype.hasOwnProperty.call(question.criteria, answer.choice), `Decision provider answer ${id} returned an unknown choice`)
+    check(answer.probabilities && typeof answer.probabilities === 'object' && !Array.isArray(answer.probabilities), `Decision provider answer ${id} has invalid probabilities`)
+    for (const key of Object.keys(question.criteria)) {
+      check(validProbability(answer.probabilities[key]), `Decision provider answer ${id} has an invalid probability`)
+    }
+    check(validProbability(answer.confidence), `Decision provider answer ${id} has invalid confidence`)
+  }
+  else if (question.type === 'score') {
+    check(typeof answer.score === 'number' && Number.isFinite(answer.score), `Decision provider answer ${id} has an invalid score`)
+    check(answer.score >= 0 && answer.score <= question.criteria.length - 1, `Decision provider answer ${id} score is outside the declared rubric`)
+    check(answer.legend && typeof answer.legend === 'object' && !Array.isArray(answer.legend), `Decision provider answer ${id} has an invalid legend`)
+    check(answer.probabilities && typeof answer.probabilities === 'object' && !Array.isArray(answer.probabilities), `Decision provider answer ${id} has invalid probabilities`)
+    for (let index = 0; index < question.criteria.length; index++) {
+      const key = String(index)
+      check(answer.legend[key] === question.criteria[index], `Decision provider answer ${id} legend does not match the declared rubric`)
+      check(validProbability(answer.probabilities[key]), `Decision provider answer ${id} has an invalid probability`)
+    }
+    check(validProbability(answer.confidence), `Decision provider answer ${id} has invalid confidence`)
+  }
+  else {
+    check(validProbability(answer.noul), `Decision provider answer ${id} has an invalid noul value`)
+  }
+}
+
+export async function decisionProviderRequest(config, state, questions, {
+  fetchImpl = fetch,
+  signal,
+  reserve,
+} = {}) {
+  check(config && typeof config === 'object' && typeof config.key === 'string' && config.key.trim().length > 0, 'Decision provider is not configured')
+  const { serialized } = normalizeDecisionProviderRequest(config, state, questions)
+  check(typeof reserve === 'function', 'Decision provider request requires a budget reservation callback')
+  await reserve()
+
+  const timeoutSignal = AbortSignal.timeout(config.timeoutMs)
+  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+
+  try {
+    const response = await fetchImpl(config.url, {
+      method: 'POST',
+      redirect: 'error',
+      signal: requestSignal,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${config.key}`,
+      },
+      body: serialized,
+    })
+
+    if (!response.ok) throw new DeploymentError(`Decision provider HTTP ${response.status}; request will not be retried automatically`)
+    const responseText = await response.text()
+    check(Buffer.byteLength(responseText, 'utf8') <= 128 * 1024, 'Decision provider response too large')
+
+    let data
+    try { data = JSON.parse(responseText) }
+    catch { throw new DeploymentError('Decision provider returned invalid JSON') }
+
+    check(data && typeof data === 'object' && !Array.isArray(data), 'Decision provider returned an invalid response')
+    check(data.answers && typeof data.answers === 'object' && !Array.isArray(data.answers), 'Decision provider response has no answers')
+
+    for (const [id, question] of Object.entries(questions)) {
+      validateDecisionAnswer(id, question, data.answers[id])
+    }
+
+    if (data.usage !== undefined) {
+      check(data.usage && typeof data.usage === 'object' && !Array.isArray(data.usage), 'Decision provider returned invalid usage')
+      for (const field of ['input_tokens', 'output_tokens']) {
+        if (data.usage[field] !== undefined) check(Number.isSafeInteger(data.usage[field]) && data.usage[field] >= 0, `Decision provider returned invalid ${field}`)
+      }
+      if (data.usage.cost !== undefined) check(typeof data.usage.cost === 'number' && Number.isFinite(data.usage.cost) && data.usage.cost >= 0, 'Decision provider returned invalid cost')
+    }
+
+    return {
+      model: typeof data.model === 'string' ? data.model : config.model,
+      provider: typeof data.provider === 'string' ? data.provider : config.provider,
+      answers: data.answers,
+      usage: data.usage,
+    }
+  }
+  catch (error) {
+    if (signal?.aborted) throw new DeploymentError('Decision provider request cancelled')
+    if (timeoutSignal.aborted) throw new DeploymentError(`Decision provider timed out after ${config.timeoutMs} ms`)
+    throw error
+  }
 }

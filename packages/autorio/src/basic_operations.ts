@@ -41,6 +41,11 @@ export interface BasicOperationResult {
   requested_ticks?: number
   requested_position?: { x: number, y: number }
   direction?: number
+  placed_unit_number?: number
+  placed_entity_type?: string
+  placed_position?: { x: number, y: number }
+  placed_surface_index?: number
+  placed_direction?: number
   previous_direction?: number
   reverse?: boolean
 }

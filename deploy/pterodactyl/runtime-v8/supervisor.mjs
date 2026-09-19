@@ -29,7 +29,7 @@ import {
 import { CanonicalTaskBoardMemory } from './canonical-task-board-memory.mjs'
 import { createSave, prepareGameConfig, prepareMods, prepareServerSettings, selectSave } from './game-files.mjs'
 import { NpcAgentLoop } from './npc-agent-loop.mjs'
-import { providerEndpoint, providerRequest } from './provider.mjs'
+import { decisionProviderConfiguration, decisionProviderRequest, providerEndpoint, providerRequest } from './provider.mjs'
 import { configureNpcSession } from './supervisor-adapter.mjs'
 import { luaString } from './structured-policy.mjs'
 
@@ -111,6 +111,7 @@ export function configuration(raw = {}, env = process.env) {
     model: cleanString(env.OPENAI_MODEL ?? raw.model ?? 'replace-me', 'OPENAI_MODEL', 200),
     base: env.OPENAI_API_BASEURL ?? raw.providerUrl ?? 'https://provider.invalid/v1',
     key: env.OPENAI_API_KEY ?? '',
+    decisionProvider: decisionProviderConfiguration(env),
     providerTimeoutMs: safeInteger(env.PROVIDER_TIMEOUT_MS ?? raw.providerTimeoutMs ?? 120000, 'PROVIDER_TIMEOUT_MS', 1000, 600000),
     gamePort: safeInteger(env.SERVER_PORT ?? raw.gamePort ?? 34197, 'SERVER_PORT', 1024, 65535),
     budget: safeInteger(env.MAX_PROVIDER_REQUESTS_PER_HOUR ?? raw.maxProviderRequestsPerHour ?? 30, 'MAX_PROVIDER_REQUESTS_PER_HOUR', 1, 1200),
@@ -538,6 +539,47 @@ function emptyAgentDebug(fallback = {}) {
     latest_round_cached_input_units: 0,
     latest_round_output_units: 0,
     latest_round_total_units: 0,
+    decision_provider: '',
+    decision_model: '',
+    decision_shadow_intent: '',
+    decision_active_intent: '',
+    decision_post_step_route: '',
+    decision_post_step_applied_route: '',
+    decision_post_step_confidence_percent: 0,
+    decision_post_step_latency_ms: 0,
+    decision_post_step_fallback: '',
+    decision_granularity: '',
+    decision_granularity_confidence_percent: 0,
+    decision_development: '',
+    decision_development_confidence_percent: 0,
+    decision_reasoning_budget: '',
+    decision_reasoning_confidence_percent: 0,
+    decision_planning_horizon: '',
+    decision_observation_budget: 0,
+    decision_confidence_percent: 0,
+    decision_queue_conflict_percent: 0,
+    decision_latency_ms: 0,
+    decision_input_units: 0,
+    decision_output_units: 0,
+    decision_cost_micro_usd: 0,
+    decision_calls_total: 0,
+    decision_input_units_total: 0,
+    decision_output_units_total: 0,
+    decision_cost_micro_usd_total: 0,
+    decision_shadow_matches_total: 0,
+    decision_shadow_mismatches_total: 0,
+    decision_post_step_calls_total: 0,
+    decision_planner_skips_total: 0,
+    decision_planner_wakes_total: 0,
+    decision_planner_continue_low_wakes_total: 0,
+    decision_planner_replan_high_wakes_total: 0,
+    decision_planner_fallback_wakes_total: 0,
+    decision_error: '',
+    step_completion_contract: '',
+    step_completion_status: '',
+    step_completion_evidence: '',
+    runtime_condition: '',
+    runtime_condition_state: '',
     last_tool: '',
     last_event: '',
     recovery_attempt: 0,
@@ -545,6 +587,55 @@ function emptyAgentDebug(fallback = {}) {
     actor_id: debugInteger(fallback.actor_id),
     actor_epoch: debugInteger(fallback.actor_epoch),
   }
+}
+
+function decisionDebugFields(value = {}) {
+  return {
+    decision_provider: uiText(value.decision_provider, 80),
+    decision_model: uiText(value.decision_model, 160),
+    decision_shadow_intent: uiText(value.decision_shadow_intent, 80),
+    decision_active_intent: uiText(value.decision_active_intent, 80),
+    decision_post_step_route: uiText(value.decision_post_step_route, 80),
+    decision_post_step_applied_route: uiText(value.decision_post_step_applied_route, 80),
+    decision_post_step_confidence_percent: debugInteger(value.decision_post_step_confidence_percent),
+    decision_post_step_latency_ms: debugInteger(value.decision_post_step_latency_ms),
+    decision_post_step_fallback: uiText(value.decision_post_step_fallback, 300),
+    decision_granularity: uiText(value.decision_granularity, 32),
+    decision_granularity_confidence_percent: debugInteger(value.decision_granularity_confidence_percent),
+    decision_development: uiText(value.decision_development, 32),
+    decision_development_confidence_percent: debugInteger(value.decision_development_confidence_percent),
+    decision_reasoning_budget: uiText(value.decision_reasoning_budget, 32),
+    decision_reasoning_confidence_percent: debugInteger(value.decision_reasoning_confidence_percent),
+    decision_planning_horizon: uiText(value.decision_planning_horizon, 32),
+    decision_observation_budget: debugInteger(value.decision_observation_budget),
+    decision_confidence_percent: debugInteger(value.decision_confidence_percent),
+    decision_queue_conflict_percent: debugInteger(value.decision_queue_conflict_percent),
+    decision_latency_ms: debugInteger(value.decision_latency_ms),
+    decision_input_units: debugInteger(value.decision_input_units),
+    decision_output_units: debugInteger(value.decision_output_units),
+    decision_cost_micro_usd: debugInteger(value.decision_cost_micro_usd),
+    decision_calls_total: debugInteger(value.decision_calls_total),
+    decision_input_units_total: debugInteger(value.decision_input_units_total),
+    decision_output_units_total: debugInteger(value.decision_output_units_total),
+    decision_cost_micro_usd_total: debugInteger(value.decision_cost_micro_usd_total),
+    decision_shadow_matches_total: debugInteger(value.decision_shadow_matches_total),
+    decision_shadow_mismatches_total: debugInteger(value.decision_shadow_mismatches_total),
+    decision_post_step_calls_total: debugInteger(value.decision_post_step_calls_total),
+    decision_planner_skips_total: debugInteger(value.decision_planner_skips_total),
+    decision_planner_wakes_total: debugInteger(value.decision_planner_wakes_total),
+    decision_planner_continue_low_wakes_total: debugInteger(value.decision_planner_continue_low_wakes_total),
+    decision_planner_replan_high_wakes_total: debugInteger(value.decision_planner_replan_high_wakes_total),
+    decision_planner_fallback_wakes_total: debugInteger(value.decision_planner_fallback_wakes_total),
+    decision_error: uiText(value.decision_error, 300),
+  }
+}
+
+function decisionPercent(value) {
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? Math.round(value * 100) : 0
+}
+
+function decisionMicroUsd(value) {
+  return Number.isFinite(value) && value >= 0 ? Math.round(value * 1_000_000) : 0
 }
 
 function applyDebugUsage(debug, usage) {
@@ -573,7 +664,7 @@ function applyLatestRoundDebugUsage(debug, usage, round) {
 export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = {}) {
   const failure = data?.failure_snapshot && typeof data.failure_snapshot === 'object' ? data.failure_snapshot : undefined
   let debug = event === 'request.received'
-    ? emptyAgentDebug(fallback)
+    ? { ...emptyAgentDebug(fallback), ...decisionDebugFields(previous) }
     : { ...emptyAgentDebug(fallback), ...(previous && typeof previous === 'object' ? previous : {}) }
 
   debug.last_event = uiText(event, 120)
@@ -623,6 +714,117 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
     debug = applyLatestRoundDebugUsage(debug, data?.usage ?? providerEvent?.usage, providerEvent?.round ?? data?.round)
   }
 
+  if (event === 'interaction.routed') {
+    const shadow = data?.decision_shadow && typeof data.decision_shadow === 'object' ? data.decision_shadow : undefined
+    if (shadow) {
+      debug.decision_provider = uiText(shadow.provider, 80)
+      debug.decision_model = uiText(shadow.model, 160)
+      debug.decision_shadow_intent = uiText(shadow.intent, 80)
+      debug.decision_active_intent = uiText(data.intent, 80)
+      debug.decision_confidence_percent = decisionPercent(shadow.intent_confidence)
+      debug.decision_queue_conflict_percent = decisionPercent(shadow.queue_conflict_probability)
+      debug.decision_latency_ms = debugInteger(data.decision_shadow_latency_ms)
+      const decisionInput = debugInteger(shadow.usage?.input_tokens)
+      const decisionOutput = debugInteger(shadow.usage?.output_tokens)
+      const decisionCost = decisionMicroUsd(shadow.usage?.cost)
+      debug.decision_input_units = decisionInput
+      debug.decision_output_units = decisionOutput
+      debug.decision_cost_micro_usd = decisionCost
+      debug.decision_calls_total = debugInteger(debug.decision_calls_total) + 1
+      debug.decision_input_units_total = debugInteger(debug.decision_input_units_total) + decisionInput
+      debug.decision_output_units_total = debugInteger(debug.decision_output_units_total) + decisionOutput
+      debug.decision_cost_micro_usd_total = debugInteger(debug.decision_cost_micro_usd_total) + decisionCost
+      if (shadow.intent === data.intent) debug.decision_shadow_matches_total = debugInteger(debug.decision_shadow_matches_total) + 1
+      else debug.decision_shadow_mismatches_total = debugInteger(debug.decision_shadow_mismatches_total) + 1
+      debug.decision_error = ''
+    }
+    const decisionError = uiText(data.decision_shadow_error, 300)
+    if (decisionError) debug.decision_error = decisionError
+  }
+
+  if (event === 'post_step.routed') {
+    debug.decision_post_step_calls_total = debugInteger(debug.decision_post_step_calls_total) + 1
+    const decision = data?.decision && typeof data.decision === 'object' ? data.decision : undefined
+    debug.decision_post_step_route = uiText(data.route, 80)
+    debug.decision_post_step_applied_route = uiText(data.applied_route, 80)
+    debug.decision_post_step_fallback = uiText(data.fallback_reason, 300)
+    debug.decision_post_step_latency_ms = debugInteger(data.decision_latency_ms)
+    if (decision) {
+      debug.decision_provider = uiText(decision.provider, 80)
+      debug.decision_model = uiText(decision.model, 160)
+      debug.decision_post_step_confidence_percent = decisionPercent(decision.confidence)
+      const hierarchy = decision.hierarchy && typeof decision.hierarchy === 'object' ? decision.hierarchy : undefined
+      if (hierarchy) {
+        debug.decision_granularity = uiText(hierarchy.granularity, 32)
+        debug.decision_granularity_confidence_percent = decisionPercent(hierarchy.granularity_confidence)
+        debug.decision_development = uiText(hierarchy.development, 32)
+        debug.decision_development_confidence_percent = decisionPercent(hierarchy.development_confidence)
+        debug.decision_reasoning_budget = uiText(hierarchy.reasoning_budget, 32)
+        debug.decision_reasoning_confidence_percent = decisionPercent(hierarchy.reasoning_confidence)
+        debug.decision_planning_horizon = uiText(hierarchy.planning_horizon, 32)
+        debug.decision_observation_budget = debugInteger(hierarchy.observation_budget)
+      }
+      const decisionInput = debugInteger(decision.usage?.input_tokens)
+      const decisionOutput = debugInteger(decision.usage?.output_tokens)
+      const decisionCost = decisionMicroUsd(decision.usage?.cost)
+      debug.decision_input_units = decisionInput
+      debug.decision_output_units = decisionOutput
+      debug.decision_cost_micro_usd = decisionCost
+      debug.decision_calls_total = debugInteger(debug.decision_calls_total) + 1
+      debug.decision_input_units_total = debugInteger(debug.decision_input_units_total) + decisionInput
+      debug.decision_output_units_total = debugInteger(debug.decision_output_units_total) + decisionOutput
+      debug.decision_cost_micro_usd_total = debugInteger(debug.decision_cost_micro_usd_total) + decisionCost
+      debug.decision_error = ''
+    }
+    if (debug.decision_post_step_fallback) debug.decision_error = debug.decision_post_step_fallback
+  }
+
+  if (event === 'planner.skipped' && data?.source === 'decision_provider') {
+    debug.decision_planner_skips_total = debugInteger(debug.decision_planner_skips_total) + 1
+  }
+  if (event === 'planner.wake' && data?.source === 'decision_provider') {
+    debug.decision_planner_wakes_total = debugInteger(debug.decision_planner_wakes_total) + 1
+    if (data?.route === 'continue_current') {
+      debug.decision_planner_continue_low_wakes_total = debugInteger(debug.decision_planner_continue_low_wakes_total) + 1
+    }
+    else if (data?.route === 'replan') {
+      debug.decision_planner_replan_high_wakes_total = debugInteger(debug.decision_planner_replan_high_wakes_total) + 1
+    }
+    else if (data?.route === 'fallback_planner') {
+      debug.decision_planner_fallback_wakes_total = debugInteger(debug.decision_planner_fallback_wakes_total) + 1
+    }
+  }
+
+  if (event === 'step.contract_created') {
+    const contract = data?.contract && typeof data.contract === 'object' ? data.contract : {}
+    const kinds = Array.isArray(contract.requirements)
+      ? contract.requirements.map(requirement => uiText(requirement?.kind, 60)).filter(Boolean).join('+')
+      : ''
+    debug.step_completion_contract = uiText(kinds || contract.mode || 'semantic_unknown', 200)
+    debug.step_completion_status = contract.mode === 'semantic_unknown' ? 'unknown' : 'waiting'
+  }
+  if (event === 'step.completion_checked') {
+    debug.step_completion_status = uiText(data.status, 80) || debug.step_completion_status
+    debug.step_completion_evidence = uiText(JSON.stringify(data.evidence ?? []), 300)
+  }
+  if (event === 'step.completion_rejected') {
+    debug.step_completion_status = uiText(data.reason, 120) || 'rejected'
+  }
+  if (event === 'step.verified') {
+    debug.step_completion_status = 'verified'
+    debug.step_completion_evidence = uiText(JSON.stringify(data.task_board ?? data.evidence ?? {}), 300)
+  }
+  if (event === 'runtime.condition_registered') {
+    debug.runtime_condition = uiText(JSON.stringify(data.condition ?? {}), 300)
+    debug.runtime_condition_state = 'active'
+  }
+  if (event === 'runtime.condition_waiting') debug.runtime_condition_state = 'active'
+  if (event === 'runtime.condition_satisfied') debug.runtime_condition_state = 'satisfied'
+  if (event === 'runtime.condition_timeout') debug.runtime_condition_state = 'timeout'
+  if (event === 'runtime.condition_failed') debug.runtime_condition_state = 'failed'
+  if (event === 'runtime.condition_progress_stopped') debug.runtime_condition_state = 'stopped'
+  if (event === 'runtime.condition_stale') debug.runtime_condition_state = 'stale'
+
   if (event === 'tool.call' || event === 'tool.result') debug.last_tool = uiText(data.name, 120)
   if (event === 'actor.bound') {
     debug.actor_id = debugInteger(data.actor_id)
@@ -651,6 +853,38 @@ export function liveAgentDebugEvent(event, data = {}, previous = {}, fallback = 
 export function liveAgentEvent(event, data = {}) {
   const count = value => Array.isArray(value) ? value.length : 0
   switch (event) {
+    case 'post_step.routed': {
+      const requested = uiText(data.route, 80) || 'fallback_planner'
+      const applied = uiText(data.applied_route, 80) || requested
+      const decision = data?.decision && typeof data.decision === 'object' ? data.decision : undefined
+      const confidence = decisionPercent(decision?.confidence)
+      const fallback = uiText(data.fallback_reason, 160)
+      return {
+        activity: {
+          kind: 'system',
+          text: `Jev ACTIVE post-step: ${requested}${applied !== requested ? ` → ${applied}` : ''}${confidence > 0 ? ` · ${confidence}%` : ''}${fallback ? ` · fallback ${fallback}` : ''}`,
+        },
+      }
+    }
+    case 'interaction.routed': {
+      const shadow = data?.decision_shadow && typeof data.decision_shadow === 'object' ? data.decision_shadow : undefined
+      if (shadow) {
+        const confidence = decisionPercent(shadow.intent_confidence)
+        const match = shadow.intent === data.intent ? 'match' : `active ${uiText(data.intent, 80) || 'unknown'}`
+        const input = debugInteger(shadow.usage?.input_tokens)
+        const cost = decisionMicroUsd(shadow.usage?.cost)
+        return {
+          activity: {
+            kind: 'system',
+            text: `Jev shadow: ${uiText(shadow.intent, 80) || 'unknown'} · ${confidence}% · ${match} · ${debugInteger(data.decision_shadow_latency_ms)} ms${input > 0 ? ` · ${input} in` : ''}${cost > 0 ? ` · ${cost} µUSD` : ''}`,
+          },
+        }
+      }
+      const decisionError = uiText(data.decision_shadow_error, 200)
+      return decisionError
+        ? { activity: { kind: 'system', text: `Jev shadow unavailable: ${decisionError}` } }
+        : undefined
+    }
     case 'request.received':
       return {
         phase: 'thinking',
@@ -732,6 +966,7 @@ export function taskBoardUiSnapshot(state, live) {
     return {
       goal_id: '',
       objective: uiText(live.objective, 500),
+      project: undefined,
       status: 'idle',
       blocker: '',
       blocker_summary: '',
@@ -751,9 +986,30 @@ export function taskBoardUiSnapshot(state, live) {
   }
   const blocker = formatTaskCondition(board.blocker, 'blocker')
   const pauseReason = formatTaskCondition(board.pause_reason, 'pause')
+  const project = state?.project_board?.kind === 'project_board_v1'
+    ? {
+        kind: 'project_board_v1',
+        project_id: uiText(state.project_board.project_id, 100),
+        title: uiText(state.project_board.title, 500),
+        status: uiText(state.project_board.status, 32),
+        current_milestone: state.project_board.current_milestone
+          ? {
+              id: uiText(state.project_board.current_milestone.id, 100),
+              title: uiText(state.project_board.current_milestone.title, 500),
+              completion_summary: uiText(state.project_board.current_milestone.completion_summary, 800),
+            }
+          : undefined,
+        next_milestones: (Array.isArray(state.project_board.next_milestones) ? state.project_board.next_milestones : []).slice(0, 3).map(item => ({
+          id: uiText(item?.id, 100),
+          title: uiText(item?.title, 500),
+        })),
+        development_direction: uiText(state.project_board.development_direction, 32),
+      }
+    : undefined
   return {
     goal_id: String(board.goal_id ?? state.goal_id ?? '').slice(0, 100),
     objective: String(state.objective ?? '').slice(0, 500),
+    project,
     status: board.status,
     blocker: blocker.raw,
     blocker_summary: blocker.summary,
@@ -970,6 +1226,7 @@ export async function pauseStrandedPlanAfterRequestError(session, message) {
   const agent = session?.agent
   const state = session?.currentPlanState?.()
   if (!agent || state?.status !== 'active') return undefined
+  if (state.condition_wait?.state === 'active') return undefined
 
   let runtime
   try {
@@ -1071,6 +1328,7 @@ export class Session {
     this.uiInputPoll = null
     this.uiHeartbeat = null
     this.uiInputPollRunning = false
+    this.conditionPollRunning = false
     this.lastUiFailure = ''
     this.lastUiFailureAt = 0
   }
@@ -1417,6 +1675,60 @@ export class Session {
     }
   }
 
+  pollRuntimeCondition() {
+    if (!this.agent || !this.rcon || !this.ready || this.stopping || this.conditionPollRunning) return false
+    const state = this.currentPlanState()
+    if (state?.condition_wait?.state !== 'active' || typeof this.agent.pollConditionWait !== 'function') return false
+    this.conditionPollRunning = true
+    this.queueEvent(async () => {
+      try {
+        await this.ensureAuthorization()
+        const result = await this.agent.pollConditionWait()
+        if (!result || result.action === 'stale') return
+        if (result.state) await this.syncTaskBoardUi(result.state)
+
+        if (result.action === 'waiting') {
+          this.log(`Runtime condition still active; planner remains asleep wait=${result.wait_id}`)
+          return
+        }
+
+        if (result.action === 'verified') {
+          if (result.state?.status === 'completed') {
+            const completed = {
+              goalStatus: 'completed',
+              goalId: result.state.goal_id,
+              taskBoard: result.state.task_board,
+              chatMessage: 'The requested goal is verified complete.',
+            }
+            const finalized = await finalizeCompletedTaskBoundary(this, completed)
+            if (completed.chatMessage) await this.printChat(completed.chatMessage)
+            if (!finalized) await this.syncTaskBoardUi(result.state)
+            return
+          }
+          const resumed = await this.recoverInterruptedPlan('condition_satisfied', {
+            condition_wait_id: result.wait_id,
+            source: 'runtime_condition',
+          })
+          if (!resumed) await this.syncTaskBoardUi(result.state)
+          return
+        }
+
+        if (result.action === 'wake' || result.action === 'timeout' || result.action === 'failed') {
+          const resumed = await this.recoverInterruptedPlan(`condition_${result.action}`, {
+            condition_wait_id: result.wait_id,
+            reason: result.reason,
+            source: 'runtime_condition',
+          })
+          if (!resumed) await this.syncTaskBoardUi(result.state)
+        }
+      }
+      finally {
+        this.conditionPollRunning = false
+      }
+    }, { reportError: true })
+    return true
+  }
+
   async applyNavigationObstaclePolicy(text) {
     if (!this.rcon) return
     const policy = navigationObstaclePolicy(text)
@@ -1483,6 +1795,20 @@ export class Session {
         model: this.config.model,
         timeoutMs: this.config.providerTimeoutMs,
       }, messages, context),
+      interactionDecisionProvider: this.config.decisionProvider
+        ? (state, questions, context = {}) => decisionProviderRequest(
+            this.config.decisionProvider,
+            state,
+            questions,
+            {
+              signal: context.signal,
+              reserve: () => reserveBudget(
+                path.join(this.root, '.airi', 'decision-provider-budget.json'),
+                this.config.decisionProvider.maxRequestsPerHour,
+              ),
+            },
+          )
+        : undefined,
       reserve: async () => reserveBudget(path.join(this.root, '.airi', 'provider-budget.json'), this.config.budget),
       log: message => this.log(`[SGLuna agent] ${redact(secrets, message)}`),
       onActivity: (event, data) => this.onAgentActivity(event, data),
@@ -1498,9 +1824,12 @@ export class Session {
     this.uiHeartbeat.unref?.()
     this.drainTaskBoardUiInputs()
     this.poll = setInterval(() => {
-      if (!this.stopping) this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
+      if (this.stopping) return
+      if (this.pollRuntimeCondition()) return
+      this.ensureAuthorization().catch(error => this.log(`NPC authorization health check failed: ${error.message}`))
     }, 2000)
-    if (shouldRecoverInterruptedPlan(this.currentPlanState())) {
+    const startupState = this.currentPlanState()
+    if (startupState?.condition_wait?.state !== 'active' && shouldRecoverInterruptedPlan(startupState)) {
       this.queueEvent(async () => {
         await this.recoverInterruptedPlan('runtime_restart', { actor_id: this.lastStatus?.actor_id, epoch: this.lastStatus?.epoch })
       })

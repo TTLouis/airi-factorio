@@ -1,0 +1,257 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+
+import {
+  applyConditionObservation,
+  completionCandidatesFromOperations,
+  evaluateCompletionContract,
+  makeConditionWait,
+  parseStepCheckpointDecision,
+  parseStepCompletionDecision,
+  sanitizeStepCompletionContract,
+  stepCheckpointDecisionQuestions,
+  stepCompletionDecisionQuestions,
+  stepRelationAllowsAdmission,
+} from './step-completion.mjs'
+
+test('unsupported, mixed, truncated, or malformed completion semantics fail closed', () => {
+  assert.equal(sanitizeStepCompletionContract({ mode: 'all', requirements: [{ kind: 'natural_language', predicate: 'looks done' }] }).mode, 'semantic_unknown')
+  assert.equal(sanitizeStepCompletionContract({
+    mode: 'all',
+    requirements: [
+      { id: 'plates', kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 },
+      { id: 'guess', kind: 'natural_language', predicate: 'looks done' },
+    ],
+  }).mode, 'semantic_unknown')
+  assert.equal(sanitizeStepCompletionContract({
+    mode: 'javascript',
+    requirements: [{ id: 'plates', kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 }],
+  }).mode, 'semantic_unknown')
+  assert.equal(sanitizeStepCompletionContract({
+    mode: 'all',
+    requirements: Array.from({ length: 9 }, (_, index) => ({ id: `item_${index}`, kind: 'inventory_count', item_name: 'iron-plate', minimum: 1 })),
+  }).mode, 'semantic_unknown')
+  assert.equal(sanitizeStepCompletionContract({
+    mode: 'all',
+    requirements: [
+      { id: 'same', kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 },
+      { id: 'same', kind: 'inventory_count', item_name: 'copper-plate', minimum: 9 },
+    ],
+  }).mode, 'semantic_unknown')
+  assert.equal(sanitizeStepCompletionContract({
+    mode: 'all',
+    requirements: [{ id: 'receipt', kind: 'authoritative_operation_receipt' }],
+  }).mode, 'semantic_unknown')
+})
+
+test('inventory completion requires grounded count truth', () => {
+  const contract = sanitizeStepCompletionContract({
+    mode: 'all',
+    requirements: [{ id: 'plates', kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 }],
+  })
+  assert.equal(evaluateCompletionContract(contract, {
+    plates: { kind: 'inventory_count', item_name: 'iron-plate', current: 0, summary: 'iron-plate=0' },
+  }).satisfied, false)
+  assert.equal(evaluateCompletionContract(contract, {
+    plates: { kind: 'inventory_count', item_name: 'iron-plate', current: 9, summary: 'iron-plate=9' },
+  }).satisfied, true)
+  assert.equal(evaluateCompletionContract(contract, {
+    plates: { kind: 'inventory_count', item_name: 'copper-plate', current: 99, satisfied: true },
+  }).satisfied, false)
+})
+
+test('entity inventory completion requires exact live identity', () => {
+  assert.equal(sanitizeStepCompletionContract({
+    mode: 'all',
+    requirements: [{ kind: 'entity_inventory_count', item_name: 'iron-plate', minimum: 9 }],
+  }).mode, 'semantic_unknown')
+  const contract = sanitizeStepCompletionContract({
+    mode: 'all',
+    requirements: [{ id: 'furnace', kind: 'entity_inventory_count', unit_number: 582, item_name: 'iron-plate', minimum: 9 }],
+  })
+  assert.equal(contract.requirements[0].unit_number, 582)
+  assert.equal(evaluateCompletionContract(contract, {
+    furnace: { kind: 'entity_inventory_count', unit_number: 582, item_name: 'iron-plate', current: 9, stale: false },
+  }).satisfied, true)
+  assert.equal(evaluateCompletionContract(contract, {
+    furnace: { kind: 'entity_inventory_count', unit_number: 583, item_name: 'iron-plate', current: 99, stale: false },
+  }).satisfied, false)
+  assert.equal(evaluateCompletionContract(contract, {
+    furnace: { kind: 'entity_inventory_count', unit_number: 582, item_name: 'iron-plate', current: 99, stale: true },
+  }).satisfied, false)
+})
+
+test('Jev completion decision may only select runtime-supplied candidate contracts', () => {
+  const candidates = [{
+    mode: 'all',
+    requirements: [{ id: 'drill', kind: 'inventory_count', item_name: 'burner-mining-drill', minimum: 1 }],
+  }]
+  const questions = stepCompletionDecisionQuestions(candidates)
+  assert.ok(questions.contract.criteria.candidate_1)
+  const selected = parseStepCompletionDecision({
+    answers: {
+      contract: { type: 'choice', choice: 'candidate_1', confidence: 0.91 },
+      compound_step: { type: 'noul', noul: 0.1 },
+    },
+  }, candidates)
+  assert.equal(selected.contract.requirements[0].item_name, 'burner-mining-drill')
+
+  const unknown = parseStepCompletionDecision({
+    answers: {
+      contract: { type: 'choice', choice: 'semantic_unknown', confidence: 0.95 },
+      compound_step: { type: 'noul', noul: 0.8 },
+    },
+  }, candidates)
+  assert.equal(unknown.contract.mode, 'semantic_unknown')
+})
+
+
+test('high-level operation intent produces deterministic checkpoint candidates before execution', () => {
+  const candidates = completionCandidatesFromOperations([
+    { name: 'gather_resource', args: { resource_name: 'stone', count: 10, search_radius: 64 } },
+  ])
+  assert.equal(candidates[0].source, 'operation_intent')
+  assert.deepEqual(candidates[0].requirements[0], {
+    id: 'intent_1',
+    kind: 'inventory_count',
+    item_name: 'stone',
+    minimum: 10,
+  })
+  assert.equal(candidates.length, 1)
+})
+
+test('Jev checkpoint pass chooses semantic boundary separately from the grounded contract', () => {
+  const candidates = completionCandidatesFromOperations([
+    { name: 'craft_item', args: { item_name: 'stone-furnace', count: 2 } },
+  ])
+  const questions = stepCheckpointDecisionQuestions(candidates)
+  assert.ok(questions.checkpoint_boundary.criteria.checkpoint_here)
+  assert.ok(questions.checkpoint_boundary.criteria.keep_step_open)
+  assert.ok(questions.checkpoint_boundary.criteria.split_recommended)
+
+  const selected = parseStepCheckpointDecision({
+    answers: {
+      contract: { type: 'choice', choice: 'candidate_1', confidence: 0.93 },
+      compound_step: { type: 'noul', noul: 0.08 },
+      step_relation: { type: 'choice', choice: 'advances_current', confidence: 0.94 },
+      checkpoint_boundary: { type: 'choice', choice: 'checkpoint_here', confidence: 0.9 },
+    },
+  }, candidates)
+  assert.equal(selected.boundary, 'checkpoint_here')
+  assert.equal(selected.relation, 'advances_current')
+  assert.equal(selected.contract.requirements[0].kind, 'inventory_count')
+  assert.equal(selected.contract.requirements[0].item_name, 'stone-furnace')
+
+  const split = parseStepCheckpointDecision({
+    answers: {
+      contract: { type: 'choice', choice: 'candidate_1', confidence: 0.86 },
+      compound_step: { type: 'noul', noul: 0.91 },
+      step_relation: { type: 'choice', choice: 'replan_needed', confidence: 0.95 },
+      checkpoint_boundary: { type: 'choice', choice: 'split_recommended', confidence: 0.95 },
+    },
+  }, candidates)
+  assert.equal(split.boundary, 'split_recommended')
+})
+
+
+test('step semantic relation admits only current-step progress or prerequisites', () => {
+  assert.equal(stepRelationAllowsAdmission('advances_current'), true)
+  assert.equal(stepRelationAllowsAdmission('prerequisite_for_current'), true)
+  assert.equal(stepRelationAllowsAdmission('belongs_to_later_step'), false)
+  assert.equal(stepRelationAllowsAdmission('replan_needed'), false)
+  assert.equal(stepRelationAllowsAdmission('unrelated'), false)
+
+  const candidates = completionCandidatesFromOperations([
+    { name: 'craft_item', args: { item_name: 'stone-furnace', count: 2 } },
+  ])
+  const drift = parseStepCheckpointDecision({
+    answers: {
+      contract: { type: 'choice', choice: 'candidate_1', confidence: 0.91 },
+      compound_step: { type: 'noul', noul: 0.1 },
+      step_relation: { type: 'choice', choice: 'belongs_to_later_step', confidence: 0.96 },
+      checkpoint_boundary: { type: 'choice', choice: 'keep_step_open', confidence: 0.92 },
+    },
+  }, candidates)
+  assert.equal(drift.relation, 'belongs_to_later_step')
+  assert.equal(drift.boundary, 'keep_step_open')
+})
+
+test('passive progress wait stays active while machine progresses and wakes when it stops', () => {
+  const wait = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    { mode: 'passive_progress', goalId: 'goal_1', stepId: 'step_2', maxChecks: 10 },
+  )
+  const active = applyConditionObservation(wait, { satisfied: true, progressing: true, progress_known: true })
+  assert.equal(active.action, 'waiting')
+  assert.equal(active.wait.state, 'active')
+  const stopped = applyConditionObservation(active.wait, { satisfied: false, progressing: false, progress_known: true })
+  assert.equal(stopped.action, 'wake')
+  assert.equal(stopped.wait.state, 'failed')
+})
+
+test('completion wait verifies once and duplicate observations are stale after satisfaction', () => {
+  const wait = makeConditionWait(
+    { kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 },
+    { goalId: 'goal_1', stepId: 'step_2', maxChecks: 10 },
+  )
+  const verified = applyConditionObservation(wait, { satisfied: true, summary: 'iron-plate=10' })
+  assert.equal(verified.action, 'verified')
+  assert.equal(applyConditionObservation(verified.wait, { satisfied: true }).action, 'stale')
+})
+
+test('timeout and exact-identity loss never fake completion', () => {
+  const wait = makeConditionWait(
+    { kind: 'entity_inventory_count', unit_number: 582, item_name: 'iron-plate', minimum: 9 },
+    { maxChecks: 1 },
+  )
+  const timed = applyConditionObservation(wait, { satisfied: false, progressing: true })
+  assert.equal(timed.action, 'timeout')
+  assert.notEqual(timed.wait.state, 'satisfied')
+
+  const stale = applyConditionObservation(wait, { stale: true })
+  assert.equal(stale.action, 'failed')
+  assert.equal(stale.reason, 'stale_exact_identity')
+})
+
+
+test('passive progress wait is bounded by checks and elapsed timeout without treating time as completion', () => {
+  const byChecks = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    { mode: 'passive_progress', goalId: 'goal_1', stepId: 'step_2', maxChecks: 1, timeoutMs: 60000, now: 1000 },
+  )
+  const checkTimeout = applyConditionObservation(byChecks, {
+    satisfied: true,
+    progressing: true,
+    progress_known: true,
+  }, { now: 1500 })
+  assert.equal(checkTimeout.action, 'timeout')
+  assert.equal(checkTimeout.wait.state, 'timeout')
+
+  const byTime = makeConditionWait(
+    { kind: 'entity_state', unit_number: 582, expected: 'working' },
+    { mode: 'passive_progress', goalId: 'goal_1', stepId: 'step_2', maxChecks: 10, timeoutMs: 1000, now: 1000 },
+  )
+  const elapsedTimeout = applyConditionObservation(byTime, {
+    satisfied: true,
+    progressing: true,
+    progress_known: true,
+  }, { now: 2000 })
+  assert.equal(elapsedTimeout.action, 'timeout')
+  assert.notEqual(elapsedTimeout.wait.state, 'satisfied')
+})
+
+test('condition wait carries bounded lifecycle identity when supplied', () => {
+  const wait = makeConditionWait(
+    { kind: 'inventory_count', item_name: 'iron-plate', minimum: 9 },
+    {
+      goalId: 'goal_1',
+      stepId: 'step_2',
+      actorId: 18,
+      actorEpoch: 3,
+      timeoutMs: 999999999,
+    },
+  )
+  assert.equal(wait.actor_id, 18)
+  assert.equal(wait.actor_epoch, 3)
+  assert.ok(wait.timeout_ms <= 2 * 60 * 60 * 1000)
+})

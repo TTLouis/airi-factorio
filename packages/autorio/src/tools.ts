@@ -1,5 +1,7 @@
+import type { LuaEntity } from 'factorio:runtime'
 import { create_actor_remote_interface, get_controlled_actor } from './actors/actor_controller'
-import { remember_entity_reference } from './entity_reference'
+import type { ControlledActor } from './actors/types'
+import { remember_entity_reference, resolve_exact_entity } from './entity_reference'
 import { create_placement_candidate_set, type PlacementCandidateRequest } from './placement_candidates'
 import { compact_spatial_summary } from './spatial_semantics'
 import { get_actor_inventory_items } from './utils/inventory'
@@ -14,10 +16,90 @@ function squared_distance(a: { x: number, y: number }, b: { x: number, y: number
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 }
 
+function positive_integer(value: unknown) {
+  return typeof value === 'number' && value === math.floor(value) && value > 0
+}
+
+function actor_item_count(actor: ControlledActor, item_name: string) {
+  const item = get_actor_inventory_items(actor).find(entry => entry.name === item_name)
+  return item?.count ?? 0
+}
+
+function entity_item_count(entity: LuaEntity, item_name: string) {
+  let count = 0
+  const max_inventory_index = math.min(entity.get_max_inventory_index(), MAX_ENTITY_INVENTORIES)
+  for (let index = 1; index <= max_inventory_index; index++) {
+    const inventory = entity.get_inventory(index)
+    if (!inventory) continue
+    for (const item of inventory.get_contents()) {
+      if (item.name === item_name) count += item.count
+    }
+  }
+  return count
+}
+
+function evaluate_runtime_condition(request: Record<string, unknown>) {
+  const actor = get_controlled_actor()
+  if (!actor) return { ok: false, error: 'no_actor' }
+  if (!request || typeof request !== 'object') return { ok: false, error: 'invalid_condition' }
+  const kind = request.kind
+  if (kind === 'inventory_count') {
+    const item_name = request.item_name
+    const minimum = request.minimum
+    if (typeof item_name !== 'string' || !positive_integer(minimum)) return { ok: false, error: 'invalid_inventory_count_condition' }
+    const current = actor_item_count(actor, item_name)
+    return { ok: true, kind, satisfied: current >= (minimum as number), current, minimum, progress_known: false }
+  }
+
+  if (kind === 'entity_exists' || kind === 'entity_state' || kind === 'entity_inventory_count') {
+    const unit_number = request.unit_number
+    if (!positive_integer(unit_number)) return { ok: false, error: 'invalid_exact_identity', stale: true }
+    const entity = resolve_exact_entity(actor, unit_number as number)
+    if (!entity || !entity.valid) return { ok: false, error: 'stale_exact_identity', stale: true, unit_number }
+    const status = entity.status
+    const progress_known = status !== undefined
+    const progressing = status === defines.entity_status.working
+
+    if (kind === 'entity_exists') {
+      return { ok: true, kind, satisfied: true, unit_number, progressing, progress_known, entity_status: status }
+    }
+
+    if (kind === 'entity_state') {
+      const expected = request.expected
+      if (expected !== 'working' && expected !== 'not_working' && expected !== 'exists') return { ok: false, error: 'invalid_entity_state_condition' }
+      const satisfied = expected === 'exists'
+        ? true
+        : expected === 'working'
+          ? progressing
+          : !progressing
+      return { ok: true, kind, satisfied, unit_number, progressing, progress_known, entity_status: status }
+    }
+
+    const item_name = request.item_name
+    const minimum = request.minimum
+    if (typeof item_name !== 'string' || !positive_integer(minimum)) return { ok: false, error: 'invalid_entity_inventory_count_condition' }
+    const current = entity_item_count(entity, item_name)
+    return {
+      ok: true,
+      kind,
+      satisfied: current >= (minimum as number),
+      current,
+      minimum,
+      unit_number,
+      progressing,
+      progress_known,
+      entity_status: status,
+    }
+  }
+
+  return { ok: false, error: 'unsupported_condition_kind' }
+}
+
 export function create_tools_remote_interface() {
   create_actor_remote_interface()
 
   remote.add_interface('autorio_tools', {
+    evaluate_condition: (request: Record<string, unknown>) => evaluate_runtime_condition(request),
     get_inventory_items: () => {
       const actor = get_controlled_actor()
       if (!actor) {
@@ -228,6 +310,8 @@ export function create_tools_remote_interface() {
         rotatable: entity.rotatable,
         amount: entity.type === 'resource' ? entity.amount : undefined,
         recipe: recipe_name,
+        status: entity.status,
+        working: entity.status === defines.entity_status.working,
         inventories,
         inventories_truncated: entity.get_max_inventory_index() > MAX_ENTITY_INVENTORIES,
         inventory_items_truncated,

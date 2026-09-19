@@ -10,6 +10,7 @@ import {
   task_conversation_messages,
   toggle_debug_activity_follow,
   reset_task_conversation,
+  sanitize_debug_snapshot,
 } from './task_board_debug'
 
 const store = () => (globalThis as any).storage as Record<string, any>
@@ -19,6 +20,71 @@ beforeEach(() => {
 })
 
 describe('task board debug and UI freshness helpers', () => {
+  it('sanitizes Jev decision diagnostics independently from planner diagnostics', () => {
+    const debug = sanitize_debug_snapshot({
+      provider_model: 'deepseek-chat',
+      input_units: 100000,
+      decision_provider: 'TypeSafe',
+      decision_model: 'jev-latest',
+      decision_shadow_intent: 'status_query',
+      decision_active_intent: 'status_query',
+      decision_post_step_route: 'wait_runtime',
+      decision_post_step_applied_route: 'fallback_planner',
+      decision_post_step_confidence_percent: 87,
+      decision_post_step_latency_ms: 42,
+      decision_post_step_fallback: 'runtime not healthy',
+      decision_confidence_percent: 109,
+      decision_queue_conflict_percent: 17,
+      decision_latency_ms: 84,
+      decision_input_units: 120,
+      decision_output_units: 20,
+      decision_cost_micro_usd: 5,
+      decision_calls_total: 7,
+      decision_input_units_total: 840,
+      decision_output_units_total: 140,
+      decision_cost_micro_usd_total: 35,
+      decision_shadow_matches_total: 6,
+      decision_shadow_mismatches_total: 1,
+      decision_post_step_calls_total: 5,
+      decision_planner_skips_total: 3,
+      decision_planner_wakes_total: 3,
+      decision_planner_continue_low_wakes_total: 1,
+      decision_planner_replan_high_wakes_total: 1,
+      decision_planner_fallback_wakes_total: 1,
+      decision_error: '',
+    })
+
+    expect(debug.provider_model).toBe('deepseek-chat')
+    expect(debug.input_units).toBe(100000)
+    expect(debug.decision_provider).toBe('TypeSafe')
+    expect(debug.decision_model).toBe('jev-latest')
+    expect(debug.decision_shadow_intent).toBe('status_query')
+    expect(debug.decision_active_intent).toBe('status_query')
+    expect(debug.decision_post_step_route).toBe('wait_runtime')
+    expect(debug.decision_post_step_applied_route).toBe('fallback_planner')
+    expect(debug.decision_post_step_confidence_percent).toBe(87)
+    expect(debug.decision_post_step_latency_ms).toBe(42)
+    expect(debug.decision_post_step_fallback).toBe('runtime not healthy')
+    expect(debug.decision_confidence_percent).toBe(100)
+    expect(debug.decision_queue_conflict_percent).toBe(17)
+    expect(debug.decision_latency_ms).toBe(84)
+    expect(debug.decision_input_units).toBe(120)
+    expect(debug.decision_output_units).toBe(20)
+    expect(debug.decision_cost_micro_usd).toBe(5)
+    expect(debug.decision_calls_total).toBe(7)
+    expect(debug.decision_input_units_total).toBe(840)
+    expect(debug.decision_output_units_total).toBe(140)
+    expect(debug.decision_cost_micro_usd_total).toBe(35)
+    expect(debug.decision_shadow_matches_total).toBe(6)
+    expect(debug.decision_shadow_mismatches_total).toBe(1)
+    expect(debug.decision_post_step_calls_total).toBe(5)
+    expect(debug.decision_planner_skips_total).toBe(3)
+    expect(debug.decision_planner_wakes_total).toBe(3)
+    expect(debug.decision_planner_continue_low_wakes_total).toBe(1)
+    expect(debug.decision_planner_replan_high_wakes_total).toBe(1)
+    expect(debug.decision_planner_fallback_wakes_total).toBe(1)
+  })
+
   it('uses concise follow captions', () => {
     expect(follow_button_caption(false)).toBe('FOLLOW')
     expect(follow_button_caption(true)).toBe('FOLLOWING')
@@ -37,6 +103,9 @@ describe('task board debug and UI freshness helpers', () => {
       { kind: 'observation', text: 'Observed something' },
       { kind: 'decision', text: 'Newest answer' },
     ] })).toBe('Newest answer')
+    expect(latest_ai_reply({ activity: [
+      { kind: 'system', text: 'Jev shadow: status_query · 91%' },
+    ] })).toBe('')
   })
 
   it('projects all player and AIRI messages for the current durable goal', () => {

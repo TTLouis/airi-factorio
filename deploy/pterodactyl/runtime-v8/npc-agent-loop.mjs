@@ -10,7 +10,26 @@ import {
   taskBoardProgress,
 } from './common.mjs'
 import { executeAuthorizedBatch } from './supervisor-adapter.mjs'
-import { isObservationToolName, renderOperation, renderOperationPreflight, toolCommand } from './structured-policy.mjs'
+import {
+  decisionEnvelopeQuestions,
+  developmentDecisionQuestions,
+  granularityDecisionQuestions,
+  hierarchyRuntimeGate,
+  parseHierarchyTelemetry,
+} from './jev-decision-taxonomy.mjs'
+import { isLifecycleMetaStep, normalizeCanonicalPlan, validateOutcomeCandidate } from './outcome-authority.mjs'
+import { parseRecoveryDecision, recoveryDecisionQuestions, recoveryFailureClassHint, validateRecoveryRoute } from './recovery-route.mjs'
+import {
+  applyConditionObservation,
+  completionCandidatesFromOperations,
+  evaluateCompletionContract,
+  makeConditionWait,
+  parseStepCheckpointDecision,
+  sanitizeStepCompletionContract,
+  stepCheckpointDecisionQuestions,
+  stepRelationAllowsAdmission,
+} from './step-completion.mjs'
+import { isObservationToolName, renderOperation, renderOperationPreflight, runtimeConditionCommand, toolCommand } from './structured-policy.mjs'
 
 export { AgentLoopError }
 
@@ -39,7 +58,7 @@ const DURABLE_PLAN_PROMPT = `
 
 The Pterodactyl harness may provide a [PLAN_STATE] message. It is harness-owned durable goal/plan context for this logical NPC and survives ordinary model turns and server restarts. Use it to resume a prior task, answer what you were doing, or continue after a pause. It is not authoritative live Factorio state: re-observe mutable game state before depending on it.
 
-The task_board field is the canonical single-NPC Task Board Lite. Its stable step ids, statuses, completed count, evidence, and revision are harness-owned. Your plan/currentStep fields are proposals used to advance or intentionally replan the remaining work; do not assume that changing the length of your plan array resets completed progress.
+The task_board field is the canonical single-NPC Task Board Lite. Its stable step ids, statuses, completed count, evidence, and revision are harness-owned. Your plan/currentStep fields are proposals only. currentStep is a proposed focus, not evidence that earlier work completed, and it cannot by itself advance active_index or completed_count. Only grounded runtime authority advances canonical progress. If you intentionally replan, preserve already-completed intent instead of treating currentStep as proof that work happened.
 
 For a multi-step request, keep the plan stable enough that the harness can track progress across Autorio batches. currentStep must identify the step you are actually executing or verifying now. If you replan, preserve already-completed intent instead of silently replacing the whole task with a vague new one.
 
@@ -52,6 +71,8 @@ An empty operations array normally means no new Autorio world action will happen
 When finite canonical work remains but execution is truthfully impossible, keep the remaining plan and start chatMessage with "BLOCKED: " followed by the exact missing fact or blocker. This is the explicit no-mutation blocker contract. Future-tense prose such as "I will take the items" is not a blocker and does not authorize the harness to invent an operation.
 
 Before a non-empty operation batch, chatMessage should tell the human what concrete current plan step AIRI is about to attempt. Do not say mining, construction, transfer, crafting, or any other mutation has started unless that mutation is in the admitted/running operation batch or authoritative runtime evidence proves it. Navigation completion proves arrival only; it never proves that a later mining or construction action started. [MOD] completion/error messages may include a detailed getTaskStatus snapshot. Use that receipt plus any needed read-only verification to advance, replan, complete, or report a blocker.
+
+Skill lifecycle is explicit. findSkills is discovery only: a search result is not a loaded skill and must not be relied on as the full pattern. Before following a discovered skill, call getSkillDetails for that exact id. A [SKILL_CONTEXT] message contains only skills explicitly opened with getSkillDetails for the current logical task. Reuse their structure and constraints, but revalidate mutable world state, recipes, inventory, geometry, and placement with live deterministic tools before acting.
 `.trim()
 
 function cleanMemoryText(value, max) {
@@ -253,7 +274,7 @@ function sanitizeTraceValue(value, key = '') {
 }
 
 function safePlan(plan) {
-  return Array.isArray(plan) ? plan.slice(0, 30).map(step => cleanMemoryText(step, 500)) : []
+  return normalizeCanonicalPlan(plan).plan
 }
 
 function currentPlanStep(plan, currentStep) {
@@ -283,6 +304,98 @@ function safePersistentRuntime(value) {
   }
 }
 
+function safeConditionWait(value) {
+  if (!value || typeof value !== 'object' || value.state !== 'active') return undefined
+  const condition = value.condition
+  if (!condition || typeof condition !== 'object') return undefined
+  if (!['inventory_count', 'entity_inventory_count', 'entity_exists', 'entity_state'].includes(condition.kind)) return undefined
+  if (['entity_inventory_count', 'entity_exists', 'entity_state'].includes(condition.kind)
+    && (!Number.isSafeInteger(condition.unit_number) || condition.unit_number < 1)) return undefined
+  if (['inventory_count', 'entity_inventory_count'].includes(condition.kind)
+    && (typeof condition.item_name !== 'string' || !Number.isSafeInteger(condition.minimum) || condition.minimum < 1)) return undefined
+  if (condition.kind === 'entity_state' && !['working', 'not_working', 'exists'].includes(condition.expected)) return undefined
+  if (!Number.isSafeInteger(value.actor_id) || value.actor_id < 1) return undefined
+  if (!Number.isSafeInteger(value.actor_epoch) || value.actor_epoch < 0) return undefined
+
+  const safeCondition = { kind: condition.kind }
+  if (Number.isSafeInteger(condition.unit_number)) safeCondition.unit_number = condition.unit_number
+  if (typeof condition.item_name === 'string') safeCondition.item_name = cleanMemoryText(condition.item_name, 160)
+  if (Number.isSafeInteger(condition.minimum)) safeCondition.minimum = condition.minimum
+  if (typeof condition.expected === 'string') safeCondition.expected = condition.expected
+
+  return {
+    id: cleanMemoryText(value.id, 100),
+    goal_id: cleanMemoryText(value.goal_id, 100),
+    step_id: cleanMemoryText(value.step_id, 80),
+    actor_id: value.actor_id,
+    actor_epoch: value.actor_epoch,
+    mode: value.mode === 'passive_progress' ? 'passive_progress' : 'completion',
+    condition: safeCondition,
+    state: 'active',
+    checks: Number.isSafeInteger(value.checks) ? Math.max(0, value.checks) : 0,
+    max_checks: Number.isSafeInteger(value.max_checks) ? Math.max(1, Math.min(value.max_checks, 7200)) : 900,
+    timeout_ms: Number.isSafeInteger(value.timeout_ms) ? Math.max(1000, Math.min(value.timeout_ms, 2 * 60 * 60 * 1000)) : 30 * 60 * 1000,
+    registered_at: Number.isFinite(value.registered_at) ? value.registered_at : Date.now(),
+    updated_at: Number.isFinite(value.updated_at) ? value.updated_at : Date.now(),
+  }
+}
+
+function persistedStepCheckpoint(board, stepId) {
+  if (!board || !stepId || !Array.isArray(board.evidence)) return undefined
+  for (let index = board.evidence.length - 1; index >= 0; index--) {
+    const item = board.evidence[index]
+    if (item?.kind !== 'step_checkpoint_contract' || item?.step_id !== stepId || typeof item.summary !== 'string') continue
+    try {
+      const parsed = JSON.parse(item.summary)
+      const contract = sanitizeStepCompletionContract(parsed?.contract)
+      return {
+        contract,
+        boundary: ['checkpoint_here', 'keep_step_open', 'split_recommended'].includes(parsed?.boundary)
+          ? parsed.boundary
+          : 'keep_step_open',
+        relation: ['advances_current', 'prerequisite_for_current', 'belongs_to_later_step', 'replan_needed', 'unrelated'].includes(parsed?.relation)
+          ? parsed.relation
+          : 'replan_needed',
+        compound_probability: parsed?.compound_probability,
+        provider: parsed?.provider,
+        model: parsed?.model,
+      }
+    }
+    catch {}
+  }
+  return undefined
+}
+
+function conditionWaitLifecycleMatches(wait, deployment) {
+  return Boolean(wait
+    && deployment
+    && Number.isSafeInteger(wait.actor_id)
+    && Number.isSafeInteger(wait.actor_epoch)
+    && wait.actor_id === deployment.actor_id
+    && wait.actor_epoch === deployment.epoch)
+}
+
+function normalizedConditionObservation(observation) {
+  return observation?.ok === true
+    ? {
+        satisfied: observation.satisfied === true,
+        progressing: observation.progressing === true,
+        progress_known: observation.progress_known === true,
+        summary: cleanMemoryText(JSON.stringify({
+          kind: observation.kind,
+          current: observation.current,
+          minimum: observation.minimum,
+          unit_number: observation.unit_number,
+          entity_status: observation.entity_status,
+          progressing: observation.progressing,
+        }), 600),
+      }
+    : {
+        stale: observation?.stale === true,
+        error: cleanMemoryText(observation?.error || 'condition_evaluation_failed', 160),
+      }
+}
+
 function visibleTaskBoard(board) {
   if (!board || board.kind !== 'task_board_lite') return undefined
   return {
@@ -296,6 +409,8 @@ function visibleTaskBoard(board) {
     total_steps: board.total_steps,
     active_index: board.active_index,
     active_step_id: board.active_step_id,
+    proposed_focus_index: board.proposed_focus_index,
+    proposed_focus_step_id: board.proposed_focus_step_id,
     steps: board.steps,
     evidence: (board.evidence ?? []).slice(-8),
     events: (board.events ?? []).slice(-12),
@@ -316,6 +431,13 @@ function compactBasicOperationResult(result) {
     item_name: typeof result.item_name === 'string' ? cleanMemoryText(result.item_name, 200) : undefined,
     requested_count: Number.isSafeInteger(result.requested_count) ? result.requested_count : undefined,
     moved_count: Number.isSafeInteger(result.moved_count) ? result.moved_count : undefined,
+    placed_unit_number: Number.isSafeInteger(result.placed_unit_number) ? result.placed_unit_number : undefined,
+    placed_entity_type: typeof result.placed_entity_type === 'string' ? cleanMemoryText(result.placed_entity_type, 100) : undefined,
+    placed_position: result.placed_position && Number.isFinite(result.placed_position.x) && Number.isFinite(result.placed_position.y)
+      ? { x: result.placed_position.x, y: result.placed_position.y }
+      : undefined,
+    placed_surface_index: Number.isSafeInteger(result.placed_surface_index) ? result.placed_surface_index : undefined,
+    placed_direction: Number.isSafeInteger(result.placed_direction) ? result.placed_direction : undefined,
     to_entity: typeof result.to_entity === 'boolean' ? result.to_entity : undefined,
     to_player: typeof result.to_player === 'boolean' ? result.to_player : undefined,
   }
@@ -475,7 +597,143 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     return state
   }
 
-  recordPlan(key, requestInfo, plan, { continuation = false, persistentRuntime, durableOperations = [], exactTargetAudit = [] } = {}) {
+  applyOutcomeAuthority(key, candidate, { world = {}, chatMessage = '' } = {}) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    const decision = validateOutcomeCandidate(candidate, { world })
+    if (!state || !decision.accepted) return { state, decision, changed: false }
+
+    const now = Date.now()
+    const previousStatus = state.status
+    let board = this.ensureTaskBoard(state)
+    const evidence = Array.isArray(candidate?.evidence) ? candidate.evidence : []
+    for (const item of evidence) {
+      if (!item || typeof item !== 'object') continue
+      const duplicate = (board?.evidence ?? []).some(existing => existing?.kind === item.kind && item.ref && existing?.ref === item.ref)
+      if (!duplicate) board = addTaskBoardEvidence(board, { ...item, now: Number.isFinite(item.now) ? item.now : now })
+    }
+    if (decision.durable_status === 'completed' && candidate?.metadata?.scope === 'step') {
+      const activeStepId = board?.active_step_id
+      const candidateKeys = evidence
+        .filter(item => item && typeof item === 'object' && typeof item.kind === 'string' && item.kind && typeof item.ref === 'string' && item.ref)
+        .map(item => ({ kind: item.kind, ref: item.ref }))
+      const boundToActiveStep = Boolean(activeStepId) && candidateKeys.some(key =>
+        (board?.evidence ?? []).some(existing => existing?.kind === key.kind && existing?.ref === key.ref && existing?.step_id === activeStepId))
+      if (!boundToActiveStep) {
+        state.task_board = board
+        this.planByNpc.set(key, state)
+        return {
+          state,
+          decision: { ...decision, accepted: false, rejection_reason: 'completion_evidence_not_bound_to_active_step' },
+          changed: false,
+        }
+      }
+    }
+
+    if (decision.durable_status === 'blocked') {
+      state.status = 'blocked'
+      if (state.admission_status !== 'admission_failed') state.admission_status = undefined
+      state.blocker = cleanMemoryText(decision.blocker || candidate?.candidate_blocker || decision.reason_code, 500)
+      state.pause_reason = ''
+      state.persistent_runtime = undefined
+      state.condition_wait = undefined
+      board = setTaskBoardStatus(board, 'blocked', { blocker: state.blocker, now })
+    }
+    else if (decision.durable_status === 'paused') {
+      state.status = 'paused'
+      state.blocker = ''
+      state.pause_reason = cleanMemoryText(decision.pause_reason || decision.reason_code, 300)
+      state.persistent_runtime = undefined
+      state.condition_wait = undefined
+      board = setTaskBoardStatus(board, 'paused', { pauseReason: state.pause_reason, now })
+    }
+    else if (decision.durable_status === 'completed') {
+      const stepScope = candidate?.metadata?.scope === 'step'
+      const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : 0
+      const finalIndex = Array.isArray(board?.steps) ? board.steps.length - 1 : -1
+      if (stepScope && activeIndex >= 0 && activeIndex < finalIndex) {
+        const nextIndex = activeIndex + 1
+        board = reconcileTaskBoard(
+          board,
+          board.steps.map(step => step.description),
+          nextIndex,
+          { now, authoritativeAdvance: true },
+        )
+        state.status = 'active'
+        state.admission_status = undefined
+        state.blocker = ''
+        state.pause_reason = ''
+        state.condition_wait = undefined
+        state.plan = board.steps.map(step => step.description)
+        state.current_step = board.active_index
+      }
+      else {
+        state.status = 'completed'
+        state.admission_status = undefined
+        state.blocker = ''
+        state.pause_reason = ''
+        state.persistent_runtime = undefined
+        state.condition_wait = undefined
+        board = setTaskBoardStatus(board, 'completed', { now })
+        state.plan = []
+        state.current_step = 0
+      }
+    }
+    else if (decision.durable_status === 'active' && state.status === 'active') {
+      state.blocker = ''
+      state.pause_reason = ''
+      board = setTaskBoardStatus(board, 'active', { now })
+    }
+
+    if (chatMessage) state.last_chat_message = cleanMemoryText(chatMessage, 2000)
+    state.task_board = board
+    if (previousStatus !== state.status) {
+      state.history = [...(state.history ?? []), {
+        revision: state.revision,
+        status: previousStatus,
+        current_step: state.current_step,
+        step: currentPlanStep(state.plan, state.current_step),
+        chat: state.last_chat_message,
+      }].slice(-PLAN_HISTORY_LIMIT)
+    }
+    state.revision = (state.revision ?? 0) + 1
+    state.updated_at = now
+    this.planByNpc.set(key, state)
+    return { state, decision, changed: previousStatus !== state.status || evidence.length > 0 || candidate?.metadata?.scope === 'step' }
+  }
+
+  registerConditionWait(key, wait) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    const safe = safeConditionWait(wait)
+    if (!state || !safe || state.status !== 'active' || safe.goal_id !== state.goal_id || safe.step_id !== state.task_board?.active_step_id) return undefined
+    state.condition_wait = safe
+    state.revision += 1
+    state.updated_at = Date.now()
+    this.planByNpc.set(key, state)
+    return state
+  }
+
+  updateConditionWait(key, wait) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state || !wait || state.condition_wait?.id !== wait.id) return undefined
+    if (wait.state === 'active') state.condition_wait = safeConditionWait(wait)
+    else state.condition_wait = undefined
+    state.revision += 1
+    state.updated_at = Date.now()
+    this.planByNpc.set(key, state)
+    return state
+  }
+
+  clearConditionWait(key, id) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state || !state.condition_wait || (id && state.condition_wait.id !== id)) return state
+    state.condition_wait = undefined
+    state.revision += 1
+    state.updated_at = Date.now()
+    this.planByNpc.set(key, state)
+    return state
+  }
+
+  recordPlan(key, requestInfo, plan, { continuation = false, persistentRuntime, durableOperations = [], exactTargetAudit = [], verifiedCompletion = false, completionEvidence = [] } = {}) {
     const previous = this.planByNpc.get(key)
     const hasOperations = plan.operations.length > 0
     const incomingDurableOperations = (Array.isArray(durableOperations) ? durableOperations : []).slice(0, 16).map(operation => sanitizeDurableModelValue(operation))
@@ -483,13 +741,14 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       ...(Array.isArray(previous?.exact_target_audit) ? previous.exact_target_audit : []),
       ...(Array.isArray(exactTargetAudit) ? exactTargetAudit : []),
     ].slice(-32)
-    const incomingPlan = safePlan(plan.plan)
-    const incomingStep = Number.isSafeInteger(plan.currentStep) ? plan.currentStep : 0
+    const normalized = normalizeCanonicalPlan(plan.plan, plan.currentStep)
+    const incomingPlan = normalized.plan
+    const incomingStep = normalized.currentStep
     const now = Date.now()
     const runtime = safePersistentRuntime(persistentRuntime)
     const runtimeHealthy = runtime?.active === true && runtime.healthy === true && runtime.controller_live === true
 
-    if (!hasOperations && !continuation && !runtimeHealthy) {
+    if (!hasOperations && !continuation && !runtimeHealthy && !verifiedCompletion) {
       return { state: previous, blockedByHarness: false, changed: false }
     }
 
@@ -513,8 +772,9 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         blocker: '',
         pause_reason: '',
         persistent_runtime: previous?.persistent_runtime,
+        condition_wait: undefined,
         plan: incomingPlan,
-        current_step: incomingStep,
+        current_step: previous?.current_step ?? 0,
         revision: (previous?.revision ?? 0) + 1,
         last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
         last_operations: plan.operations.slice(0, 16).map(operation => cleanMemoryText(`${operation.name} ${JSON.stringify(operation.args ?? {})}`, 800)),
@@ -540,8 +800,9 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         blocker: '',
         pause_reason: '',
         persistent_runtime: runtime,
+        condition_wait: previous?.condition_wait,
         plan: incomingPlan,
-        current_step: incomingStep,
+        current_step: previous?.current_step ?? 0,
         revision: (previous?.revision ?? 0) + 1,
         last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
         last_operations: [],
@@ -556,56 +817,32 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
 
     if (!previous) return { state: undefined, blockedByHarness: false, changed: false }
 
-    if (incomingPlan.length > 0) {
-      const preserveBlockedMutation = previous.status === 'blocked'
-        && previous.last_mutation_verified !== true
-        && Array.isArray(previous.last_operations)
-        && previous.last_operations.length > 0
-      const state = {
-        ...previous,
-        status: 'blocked',
-        admission_status: preserveBlockedMutation ? previous.admission_status : undefined,
-        blocker: preserveBlockedMutation && previous.blocker
-          ? previous.blocker
-          : 'no_autorio_operation_for_remaining_plan',
-        pause_reason: '',
-        persistent_runtime: runtime,
-        plan: incomingPlan,
-        current_step: incomingStep,
-        revision: previous.revision + 1,
-        last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
-        last_operations: preserveBlockedMutation ? previous.last_operations : [],
-        durable_last_operations: preserveBlockedMutation ? modelFacingLastOperations(previous) : [],
-        exact_target_audit: mergedExactTargetAudit,
-        updated_at: now,
-        history,
-      }
-      this.planByNpc.set(key, state)
-      return { state, blockedByHarness: true, changed: true }
-    }
-
     const state = {
       ...previous,
-      status: 'completed',
-      admission_status: undefined,
-      blocker: '',
-      pause_reason: '',
-      persistent_runtime: undefined,
-      plan: [],
-      current_step: 0,
-      revision: previous.revision + 1,
+      plan: incomingPlan.length > 0 ? incomingPlan : previous.plan,
+      current_step: previous.current_step,
       last_chat_message: cleanMemoryText(plan.chatMessage, 2000),
-      last_operations: [],
       durable_last_operations: [],
       exact_target_audit: mergedExactTargetAudit,
       updated_at: now,
       history,
     }
     this.planByNpc.set(key, state)
-    return { state, blockedByHarness: false, changed: true }
+
+    if (verifiedCompletion) {
+      const reduced = this.applyOutcomeAuthority(key, {
+        kind: 'verified_complete',
+        source: 'deterministic_runtime',
+        reason_code: 'verified_final_step',
+        evidence: completionEvidence,
+      }, { chatMessage: plan.chatMessage })
+      return { state: reduced.state, blockedByHarness: false, changed: reduced.changed, outcomeDecision: reduced.decision }
+    }
+
+    return { state, blockedByHarness: false, changed: incomingPlan.length > 0 }
   }
 
-  reconcileTaskBoard(key, previousBoard, plan, stateResult, { allowReplan = false } = {}) {
+  reconcileTaskBoard(key, previousBoard, plan, stateResult, { allowReplan = false, authoritativeAdvance = false } = {}) {
     const state = stateResult?.state
     if (!state) return stateResult
     const now = state.updated_at ?? Date.now()
@@ -617,7 +854,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
       board = setTaskBoardStatus(board, 'completed', { now })
     }
     else {
-      board = reconcileTaskBoard(board, plan.plan, plan.currentStep, { now, allowReplan })
+      board = reconcileTaskBoard(board, plan.plan, plan.currentStep, { now, allowReplan, authoritativeAdvance })
       board = setTaskBoardStatus(board, state.status, {
         blocker: state.blocker,
         pauseReason: state.pause_reason,
@@ -648,21 +885,19 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
   setAdmissionState(key, admissionStatus, { blocker = '', evidence } = {}) {
     const state = key ? this.planByNpc.get(key) : undefined
     if (!state) return undefined
-    const now = Date.now()
     state.admission_status = admissionStatus
-    if (admissionStatus === 'admission_failed') {
-      state.status = 'blocked'
-      state.blocker = cleanMemoryText(blocker || 'operation_admission_failed', 500)
-      state.pause_reason = ''
-      let board = this.ensureTaskBoard(state)
-      board = setTaskBoardStatus(board, 'blocked', { blocker: state.blocker, now })
-      if (evidence) board = addTaskBoardEvidence(board, { ...evidence, now })
-      state.task_board = board
-    }
     state.revision += 1
-    state.updated_at = now
+    state.updated_at = Date.now()
     this.planByNpc.set(key, state)
-    return state
+    if (admissionStatus !== 'admission_failed') return state
+
+    return this.applyOutcomeAuthority(key, {
+      kind: 'world_blocked',
+      source: 'deterministic_runtime',
+      reason_code: blocker || 'operation_admission_failed',
+      candidate_blocker: blocker || 'operation_admission_failed',
+      evidence: evidence ? [evidence] : [],
+    }).state
   }
 
   beginActionOmissionRecovery(key, requestInfo, plan) {
@@ -671,9 +906,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
     if (!previous) {
       const incomingPlan = safePlan(plan?.plan)
       if (incomingPlan.length === 0) return undefined
-      const incomingStep = Number.isSafeInteger(plan?.currentStep)
-        ? Math.min(Math.max(plan.currentStep, 0), incomingPlan.length - 1)
-        : 0
+      const incomingStep = 0
       const state = {
         goal_id: `goal_${now.toString(36)}`,
         owner: cleanMemoryText(requestInfo?.sender ?? 'unknown', 128),
@@ -718,59 +951,33 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
   }
 
   blockRemainingPlan(key, { blocker, reason = '', chatMessage = '', evidenceKind = 'lifecycle_blocker' } = {}) {
-    const state = key ? this.planByNpc.get(key) : undefined
-    if (!state) return undefined
-    const now = Date.now()
-    const code = cleanMemoryText(blocker || 'action_omission_after_repair', 500)
-    state.status = 'blocked'
-    state.admission_status = undefined
-    state.blocker = code
-    state.pause_reason = ''
-    state.persistent_runtime = undefined
-    if (chatMessage) state.last_chat_message = cleanMemoryText(chatMessage, 2000)
-    let board = setTaskBoardStatus(this.ensureTaskBoard(state), 'blocked', { blocker: code, now })
-    if (reason) {
-      board = addTaskBoardEvidence(board, {
-        kind: evidenceKind,
-        ref: `${state.goal_id}/${code}`,
-        summary: JSON.stringify({
-          blocker: code,
-          reason: sanitizeDurableModelText(reason, 1200),
-          semantics: 'No world mutation was synthesized by the harness.',
-        }),
-        now,
-      })
-    }
-    state.task_board = board
-    state.revision += 1
-    state.updated_at = now
-    this.planByNpc.set(key, state)
-    return state
+    const evidence = reason
+      ? [{
+          kind: evidenceKind,
+          ref: `${this.planByNpc.get(key)?.goal_id ?? 'goal'}/${cleanMemoryText(blocker || 'blocker', 120)}`,
+          summary: JSON.stringify({ blocker, reason: sanitizeDurableModelText(reason, 1200) }),
+        }]
+      : []
+    return this.applyOutcomeAuthority(key, {
+      kind: 'world_blocked',
+      source: evidenceKind === 'provider_blocker' ? 'main_planner' : 'deterministic_runtime',
+      reason_code: blocker || 'candidate_world_blocker',
+      candidate_blocker: blocker || 'candidate_world_blocker',
+      evidence,
+    }, { chatMessage }).state
   }
 
   pausePlan(key, reason = 'cancelled') {
-    const previous = key ? this.planByNpc.get(key) : undefined
-    if (!previous || previous.status === 'completed') return previous
-    const state = {
-      ...previous,
-      status: 'paused',
-      blocker: '',
-      pause_reason: cleanMemoryText(reason, 300),
-      persistent_runtime: undefined,
-      revision: previous.revision + 1,
-      updated_at: Date.now(),
-      history: [...previous.history, {
-        revision: previous.revision,
-        status: previous.status,
-        current_step: previous.current_step,
-        step: currentPlanStep(previous.plan, previous.current_step),
-        chat: previous.last_chat_message,
-      }].slice(-PLAN_HISTORY_LIMIT),
-    }
-    const board = this.ensureTaskBoard(previous)
-    state.task_board = setTaskBoardStatus(board, 'paused', { pauseReason: state.pause_reason, now: state.updated_at })
-    this.planByNpc.set(key, state)
-    return state
+    return this.applyOutcomeAuthority(key, {
+      kind: 'cancelled',
+      source: 'server_lifecycle',
+      reason_code: reason,
+      metadata: {
+        server_authoritative: true,
+        transition: 'paused',
+        pause_reason: reason,
+      },
+    }).state
   }
 
   maxTurnId() {
@@ -829,6 +1036,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
         blocker: cleanMemoryText(value.blocker, 500),
         pause_reason: cleanMemoryText(value.pause_reason, 300),
         persistent_runtime: safePersistentRuntime(value.persistent_runtime),
+        condition_wait: safeConditionWait(value.condition_wait),
         plan: safePlan(value.plan),
         current_step: Number.isSafeInteger(value.current_step) && value.current_step >= 0 ? value.current_step : 0,
         revision: Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : 1,
@@ -1090,6 +1298,105 @@ const INTERACTION_INTENTS = new Set([
   'chat_only',
 ])
 
+const POST_STEP_ROUTES = new Set([
+  'continue_current',
+  'replan',
+  'wait_runtime',
+  'fallback_planner',
+])
+const SKILL_CONTEXT_MAX_SKILLS = 3
+const SKILL_CONTEXT_MAX_CHARS = 16000
+
+function boundedSkillValue(value, depth = 0) {
+  if (depth > 4) return undefined
+  if (typeof value === 'string') return cleanMemoryText(value, 600)
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value
+  if (Array.isArray(value)) {
+    return value.slice(0, 12)
+      .map(item => boundedSkillValue(item, depth + 1))
+      .filter(item => item !== undefined)
+  }
+  if (!value || typeof value !== 'object') return undefined
+  const entries = Object.entries(value).slice(0, 24)
+    .map(([key, child]) => [key, boundedSkillValue(child, depth + 1)])
+    .filter(([, child]) => child !== undefined)
+  return Object.fromEntries(entries)
+}
+
+function compactLoadedSkill(raw, expectedId) {
+  let skill
+  try { skill = typeof raw === 'string' ? JSON.parse(raw) : raw }
+  catch { return undefined }
+  if (!skill || typeof skill !== 'object' || Array.isArray(skill)) return undefined
+  const id = typeof skill.id === 'string' ? cleanMemoryText(skill.id, 80) : ''
+  if (!id || (expectedId && id !== expectedId)) return undefined
+
+  const keys = [
+    'schema_version', 'revision', 'id', 'name', 'kind', 'stage', 'status', 'summary',
+    'preconditions', 'inputs', 'outputs', 'topology', 'constraints', 'parameters',
+    'verification', 'known_failure_modes', 'confidence', 'examples',
+  ]
+  const compact = {}
+  for (const key of keys) {
+    if (skill[key] === undefined) continue
+    const value = boundedSkillValue(skill[key])
+    if (value !== undefined) compact[key] = value
+  }
+  let serialized = JSON.stringify(compact)
+  if (serialized.length <= 7000) return compact
+
+  delete compact.examples
+  delete compact.known_failure_modes
+  serialized = JSON.stringify(compact)
+  if (serialized.length <= 7000) return compact
+
+  return {
+    id,
+    revision: Number.isSafeInteger(skill.revision) ? skill.revision : undefined,
+    name: typeof skill.name === 'string' ? cleanMemoryText(skill.name, 160) : undefined,
+    kind: typeof skill.kind === 'string' ? cleanMemoryText(skill.kind, 80) : undefined,
+    stage: typeof skill.stage === 'string' ? cleanMemoryText(skill.stage, 80) : undefined,
+    status: typeof skill.status === 'string' ? cleanMemoryText(skill.status, 80) : undefined,
+    summary: typeof skill.summary === 'string' ? cleanMemoryText(skill.summary, 1200) : undefined,
+    preconditions: Array.isArray(skill.preconditions) ? boundedSkillValue(skill.preconditions.slice(0, 6)) : undefined,
+    topology: boundedSkillValue(skill.topology),
+    constraints: Array.isArray(skill.constraints) ? boundedSkillValue(skill.constraints.slice(0, 8)) : undefined,
+    parameters: Array.isArray(skill.parameters) ? boundedSkillValue(skill.parameters.slice(0, 8)) : undefined,
+    verification: boundedSkillValue(skill.verification),
+  }
+}
+
+function postStepDecisionQuestions() {
+  return {
+    route: {
+      type: 'choice',
+      instructions: 'After one authoritative Autorio completion or error boundary, choose the smallest safe planner transition. This is routing only; do not invent world facts, mutation success, or goal completion.',
+      criteria: {
+        continue_current: 'The canonical goal and active step are semantically aligned with the admitted work, so the main planner should continue compactly.',
+        replan: 'The completion evidence changes the remaining approach, or semantic_alignment shows the admitted/proposed work drifted from the active canonical step; wake the planner to realign or split the plan with higher reasoning.',
+        wait_runtime: 'A persistent runtime controller is authoritatively active, healthy, and live, so waking the main planner now would only duplicate ongoing work.',
+        fallback_planner: 'The evidence is ambiguous or outside this routing contract; use the existing safe main-planner continuation.',
+      },
+    },
+  }
+}
+
+function parsePostStepDecision(response) {
+  const answer = response?.answers?.route
+  if (!answer || !POST_STEP_ROUTES.has(answer.choice)) throw new AgentLoopError('Decision provider returned invalid post-step route')
+  if (typeof answer.confidence !== 'number' || !Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1) {
+    throw new AgentLoopError('Decision provider returned invalid post-step confidence')
+  }
+  return {
+    route: answer.choice,
+    confidence: answer.confidence,
+    probabilities: answer.probabilities,
+    model: typeof response?.model === 'string' ? response.model : undefined,
+    provider: typeof response?.provider === 'string' ? response.provider : undefined,
+    usage: response?.usage && typeof response.usage === 'object' ? response.usage : undefined,
+  }
+}
+
 const INTERACTION_ROUTER_PROMPT = `Classify one incoming human message relative to the currently active Factorio goal.
 You are a side-channel interaction router only. You have no Factorio tools and must never propose or execute world operations.
 
@@ -1107,6 +1414,53 @@ For every non-amend intent, queue_conflict must be false.
 Return exactly one JSON object with exactly three fields:
 {"intent":"continue_current|status_query|amend_current|new_goal|cancel_current|chat_only","queue_conflict":false,"reply":""}
 reply must be empty except for chat_only, where it may contain one brief conversational response. No markdown.`
+
+export function interactionDecisionQuestions() {
+  return {
+    intent: {
+      type: 'choice',
+      instructions: 'Classify the incoming human message relative to the current Factorio goal and authoritative runtime state.',
+      criteria: {
+        continue_current: 'The player asks SGLuna to keep or resume the same goal without changing its constraints.',
+        status_query: 'The player asks what is happening, current progress, a blocker, or why the agent is stuck.',
+        amend_current: 'The player changes instructions or constraints for the same active goal.',
+        new_goal: 'The player requests a materially different world goal.',
+        cancel_current: 'The player asks to stop or cancel the current goal.',
+        chat_only: 'The message is social or conversational and should not change task state.',
+      },
+    },
+    queue_conflict: {
+      type: 'noul',
+      instructions: 'Only when the message amends the current goal: would applying that amendment conflict with world work that is already running or queued? For every other intent, answer false.',
+      criteria: {
+        true: 'The amendment conflicts with work that is already running or queued and should not be deferred.',
+        false: 'There is no amendment, or the amendment is compatible with the work already running or queued.',
+      },
+    },
+  }
+}
+
+export function parseInteractionDecisionShadow(response) {
+  const intentAnswer = response?.answers?.intent
+  const conflictAnswer = response?.answers?.queue_conflict
+  if (!intentAnswer || !INTERACTION_INTENTS.has(intentAnswer.choice)) throw new AgentLoopError('Decision provider returned invalid interaction intent')
+  if (typeof intentAnswer.confidence !== 'number' || !Number.isFinite(intentAnswer.confidence) || intentAnswer.confidence < 0 || intentAnswer.confidence > 1) {
+    throw new AgentLoopError('Decision provider returned invalid interaction confidence')
+  }
+  if (!conflictAnswer || typeof conflictAnswer.noul !== 'number' || !Number.isFinite(conflictAnswer.noul) || conflictAnswer.noul < 0 || conflictAnswer.noul > 1) {
+    throw new AgentLoopError('Decision provider returned invalid queue-conflict probability')
+  }
+  return {
+    intent: intentAnswer.choice,
+    intent_confidence: intentAnswer.confidence,
+    intent_probabilities: intentAnswer.probabilities,
+    queue_conflict_probability: conflictAnswer.noul,
+    queue_conflict: intentAnswer.choice === 'amend_current' && conflictAnswer.noul >= 0.5,
+    model: typeof response?.model === 'string' ? response.model : undefined,
+    provider: typeof response?.provider === 'string' ? response.provider : undefined,
+    usage: response?.usage && typeof response.usage === 'object' ? response.usage : undefined,
+  }
+}
 
 export function parseInteractionRoute(message) {
   if (!message || typeof message !== 'object' || message.tool_calls !== undefined) {
@@ -1294,13 +1648,7 @@ function finalStepCanCloseFromFreshObservation(state) {
 }
 
 function terminalControlOnlyPlanStep(value) {
-  const text = cleanMemoryText(value, 120).toLowerCase().replace(/[.!]+$/g, '').trim()
-  return text === 'stop'
-    || text === 'done'
-    || text === 'finish'
-    || text === 'finished'
-    || text === 'complete'
-    || text === 'completed'
+  return isLifecycleMetaStep(value)
 }
 
 function verifiedFinalCompletion(plan, state, triggerSource, { freshObservation = false } = {}) {
@@ -1368,9 +1716,19 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.stateFile = stateFileFromOptions(options)
     this.stateLoaded = false
     this.interactionProvider = typeof options.interactionProvider === 'function' ? options.interactionProvider : null
+    this.interactionDecisionProvider = typeof options.interactionDecisionProvider === 'function' ? options.interactionDecisionProvider : null
+    this.interactionAbort = null
+    this.postStepDecisionAbort = null
+    this.recoveryDecisionAbort = null
+    this.lastRecoveryDecisionKey = ''
+    this.lastRecoveryDecision = null
+    this.loadedSkillContext = new Map()
+    this.reasoningTriggerSource = null
     this.persistQueue = Promise.resolve()
     this.traceRequest = null
     this.traceRequestSequence = 0
+    this.decisionRequestSequence = 0
+    this.decisionTraceSequence = 0
     this.planUpdateReason = 'request'
     this.requestLifecycle = 'new_goal'
     this.pendingInteractionAmendment = null
@@ -1384,6 +1742,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.pendingFiniteNoOperationPlan = null
     this.freshObservationSinceContinuation = false
     this.genericRecoveryDecisionActive = false
+    this.conditionPollPromise = null
     this.liveEntityObservations = new Map()
     this.rejectedExactTargets = new Set()
     this.staleExactPreflightRetries = 0
@@ -1392,6 +1751,15 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const traceFile = options.traceFile ?? process.env.SGLUNA_BEHAVIOR_TRACE_FILE ?? process.env.AIRI_BEHAVIOR_TRACE_FILE
       ?? (process.env.NODE_TEST_CONTEXT ? null : path.resolve(process.cwd(), 'logs', 'sgluna-behavior.jsonl'))
     this.behaviorTrace = traceFile ? new BehaviorTraceWriter(traceFile, message => this.log(`[trace] ${message}`)) : null
+    const decisionTraceFile = Object.prototype.hasOwnProperty.call(options, 'decisionTraceFile')
+      ? options.decisionTraceFile
+      : (process.env.SGLUNA_DECISION_TRACE_FILE
+        ?? (this.interactionDecisionProvider && !process.env.NODE_TEST_CONTEXT
+          ? path.resolve(process.cwd(), 'logs', 'sgluna-decision.jsonl')
+          : null))
+    this.decisionTrace = this.interactionDecisionProvider && decisionTraceFile
+      ? new BehaviorTraceWriter(decisionTraceFile, message => this.log(`[decision-trace] ${message}`))
+      : null
   }
 
   async loadPersistentState() {
@@ -1427,6 +1795,51 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     return this.requestInfo?.memoryKey ?? this.lastMemoryKey ?? `npc:${this.npcId}`
   }
 
+  clearLoadedSkillContext() {
+    if (!(this.loadedSkillContext instanceof Map)) {
+      this.loadedSkillContext = new Map()
+      return
+    }
+    this.loadedSkillContext.clear()
+  }
+
+  recordLoadedSkillToolResult(toolName, args, raw) {
+    if (toolName !== 'getSkillDetails') return false
+    const skill = compactLoadedSkill(raw, typeof args?.id === 'string' ? args.id : undefined)
+    if (!skill) return false
+    if (!(this.loadedSkillContext instanceof Map)) this.loadedSkillContext = new Map()
+    if (this.loadedSkillContext.has(skill.id)) this.loadedSkillContext.delete(skill.id)
+    this.loadedSkillContext.set(skill.id, skill)
+    while (this.loadedSkillContext.size > SKILL_CONTEXT_MAX_SKILLS) {
+      const oldest = this.loadedSkillContext.keys().next().value
+      if (oldest === undefined) break
+      this.loadedSkillContext.delete(oldest)
+    }
+    return skill
+  }
+
+  skillContext() {
+    if (!(this.loadedSkillContext instanceof Map) || this.loadedSkillContext.size === 0) return ''
+    const skills = [...this.loadedSkillContext.values()]
+    while (skills.length > 1 && JSON.stringify(skills).length > SKILL_CONTEXT_MAX_CHARS) skills.shift()
+    const payload = JSON.stringify(skills)
+    if (payload.length > SKILL_CONTEXT_MAX_CHARS) return ''
+    return `[SKILL_CONTEXT] Explicitly loaded AIRI skills for this logical task. They are reusable strategy/constraint context, not authoritative live world state. Revalidate mutable facts before acting.\n${payload}`
+  }
+
+  providerMessages() {
+    const messages = super.providerMessages().filter(message => !(message?.role === 'user'
+      && typeof message.content === 'string'
+      && message.content.startsWith('[SKILL_CONTEXT]')))
+    const skillContext = this.skillContext()
+    if (!skillContext) return messages
+    const insertAt = Math.min(this.baseMessages.length, messages.length)
+    return [
+      ...messages.slice(0, insertAt),
+      { role: 'user', content: skillContext },
+      ...messages.slice(insertAt),
+    ]
+  }
 
   prepareContinuationContext() {
     super.prepareContinuationContext()
@@ -1477,6 +1890,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       surface,
       surface_index: surfaceIndex,
       source,
+      working: entity.working === true,
+      status: Number.isFinite(entity.status) ? entity.status : undefined,
+      inventories: Array.isArray(entity.inventories) ? sanitizeDurableModelValue(entity.inventories) : undefined,
+      recipe: typeof entity.recipe === 'string' ? cleanMemoryText(entity.recipe, 160) : undefined,
     })
   }
 
@@ -1500,11 +1917,285 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
   }
 
+  recordPlacementReceipt(raw) {
+    let parsed
+    try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw }
+    catch { return }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+
+    const batch = parsed.last_completed_batch
+    const result = parsed.basic_operation?.last_result
+    if (!batch || !result || result.completed !== true || result.code !== 'completed' || result.type !== 'placing') return
+    if (!Array.isArray(batch.task_types) || !batch.task_types.includes('placing')) return
+    if (Number.isFinite(batch.tick) && Number.isFinite(result.tick) && result.tick > batch.tick) return
+    if (Number.isSafeInteger(result.actor_id) && Number.isSafeInteger(this.epoch?.actor_id)
+      && result.actor_id !== this.epoch.actor_id) return
+    if (!Number.isSafeInteger(result.placed_unit_number)
+      || typeof result.entity_name !== 'string'
+      || !result.placed_position
+      || !Number.isFinite(result.placed_position.x)
+      || !Number.isFinite(result.placed_position.y)) return
+
+    this.recordLiveEntityObservation({
+      name: result.entity_name,
+      type: result.placed_entity_type,
+      unit_number: result.placed_unit_number,
+      position: { x: result.placed_position.x, y: result.placed_position.y },
+      surface_index: result.placed_surface_index,
+    }, parsed.actor?.position, 'placement_receipt', {
+      surface_index: result.placed_surface_index,
+    })
+  }
+
   liveObservedExactTarget(unitNumber) {
     return Number.isSafeInteger(unitNumber)
       ? this.liveEntityObservations?.get?.(`unit:${unitNumber}`)
       : undefined
   }
+
+  passiveProgressWaitCandidate(state = this.memory.currentPlan?.(this.activePlanKey())) {
+    if (!state || state.status !== 'active' || !state.task_board?.active_step_id) return undefined
+    const observations = [...(this.liveEntityObservations?.values?.() ?? [])].reverse()
+    const working = observations.find(observation => Number.isSafeInteger(observation?.unit_number) && observation?.working === true)
+    if (!working) return undefined
+    return makeConditionWait(
+      { kind: 'entity_state', unit_number: working.unit_number, expected: 'working' },
+      {
+        goalId: state.goal_id,
+        stepId: state.task_board.active_step_id,
+        mode: 'passive_progress',
+        maxChecks: 900,
+        actorId: this.epoch?.actor_id,
+        actorEpoch: this.epoch?.epoch,
+      },
+    )
+  }
+
+  async inspectConditionWait() {
+    const key = this.activePlanKey()
+    const state = this.memory.planByNpc?.get?.(key) ?? this.memory.currentPlan?.(key)
+    const rawWait = state?.condition_wait
+    if (!state || state.status !== 'active' || !rawWait || rawWait.state !== 'active') {
+      return { action: 'absent', healthy: false, state }
+    }
+
+    const wait = safeConditionWait(rawWait)
+    const identity = {
+      goal_id: state.goal_id,
+      step_id: state.task_board?.active_step_id,
+      wait_id: rawWait.id,
+    }
+    if (!wait) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state,
+        wait: rawWait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: 'invalid_condition_wait',
+          wait: { ...rawWait, state: 'failed' },
+        },
+      }
+    }
+
+    identity.actor_id = wait.actor_id
+    identity.actor_epoch = wait.actor_epoch
+
+    let before
+    try {
+      before = await this.captureEpoch()
+    }
+    catch (error) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state,
+        wait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: `condition_lifecycle_status_error:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}`,
+          wait: { ...wait, state: 'failed' },
+        },
+      }
+    }
+    if (!conditionWaitLifecycleMatches(wait, before)) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state,
+        wait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: 'condition_lifecycle_changed',
+          wait: { ...wait, state: 'failed' },
+        },
+      }
+    }
+
+    let observation
+    try {
+      observation = JSON.parse(String(await this.rcon.command(runtimeConditionCommand(wait.condition))).trim())
+    }
+    catch (error) {
+      observation = { error: `condition_transport_error:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}` }
+    }
+
+    let after
+    try {
+      after = await this.captureEpoch()
+    }
+    catch (error) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state,
+        wait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: `condition_lifecycle_status_error:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}`,
+          wait: { ...wait, state: 'failed' },
+        },
+      }
+    }
+
+    const current = this.memory.planByNpc?.get?.(key)
+    if (!current
+      || current.goal_id !== identity.goal_id
+      || current.task_board?.active_step_id !== identity.step_id
+      || current.condition_wait?.id !== identity.wait_id) {
+      return { action: 'stale', healthy: false, state: current, wait, identity }
+    }
+    if (!conditionWaitLifecycleMatches(wait, after)) {
+      return {
+        action: 'failed',
+        healthy: false,
+        state: current,
+        wait,
+        identity,
+        result: {
+          action: 'failed',
+          reason: 'condition_lifecycle_changed',
+          wait: { ...wait, state: 'failed' },
+        },
+      }
+    }
+
+    const normalizedObservation = normalizedConditionObservation(observation)
+    const result = applyConditionObservation(wait, normalizedObservation)
+    return {
+      action: result.action,
+      healthy: result.action === 'waiting',
+      state: current,
+      wait,
+      identity,
+      observation: normalizedObservation,
+      result,
+    }
+  }
+
+  async validateConditionWaitHealth() {
+    const inspected = await this.inspectConditionWait()
+    return {
+      healthy: inspected.healthy === true,
+      action: inspected.action,
+      reason: inspected.result?.reason,
+      wait: inspected.wait,
+      observation: inspected.observation,
+      state: inspected.state,
+    }
+  }
+
+  async pollConditionWait() {
+    if (this.conditionPollPromise) return this.conditionPollPromise
+    this.conditionPollPromise = (async () => {
+      const inspected = await this.inspectConditionWait()
+      if (!inspected || inspected.action === 'absent') return null
+
+      const key = this.activePlanKey()
+      const identity = inspected.identity ?? {}
+      if (inspected.action === 'stale') {
+        await this.traceEvent('runtime.condition_stale', identity)
+        return { action: 'stale', wait_id: identity.wait_id }
+      }
+
+      const wait = inspected.wait
+      const result = inspected.result
+      const normalizedObservation = inspected.observation
+      if (!result) return null
+
+      if (result.action === 'waiting') {
+        const updated = this.memory.updateConditionWait?.(key, result.wait)
+        await this.persistState()
+        await this.traceEvent('runtime.condition_waiting', {
+          wait_id: identity.wait_id,
+          condition: wait.condition,
+          observation: normalizedObservation,
+          checks: result.wait?.checks,
+        })
+        return { action: 'waiting', wait_id: identity.wait_id, state: updated, observation: normalizedObservation }
+      }
+
+      if (result.action === 'verified') {
+        const evidence = {
+          kind: 'condition_satisfied',
+          ref: identity.wait_id,
+          summary: JSON.stringify({
+            verdict: 'verified_complete',
+            condition: wait.condition,
+            observation: normalizedObservation,
+          }),
+        }
+        const reduced = this.memory.applyOutcomeAuthority?.(key, {
+          kind: 'verified_complete',
+          source: 'condition_wait',
+          reason_code: 'condition_satisfied',
+          evidence: [evidence],
+          metadata: { scope: 'step' },
+        })
+        await this.persistState()
+        await this.traceEvent('runtime.condition_satisfied', {
+          wait_id: identity.wait_id,
+          condition: wait.condition,
+          task_board: visibleTaskBoard(reduced?.state?.task_board),
+        })
+        await this.traceEvent('step.verified', {
+          source: 'condition_wait',
+          wait_id: identity.wait_id,
+          task_board: visibleTaskBoard(reduced?.state?.task_board),
+        })
+        return { action: 'verified', wait_id: identity.wait_id, state: reduced?.state, observation: normalizedObservation }
+      }
+
+      const updated = result.wait
+        ? this.memory.updateConditionWait?.(key, result.wait)
+        : this.memory.clearConditionWait?.(key, identity.wait_id)
+      await this.persistState()
+      const event = result.action === 'timeout'
+        ? 'runtime.condition_timeout'
+        : result.action === 'wake'
+          ? 'runtime.condition_progress_stopped'
+          : 'runtime.condition_failed'
+      await this.traceEvent(event, {
+        wait_id: identity.wait_id,
+        condition: wait?.condition,
+        reason: result.reason,
+        observation: normalizedObservation,
+      })
+      return { action: result.action, wait_id: identity.wait_id, state: updated, reason: result.reason, observation: normalizedObservation }
+    })()
+    try {
+      return await this.conditionPollPromise
+    }
+    finally {
+      this.conditionPollPromise = null
+    }
+  }
+
 
   observedMiningTargets(entityName) {
     const byReference = new Map()
@@ -1590,31 +2281,701 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         }
       : null
     if (!this.interactionProvider) throw new AgentLoopError('Interaction router provider is unavailable')
-    const message = await this.interactionProvider([
-      { role: 'system', content: INTERACTION_ROUTER_PROMPT },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          message: cleanMemoryText(text, 4000),
-          sender: cleanMemoryText(sender, 128),
-          current_goal: currentGoal,
-          runtime: taskStatus,
-        }),
+
+    const state = {
+      message: cleanMemoryText(text, 4000),
+      sender: cleanMemoryText(sender, 128),
+      current_goal: currentGoal,
+      runtime: taskStatus,
+    }
+
+    this.interactionAbort?.abort()
+    const controller = new AbortController()
+    this.interactionAbort = controller
+
+    const decisionQuestions = interactionDecisionQuestions()
+    const decisionId = this.interactionDecisionProvider
+      ? `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
+      : undefined
+    if (decisionId) {
+      await this.decisionTraceEvent('decision.request', {
+        decision_id: decisionId,
+        contract: 'interaction_route',
+        mode: 'shadow',
+        question_ids: Object.keys(decisionQuestions),
+        message_chars: state.message.length,
+        has_current_goal: currentGoal !== null,
+        runtime_task_state: cleanMemoryText(taskStatus?.task_state, 64),
+        runtime_queue_length: Number.isSafeInteger(taskStatus?.queue_length) ? taskStatus.queue_length : 0,
+      })
+    }
+
+    const decisionStartedAt = Date.now()
+    const decisionPromise = this.interactionDecisionProvider
+      ? this.interactionDecisionProvider(state, decisionQuestions, {
+          epoch: current.epoch,
+          actorId: current.actor_id,
+          signal: controller.signal,
+        }).then(async response => {
+          const shadow = parseInteractionDecisionShadow(response)
+          const latency_ms = Date.now() - decisionStartedAt
+          await this.decisionTraceEvent('decision.response', {
+            decision_id: decisionId,
+            contract: 'interaction_route',
+            mode: 'shadow',
+            provider: shadow.provider,
+            model: shadow.model,
+            intent: shadow.intent,
+            confidence: shadow.intent_confidence,
+            queue_conflict_probability: shadow.queue_conflict_probability,
+            latency_ms,
+            input_units: Number.isFinite(shadow.usage?.input_tokens) ? Math.max(0, Math.trunc(shadow.usage.input_tokens)) : 0,
+            output_units: Number.isFinite(shadow.usage?.output_tokens) ? Math.max(0, Math.trunc(shadow.usage.output_tokens)) : 0,
+            cost_usd: Number.isFinite(shadow.usage?.cost) && shadow.usage.cost >= 0 ? shadow.usage.cost : 0,
+          })
+          return { shadow, latency_ms }
+        }).catch(async error => {
+          const latency_ms = Date.now() - decisionStartedAt
+          const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+          await this.decisionTraceEvent('decision.fallback', {
+            decision_id: decisionId,
+            contract: 'interaction_route',
+            mode: 'shadow',
+            fallback_target: 'interaction_router',
+            reason: message,
+            latency_ms,
+          })
+          return { error: message, latency_ms }
+        })
+      : Promise.resolve(undefined)
+
+    try {
+      const message = await this.interactionProvider([
+        { role: 'system', content: INTERACTION_ROUTER_PROMPT },
+        { role: 'user', content: JSON.stringify(state) },
+      ], {
+        epoch: current.epoch,
+        actorId: current.actor_id,
+        round: 0,
+        allowTools: false,
+        recoveryAttempt: 0,
+        triggerSource: 'interaction_router',
+        interactionRouter: true,
+        signal: controller.signal,
+        requestBodyPatch: {
+          max_tokens: 180,
+          response_format: { type: 'json_object' },
+        },
+      })
+      const route = parseInteractionRoute(message)
+      const decision = await decisionPromise
+      if (decisionId) {
+        await this.decisionTraceEvent('decision.route_applied', {
+          decision_id: decisionId,
+          contract: 'interaction_route',
+          mode: 'shadow',
+          active_source: 'interaction_router',
+          active_intent: route.intent,
+          shadow_intent: decision?.shadow?.intent ?? '',
+          agreement: decision?.shadow ? decision.shadow.intent === route.intent : undefined,
+          shadow_available: Boolean(decision?.shadow),
+        })
+      }
+      return {
+        route,
+        epoch: current,
+        decision_id: decisionId,
+        decision_shadow: decision?.shadow,
+        decision_shadow_error: decision?.error,
+        decision_shadow_latency_ms: decision?.latency_ms,
+      }
+    }
+    finally {
+      controller.abort()
+      if (this.interactionAbort === controller) this.interactionAbort = null
+    }
+  }
+
+  async routeStepCheckpointDecision(plan) {
+    const key = this.activePlanKey()
+    const planState = this.memory.planByNpc?.get?.(key) ?? this.memory.currentPlan?.(key)
+    const board = planState?.task_board
+    const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
+    const step = activeIndex === undefined ? undefined : board?.steps?.[activeIndex]
+    if (!planState || planState.status !== 'active' || !step || !Array.isArray(plan?.operations) || plan.operations.length === 0) {
+      return { boundary: 'keep_step_open', relation: 'advances_current', state: planState }
+    }
+
+    const existing = persistedStepCheckpoint(board, step.id)
+    if (existing?.boundary === 'checkpoint_here' && existing.contract?.mode !== 'semantic_unknown' && stepRelationAllowsAdmission(existing.relation)) {
+      return { ...existing, state: planState, reused: true }
+    }
+
+    const candidates = completionCandidatesFromOperations(plan.operations)
+    const questions = stepCheckpointDecisionQuestions(candidates)
+    if (!this.interactionDecisionProvider) {
+      return { boundary: 'keep_step_open', relation: 'replan_needed', state: planState, reason: 'decision_provider_unavailable' }
+    }
+
+    const current = await this.assertCurrent()
+    const generation = this.generation
+    const decisionState = {
+      contract: 'step_checkpoint_normalizer',
+      goal: {
+        goal_id: sanitizeDurableModelText(planState.goal_id, 100),
+        objective: sanitizeDurableModelText(planState.objective, 500),
       },
-    ], {
-      epoch: current.epoch,
-      actorId: current.actor_id,
-      round: 0,
-      allowTools: false,
-      recoveryAttempt: 0,
-      triggerSource: 'interaction_router',
-      interactionRouter: true,
-      requestBodyPatch: {
-        max_tokens: 180,
-        response_format: { type: 'json_object' },
+      step: {
+        id: step.id,
+        description: sanitizeDurableModelText(step.description, 400),
+        active_index: activeIndex,
       },
+      proposed_operations: plan.operations.slice(0, 8).map(operation => ({
+        name: cleanMemoryText(operation?.name, 100),
+        args: sanitizeDurableModelValue(operation?.args),
+      })),
+      remaining_steps: (Array.isArray(board?.steps) ? board.steps : [])
+        .slice(activeIndex, activeIndex + 6)
+        .map(item => ({
+          id: sanitizeDurableModelText(item?.id, 80),
+          description: sanitizeDurableModelText(item?.description, 400),
+        })),
+      supported_requirement_kinds: [
+        'inventory_count',
+        'entity_inventory_count',
+        'entity_exists',
+        'entity_state',
+        'authoritative_operation_receipt',
+        'runtime_controller_state',
+      ],
+    }
+    const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
+    const controller = new AbortController()
+    const startedAt = Date.now()
+    await this.decisionTraceEvent('decision.request', {
+      decision_id: decisionId,
+      contract: 'step_checkpoint_normalizer',
+      mode: 'active',
+      active_step_id: step.id,
+      question_ids: Object.keys(questions),
     })
-    return { route: parseInteractionRoute(message), epoch: current }
+
+    try {
+      const response = await this.interactionDecisionProvider(decisionState, questions, {
+        epoch: current.epoch,
+        actorId: current.actor_id,
+        signal: controller.signal,
+      })
+      if (generation !== this.generation || controller.signal.aborted) {
+        throw new AgentLoopError('Model turn was cancelled or superseded')
+      }
+      await this.assertCurrent()
+      const normalized = parseStepCheckpointDecision(response, candidates)
+      const confidenceAccepted = normalized.contract?.confidence >= 0.7
+      const contract = confidenceAccepted
+        ? sanitizeStepCompletionContract(normalized.contract)
+        : { mode: 'semantic_unknown', requirements: [], confidence: normalized.contract?.confidence ?? 0 }
+      const compoundNeedsStrongProof = typeof normalized.compound_probability !== 'number'
+        || normalized.compound_probability >= 0.5
+      const compoundProofStrongEnough = contract.mode === 'all'
+        && Array.isArray(contract.requirements)
+        && contract.requirements.length > 1
+      let boundary = normalized.boundary
+      const relation = normalized.relation
+      if (boundary === 'checkpoint_here' && contract.mode === 'semantic_unknown') boundary = 'keep_step_open'
+      if (boundary === 'checkpoint_here' && compoundNeedsStrongProof && !compoundProofStrongEnough) {
+        boundary = 'split_recommended'
+      }
+
+      this.memory.recordBoardEvidence?.(key, {
+        kind: 'step_checkpoint_contract',
+        ref: `checkpoint/${step.id}`,
+        summary: JSON.stringify({
+          contract,
+          boundary,
+          relation,
+          compound_probability: normalized.compound_probability,
+          provider: normalized.provider,
+          model: normalized.model,
+        }),
+      })
+      await this.persistState()
+      await this.traceEvent('step.checkpoint_created', {
+        active_step_id: step.id,
+        boundary,
+        relation,
+        contract,
+        compound_probability: normalized.compound_probability,
+      })
+      await this.decisionTraceEvent('decision.response', {
+        decision_id: decisionId,
+        contract: 'step_checkpoint_normalizer',
+        mode: 'active',
+        provider: normalized.provider,
+        model: normalized.model,
+        boundary,
+        relation,
+        confidence: contract.confidence,
+        latency_ms: Date.now() - startedAt,
+        input_units: Number.isFinite(normalized.usage?.input_tokens) ? Math.max(0, Math.trunc(normalized.usage.input_tokens)) : 0,
+        output_units: Number.isFinite(normalized.usage?.output_tokens) ? Math.max(0, Math.trunc(normalized.usage.output_tokens)) : 0,
+        cost_usd: Number.isFinite(normalized.usage?.cost) && normalized.usage.cost >= 0 ? normalized.usage.cost : 0,
+      })
+      return { boundary, relation, contract, state: this.memory.currentPlan?.(key), compound_probability: normalized.compound_probability }
+    }
+    catch (error) {
+      const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+      await this.traceEvent('step.checkpoint_failed', {
+        active_step_id: step.id,
+        reason: 'checkpoint_decision_failed',
+        error: message,
+      })
+      await this.decisionTraceEvent('decision.fallback', {
+        decision_id: decisionId,
+        contract: 'step_checkpoint_normalizer',
+        mode: 'active',
+        fallback_target: 'keep_step_open',
+        reason: message,
+        latency_ms: Date.now() - startedAt,
+      })
+      return { boundary: 'keep_step_open', relation: 'replan_needed', state: planState, reason: 'checkpoint_decision_failed' }
+    }
+    finally {
+      controller.abort()
+    }
+  }
+
+  async completionFactsForContract(contract, verification, operationNames) {
+    const facts = {}
+    const normalized = sanitizeStepCompletionContract(contract)
+    for (const requirement of normalized.requirements ?? []) {
+      if (requirement.kind === 'authoritative_operation_receipt') {
+        facts[requirement.id] = {
+          kind: requirement.kind,
+          authoritative: verification !== undefined,
+          operation_name: operationNames.length === 1 ? operationNames[0] : undefined,
+          operation_names: operationNames,
+          summary: cleanMemoryText(verification?.summary, 600),
+        }
+        continue
+      }
+      if (['inventory_count', 'entity_inventory_count', 'entity_exists', 'entity_state'].includes(requirement.kind)) {
+        const { id: _id, ...condition } = requirement
+        try {
+          const raw = JSON.parse(String(await this.rcon.command(runtimeConditionCommand(condition))).trim())
+          const observation = normalizedConditionObservation(raw)
+          facts[requirement.id] = {
+            kind: requirement.kind,
+            ...(Number.isSafeInteger(requirement.unit_number) ? { unit_number: requirement.unit_number } : {}),
+            ...(typeof requirement.item_name === 'string' ? { item_name: requirement.item_name } : {}),
+            ...(Number.isFinite(raw?.current) ? { current: raw.current } : {}),
+            ...(raw?.exists !== undefined ? { exists: raw.exists === true } : {}),
+            ...(raw?.working !== undefined ? { working: raw.working === true } : {}),
+            ...(raw?.stale !== undefined ? { stale: raw.stale === true } : {}),
+            satisfied: observation.satisfied === true,
+            progressing: observation.progressing === true,
+            summary: observation.summary,
+          }
+        }
+        catch (error) {
+          facts[requirement.id] = {
+            kind: requirement.kind,
+            summary: `condition_observation_failed:${cleanMemoryText(error instanceof Error ? error.message : String(error), 160)}`,
+          }
+        }
+      }
+    }
+    return facts
+  }
+
+  async routeStepCompletionDecision(receipt) {
+    const key = this.activePlanKey()
+    const planState = this.memory.planByNpc?.get?.(key) ?? this.memory.currentPlan?.(key)
+    const board = planState?.task_board
+    const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
+    const step = activeIndex === undefined ? undefined : board?.steps?.[activeIndex]
+    const batchId = Number.isSafeInteger(receipt?.view?.last_completed_batch?.batch_id)
+      ? receipt.view.last_completed_batch.batch_id
+      : undefined
+    const ref = batchId ? `batch_${batchId}` : ''
+    const verification = ref
+      ? [...(board?.evidence ?? [])].reverse().find(item =>
+          item?.kind === 'deterministic_verification'
+          && item?.ref === ref
+          && item?.step_id === step?.id)
+      : undefined
+
+    if (!planState || planState.status !== 'active' || !step || !verification) {
+      await this.traceEvent('step.completion_rejected', {
+        reason: 'no_authoritative_operation_receipt',
+        active_step_id: step?.id,
+        batch_id: batchId,
+      })
+      return { verified: false, reason: 'no_authoritative_operation_receipt', state: planState }
+    }
+
+    const checkpoint = persistedStepCheckpoint(board, step.id)
+    if (!checkpoint || checkpoint.boundary !== 'checkpoint_here' || checkpoint.contract?.mode === 'semantic_unknown') {
+      const reason = checkpoint?.boundary === 'split_recommended'
+        ? 'checkpoint_split_recommended'
+        : checkpoint?.boundary === 'keep_step_open'
+          ? 'checkpoint_kept_open'
+          : 'missing_pre_admission_checkpoint'
+      await this.traceEvent('step.completion_rejected', {
+        active_step_id: step.id,
+        reason,
+        checkpoint_boundary: checkpoint?.boundary,
+      })
+      return { verified: false, reason, state: planState, contract: checkpoint?.contract }
+    }
+
+    let operationNames = []
+    try {
+      const parsed = JSON.parse(verification.summary)
+      operationNames = Array.isArray(parsed?.operations) ? parsed.operations.filter(name => typeof name === 'string').slice(0, 8) : []
+    }
+    catch {}
+
+    const facts = await this.completionFactsForContract(checkpoint.contract, verification, operationNames)
+    const evaluation = evaluateCompletionContract(checkpoint.contract, facts)
+    await this.traceEvent('step.completion_checked', {
+      active_step_id: step.id,
+      status: evaluation.status,
+      contract: evaluation.contract,
+      evidence: evaluation.results,
+      checkpoint_boundary: checkpoint.boundary,
+    })
+    if (!evaluation.satisfied) {
+      await this.traceEvent('step.completion_rejected', {
+        active_step_id: step.id,
+        reason: 'checkpoint_requirements_unsatisfied',
+        contract: checkpoint.contract,
+      })
+      return { verified: false, reason: 'checkpoint_requirements_unsatisfied', state: planState, contract: checkpoint.contract }
+    }
+
+    const reduced = this.memory.applyOutcomeAuthority?.(key, {
+      kind: 'verified_complete',
+      source: 'step_checkpoint_gate',
+      reason_code: 'pre_admission_checkpoint_satisfied',
+      evidence: [verification, {
+        kind: 'verified_world_state',
+        ref: `checkpoint/${step.id}`,
+        summary: JSON.stringify({ contract: checkpoint.contract, results: evaluation.results }),
+      }],
+      metadata: { scope: 'step' },
+    })
+    await this.persistState()
+    if (reduced?.decision?.accepted !== true) {
+      const reason = reduced?.decision?.rejection_reason || 'outcome_authority_rejected_completion'
+      await this.traceEvent('step.completion_rejected', { active_step_id: step.id, reason, contract: checkpoint.contract })
+      return { verified: false, reason, state: reduced?.state ?? planState, contract: checkpoint.contract }
+    }
+    await this.traceEvent('step.verified', {
+      active_step_id: step.id,
+      source: 'step_checkpoint_gate',
+      contract: checkpoint.contract,
+      task_board: visibleTaskBoard(reduced?.state?.task_board),
+    })
+    return { verified: true, state: reduced?.state, contract: checkpoint.contract }
+  }
+
+  async routePostStepDecision(receipt, { boundary = 'completion', failure = '' } = {}) {
+    const generation = this.generation
+    const current = await this.assertCurrent()
+    const persistentRuntime = await this.persistentRuntimeStatus()
+    const autorioStatus = receipt?.view && typeof receipt.view === 'object'
+      ? receipt.view
+      : (receipt?.providerStatus && typeof receipt.providerStatus === 'object' ? receipt.providerStatus : {})
+    const autorioRuntimeHealthy = interactionRuntimeHealthy(autorioStatus)
+    const persistentControllerHealthy = persistentRuntimeHealthy(persistentRuntime)
+    const planState = this.memory.planByNpc?.get?.(this.activePlanKey()) ?? this.memory.currentPlan?.(this.activePlanKey())
+    let conditionValidation = await this.validateConditionWaitHealth()
+    let conditionWaitHealthy = conditionValidation.healthy === true
+    let runtimeHealthy = autorioRuntimeHealthy || persistentControllerHealthy || conditionWaitHealthy
+    let runtimeReason = autorioRuntimeHealthy
+      ? 'autorio_active_work'
+      : persistentControllerHealthy
+        ? 'persistent_controller_active'
+        : conditionWaitHealthy
+          ? 'condition_wait_active'
+          : ''
+
+    if (!this.interactionDecisionProvider) {
+      if (conditionWaitHealthy) {
+        await this.traceEvent('planner.skipped', {
+          source: 'condition_wait',
+          route: 'wait_runtime',
+          authoritative_runtime_reason: 'condition_wait_active',
+        })
+        return {
+          route: 'wait_runtime',
+          decision_called: false,
+          runtime: persistentRuntime,
+          runtime_reason: 'condition_wait_active',
+          condition_wait: conditionValidation.wait,
+        }
+      }
+      return { route: 'fallback_planner', decision_called: false }
+    }
+
+    const board = planState?.task_board
+    const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
+    const activeStep = activeIndex === undefined ? undefined : board?.steps?.[activeIndex]
+    const activeCheckpoint = activeStep ? persistedStepCheckpoint(board, activeStep.id) : undefined
+    const skills = this.loadedSkillContext instanceof Map
+      ? [...this.loadedSkillContext.values()].slice(-SKILL_CONTEXT_MAX_SKILLS).map(skill => ({
+          id: typeof skill?.id === 'string' ? cleanMemoryText(skill.id, 80) : undefined,
+          name: typeof skill?.name === 'string' ? cleanMemoryText(skill.name, 160) : undefined,
+          revision: Number.isSafeInteger(skill?.revision) ? skill.revision : undefined,
+          stage: typeof skill?.stage === 'string' ? cleanMemoryText(skill.stage, 80) : undefined,
+          status: typeof skill?.status === 'string' ? cleanMemoryText(skill.status, 80) : undefined,
+          summary: typeof skill?.summary === 'string' ? cleanMemoryText(skill.summary, 1000) : undefined,
+        }))
+      : []
+    const state = {
+      reason: 'post_step_planner_gate',
+      phase: 'post_step',
+      boundary: boundary === 'failure' ? 'failure' : 'completion',
+      goal: planState
+        ? {
+            goal_id: sanitizeDurableModelText(planState.goal_id, 100),
+            objective: sanitizeDurableModelText(planState.objective, 500),
+            status: planState.status,
+          }
+        : null,
+      task_board: board
+        ? {
+            active_index: activeIndex,
+            active_step: activeIndex !== undefined
+              ? sanitizeDurableModelText(board?.steps?.[activeIndex]?.description, 300)
+              : undefined,
+            completed_count: Number.isSafeInteger(board?.completed_count) ? board.completed_count : undefined,
+            total_steps: Number.isSafeInteger(board?.total_steps)
+              ? board.total_steps
+              : (Array.isArray(board?.steps) ? board.steps.length : undefined),
+            blocker: cleanMemoryText(board?.blocker, 300),
+            pause_reason: cleanMemoryText(board?.pause_reason, 300),
+          }
+        : null,
+      semantic_alignment: activeCheckpoint
+        ? {
+            step_relation: activeCheckpoint.relation,
+            checkpoint_boundary: activeCheckpoint.boundary,
+            admission_aligned: stepRelationAllowsAdmission(activeCheckpoint.relation),
+          }
+        : null,
+      autorio: {
+        task_state: typeof autorioStatus?.task_state === 'string' ? cleanMemoryText(autorioStatus.task_state, 64) : undefined,
+        queue_length: Number.isSafeInteger(autorioStatus?.queue_length) ? autorioStatus.queue_length : undefined,
+        last_completed_batch: sanitizeDurableModelValue(autorioStatus?.last_completed_batch),
+        last_cancelled_batch: sanitizeDurableModelValue(autorioStatus?.last_cancelled_batch),
+        latest_basic_operation_result: sanitizeDurableModelValue(autorioStatus?.basic_operation?.last_result),
+      },
+      deterministic_evidence: (Array.isArray(board?.evidence) ? board.evidence : [])
+        .slice(-4)
+        .map(item => sanitizeDurableModelValue(item)),
+      ...(planState?.dependency_context
+        ? { dependency_context: sanitizeDurableModelValue(planState.dependency_context) }
+        : {}),
+      ...(skills.length > 0 ? { skills } : {}),
+      persistent_runtime: sanitizeDurableModelValue(persistentRuntime),
+      persistent_runtime_healthy: persistentControllerHealthy,
+      condition_wait_active: conditionWaitHealthy,
+      ...(conditionWaitHealthy ? { condition_wait: sanitizeDurableModelValue(conditionValidation.wait) } : {}),
+      ...(failure ? { failure: cleanMemoryText(failure, 1200) } : {}),
+    }
+    const envelopeQuestions = decisionEnvelopeQuestions()
+    const questions = {
+      ...postStepDecisionQuestions(),
+      ...granularityDecisionQuestions(),
+      ...developmentDecisionQuestions(),
+      reasoning_budget: envelopeQuestions.reasoning_budget,
+      planning_horizon: envelopeQuestions.planning_horizon,
+      observation_budget: envelopeQuestions.observation_budget,
+    }
+    const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
+    this.postStepDecisionAbort?.abort()
+    const controller = new AbortController()
+    this.postStepDecisionAbort = controller
+    const startedAt = Date.now()
+
+    await this.decisionTraceEvent('decision.request', {
+      decision_id: decisionId,
+      contract: 'post_step_planner_gate',
+      mode: 'active',
+      boundary: state.boundary,
+      question_ids: Object.keys(questions),
+      runtime_healthy: runtimeHealthy,
+      runtime_reason: runtimeReason,
+      canonical_step: activeIndex,
+    })
+
+    try {
+      const response = await this.interactionDecisionProvider(state, questions, {
+        epoch: current.epoch,
+        actorId: current.actor_id,
+        signal: controller.signal,
+      })
+      if (generation !== this.generation || !this.active || controller.signal.aborted) {
+        throw new AgentLoopError('Model turn was cancelled or superseded')
+      }
+      await this.assertCurrent()
+      const decision = parsePostStepDecision(response)
+      const hierarchyTelemetry = parseHierarchyTelemetry(response)
+      const latency_ms = Date.now() - startedAt
+      if (decision.route === 'wait_runtime' && conditionWaitHealthy) {
+        conditionValidation = await this.validateConditionWaitHealth()
+        conditionWaitHealthy = conditionValidation.healthy === true
+        runtimeHealthy = autorioRuntimeHealthy || persistentControllerHealthy || conditionWaitHealthy
+        runtimeReason = autorioRuntimeHealthy
+          ? 'autorio_active_work'
+          : persistentControllerHealthy
+            ? 'persistent_controller_active'
+            : conditionWaitHealthy
+              ? 'condition_wait_active'
+              : ''
+      }
+      let appliedRoute = decision.route
+      let fallbackReason = ''
+      const hierarchyGate = hierarchyRuntimeGate(hierarchyTelemetry, {
+        runtimeHealthy,
+        boundary: state.boundary,
+      })
+
+      // Phase 3: hierarchy may only suppress a planner wake in the narrow case
+      // where authoritative runtime work is already active, the semantic scope
+      // is stable, and Jev classifies the next strategic move as maintain.
+      // Split/vertical/horizontal/recover remain planner-owned; budget/horizon
+      // fields are still telemetry only.
+      if (hierarchyGate.allow_runtime_continuation && decision.route === 'continue_current') {
+        appliedRoute = 'wait_runtime'
+        fallbackReason = 'hierarchy_maintain_authoritative_runtime'
+      }
+      else if (decision.route === 'wait_runtime' && !runtimeHealthy) {
+        appliedRoute = 'fallback_planner'
+        fallbackReason = 'wait_runtime_without_authoritative_active_runtime'
+      }
+      else if (decision.route === 'wait_runtime' && !hierarchyGate.allow_runtime_continuation) {
+        appliedRoute = 'fallback_planner'
+        fallbackReason = hierarchyGate.reason
+      }
+
+      await this.decisionTraceEvent('decision.response', {
+        decision_id: decisionId,
+        contract: 'post_step_planner_gate',
+        mode: 'active',
+        boundary: state.boundary,
+        provider: decision.provider,
+        model: decision.model,
+        route: decision.route,
+        confidence: decision.confidence,
+        hierarchy_telemetry: hierarchyTelemetry,
+        hierarchy_runtime_gate: hierarchyGate,
+        hierarchy_budget_shadow_only: true,
+        latency_ms,
+        input_units: Number.isFinite(decision.usage?.input_tokens) ? Math.max(0, Math.trunc(decision.usage.input_tokens)) : 0,
+        output_units: Number.isFinite(decision.usage?.output_tokens) ? Math.max(0, Math.trunc(decision.usage.output_tokens)) : 0,
+        cost_usd: Number.isFinite(decision.usage?.cost) && decision.usage.cost >= 0 ? decision.usage.cost : 0,
+      })
+      await this.decisionTraceEvent('decision.route_applied', {
+        decision_id: decisionId,
+        contract: 'post_step_planner_gate',
+        mode: 'active',
+        boundary: state.boundary,
+        requested_route: decision.route,
+        applied_route: appliedRoute,
+        fallback_reason: fallbackReason,
+        runtime_healthy: runtimeHealthy,
+        runtime_reason: runtimeReason,
+        hierarchy_runtime_gate: hierarchyGate,
+      })
+      await this.traceEvent('post_step.routed', {
+        mode: 'active',
+        boundary: state.boundary,
+        route: decision.route,
+        applied_route: appliedRoute,
+        fallback_reason: fallbackReason,
+        runtime_healthy: runtimeHealthy,
+        runtime_reason: runtimeReason,
+        decision: {
+          provider: decision.provider,
+          model: decision.model,
+          route: decision.route,
+          confidence: decision.confidence,
+          hierarchy: hierarchyTelemetry,
+          hierarchy_runtime_gate: hierarchyGate,
+          hierarchy_budget_shadow_only: true,
+          usage: decision.usage,
+        },
+        decision_latency_ms: latency_ms,
+      })
+
+      if (appliedRoute === 'wait_runtime') {
+        await this.traceEvent('planner.skipped', {
+          source: 'decision_provider',
+          route: appliedRoute,
+          authoritative_runtime_reason: runtimeReason,
+        })
+      }
+      else {
+        await this.traceEvent('planner.wake', {
+          source: 'decision_provider',
+          route: appliedRoute,
+          reasoning_policy: appliedRoute === 'continue_current'
+            ? 'low'
+            : appliedRoute === 'replan'
+              ? 'high'
+              : 'existing_fallback',
+        })
+      }
+      return {
+        route: appliedRoute,
+        requested_route: decision.route,
+        runtime: persistentRuntime,
+        runtime_reason: runtimeReason,
+        decision,
+        hierarchy_gate: hierarchyGate,
+        fallback_reason: fallbackReason,
+        decision_called: true,
+      }
+    }
+    catch (error) {
+      if (generation !== this.generation || !this.active || controller.signal.aborted) {
+        throw new AgentLoopError('Model turn was cancelled or superseded')
+      }
+      const latency_ms = Date.now() - startedAt
+      const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+      await this.decisionTraceEvent('decision.fallback', {
+        decision_id: decisionId,
+        contract: 'post_step_planner_gate',
+        mode: 'active',
+        boundary: state.boundary,
+        fallback_target: 'main_planner',
+        reason: message,
+        latency_ms,
+      })
+      await this.traceEvent('post_step.routed', {
+        mode: 'active',
+        boundary: state.boundary,
+        route: 'fallback_planner',
+        applied_route: 'fallback_planner',
+        fallback_reason: message,
+        runtime_healthy: runtimeHealthy,
+        runtime_reason: runtimeReason,
+        decision_latency_ms: latency_ms,
+      })
+      await this.traceEvent('planner.wake', {
+        source: 'decision_provider',
+        route: 'fallback_planner',
+        fallback_reason: message,
+        reasoning_policy: 'existing_fallback',
+      })
+      return { route: 'fallback_planner', runtime: persistentRuntime, runtime_reason: runtimeReason, error: message, decision_called: true }
+    }
+    finally {
+      if (this.postStepDecisionAbort === controller) this.postStepDecisionAbort = null
+    }
   }
 
   async cancelInteractionWorldWork(epoch) {
@@ -1648,6 +3009,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   async request(text, options = {}) {
     await this.loadPersistentState()
+    this.semanticAlignmentRetries = 0
     const sender = options.sender ?? 'unknown'
     this.lastMemoryKey = `npc:${this.npcId}`
     const memoryKey = this.activePlanKey()
@@ -1660,13 +3022,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         route: { intent: planBefore ? 'continue_current' : 'new_goal', queue_conflict: false, reply: '' },
         epoch: undefined,
         router_bypassed: true,
-      }
-    }
-    else if (!planBefore && !healthyRuntime) {
-      routed = {
-        route: { intent: 'new_goal', queue_conflict: false, reply: '' },
-        epoch: undefined,
-        classifier_skipped: 'no_current_goal_or_runtime_work',
+        classifier_skipped: 'interaction_router_unavailable',
       }
     }
     else {
@@ -1695,6 +3051,18 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       router_error: routed.router_error,
       classifier_skipped: routed.classifier_skipped,
       router_bypassed: routed.router_bypassed === true,
+      decision_shadow: routed.decision_shadow,
+      decision_shadow_error: routed.decision_shadow_error,
+      decision_shadow_latency_ms: routed.decision_shadow_latency_ms,
+      decision_shadow_status: routed.classifier_skipped
+        ? 'classifier_skipped'
+        : routed.decision_shadow
+          ? 'called_success'
+          : routed.decision_shadow_error
+            ? 'call_failed'
+            : this.interactionDecisionProvider
+              ? 'configured_not_called'
+              : 'not_configured',
     })
 
     if (!routed.router_bypassed && intent === 'continue_current' && healthyRuntime) {
@@ -1719,6 +3087,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       if (healthyRuntime) await this.cancelInteractionWorldWork(routed.epoch)
       const state = this.memory.pausePlan?.(memoryKey, 'user_cancel')
       await this.persistState()
+      this.clearLoadedSkillContext()
       super.cancel()
       const reply = state
         ? 'Cancelled the remaining Autorio work and paused the current goal.'
@@ -1741,6 +3110,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     else if (!routed.router_bypassed && intent === 'new_goal') {
       if (healthyRuntime) await this.cancelInteractionWorldWork(routed.epoch)
+      this.clearLoadedSkillContext()
       super.cancel()
       this.memory.clearTaskContext?.(memoryKey)
       await this.persistState()
@@ -1756,6 +3126,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         ? 'amend_current'
         : 'continue_current'
     this.requestLifecycle = intent
+    this.reasoningTriggerSource = null
     this.lastTaskStatusView = null
     this.lastHandledRuntimeReceipt = { completion: null, failure: null }
     this.outputBudgetRecoveryUsed = false
@@ -1818,6 +3189,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     await this.loadPersistentState()
     const key = this.requestInfo?.memoryKey ?? this.lastMemoryKey ?? `npc:${this.npcId}`
     this.memory.clearTaskContext?.(key)
+    this.clearLoadedSkillContext()
     await this.persistState()
 
     // Completion is a hard planner boundary. Do not carry the completed task's
@@ -1838,6 +3210,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.staleExactPreflightRetries = 0
     this.bootstrapDependencyPreflightRetries = 0
     return true
+  }
+
+  decisionTraceEvent(event, data = {}) {
+    if (!this.decisionTrace) return Promise.resolve()
+    const { decision_id, ...details } = data ?? {}
+    return this.decisionTrace.emit({
+      schema: 1,
+      ts: new Date().toISOString(),
+      seq: ++this.decisionTraceSequence,
+      event,
+      decision_id,
+      actor_id: this.epoch?.actor_id,
+      epoch: this.epoch?.epoch,
+      data: details,
+    })
   }
 
   traceEvent(event, data = {}) {
@@ -1868,15 +3255,21 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   }
 
   async runGuarded() {
+    const generation = this.generation
     try {
-      return await super.runGuarded()
+      return await this.runTurn()
     }
     catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const planState = this.memory.currentPlan?.(this.activePlanKey())
+      const recoverablePlannerFailure = planState?.status === 'active'
+        && /provider_action_omission_repair_failed|provider_output_budget_exhausted|provider_jev_recovery_route_failed|Provider strict recovery could not safely resolve remaining canonical work/i.test(message)
+      if (!recoverablePlannerFailure && generation === this.generation) this.reset()
       if (this.traceRequest) {
-        const message = error instanceof Error ? error.message : String(error)
         await this.traceEvent('request.failed', {
           stage: 'runtime',
           message,
+          recoverable: recoverablePlannerFailure,
           usage: this.traceRequest.usage,
           failure_snapshot: this.failureSnapshot('runtime', message),
         })
@@ -1895,8 +3288,10 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
   async taskStatusReceipt() {
     try {
       const raw = String(await this.rcon.command(toolCommand('getTaskStatus', {}))).slice(0, 16000)
+      this.recordPlacementReceipt(raw)
       const evidence = receiptEvidence(raw, this.planUpdateReason === 'failure' ? 'failed' : 'completed')
-      if (this.memory.recordBoardEvidence?.(this.activePlanKey(), evidence)) await this.persistState()
+      const taskBoard = this.memory.recordBoardEvidence?.(this.activePlanKey(), evidence)
+      if (taskBoard) await this.persistState()
       const view = taskStatusDecisionView(raw)
       const providerStatus = taskStatusDelta(this.lastTaskStatusView, view)
       this.lastTaskStatusView = view
@@ -1908,7 +3303,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         raw_chars: raw.length,
         task_status: providerStatus,
       })
-      return { raw, view, providerStatus }
+      return { raw, view, providerStatus, taskBoard: visibleTaskBoard(taskBoard) }
     }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1987,18 +3382,84 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return null
     }
     this.lastHandledRuntimeReceipt.completion = receiptKey
-    const result = await this.continueFromModMessage(
-      `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
-      'factorio.completion_continuation',
-    )
-    if (pendingAmendment) this.pendingInteractionAmendment = null
-    return result
+
+    const stepCompletion = pendingAmendment
+      ? { verified: false, reason: 'pending_amendment' }
+      : await this.routeStepCompletionDecision(receipt)
+    const completionState = stepCompletion?.state
+    if (!pendingAmendment && completionState?.status === 'completed') {
+      this.active = false
+      const completedBoard = visibleTaskBoard(completionState.task_board)
+      await this.traceEvent('outcome.validated', {
+        kind: 'verified_complete',
+        source: 'step_completion_gate',
+        reason_code: 'verified_final_step',
+        task_board: completedBoard,
+      })
+      await this.traceEvent('planner.skipped', {
+        source: 'outcome_authority',
+        route: 'deterministic_close',
+      })
+      await this.traceEvent('request.completed', {
+        chat_message: 'The requested goal is verified complete.',
+        outcome: 'verified_complete',
+        task_board: completedBoard,
+        usage: this.traceRequest?.usage,
+      })
+      this.traceRequest = null
+      return {
+        chatMessage: 'The requested goal is verified complete.',
+        plan: [],
+        currentStep: 0,
+        operations: [],
+        epoch: this.epoch?.epoch,
+        actorId: this.epoch?.actor_id,
+        goalId: completionState.goal_id,
+        goalStatus: 'completed',
+        taskBoard: completedBoard,
+      }
+    }
+
+    let routed
+    if (pendingAmendment) {
+      routed = { route: 'fallback_planner', decision_called: false }
+    }
+    else if (stepCompletion?.reason === 'checkpoint_split_recommended') {
+      routed = { route: 'replan', decision_called: false, source: 'step_checkpoint_normalizer' }
+      await this.traceEvent('planner.wake', {
+        source: 'step_checkpoint_normalizer',
+        route: 'replan',
+        reason: 'checkpoint_split_recommended',
+      })
+    }
+    else {
+      routed = await this.routePostStepDecision(receipt)
+    }
+    if (routed.route === 'wait_runtime') return null
+
+    this.reasoningTriggerSource = routed.route === 'continue_current'
+      ? 'post_step_continue'
+      : routed.route === 'replan'
+        ? 'post_step_replan'
+        : null
+    try {
+      const result = await this.continueFromModMessage(
+        `[MOD] Autorio operation batch completed. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
+        'factorio.completion_continuation',
+      )
+      if (pendingAmendment) this.pendingInteractionAmendment = null
+      return result
+    }
+    finally {
+      this.reasoningTriggerSource = null
+    }
   }
 
   async failed(errorText) {
     await this.loadPersistentState()
     if (!this.active) return null
     this.planUpdateReason = 'failure'
+    this.reasoningTriggerSource = null
     const cleanError = cleanMemoryText(errorText, 4000)
     const receipt = await this.taskStatusReceipt()
     const receiptKey = runtimeReceiptKey('failure', receipt.view, cleanError, this.epoch?.epoch)
@@ -2012,13 +3473,38 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       return null
     }
     this.lastHandledRuntimeReceipt.failure = receiptKey
-    return this.continueFromModMessage(
-      `[MOD] Autorio operation error: ${cleanError}. Dependent queued operations may have been cancelled. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
-      'factorio.error_continuation',
-    )
+
+    const routed = await this.routePostStepDecision(receipt, {
+      boundary: 'failure',
+      failure: cleanError,
+    })
+    if (routed.route === 'wait_runtime') return null
+
+    this.reasoningTriggerSource = routed.route === 'continue_current'
+      ? 'post_step_continue'
+      : routed.route === 'replan'
+        ? 'post_step_replan'
+        : null
+    try {
+      return await this.continueFromModMessage(
+        `[MOD] Autorio operation error: ${cleanError}. Dependent queued operations may have been cancelled. Detailed task receipt: ${JSON.stringify(receipt.providerStatus)}`,
+        'factorio.error_continuation',
+      )
+    }
+    finally {
+      this.reasoningTriggerSource = null
+    }
   }
 
   cancel(reason = 'cancelled') {
+    this.interactionAbort?.abort()
+    this.interactionAbort = null
+    this.postStepDecisionAbort?.abort()
+    this.postStepDecisionAbort = null
+    this.recoveryDecisionAbort?.abort()
+    this.recoveryDecisionAbort = null
+    if (/terminate|new_task|cancel_current|user_cancel/i.test(String(reason))) this.clearLoadedSkillContext()
+    this.reasoningTriggerSource = null
     void this.traceEvent('request.cancelled', { reason, usage: this.traceRequest?.usage })
     this.traceRequest = null
     this.outputBudgetRecoveryUsed = false
@@ -2029,6 +3515,8 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.pendingFiniteNoOperationPlan = null
     this.freshObservationSinceContinuation = false
     this.genericRecoveryDecisionActive = false
+    this.lastRecoveryDecisionKey = ''
+    this.lastRecoveryDecision = null
     return super.cancel()
   }
 
@@ -2061,6 +3549,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     const controller = new AbortController()
     this.providerAbort = controller
     const providerMessages = providerMessagesOverride ?? this.providerMessages()
+    const triggerSource = this.reasoningTriggerSource ?? this.planUpdateReason
     const startedAt = Date.now()
     if (recoveryAttempt > 0 && this.traceRequest) {
       this.traceRequest.recovery = {
@@ -2072,7 +3561,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     await this.traceEvent('provider.request', {
       round,
-      trigger_source: this.planUpdateReason,
+      trigger_source: triggerSource,
       allow_tools: effectiveAllowTools,
       recovery_attempt: effectiveRecoveryAttempt,
       recovery_kind: traceRecoveryKind,
@@ -2088,7 +3577,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         allowTools: effectiveAllowTools,
         recoveryAttempt: effectiveRecoveryAttempt,
         recoveryKind,
-        triggerSource: this.planUpdateReason,
+        triggerSource,
         lifecycle: this.requestLifecycle,
         actionOmissionRepair: omissionRepair,
         requestBodyPatch: omissionRepair ? { max_tokens: ACTION_OMISSION_MAX_TOKENS } : undefined,
@@ -2099,7 +3588,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const responseTrace = {
         kind: 'response',
         round,
-        trigger_source: this.planUpdateReason,
+        trigger_source: triggerSource,
         recovery_attempt: effectiveRecoveryAttempt,
         recovery_kind: traceRecoveryKind,
         latency_ms: Date.now() - startedAt,
@@ -2116,7 +3605,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       const errorTrace = {
         kind: 'error',
         round,
-        trigger_source: this.planUpdateReason,
+        trigger_source: triggerSource,
         recovery_attempt: effectiveRecoveryAttempt,
         recovery_kind: traceRecoveryKind,
         latency_ms: Date.now() - startedAt,
@@ -2196,6 +3685,9 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
   parsePlanMessage(message) {
     const plan = super.parsePlanMessage(message)
+    const normalizedPlan = normalizeCanonicalPlan(plan.plan, plan.currentStep)
+    plan.plan = normalizedPlan.plan
+    plan.currentStep = normalizedPlan.currentStep
     for (const operation of plan.operations) {
       if (!EXACT_ENTITY_TARGET_OPERATIONS.has(operation.name)) continue
       const unitNumber = operation.args?.unit_number
@@ -2331,7 +3823,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     }
     for (let index = 0; index < results.length; index++) {
       const original = String(results[index].content ?? '')
-      this.recordLiveEntityToolResult(prepared[index]?.tool?.function?.name, original)
+      const toolName = prepared[index]?.tool?.function?.name
+      this.recordLiveEntityToolResult(toolName, original)
+      const loadedSkill = this.recordLoadedSkillToolResult(toolName, prepared[index]?.args, original)
+      if (loadedSkill) {
+        await this.traceEvent('skill.context_loaded', {
+          skill_id: loadedSkill.id,
+          revision: loadedSkill.revision,
+          loaded_skill_count: this.loadedSkillContext.size,
+        })
+      }
       if (cachedBefore[index]) results[index].content = DUPLICATE_OBSERVATION_MESSAGE
       const output = String(results[index].content ?? '')
       if (this.traceRequest?.usage) this.traceRequest.usage.tool_result_chars += output.length
@@ -2480,8 +3981,6 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         operations: [],
         epoch: before.epoch,
         actorId: before.actor_id,
-        blocked: true,
-        blocker: { class: blocker, reason },
       }
     }
 
@@ -2496,23 +3995,61 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       assistant: plan.chatMessage,
       operations: [],
     })
-    state = this.memory.blockRemainingPlan?.(this.requestInfo.memoryKey, {
-      blocker,
-      reason,
-      chatMessage: plan.chatMessage,
-      evidenceKind,
-    }) ?? state
-    await this.persistState()
-    await this.traceEvent('plan.persisted', {
-      lifecycle: 'blocked',
-      blocker,
-      goal_id: state?.goal_id,
-      task_board: visibleTaskBoard(state?.task_board),
+
+    const blockerCandidate = {
+      kind: 'world_blocked',
+      source: evidenceKind === 'provider_blocker' ? 'main_planner' : 'action_omission_repair',
+      reason_code: blocker,
+      candidate_blocker: blocker,
+      evidence: reason ? [{ kind: evidenceKind, ref: `${state?.goal_id ?? 'goal'}/candidate_blocker`, summary: cleanMemoryText(reason, 1200) }] : [],
+    }
+    await this.traceEvent('outcome.candidate', blockerCandidate)
+    const blockerDecision = this.memory.applyOutcomeAuthority?.(this.requestInfo.memoryKey, blockerCandidate, { chatMessage: plan.chatMessage })
+    await this.traceEvent(blockerDecision?.decision?.accepted ? 'outcome.validated' : 'outcome.rejected', {
+      ...blockerDecision?.decision,
+      candidate_blocker: blocker,
     })
+
+    if (!blockerDecision?.decision?.accepted) {
+      const runtime = await this.readInteractionTaskStatus()
+      const persistentRuntime = await this.persistentRuntimeStatus()
+      const failureCandidate = {
+        kind: 'recoverable_provider_failure',
+        source: evidenceKind === 'provider_blocker' ? 'main_planner' : 'action_omission_repair',
+        reason_code: blocker || 'provider_recovery_failed',
+        evidence: [],
+      }
+      await this.traceEvent('outcome.candidate', failureCandidate)
+      const reduced = this.memory.applyOutcomeAuthority?.(this.requestInfo.memoryKey, failureCandidate, {
+        world: {
+          ...runtime,
+          persistent_runtime: persistentRuntime,
+          persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
+          condition_wait_active: state?.condition_wait?.state === 'active',
+          condition_wait: state?.condition_wait,
+        },
+        chatMessage: plan.chatMessage,
+      })
+      state = reduced?.state ?? state
+      await this.traceEvent(reduced?.decision?.accepted ? 'outcome.validated' : 'outcome.rejected', reduced?.decision ?? failureCandidate)
+      if (reduced?.changed) {
+        await this.traceEvent('task_state.transition', {
+          status: state?.status,
+          blocker: state?.blocker,
+          pause_reason: state?.pause_reason,
+          task_board: visibleTaskBoard(state?.task_board),
+        })
+      }
+    }
+    else {
+      state = blockerDecision.state ?? state
+    }
+
+    await this.persistState()
     this.active = false
     await this.traceEvent('request.completed', {
       chat_message: plan.chatMessage,
-      outcome: 'blocked_no_operation',
+      outcome: state?.status === 'blocked' ? 'world_blocked' : 'recoverable_provider_failure',
       task_board: visibleTaskBoard(state?.task_board),
       usage: this.traceRequest?.usage,
     })
@@ -2520,20 +4057,23 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
     this.clearActionOmissionRecovery()
     const visibleReason = providerBlockerReason(plan) || cleanMemoryText(reason, 800) || blocker
     return {
-      chatMessage: `[Plan blocked] ${visibleReason}`,
+      chatMessage: state?.status === 'blocked'
+        ? `[Plan blocked] ${visibleReason}`
+        : `[Plan paused for recoverable provider failure] ${visibleReason}`,
       plan: state?.plan ?? plan.plan,
       currentStep: state?.current_step ?? plan.currentStep,
       operations: [],
       epoch: before.epoch,
       actorId: before.actor_id,
       goalId: state?.goal_id,
-      goalStatus: state?.status ?? 'blocked',
+      goalStatus: state?.status,
       taskBoard: visibleTaskBoard(state?.task_board),
-      blocker: { class: blocker, reason: cleanMemoryText(reason, 1200) },
+      blocker: state?.status === 'blocked' ? { class: blocker, reason: cleanMemoryText(reason, 1200) } : undefined,
     }
   }
 
   async commitPlan(plan) {
+    const triggerSource = this.reasoningTriggerSource ?? this.planUpdateReason
     const commands = plan.operations.map(renderOperation)
     const operations = plan.operations.map((operation, index) => ({
       trace_operation_id: `${this.traceRequest?.id ?? 'request'}/op_${index + 1}`,
@@ -2541,7 +4081,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       args: operation.args,
     }))
     await this.traceEvent('plan.accepted', {
-      trigger_source: this.planUpdateReason,
+      trigger_source: triggerSource,
       chat_message: plan.chatMessage,
       plan: plan.plan,
       current_step: plan.currentStep,
@@ -2564,8 +4104,42 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       || (!previousState && Array.isArray(plan.plan) && plan.plan.length > 0)
     )
     const explicitBlocker = providerBlockerReason(plan)
+    let conditionWait = previousState?.condition_wait?.state === 'active'
+      ? previousState.condition_wait
+      : undefined
+    if (!conditionWait && commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
+      const candidate = this.passiveProgressWaitCandidate(previousState)
+      if (candidate && this.requestInfo) {
+        const waiting = this.memory.registerConditionWait?.(this.requestInfo.memoryKey, candidate)
+        if (waiting?.condition_wait) {
+          conditionWait = waiting.condition_wait
+          await this.persistState()
+          await this.traceEvent('runtime.condition_registered', {
+            wait_id: conditionWait.id,
+            goal_id: waiting.goal_id,
+            step_id: waiting.task_board?.active_step_id,
+            mode: conditionWait.mode,
+            condition: conditionWait.condition,
+          })
+        }
+      }
+    }
+    const conditionWaitActive = conditionWait?.state === 'active'
 
-    if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy) {
+    if (commands.length === 0 && this.actionOmissionRepairActive && !runtimeHealthy && !conditionWaitActive && !finalCompletionVerified) {
+      if (explicitBlocker) {
+        return this.finishNoOperationBlock(plan, before, 'provider_reported_blocker', explicitBlocker, 'provider_blocker')
+      }
+      await this.traceEvent('recovery.action_omission_failed', {
+        reason_code: 'repair_no_executable_action',
+        detail: 'bounded repair returned no executable operation and no explicit BLOCKED reason',
+      })
+      throw new AgentLoopError(
+        'provider_action_omission_repair_failed: bounded act-or-block repair returned no executable operation and no explicit BLOCKED: reason',
+      )
+    }
+
+    if (commands.length === 0 && remainingCanonicalWork && !runtimeHealthy && !conditionWaitActive) {
       if (this.genericRecoveryDecisionActive) {
         // Generic strict recovery exists because the provider already failed to
         // produce a valid decision. Tools are intentionally disabled there, so
@@ -2585,21 +4159,23 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         return this.finishNoOperationBlock(plan, before, 'provider_reported_blocker', explicitBlocker, 'provider_blocker')
       }
       if (this.outputBudgetRecoveryGuard && this.outputBudgetRecoveryGuard.world_evidence_observed !== true) {
-        return this.finishNoOperationBlock(
-          plan,
-          before,
-          'output_budget_recovery_no_operation',
-          'Output-budget recovery supplied no fresh world evidence and no executable operation for the remaining canonical work.',
-          'output_budget_recovery',
+        // Output-budget recovery is provider orchestration, not Factorio world
+        // truth. If the bounded recovery cannot produce grounded evidence or an
+        // executable operation, fail the request upward instead of persisting a
+        // durable BLOCKED task. The supervisor will pause the durable plan only
+        // when Autorio is authoritatively idle, preserving the verified prefix
+        // for a fresh normal tool-capable Continue turn.
+        throw new AgentLoopError(
+          'provider_output_budget_exhausted: bounded output-budget recovery produced no fresh world evidence and no executable operation for remaining canonical work',
         )
       }
       if (this.actionOmissionRepairActive) {
-        return this.finishNoOperationBlock(
-          plan,
-          before,
-          'action_omission_after_repair',
-          'The bounded act-or-block repair returned no executable operation and no explicit BLOCKED: reason.',
-          'action_omission',
+        await this.traceEvent('recovery.action_omission_failed', {
+          reason_code: 'repair_no_executable_action',
+          detail: 'bounded repair returned no executable operation and no explicit BLOCKED reason',
+        })
+        throw new AgentLoopError(
+          'provider_action_omission_repair_failed: bounded act-or-block repair returned no executable operation and no explicit BLOCKED: reason',
         )
       }
       const state = await this.beginActionOmissionRepair(plan, 'no_operation_for_remaining_plan')
@@ -2610,10 +4186,11 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       }
     }
 
-    if (runtimeHealthy) this.clearActionOmissionRecovery()
+    if (runtimeHealthy || conditionWaitActive) this.clearActionOmissionRecovery()
     this.messages.push({ role: 'assistant', content: JSON.stringify(plan) })
     let stateResult
     let durablePlan = plan
+    let stepCheckpoint
     if (this.requestInfo) {
       this.lastMemoryKey = this.requestInfo.memoryKey
       const previousBoard = previousState?.task_board
@@ -2652,14 +4229,24 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         assistant: plan.chatMessage,
         operations: durableOperations,
       })
+      const completionEvidence = finalCompletionVerified
+        ? [
+            ...[...(previousState?.task_board?.evidence ?? [])].reverse().filter(item => item?.kind === 'deterministic_verification').slice(0, 1),
+            ...(this.freshObservationSinceContinuation
+              ? [{ kind: 'verified_world_state', ref: `${this.traceRequest?.id ?? 'request'}/fresh_observation`, summary: 'Fresh authoritative observation plus the canonical completion guard satisfied the final step.' }]
+              : []),
+          ].slice(0, 2)
+        : []
       stateResult = this.memory.recordPlan?.(this.requestInfo.memoryKey, this.requestInfo, durablePlan, {
         continuation: this.continuations > 0,
         persistentRuntime,
         durableOperations,
         exactTargetAudit,
+        verifiedCompletion: finalCompletionVerified,
+        completionEvidence,
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
-        allowReplan: this.planUpdateReason === 'failure',
+        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason),
         previousState,
       }) ?? stateResult
       if (commands.length > 0 && stateResult?.state && stateResult?.blockedByHarness !== true) {
@@ -2672,7 +4259,60 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         goal_id: stateResult?.state?.goal_id,
         task_board: visibleTaskBoard(stateResult?.state?.task_board),
       })
+      if (commands.length > 0 && stateResult?.blockedByHarness !== true) {
+        stepCheckpoint = await this.routeStepCheckpointDecision(plan)
+        if (stepCheckpoint?.state) stateResult = { ...(stateResult ?? {}), state: stepCheckpoint.state }
+      }
     }
+
+    if (commands.length > 0 && stateResult?.blockedByHarness !== true && stepCheckpoint && !stepRelationAllowsAdmission(stepCheckpoint.relation)) {
+      const activeBoard = stateResult?.state?.task_board
+      const activeIndex = Number.isSafeInteger(activeBoard?.active_index) ? activeBoard.active_index : undefined
+      const activeStep = activeIndex === undefined ? undefined : activeBoard?.steps?.[activeIndex]
+      if (this.requestInfo) {
+        const state = this.memory.setAdmissionState?.(this.requestInfo.memoryKey, 'preflight_rejected')
+        if (state) stateResult = { ...(stateResult ?? {}), state }
+        this.memory.recordBoardEvidence?.(this.requestInfo.memoryKey, {
+          kind: 'step_semantic_alignment_rejection',
+          ref: `${this.traceRequest?.id ?? 'request'}/semantic_alignment`,
+          summary: JSON.stringify({
+            relation: stepCheckpoint.relation,
+            checkpoint_boundary: stepCheckpoint.boundary,
+            active_step_id: activeStep?.id,
+            active_step: activeStep?.description,
+            proposed_operations: plan.operations.slice(0, 8).map(operation => operation?.name),
+          }),
+        })
+        await this.persistState()
+      }
+      await this.traceEvent('operations.semantic_alignment_rejected', {
+        relation: stepCheckpoint.relation,
+        checkpoint_boundary: stepCheckpoint.boundary,
+        active_step_id: activeStep?.id,
+        active_step: activeStep?.description,
+        operations,
+        task_board: visibleTaskBoard(stateResult?.state?.task_board),
+      })
+
+      const retries = Number.isSafeInteger(this.semanticAlignmentRetries) ? this.semanticAlignmentRetries : 0
+      if (retries >= 1) {
+        throw new AgentLoopError(`provider_semantic_alignment_failed: proposed operations still do not align with active canonical step after re-anchor; relation=${stepCheckpoint.relation}`)
+      }
+      this.semanticAlignmentRetries = retries + 1
+      this.planUpdateReason = 'reanchor_plan'
+      this.reasoningTriggerSource = 'semantic_reanchor'
+      this.messages.push({
+        role: 'user',
+        content: `[HARNESS] Autorio admission was stopped before any world mutation because Jev classified the proposed batch as "${stepCheckpoint.relation}" relative to the active canonical step "${cleanMemoryText(activeStep?.description, 400)}". Re-anchor the plan to authoritative Task Board evidence before proposing another batch. Do not assume the active step completed merely because you intended later work. If existing grounded evidence proves an earlier step complete, propose a plan aligned with that evidence; otherwise continue or split the active step. Avoid extra observations unless one specific mutable fact is genuinely missing.`,
+      })
+      try {
+        return await this.runTurn()
+      }
+      finally {
+        this.reasoningTriggerSource = null
+      }
+    }
+    if (commands.length > 0) this.semanticAlignmentRetries = 0
     this.outputBudgetRecoveryGuard = null
     if (commands.length > 0) this.clearActionOmissionRecovery()
 
@@ -2849,13 +4489,16 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       this.active = false
       const outcome = stateResult?.blockedByHarness
         ? 'blocked_no_operation'
-        : stateResult?.persistentRuntimeActive
-          ? 'persistent_runtime_active'
-          : 'no_operations'
+        : conditionWaitActive
+          ? 'condition_wait_active'
+          : stateResult?.persistentRuntimeActive
+            ? 'persistent_runtime_active'
+            : 'no_operations'
       await this.traceEvent('request.completed', {
         chat_message: plan.chatMessage,
         outcome,
         persistent_runtime: persistentRuntime,
+        condition_wait: conditionWait,
         task_board: visibleTaskBoard(stateResult?.state?.task_board),
         usage: this.traceRequest?.usage,
       })
@@ -2883,6 +4526,229 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
       goalStatus: stateResult?.state?.status,
       taskBoard: visibleTaskBoard(stateResult?.state?.task_board),
       persistentRuntime: stateResult?.state?.persistent_runtime,
+      conditionWait: stateResult?.state?.condition_wait,
+    }
+  }
+
+  async routeRecoveryDecision(reason, roundBase = 0) {
+    const generation = this.generation
+    const current = await this.assertCurrent()
+    const reasonText = cleanMemoryText(reason instanceof Error ? reason.message : String(reason), 1600)
+    let conditionValidation = await this.validateConditionWaitHealth()
+    const planState = this.memory.currentPlan?.(this.activePlanKey())
+    const board = planState?.task_board
+    const runtime = await this.readInteractionTaskStatus()
+    const persistentRuntime = await this.persistentRuntimeStatus()
+    const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : undefined
+    const evidence = (Array.isArray(board?.evidence) ? board.evidence : []).slice(-4)
+    const finalIndex = Array.isArray(board?.steps) ? board.steps.length - 1 : -1
+    const finalCompletionProven = latestDeterministicCompletionEvidence(planState)
+      && Number.isSafeInteger(activeIndex)
+      && activeIndex === finalIndex
+    const failureClass = recoveryFailureClassHint(reasonText)
+    const key = [
+      generation,
+      planState?.goal_id ?? '',
+      board?.revision ?? 0,
+      roundBase,
+      failureClass,
+      conditionValidation.healthy ? `wait:${conditionValidation.wait?.id ?? ''}` : `wait:${conditionValidation.action ?? 'none'}`,
+      reasonText.slice(0, 240),
+    ].join('|')
+    if (this.lastRecoveryDecisionKey === key && this.lastRecoveryDecision) {
+      await this.traceEvent('recovery.route_coalesced', {
+        failure_class: failureClass,
+        route: this.lastRecoveryDecision.route,
+      })
+      return { ...this.lastRecoveryDecision, duplicate: true }
+    }
+
+    if (!this.interactionDecisionProvider) {
+      const result = {
+        route: conditionValidation.healthy ? 'wait_runtime' : 'fallback_runtime',
+        failure_class: failureClass,
+        runtime,
+        persistentRuntime,
+        conditionWaitHealthy: conditionValidation.healthy === true,
+        conditionWait: conditionValidation.wait,
+        decision_called: false,
+      }
+      this.lastRecoveryDecisionKey = key
+      this.lastRecoveryDecision = result
+      return result
+    }
+
+    const state = {
+      contract: 'recovery_route',
+      failure: {
+        class: failureClass,
+        reason_code: cleanMemoryText(this.traceRequest?.recovery?.reason_code || failureClass, 120),
+        detail: reasonText,
+        provider_finish_reason: cleanMemoryText(this.traceRequest?.last_provider_event?.provider?.finish_reason, 80) || undefined,
+        invalid_json: /invalid provider|invalid json|strict json|malformed|parse/i.test(reasonText),
+        recovery_attempt: Number.isSafeInteger(this.traceRequest?.recovery?.attempt) ? this.traceRequest.recovery.attempt : 0,
+      },
+      task: planState
+        ? {
+            goal_id: sanitizeDurableModelText(planState.goal_id, 100),
+            objective: sanitizeDurableModelText(planState.objective, 500),
+            active_step: activeIndex === undefined ? undefined : sanitizeDurableModelText(board?.steps?.[activeIndex]?.description, 300),
+            completed_count: Number.isSafeInteger(board?.completed_count) ? board.completed_count : 0,
+            total_steps: Array.isArray(board?.steps) ? board.steps.length : 0,
+            canonical_status: planState.status,
+          }
+        : null,
+      world: {
+        task_state: cleanMemoryText(runtime?.task_state, 64),
+        queue_length: Number.isSafeInteger(runtime?.queue_length) ? runtime.queue_length : undefined,
+        persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
+        condition_wait_active: conditionValidation.healthy === true,
+        condition_wait: conditionValidation.healthy ? conditionValidation.wait : undefined,
+      },
+      evidence: {
+        latest_relevant_deterministic_evidence: evidence.map(item => sanitizeDurableModelValue(item)),
+        fresh_observation_available: this.freshObservationSinceContinuation === true,
+      },
+      provider: {
+        previous_reasoning_mode: cleanMemoryText(this.traceRequest?.last_provider_event?.provider?.reasoning_effort, 32),
+        previous_trigger_source: cleanMemoryText(this.traceRequest?.last_provider_event?.trigger_source, 80),
+      },
+      context: {
+        loaded_skill_ids: this.loadedSkillContext instanceof Map ? [...this.loadedSkillContext.keys()].slice(-3) : [],
+        dependency_summary: planState?.dependency_context ? sanitizeDurableModelValue(planState.dependency_context) : undefined,
+      },
+    }
+
+    const questions = recoveryDecisionQuestions()
+    const decisionId = `decision_${Date.now().toString(36)}_${(++this.decisionRequestSequence).toString(36)}`
+    this.recoveryDecisionAbort?.abort()
+    const controller = new AbortController()
+    this.recoveryDecisionAbort = controller
+    const startedAt = Date.now()
+    await this.decisionTraceEvent('decision.request', {
+      decision_id: decisionId,
+      contract: 'recovery_route',
+      mode: 'active',
+      failure_class_hint: failureClass,
+      question_ids: Object.keys(questions),
+      canonical_step: activeIndex,
+    })
+
+    try {
+      const response = await this.interactionDecisionProvider(state, questions, {
+        epoch: current.epoch,
+        actorId: current.actor_id,
+        signal: controller.signal,
+      })
+      if (generation !== this.generation || !this.active || controller.signal.aborted) {
+        throw new AgentLoopError('Model turn was cancelled or superseded')
+      }
+      await this.assertCurrent()
+      const decision = parseRecoveryDecision(response)
+      if (decision.route === 'wait_runtime' && conditionValidation.healthy) {
+        conditionValidation = await this.validateConditionWaitHealth()
+      }
+      const validated = validateRecoveryRoute(decision, {
+        world: {
+          ...runtime,
+          persistent_runtime: persistentRuntime,
+          persistent_runtime_healthy: persistentRuntimeHealthy(persistentRuntime),
+          condition_wait_active: conditionValidation.healthy === true,
+          condition_wait: conditionValidation.healthy ? conditionValidation.wait : undefined,
+        },
+        finalCompletionProven,
+        observationBudgetAvailable: this.actionOmissionObservationUsed !== true,
+        evidence,
+      })
+      const result = {
+        route: validated.route,
+        requested_route: validated.requested_route,
+        failure_class: decision.failure_class,
+        rejection_reason: validated.rejection_reason,
+        runtime,
+        persistentRuntime,
+        conditionWaitHealthy: conditionValidation.healthy === true,
+        conditionWait: conditionValidation.wait,
+        runtime_state: validated.runtime,
+        decision,
+        decision_called: true,
+      }
+      this.lastRecoveryDecisionKey = key
+      this.lastRecoveryDecision = result
+
+      await this.decisionTraceEvent('decision.response', {
+        decision_id: decisionId,
+        contract: 'recovery_route',
+        mode: 'active',
+        provider: decision.provider,
+        model: decision.model,
+        failure_class: decision.failure_class,
+        route: decision.route,
+        confidence: decision.confidence,
+        latency_ms: Date.now() - startedAt,
+        input_units: Number.isFinite(decision.usage?.input_tokens) ? Math.max(0, Math.trunc(decision.usage.input_tokens)) : 0,
+        output_units: Number.isFinite(decision.usage?.output_tokens) ? Math.max(0, Math.trunc(decision.usage.output_tokens)) : 0,
+        cost_usd: Number.isFinite(decision.usage?.cost) && decision.usage.cost >= 0 ? decision.usage.cost : 0,
+      })
+      await this.decisionTraceEvent('decision.route_applied', {
+        decision_id: decisionId,
+        contract: 'recovery_route',
+        mode: 'active',
+        requested_route: decision.route,
+        applied_route: validated.route,
+        fallback_reason: validated.rejection_reason,
+      })
+      await this.traceEvent('recovery.routed', {
+        failure_class: decision.failure_class,
+        route: decision.route,
+        applied_route: validated.route,
+        fallback_reason: validated.rejection_reason,
+        confidence: decision.confidence,
+        decision_latency_ms: Date.now() - startedAt,
+        runtime: validated.runtime,
+        decision: {
+          provider: decision.provider,
+          model: decision.model,
+          usage: decision.usage,
+        },
+      })
+      return result
+    }
+    catch (error) {
+      if (generation !== this.generation || controller.signal.aborted) throw new AgentLoopError('Model turn was cancelled or superseded')
+      if (conditionValidation.healthy) conditionValidation = await this.validateConditionWaitHealth()
+      const message = cleanMemoryText(error instanceof Error ? error.message : String(error), 300)
+      await this.decisionTraceEvent('decision.fallback', {
+        decision_id: decisionId,
+        contract: 'recovery_route',
+        mode: 'active',
+        fallback_target: 'runtime',
+        reason: message,
+        latency_ms: Date.now() - startedAt,
+      })
+      await this.traceEvent('recovery.routed', {
+        failure_class: failureClass,
+        route: 'fallback_runtime',
+        applied_route: 'fallback_runtime',
+        fallback_reason: message,
+        decision_latency_ms: Date.now() - startedAt,
+      })
+      const result = {
+        route: conditionValidation.healthy ? 'wait_runtime' : 'fallback_runtime',
+        failure_class: failureClass,
+        runtime,
+        persistentRuntime,
+        conditionWaitHealthy: conditionValidation.healthy === true,
+        conditionWait: conditionValidation.wait,
+        error: message,
+        decision_called: true,
+      }
+      this.lastRecoveryDecisionKey = key
+      this.lastRecoveryDecision = result
+      return result
+    }
+    finally {
+      if (this.recoveryDecisionAbort === controller) this.recoveryDecisionAbort = null
     }
   }
 
@@ -2898,91 +4764,200 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
 
     const observationDecisionComplete = /single targeted observation allowed by decision pressure is complete/i.test(reasonText)
     const currentState = this.memory.currentPlan?.(this.activePlanKey())
-    if (observationDecisionComplete) {
-      if (!this.actionOmissionRepairActive) {
-        if (canonicalWorkRemains(currentState)) {
-          await this.beginActionOmissionRepair({
-            chatMessage: '',
-            plan: currentState.plan,
-            currentStep: currentState.current_step,
-            operations: [],
-          }, 'observation_decision_pressure_complete')
-        }
-        else {
-          this.actionOmissionRepairActive = true
-          await this.traceEvent('recovery.action_omission_started', {
-            reason_code: 'observation_decision_pressure_without_plan',
-            goal_id: undefined,
-            active_step: undefined,
-            completed_count: 0,
-            provider_call_budget: 'one final no-tools act-or-block call',
-          })
-        }
+    if (observationDecisionComplete && !this.actionOmissionRepairActive) {
+      if (canonicalWorkRemains(currentState)) {
+        await this.beginActionOmissionRepair({
+          chatMessage: '',
+          plan: currentState.plan,
+          currentStep: currentState.current_step,
+          operations: [],
+        }, 'observation_decision_pressure_complete')
+      }
+      else {
+        this.actionOmissionRepairActive = true
       }
       this.actionOmissionObservationUsed = true
       this.actionOmissionForceNoTools = true
-      this.messages.push({ role: 'user', content: `[HARNESS] ${ACTION_OMISSION_AFTER_OBSERVATION_MESSAGE}` })
-      const current = await this.assertCurrent()
-      let message
-      try {
-        message = await this.callProvider(current, generation, {
-          round: roundBase,
-          allowTools: false,
-          recoveryAttempt: 0,
-        })
-      }
-      catch (error) {
-        throw error
-      }
-      let plan
-      try {
-        plan = this.parsePlanMessage(message)
-      }
-      catch (error) {
-        const fallbackPlan = currentState?.plan?.length
-          ? currentState.plan
-          : [cleanMemoryText(this.requestInfo?.text ?? 'Unresolved user goal', 500)]
-        const fallback = {
-          chatMessage: 'Action-omission repair did not produce a valid executable plan.',
-          plan: fallbackPlan,
-          currentStep: currentState?.current_step ?? 0,
-          operations: [],
-        }
-        return this.finishNoOperationBlock(
-          fallback,
-          current,
-          'action_omission_after_repair',
-          `The bounded act-or-block repair was invalid: ${error instanceof Error ? error.message : String(error)}`,
-          'action_omission',
-        )
-      }
-      if (plan.operations.length === 0 && plan.plan.length === 0) {
-        plan = {
-          ...plan,
-          chatMessage: plan.chatMessage || 'Action-omission repair ended without an executable action.',
-          plan: [cleanMemoryText(this.requestInfo?.text ?? 'Unresolved user goal', 500)],
-          currentStep: 0,
-        }
-      }
-      return this.commitPlan(plan)
     }
 
-    if (this.actionOmissionRepairActive) {
-      const current = await this.assertCurrent()
-      const fallbackState = this.memory.currentPlan?.(this.activePlanKey())
-      const fallback = {
-        chatMessage: 'Action-omission repair exhausted without a valid executable action.',
-        plan: fallbackState?.plan ?? [],
-        currentStep: fallbackState?.current_step ?? 0,
-        operations: [],
+    let routed
+    try {
+      routed = await this.routeRecoveryDecision(reason, roundBase)
+    }
+    catch (error) {
+      if (/cancelled|superseded|epoch changed/i.test(String(error?.message ?? error))) throw error
+      routed = { route: 'fallback_runtime', error: cleanMemoryText(error instanceof Error ? error.message : String(error), 300) }
+    }
+
+    if (routed.route === 'deterministic_close') {
+      const state = this.memory.planByNpc?.get?.(this.activePlanKey()) ?? this.memory.currentPlan?.(this.activePlanKey())
+      const proof = [...(state?.task_board?.evidence ?? [])].reverse().find(item => item?.kind === 'deterministic_verification')
+      const reduced = this.memory.applyOutcomeAuthority?.(this.activePlanKey(), {
+        kind: 'verified_complete',
+        source: 'deterministic_runtime',
+        reason_code: 'jev_suggested_deterministic_close',
+        evidence: proof ? [proof] : [],
+      })
+      if (reduced?.decision?.accepted) {
+        await this.persistState()
+        this.active = false
+        await this.traceEvent('planner.skipped', {
+          source: 'decision_provider',
+          contract: 'recovery_route',
+          route: 'deterministic_close',
+        })
+        return {
+          chatMessage: 'The requested goal is verified complete.',
+          plan: [],
+          currentStep: 0,
+          operations: [],
+          epoch: this.epoch?.epoch,
+          actorId: this.epoch?.actor_id,
+          goalId: reduced.state?.goal_id,
+          goalStatus: 'completed',
+          taskBoard: visibleTaskBoard(reduced.state?.task_board),
+        }
       }
-      return this.finishNoOperationBlock(
-        fallback,
-        current,
-        'action_omission_after_repair',
-        `The bounded act-or-block repair could not produce a valid final decision: ${reasonText}`,
-        'action_omission',
-      )
+    }
+
+    if (routed.route === 'wait_runtime') {
+      const state = this.memory.currentPlan?.(this.activePlanKey())
+      await this.traceEvent('planner.skipped', {
+        source: 'decision_provider',
+        contract: 'recovery_route',
+        route: 'wait_runtime',
+      })
+      return {
+        chatMessage: 'Autorio is still working; no recovery planner call was needed.',
+        plan: state?.plan ?? [],
+        currentStep: state?.current_step ?? 0,
+        operations: [],
+        epoch: this.epoch?.epoch,
+        actorId: this.epoch?.actor_id,
+        goalId: state?.goal_id,
+        goalStatus: state?.status,
+        taskBoard: visibleTaskBoard(state?.task_board),
+        persistentRuntime: routed.persistentRuntime,
+      }
+    }
+
+    if (routed.route === 'pause_recoverable') {
+      const reduced = this.memory.applyOutcomeAuthority?.(this.activePlanKey(), {
+        kind: 'recoverable_provider_failure',
+        source: 'jev',
+        reason_code: routed.failure_class || recoveryFailureClassHint(reasonText),
+      }, {
+        world: {
+          ...(routed.runtime ?? {}),
+          persistent_runtime: routed.persistentRuntime,
+          persistent_runtime_healthy: persistentRuntimeHealthy(routed.persistentRuntime),
+          condition_wait_active: routed.conditionWaitHealthy === true,
+          condition_wait: routed.conditionWaitHealthy ? routed.conditionWait : undefined,
+        },
+      })
+      if (reduced?.decision?.accepted) {
+        await this.persistState()
+        this.active = false
+        await this.traceEvent('planner.skipped', {
+          source: 'decision_provider',
+          contract: 'recovery_route',
+          route: 'pause_recoverable',
+        })
+        return {
+          chatMessage: 'The provider failure is recoverable; the canonical task was paused without creating a world blocker.',
+          plan: reduced.state?.plan ?? [],
+          currentStep: reduced.state?.current_step ?? 0,
+          operations: [],
+          epoch: this.epoch?.epoch,
+          actorId: this.epoch?.actor_id,
+          goalId: reduced.state?.goal_id,
+          goalStatus: reduced.state?.status,
+          taskBoard: visibleTaskBoard(reduced.state?.task_board),
+        }
+      }
+    }
+
+    if (routed.route === 'propose_blocker') {
+      const state = this.memory.currentPlan?.(this.activePlanKey())
+      const evidence = (Array.isArray(state?.task_board?.evidence) ? state.task_board.evidence : []).slice(-4)
+      const candidate = cleanMemoryText(reasonText, 500)
+      const reduced = this.memory.applyOutcomeAuthority?.(this.activePlanKey(), {
+        kind: 'world_blocked',
+        source: 'jev',
+        reason_code: routed.failure_class || 'grounded_world_failure',
+        candidate_blocker: candidate,
+        evidence,
+      })
+      await this.traceEvent(reduced?.decision?.accepted ? 'outcome.validated' : 'outcome.rejected', {
+        ...(reduced?.decision ?? {}),
+        source: 'jev',
+        candidate_blocker: candidate,
+      })
+      if (reduced?.decision?.accepted) {
+        await this.persistState()
+        this.active = false
+        return {
+          chatMessage: `[Plan blocked] ${candidate}`,
+          plan: reduced.state?.plan ?? [],
+          currentStep: reduced.state?.current_step ?? 0,
+          operations: [],
+          epoch: this.epoch?.epoch,
+          actorId: this.epoch?.actor_id,
+          goalId: reduced.state?.goal_id,
+          goalStatus: 'blocked',
+          taskBoard: visibleTaskBoard(reduced.state?.task_board),
+        }
+      }
+    }
+
+    if (['retry_compact', 'continue_low', 'replan_high', 'targeted_observation'].includes(routed.route)) {
+      const previousTrigger = this.reasoningTriggerSource
+      this.reasoningTriggerSource = routed.route === 'replan_high' ? 'recovery_replan_high' : 'recovery_continue_low'
+      const state = this.memory.currentPlan?.(this.activePlanKey())
+      const board = state?.task_board
+      const activeIndex = Number.isSafeInteger(board?.active_index) ? board.active_index : state?.current_step ?? 0
+      this.messages.push({
+        role: 'user',
+        content: `[RECOVERY_ROUTE] Jev selected ${routed.route}. Preserve the verified canonical prefix and use only current runtime truth. Failure: ${cleanMemoryText(reasonText, 1000)}. Active step: ${cleanMemoryText(board?.steps?.[activeIndex]?.description ?? currentPlanStep(state?.plan, activeIndex), 500)}.`,
+      })
+      await this.traceEvent('planner.wake', {
+        source: 'decision_provider',
+        contract: 'recovery_route',
+        route: routed.route,
+        reasoning_policy: routed.route === 'replan_high' ? 'high' : 'low',
+      })
+      try {
+        const current = await this.assertCurrent()
+        const message = await this.callProvider(current, generation, {
+          round: roundBase,
+          allowTools: routed.route === 'targeted_observation',
+          recoveryAttempt: 0,
+        })
+        if (message?.tool_calls !== undefined) {
+          if (routed.route !== 'targeted_observation') {
+            throw new AgentLoopError('compact recovery returned observation tools outside targeted_observation route')
+          }
+          const prepared = this.prepareToolBatch(message)
+          if (prepared.length !== 1) throw new AgentLoopError('targeted observation route permits exactly one observation call')
+          await this.handleToolBatch(message, prepared)
+          this.actionOmissionObservationUsed = true
+          this.actionOmissionForceNoTools = true
+          return this.recoverPlan(
+            generation,
+            new AgentLoopError('The single targeted recovery observation is complete. Reuse that fresh evidence and choose a bounded next recovery route.'),
+            roundBase + 1,
+          )
+        }
+        const plan = this.parsePlanMessage(message)
+        return await this.commitPlan(plan)
+      }
+      catch (error) {
+        if (/cancelled|superseded|epoch changed/i.test(String(error?.message ?? error))) throw error
+        throw new AgentLoopError(`provider_jev_recovery_route_failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      finally {
+        this.reasoningTriggerSource = previousTrigger
+      }
     }
 
     this.genericRecoveryDecisionActive = true

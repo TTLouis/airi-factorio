@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { canonicalContinuationPlan, CanonicalTaskBoardMemory, verifyDeterministicReceipt } from './canonical-task-board-memory.mjs'
+import { createTaskBoard, reconcileTaskBoard } from './common.mjs'
 
 function board() {
   return {
@@ -82,13 +83,34 @@ test('ordinary continuation cannot shrink a canonical five-step board to three s
   assert.deepEqual(guarded.plan, board().steps.map(step => step.description))
 })
 
-test('ordinary continuation may advance only to a step already on the canonical board', () => {
+test('ordinary provider continuation preserves proposed focus without completion authority', () => {
   const guarded = canonicalContinuationPlan(board(), {
     plan: ['Mine stone', 'Build power'],
     currentStep: 1,
   })
   assert.equal(guarded.plan.length, 5)
   assert.equal(guarded.currentStep, 3)
+})
+
+test('initial planner currentStep is proposed focus only and cannot create a completed prefix', () => {
+  const initial = createTaskBoard(['Gather ore', 'Smelt plates', 'Craft machine'], 2, { goalId: 'goal_focus', now: 1 })
+  assert.equal(initial.active_index, 0)
+  assert.equal(initial.completed_count, 0)
+  assert.equal(initial.steps[0].status, 'active')
+  assert.equal(initial.steps[1].status, 'pending')
+  assert.equal(initial.steps[2].status, 'pending')
+  assert.equal(initial.proposed_focus_index, 2)
+  assert.equal(initial.proposed_focus_step_id, 'step_3')
+})
+
+test('reconcileTaskBoard records later focus without advancing verified progress', () => {
+  const initial = createTaskBoard(['Gather ore', 'Smelt plates', 'Craft machine'], 0, { goalId: 'goal_focus', now: 1 })
+  const proposed = reconcileTaskBoard(initial, ['Gather ore', 'Smelt plates', 'Craft machine'], 2, { now: 2 })
+  assert.equal(proposed.active_index, 0)
+  assert.equal(proposed.completed_count, 0)
+  assert.equal(proposed.proposed_focus_index, 2)
+  assert.equal(proposed.steps[0].status, 'active')
+  assert.equal(proposed.steps[1].status, 'pending')
 })
 
 test('explicit failure replan is still allowed to replace the remaining suffix', () => {
@@ -99,7 +121,7 @@ test('explicit failure replan is still allowed to replace the remaining suffix',
   assert.equal(canonicalContinuationPlan(board(), proposal, { allowReplan: true }), proposal)
 })
 
-test('provider currentStep cannot skip an unverified transfer mutation', () => {
+test('provider currentStep may propose later focus but cannot grant transfer completion authority', () => {
   const transferState = planState({
     last_operations: ['move_items_exact {"item_name":"iron-ore","unit_number":582,"max_count":20,"to_entity":true}'],
     last_mutation_verified: false,
@@ -110,8 +132,11 @@ test('provider currentStep cannot skip an unverified transfer mutation', () => {
     operations: [],
   }, { previousState: transferState })
 
-  assert.equal(guarded.currentStep, 2)
+  assert.equal(guarded.currentStep, 3)
   assert.deepEqual(guarded.plan, board().steps.map(step => step.description))
+  assert.equal(transferState.task_board.active_index, 2)
+  assert.equal(transferState.task_board.completed_count, 2)
+  assert.equal(transferState.last_mutation_verified, false)
 })
 
 test('strict completed operation receipts are eligible for deterministic verification', () => {
@@ -192,25 +217,26 @@ test('receipt task types must match the submitted strict operations exactly', ()
   assert.deepEqual(result, { verified: false, reason: 'receipt_operation_mismatch' })
 })
 
-test('verified intermediate step advances canonical board before the model continuation', () => {
+test('verified mutation receipt records proof without advancing semantic canonical progress', () => {
   const memory = new CanonicalTaskBoardMemory()
   memory.planByNpc.set('npc:airi', planState())
 
   const nextBoard = memory.recordBoardEvidence('npc:airi', completedReceipt())
   const state = memory.currentPlan('npc:airi')
 
-  assert.equal(nextBoard.active_index, 3)
-  assert.equal(nextBoard.active_step_id, 'step_4')
-  assert.equal(nextBoard.completed_count, 3)
-  assert.equal(state.current_step, 3)
+  assert.equal(nextBoard.active_index, 2)
+  assert.equal(nextBoard.active_step_id, 'step_3')
+  assert.equal(nextBoard.completed_count, 2)
+  assert.equal(state.current_step, 2)
   assert.equal(state.plan.length, 5)
   assert.equal(state.status, 'active')
+  assert.equal(state.last_mutation_verified, true)
   const proof = nextBoard.evidence.find(item => item.kind === 'deterministic_verification')
   assert.equal(proof.ref, 'batch_7')
   assert.equal(proof.step_id, 'step_3')
 })
 
-test('positive transfer receipt advances once and marks the last mutation verified', () => {
+test('positive transfer receipt marks the mutation verified without completing the semantic step', () => {
   const transferBoard = board()
   transferBoard.steps[2] = { ...transferBoard.steps[2], description: 'Load furnace' }
   const state = planState({
@@ -238,10 +264,12 @@ test('positive transfer receipt advances once and marks the last mutation verifi
   }))
   const nextState = memory.currentPlan('npc:airi')
 
-  assert.equal(nextBoard.active_index, 3)
-  assert.equal(nextBoard.completed_count, 3)
+  assert.equal(nextBoard.active_index, 2)
+  assert.equal(nextBoard.completed_count, 2)
+  assert.equal(nextBoard.active_step_id, 'step_3')
   assert.equal(nextState.last_mutation_verified, true)
   assert.equal(nextState.last_verified_batch_id, 7)
+  assert.equal(nextBoard.evidence.some(item => item.kind === 'deterministic_verification' && item.ref === 'batch_7' && item.step_id === 'step_3'), true)
 })
 
 test('failed or zero-effect transfer receipt blocks the active step without completing it', () => {
@@ -286,7 +314,7 @@ test('failed or zero-effect transfer receipt blocks the active step without comp
   assert.equal(state.last_mutation_verified, false)
 })
 
-test('duplicate completed receipt cannot advance a second canonical step', () => {
+test('duplicate completed receipt records one deterministic proof but cannot advance semantic progress', () => {
   const memory = new CanonicalTaskBoardMemory()
   memory.planByNpc.set('npc:airi', planState())
 
@@ -294,12 +322,13 @@ test('duplicate completed receipt cannot advance a second canonical step', () =>
   memory.recordBoardEvidence('npc:airi', completedReceipt())
 
   const state = memory.currentPlan('npc:airi')
-  assert.equal(state.task_board.active_index, 3)
-  assert.equal(state.current_step, 3)
+  assert.equal(state.task_board.active_index, 2)
+  assert.equal(state.task_board.completed_count, 2)
+  assert.equal(state.current_step, 2)
   assert.equal(state.task_board.evidence.filter(item => item.kind === 'deterministic_verification' && item.ref === 'batch_7').length, 1)
 })
 
-test('verified final step records proof but leaves whole-goal closure to the existing completion continuation', () => {
+test('verified final operation receipt does not close the semantic goal by itself', () => {
   const finalBoard = board()
   finalBoard.active_index = 4
   finalBoard.active_step_id = 'step_5'
@@ -313,11 +342,11 @@ test('verified final step records proof but leaves whole-goal closure to the exi
   }))
 
   const nextBoard = memory.recordBoardEvidence('npc:airi', completedReceipt({ taskTypes: ['attacking'] }))
-  const state = memory.currentPlan('npc:airi')
+  const stored = memory.planByNpc.get('npc:airi')
 
   assert.equal(nextBoard.active_index, 4)
   assert.equal(nextBoard.status, 'active')
-  assert.equal(state.status, 'active')
+  assert.equal(stored.status, 'active')
   assert.equal(nextBoard.evidence.some(item => item.kind === 'deterministic_verification' && item.ref === 'batch_7'), true)
 })
 
@@ -346,7 +375,11 @@ test('whole-goal completion returns the final completed receipt but retires it b
     operations: [],
   }
 
-  const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'Build early automation' }, completion, { continuation: true })
+  const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'Build early automation' }, completion, {
+    continuation: true,
+    verifiedCompletion: true,
+    completionEvidence: [{ kind: 'deterministic_verification', ref: 'batch_final', summary: '{"verdict":"verified_complete"}' }],
+  })
   const reconciled = memory.reconcileTaskBoard(key, board(), completion, recorded)
 
   assert.equal(reconciled.state.status, 'completed')
@@ -446,10 +479,90 @@ test('completed prefix stays completed when a later placement recovery blocks', 
   const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'Place a chest nearby' }, blockedPlan, { continuation: true })
   const reconciled = memory.reconcileTaskBoard(key, placementBoard, blockedPlan, recorded, { previousState: previous })
 
-  assert.equal(reconciled.state.status, 'blocked')
+  assert.equal(reconciled.state.status, 'active')
   assert.equal(reconciled.state.task_board.completed_count, 1)
   assert.equal(reconciled.state.task_board.active_index, 1)
   assert.equal(reconciled.state.task_board.steps[0].status, 'completed')
-  assert.equal(reconciled.state.task_board.steps[1].status, 'blocked')
+  assert.equal(reconciled.state.task_board.steps[1].status, 'active')
   assert.equal(reconciled.state.task_board.steps[2].status, 'pending')
+})
+
+
+test('provider currentStep proposal alone cannot increase canonical completed_count', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const key = 'npc:airi'
+  const initial = board()
+  initial.active_index = 1
+  initial.active_step_id = 'step_2'
+  initial.completed_count = 1
+  initial.steps = initial.steps.map((step, index) => ({ ...step, status: index < 1 ? 'completed' : index === 1 ? 'active' : 'pending' }))
+  memory.planByNpc.set(key, planState({
+    task_board: initial,
+    plan: initial.steps.map(step => step.description),
+    current_step: 1,
+    last_mutation_verified: true,
+  }))
+  const proposal = {
+    chatMessage: 'I think later steps are done.',
+    plan: initial.steps.map(step => step.description),
+    currentStep: 4,
+    operations: [],
+  }
+  const previous = memory.currentPlan(key)
+  const recorded = memory.recordPlan(key, { sender: 'Louis', text: 'continue' }, proposal, { continuation: true })
+  const reconciled = memory.reconcileTaskBoard(key, initial, proposal, recorded, { previousState: previous })
+  assert.equal(reconciled.state.task_board.active_index, 1)
+  assert.equal(reconciled.state.task_board.completed_count, 1)
+  assert.equal(reconciled.state.task_board.proposed_focus_index, 4)
+})
+
+
+test('replan keeps every unverified remaining step even when proposed currentStep points later', () => {
+  const initial = createTaskBoard(['Gather ore', 'Smelt plates', 'Craft machine'], 0, { goalId: 'goal_replan', now: 1 })
+  const replanned = reconcileTaskBoard(
+    initial,
+    ['Gather ore', 'Prepare fuel', 'Smelt plates', 'Craft machine'],
+    2,
+    { now: 2, allowReplan: true },
+  )
+
+  assert.equal(replanned.active_index, 0)
+  assert.equal(replanned.completed_count, 0)
+  assert.deepEqual(
+    replanned.steps.map(step => step.description),
+    ['Gather ore', 'Prepare fuel', 'Smelt plates', 'Craft machine'],
+  )
+  assert.equal(replanned.proposed_focus_index, 2)
+  assert.equal(replanned.proposed_focus_step_id, 'step_3')
+  assert.equal(replanned.steps[0].status, 'active')
+  assert.equal(replanned.steps[1].status, 'pending')
+})
+
+
+test('canonical memory persists project and milestone hierarchy across restore', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', planState())
+  memory.updateProjectBoard('npc:airi', {
+    current_milestone: { id: 'bootstrap', title: 'Establish burner production', completion_summary: 'Stable early production is available.' },
+    next_milestones: [{ id: 'automation', title: 'Reach Automation' }, { id: 'power', title: 'Establish electric power' }],
+    development_direction: 'vertical',
+  })
+  const snapshot = memory.snapshot()
+  const restored = new CanonicalTaskBoardMemory()
+  restored.restore(snapshot)
+  const state = restored.currentPlan('npc:airi')
+  assert.equal(state.project_board.project_id, 'goal_1')
+  assert.equal(state.project_board.title, 'Build early automation')
+  assert.equal(state.project_board.current_milestone.title, 'Establish burner production')
+  assert.deepEqual(state.project_board.next_milestones.map(item => item.title), ['Reach Automation', 'Establish electric power'])
+  assert.equal(state.project_board.development_direction, 'vertical')
+  assert.match(restored.planContext('npc:airi'), /\[PROJECT_STATE\]/)
+})
+
+test('project status follows durable goal lifecycle authority', () => {
+  const memory = new CanonicalTaskBoardMemory()
+  memory.planByNpc.set('npc:airi', planState())
+  memory.currentPlan('npc:airi')
+  memory.pausePlan('npc:airi', 'user_pause')
+  assert.equal(memory.planByNpc.get('npc:airi').project_board.status, 'paused')
 })

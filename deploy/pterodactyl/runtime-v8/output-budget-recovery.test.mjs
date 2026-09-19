@@ -191,6 +191,50 @@ test('output-budget recovery keeps the canonical Task Board at the evidenced ste
   assert.equal(agent.messages.some(message => String(message.content ?? '').includes('immediately preceding provider response exhausted its output budget')), false)
 })
 
+test('output-budget recovery with no fresh evidence does not invent a durable world blocker', async () => {
+  const canonical = ['Inspect the crash-site wreck', 'Build the coal bootstrap', 'Verify coal']
+  const calls = []
+  const rcon = new FakeRcon()
+  const agent = makeAgent({
+    rcon,
+    provider: async (_messages, context) => {
+      calls.push(context)
+      if (calls.length === 1) {
+        return planMessage({
+          chatMessage: 'Checking the crash-site wreck before committing to a bootstrap plan.',
+          plan: canonical,
+          currentStep: 0,
+          operations: [{ name: 'wait', args: { ticks: 1 } }],
+        })
+      }
+      if (calls.length === 2) return exhaustedMessage()
+      assert.equal(context.allowTools, true)
+      assert.equal(context.recoveryKind, 'output_budget_exhaustion')
+      return planMessage({
+        chatMessage: 'I still need a grounded next action.',
+        plan: canonical,
+        currentStep: 0,
+        operations: [],
+      })
+    },
+  })
+
+  await agent.request('build a small working coal production setup', { sender: 'TTLouis' })
+
+  await assert.rejects(
+    agent.completed(),
+    /provider_output_budget_exhausted: bounded output-budget recovery produced no fresh world evidence/i,
+  )
+
+  const state = agent.memory.currentPlan('npc:airi')
+  assert.equal(state.status, 'active')
+  assert.equal(state.task_board.status, 'active')
+  assert.equal(state.task_board.active_index, 0)
+  assert.deepEqual(state.plan, canonical)
+  assert.notEqual(state.blocker, 'output_budget_recovery_no_operation')
+  assert.notEqual(state.task_board.blocker, 'output_budget_recovery_no_operation')
+})
+
 test('output-budget recovery rejects replay of a completed mutation before admission and falls through the bounded recovery path', async () => {
   const canonical = ['Wait for the machine cycle', 'Inspect the result']
   const calls = []
@@ -235,15 +279,21 @@ test('output-budget recovery rejects replay of a completed mutation before admis
   await agent.request('run the safe two-step check', { sender: 'TTLouis' })
   assert.equal(rcon.mutations.length, 1)
 
-  const recovered = await agent.completed()
+  await assert.rejects(
+    agent.completed(),
+    /Provider strict recovery could not safely resolve remaining canonical work/i,
+  )
 
   assert.equal(calls.length, 4)
   assert.equal(rcon.mutations.length, 1)
   assert.equal(rcon.mutations.filter(text => text.includes("'wait'")).length, 1)
-  assert.equal(recovered.goalStatus, 'blocked')
-  assert.equal(recovered.taskBoard.status, 'blocked')
-  assert.equal(recovered.taskBoard.active_index, 0)
-  assert.deepEqual(recovered.plan, canonical)
+  const state = agent.memory.currentPlan('npc:airi')
+  assert.equal(state.status, 'active')
+  assert.equal(state.task_board.status, 'active')
+  assert.equal(state.task_board.active_index, 0)
+  assert.deepEqual(state.plan, canonical)
+  assert.notEqual(state.blocker, 'provider_reported_blocker')
+  assert.notEqual(state.blocker, 'recovery_no_operation')
 })
 
 test('empty recovery content cannot retire an active canonical Task Board without evidence', async () => {
@@ -266,21 +316,21 @@ test('empty recovery content cannot retire an active canonical Task Board withou
   const agent = makeAgent({ provider: async () => replies.shift() })
 
   await agent.request('finish this safely', { sender: 'TTLouis' })
-  const recovered = await agent.completed()
-
-  assert.equal(recovered.goalStatus, 'blocked')
-  assert.deepEqual(recovered.plan, canonical)
-  assert.equal(recovered.currentStep, 0)
-  assert.equal(recovered.taskBoard.status, 'blocked')
-  assert.equal(recovered.taskBoard.active_index, 0)
-  assert.equal(recovered.taskBoard.total_steps, 3)
-  assert.equal(recovered.taskBoard.evidence.some(item => item.kind === 'deterministic_verification'), false)
+  await assert.rejects(
+    agent.completed(),
+    /provider_output_budget_exhausted: bounded output-budget recovery produced no fresh world evidence/i,
+  )
 
   const durable = agent.memory.currentPlan('npc:airi')
   assert.ok(durable)
-  assert.equal(durable.status, 'blocked')
-  assert.deepEqual(durable.plan, canonical)
+  assert.equal(durable.status, 'active')
+  assert.deepEqual(durable.plan, canonical.slice(0, 2))
   assert.equal(durable.current_step, 0)
+  assert.equal(durable.task_board.status, 'active')
+  assert.equal(durable.task_board.active_index, 0)
+  assert.equal(durable.task_board.total_steps, 2)
+  assert.equal(durable.task_board.evidence.some(item => item.kind === 'deterministic_verification'), false)
+  assert.notEqual(durable.blocker, 'output_budget_recovery_no_operation')
 })
 
 test('cached recovery observation does not count as fresh world evidence', async () => {

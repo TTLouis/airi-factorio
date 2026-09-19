@@ -155,6 +155,35 @@ test('SGLuna Egg environment overrides stored runtime config and is synchronized
   assert.equal(fileText.includes('FACTORIO_TOKEN'), false)
 })
 
+test('decision provider auto-configures from TypeSafe credentials without persisting secrets or an enabled flag', async t => {
+  const root = await temp(t)
+  const filename = path.join(root, 'sgluna-config.json')
+  const decisionKey = fixtureSecret('typesafe-key')
+  const env = eggEnv({
+    TYPESAFE_API_KEY: decisionKey,
+    DECISION_PROVIDER_MAX_INPUT_CHARS: '6000',
+    MAX_DECISION_PROVIDER_REQUESTS_PER_HOUR: '45',
+  })
+
+  const effective = configuration({}, env)
+  assert.equal(effective.decisionProvider?.provider, 'typesafe')
+  assert.equal(effective.decisionProvider?.key, decisionKey)
+  assert.equal(effective.decisionProvider?.model, 'jev-latest')
+  assert.equal(effective.decisionProvider?.maxInputChars, 6000)
+  assert.equal(effective.decisionProvider?.maxRequestsPerHour, 45)
+  assert.equal(Object.prototype.hasOwnProperty.call(effective.decisionProvider, 'enabled'), false)
+
+  const persisted = (await migrateCanonicalConfig(root, env)).config
+  assert.equal(Object.prototype.hasOwnProperty.call(persisted, 'decisionProvider'), false)
+  const text = await fsp.readFile(filename, 'utf8')
+  assert.equal(text.includes(decisionKey), false)
+  assert.equal(text.includes('TYPESAFE_API_KEY'), false)
+  assert.equal(text.includes('DECISION_PROVIDER'), false)
+
+  const withoutDecisionCredentials = configuration({}, eggEnv())
+  assert.equal(withoutDecisionCredentials.decisionProvider, undefined)
+})
+
 test('Factorio Egg credentials are rewritten into the exact launched server-settings.json on restart', async t => {
   const root = await temp(t)
   const game = await setupGame(root)

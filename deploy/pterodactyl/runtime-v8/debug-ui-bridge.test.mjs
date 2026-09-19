@@ -81,6 +81,55 @@ test('live debug bridge retains request, provider, tool, recovery, and actor dia
   assert.equal(debug.last_event, 'tool.result')
 })
 
+test('Jev economics accumulate across interactions and planner attribution stays explicit', () => {
+  let debug = liveAgentDebugEvent('interaction.routed', {
+    intent: 'status_query',
+    decision_shadow_latency_ms: 80,
+    decision_shadow: {
+      provider: 'TypeSafe',
+      model: 'jev-latest',
+      intent: 'status_query',
+      intent_confidence: 0.93,
+      queue_conflict_probability: 0.02,
+      usage: { input_tokens: 120, output_tokens: 10, cost: 0.00000504 },
+    },
+  })
+
+  debug = liveAgentDebugEvent('interaction.routed', {
+    intent: 'amend_current',
+    decision_shadow_latency_ms: 95,
+    decision_shadow: {
+      provider: 'TypeSafe',
+      model: 'jev-latest',
+      intent: 'new_goal',
+      intent_confidence: 0.71,
+      queue_conflict_probability: 0.44,
+      usage: { input_tokens: 180, output_tokens: 12, cost: 0.00000756 },
+    },
+  }, debug)
+
+  assert.equal(debug.decision_calls_total, 2)
+  assert.equal(debug.decision_input_units_total, 300)
+  assert.equal(debug.decision_output_units_total, 22)
+  assert.equal(debug.decision_cost_micro_usd_total, 13)
+  assert.equal(debug.decision_shadow_matches_total, 1)
+  assert.equal(debug.decision_shadow_mismatches_total, 1)
+  assert.equal(debug.decision_planner_skips_total, 0)
+  assert.equal(debug.decision_planner_wakes_total, 0)
+
+  debug = liveAgentDebugEvent('request.received', { sender: 'TTLouis', text: 'new task' }, debug, {
+    request_id: 'req-jev-next',
+  })
+  assert.equal(debug.decision_calls_total, 2)
+  assert.equal(debug.decision_input_units_total, 300)
+  assert.equal(debug.decision_cost_micro_usd_total, 13)
+
+  debug = liveAgentDebugEvent('planner.skipped', { source: 'decision_provider' }, debug)
+  debug = liveAgentDebugEvent('planner.wake', { source: 'decision_provider' }, debug)
+  assert.equal(debug.decision_planner_skips_total, 1)
+  assert.equal(debug.decision_planner_wakes_total, 1)
+})
+
 test('request cumulative usage stays separate from the latest completed provider round', () => {
   let debug = liveAgentDebugEvent('request.received', { sender: 'TTLouis', text: 'multi-round request' }, undefined, {
     request_id: 'req-multi',
@@ -336,4 +385,108 @@ test('task board UI snapshot includes live debug diagnostics', () => {
   assert.equal(snapshot.debug.latest_round_total_units, 35)
   assert.equal(snapshot.debug.recovery_attempt, 3)
   assert.equal(snapshot.debug.last_event, 'request.failed')
+})
+
+
+test('active Jev post-step routing is tracked separately from interaction shadow routing', () => {
+  let debug = liveAgentDebugEvent('interaction.routed', {
+    intent: 'status_query',
+    decision_shadow_latency_ms: 80,
+    decision_shadow: {
+      provider: 'TypeSafe',
+      model: 'jev-latest',
+      intent: 'status_query',
+      intent_confidence: 0.93,
+      queue_conflict_probability: 0.02,
+      usage: { input_tokens: 120, output_tokens: 10, cost: 0.00000504 },
+    },
+  })
+
+  debug = liveAgentDebugEvent('post_step.routed', {
+    mode: 'active',
+    route: 'wait_runtime',
+    applied_route: 'fallback_planner',
+    fallback_reason: 'wait_runtime_without_authoritative_healthy_persistent_runtime',
+    decision_latency_ms: 44,
+    decision: {
+      provider: 'TypeSafe',
+      model: 'jev-latest',
+      route: 'wait_runtime',
+      confidence: 0.88,
+      hierarchy: {
+        granularity: 'keep',
+        granularity_confidence: 0.92,
+        development: 'maintain',
+        development_confidence: 0.86,
+        reasoning_budget: 'micro',
+        reasoning_confidence: 0.81,
+        planning_horizon: 'checkpoint',
+        observation_budget: 1,
+      },
+      hierarchy_shadow_only: true,
+      usage: { input_tokens: 90, output_tokens: 8, cost: 0.00000378 },
+    },
+  }, debug)
+
+  assert.equal(debug.decision_shadow_intent, 'status_query')
+  assert.equal(debug.decision_active_intent, 'status_query')
+  assert.equal(debug.decision_post_step_route, 'wait_runtime')
+  assert.equal(debug.decision_post_step_applied_route, 'fallback_planner')
+  assert.equal(debug.decision_post_step_confidence_percent, 88)
+  assert.equal(debug.decision_post_step_latency_ms, 44)
+  assert.equal(debug.decision_granularity, 'keep')
+  assert.equal(debug.decision_granularity_confidence_percent, 92)
+  assert.equal(debug.decision_development, 'maintain')
+  assert.equal(debug.decision_development_confidence_percent, 86)
+  assert.equal(debug.decision_reasoning_budget, 'micro')
+  assert.equal(debug.decision_reasoning_confidence_percent, 81)
+  assert.equal(debug.decision_planning_horizon, 'checkpoint')
+  assert.equal(debug.decision_observation_budget, 1)
+  assert.match(debug.decision_post_step_fallback, /wait_runtime_without/)
+  assert.equal(debug.decision_calls_total, 2)
+  assert.equal(debug.decision_input_units_total, 210)
+  assert.equal(debug.decision_output_units_total, 18)
+  assert.equal(debug.decision_post_step_calls_total, 1)
+
+  debug = liveAgentDebugEvent('planner.wake', { source: 'decision_provider', route: 'fallback_planner' }, debug)
+  assert.equal(debug.decision_planner_wakes_total, 1)
+  assert.equal(debug.decision_planner_continue_low_wakes_total, 0)
+  assert.equal(debug.decision_planner_replan_high_wakes_total, 0)
+  assert.equal(debug.decision_planner_fallback_wakes_total, 1)
+})
+
+
+test('task board UI snapshot projects durable project hierarchy separately from plan steps', () => {
+  const state = {
+    goal_id: 'goal-rocket',
+    objective: 'Launch a rocket',
+    project_board: {
+      kind: 'project_board_v1',
+      project_id: 'goal-rocket',
+      title: 'Launch a rocket',
+      status: 'active',
+      current_milestone: { id: 'bootstrap', title: 'Establish burner production', status: 'active', completion_summary: 'Stable early production exists.' },
+      next_milestones: [{ id: 'automation', title: 'Reach Automation', status: 'tentative' }],
+      development_direction: 'vertical',
+      revision: 2,
+      updated_at: 123,
+    },
+    task_board: {
+      kind: 'task_board_lite',
+      goal_id: 'goal-rocket',
+      status: 'active',
+      blocker: '',
+      pause_reason: '',
+      completed_count: 0,
+      total_steps: 1,
+      active_index: 0,
+      steps: [{ id: 'step-1', description: 'Gather stone for the first furnaces', status: 'active' }],
+    },
+  }
+  const snapshot = taskBoardUiSnapshot(state, { phase: 'thinking', activity: [], debug: {} })
+  assert.equal(snapshot.project.title, 'Launch a rocket')
+  assert.equal(snapshot.project.current_milestone.title, 'Establish burner production')
+  assert.equal(snapshot.project.development_direction, 'vertical')
+  assert.deepEqual(snapshot.project.next_milestones.map(item => item.title), ['Reach Automation'])
+  assert.equal(snapshot.steps[0].description, 'Gather stone for the first furnaces')
 })

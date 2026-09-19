@@ -1,0 +1,89 @@
+const PROJECT_BOARD_NEXT_LIMIT = 3
+const PROJECT_STATUSES = new Set(['active', 'blocked', 'paused', 'completed'])
+const DEVELOPMENT_DIRECTIONS = new Set(['vertical', 'horizontal', 'maintain', 'recover'])
+
+function clean(value, max = 500) {
+  const text = String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
+}
+
+function milestone(value, status) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const title = clean(value.title, 500)
+  if (!title) return undefined
+  return {
+    id: clean(value.id, 100) || undefined,
+    title,
+    status,
+    completion_summary: clean(value.completion_summary, 800) || undefined,
+  }
+}
+
+export function sanitizeProjectBoard(value, {
+  goalId = '',
+  objective = '',
+  status = 'active',
+  now = Date.now(),
+} = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const current = milestone(source.current_milestone, 'active')
+  const next = (Array.isArray(source.next_milestones) ? source.next_milestones : [])
+    .slice(0, PROJECT_BOARD_NEXT_LIMIT)
+    .map(item => milestone(item, 'tentative'))
+    .filter(Boolean)
+  return {
+    kind: 'project_board_v1',
+    project_id: clean(source.project_id || goalId, 100),
+    title: clean(source.title || objective, 500),
+    status: PROJECT_STATUSES.has(status) ? status : 'active',
+    current_milestone: current,
+    next_milestones: next,
+    development_direction: DEVELOPMENT_DIRECTIONS.has(source.development_direction)
+      ? source.development_direction
+      : '',
+    revision: Number.isSafeInteger(source.revision) && source.revision > 0 ? source.revision : 1,
+    updated_at: Number.isFinite(source.updated_at) ? source.updated_at : now,
+  }
+}
+
+export function updateProjectBoard(current, patch = {}, context = {}) {
+  const previous = sanitizeProjectBoard(current, context)
+  const now = Number.isFinite(context.now) ? context.now : Date.now()
+  return sanitizeProjectBoard({
+    ...previous,
+    current_milestone: patch.current_milestone === undefined ? previous.current_milestone : patch.current_milestone,
+    next_milestones: patch.next_milestones === undefined ? previous.next_milestones : patch.next_milestones,
+    development_direction: patch.development_direction === undefined ? previous.development_direction : patch.development_direction,
+    revision: previous.revision + 1,
+    updated_at: now,
+  }, { ...context, now })
+}
+
+
+export function parseProjectProposal(value) {
+  if (value === undefined || value === null) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid project proposal')
+  const allowed = new Set(['currentMilestone', 'nextMilestones', 'developmentDirection'])
+  if (Object.keys(value).some(key => !allowed.has(key))) throw new Error('Invalid project proposal field')
+
+  const parseMilestone = (entry, label) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`Invalid ${label}`)
+    if (Object.keys(entry).some(key => !['title', 'completionSummary'].includes(key))) throw new Error(`Invalid ${label} field`)
+    const title = clean(entry.title, 500)
+    if (!title) throw new Error(`Invalid ${label} title`)
+    return { title, completion_summary: clean(entry.completionSummary, 800) || undefined }
+  }
+
+  const current = parseMilestone(value.currentMilestone, 'currentMilestone')
+  const nextRaw = value.nextMilestones === undefined ? [] : value.nextMilestones
+  if (!Array.isArray(nextRaw) || nextRaw.length > PROJECT_BOARD_NEXT_LIMIT) throw new Error('Invalid nextMilestones')
+  const next = nextRaw.map((entry, index) => parseMilestone(entry, `nextMilestones[${index}]`))
+  const direction = value.developmentDirection === undefined ? '' : value.developmentDirection
+  if (direction && !DEVELOPMENT_DIRECTIONS.has(direction)) throw new Error('Invalid developmentDirection')
+
+  return {
+    current_milestone: current,
+    next_milestones: next,
+    development_direction: direction,
+  }
+}

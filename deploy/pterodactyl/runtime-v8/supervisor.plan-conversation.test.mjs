@@ -22,7 +22,8 @@ test('plan.accepted retains each non-empty public decision in the current task c
 test('NpcAgentLoop carries the trigger source on plan.accepted', () => {
   const source = readFileSync(new URL('./npc-agent-loop.mjs', import.meta.url), 'utf8')
   const accepted = source.split("await this.traceEvent('plan.accepted'")[1]?.split('})')[0] ?? ''
-  assert.match(accepted, /trigger_source: this\.planUpdateReason/)
+  assert.match(source, /const triggerSource = this\.reasoningTriggerSource \?\? this\.planUpdateReason/)
+  assert.match(accepted, /trigger_source: triggerSource/)
   assert.match(accepted, /chat_message: plan\.chatMessage/)
 })
 

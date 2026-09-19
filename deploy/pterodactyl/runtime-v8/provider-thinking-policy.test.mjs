@@ -8,6 +8,7 @@ import { providerRequest, selectReasoningPolicy } from './provider.mjs'
 
 const VALID_PLAN = JSON.stringify({ chatMessage: '', plan: [], currentStep: 0, operations: [] })
 const COMPLETION = '[MOD] Autorio operation batch completed. Detailed task receipt: {"task_state":"completed"}'
+const FAILURE = '[MOD] Autorio operation error: placement failed. Dependent queued operations may have been cancelled. Detailed task receipt: {"task_state":"idle","queue_length":0}'
 
 function response(model = 'deepseek-flash') {
   return new Response(JSON.stringify({
@@ -55,6 +56,32 @@ test('successful deterministic completion continuation uses low effort with thin
   assert.equal(message._airiProvider.reasoning_policy_reason, 'deterministic_completion')
 })
 
+test('Jev post-step replan overrides the compact completion path and uses high effort', async () => {
+  const { seen, message } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: build a furnace' },
+    { role: 'user', content: COMPLETION },
+  ], { allowTools: true, triggerSource: 'post_step_replan' })
+
+  assert.equal(seen.url, 'https://proxy.example/v1/chat/completions')
+  assert.equal(seen.body.reasoning_effort, 'high')
+  assert.deepEqual(seen.body.thinking, { type: 'enabled' })
+  assert.equal(seen.body.max_tokens, 4000)
+  assert.equal(message._airiProvider.reasoning_policy_reason, 'jev_post_step_replan')
+})
+
+test('Jev post-step continue overrides an error boundary to low reasoning', async () => {
+  const { seen, message } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: keep building' },
+    { role: 'user', content: FAILURE },
+  ], { allowTools: true, triggerSource: 'post_step_continue' })
+
+  assert.equal(seen.body.reasoning_effort, 'low')
+  assert.deepEqual(seen.body.thinking, { type: 'enabled' })
+  assert.equal(message._airiProvider.reasoning_policy_reason, 'jev_post_step_continue')
+})
+
 test('new ordinary DeepSeek goal uses high effort only when lifecycle routing marks it new_goal', async () => {
   const { seen } = await captureRequest([
     { role: 'system', content: 'system' },
@@ -63,6 +90,7 @@ test('new ordinary DeepSeek goal uses high effort only when lifecycle routing ma
 
   assert.equal(seen.body.reasoning_effort, 'high')
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
+  assert.equal(seen.body.max_tokens, 4000)
 })
 
 test('strict JSON recovery uses none and disables thinking', async () => {
@@ -104,6 +132,7 @@ test('meaningful failure following a low continuation escalates the next plannin
   })
   const { seen } = await captureRequest(messages, { allowTools: true })
   assert.equal(seen.body.reasoning_effort, 'high')
+  assert.equal(seen.body.max_tokens, 4000)
 })
 
 test('repeated meaningful failures can escalate a later planning turn to max', async () => {
@@ -118,6 +147,7 @@ test('repeated meaningful failures can escalate a later planning turn to max', a
   const { seen } = await captureRequest(messages, { allowTools: true })
   assert.equal(seen.body.reasoning_effort, 'max')
   assert.deepEqual(seen.body.thinking, { type: 'enabled' })
+  assert.equal(seen.body.max_tokens, 6000)
 })
 
 test('successful grounded execution de-escalates back to low after earlier failures', async () => {
@@ -176,6 +206,20 @@ test('interaction router is tool-free, disables reasoning, and CHAT alone is not
     effort: 'high',
     reason: 'ordinary_planning',
   })
+})
+
+test('explicit caller max_tokens remains authoritative over reasoning policy budget', async () => {
+  const { seen } = await captureRequest([
+    { role: 'system', content: 'system' },
+    { role: 'user', content: '[CHAT] tester: plan something difficult' },
+  ], {
+    allowTools: true,
+    triggerSource: 'new_goal',
+    requestBodyPatch: { max_tokens: 900 },
+  })
+
+  assert.equal(seen.body.reasoning_effort, 'high')
+  assert.equal(seen.body.max_tokens, 900)
 })
 
 test('custom DeepSeek-compatible base URL keeps its endpoint while receiving model-gated reasoning policy', async () => {

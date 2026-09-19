@@ -119,8 +119,8 @@ test('distinct read-only tools receive decision pressure before exhausting the o
     rcon,
     provider: async (messages) => {
       calls++
-      if (calls <= 4) return toolMessage(`tool-${calls}`, 'getRecipe', { item: `test-item-${calls}` })
-      assert.match(messages.map(message => String(message.content ?? '')).join('\n'), /Decision pressure after 4 consecutive observation-only rounds/)
+      if (calls <= 3) return toolMessage(`tool-${calls}`, 'getRecipe', { item: `test-item-${calls}` })
+      assert.match(messages.map(message => String(message.content ?? '')).join('\n'), /Decision pressure after 3 consecutive observation-only rounds/)
       return planMessage([{ name: 'wait', args: { ticks: 1 } }])
     },
     systemPrompt: 'NPC test prompt',
@@ -128,7 +128,7 @@ test('distinct read-only tools receive decision pressure before exhausting the o
 
   const result = await agent.request('observe before acting')
 
-  assert.equal(calls, 5)
+  assert.equal(calls, 4)
   assert.equal(result.operations[0].name, 'wait')
   assert.equal(rcon.mutations.length, 1)
 })

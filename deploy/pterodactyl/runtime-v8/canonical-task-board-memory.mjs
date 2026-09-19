@@ -1,5 +1,6 @@
 import { NpcDialogueMemory } from './npc-agent-loop.mjs'
 import { setTaskBoardStatus } from './common.mjs'
+import { sanitizeProjectBoard, updateProjectBoard } from './project-board.mjs'
 
 const STRICT_TASKS_BY_OPERATION = new Map([
   ['walk_to_entity', ['walking_to_entity']],
@@ -185,25 +186,44 @@ export function canonicalContinuationPlan(previousBoard, plan, { allowReplan = f
     ? -1
     : canonical.findIndex(description => clean(description) === clean(incomingActive))
 
-  if (stateHasUnverifiedTransferIntent(previousState) && matched > currentIndex) {
-    return {
-      ...plan,
-      plan: canonical,
-      currentStep: currentIndex,
-    }
-  }
-
   if (allowReplan) return plan
-  const nextIndex = matched >= currentIndex ? matched : currentIndex
-
   return {
     ...plan,
     plan: canonical,
-    currentStep: nextIndex,
+    // currentStep is advisory proposed focus only. Runtime completion authority
+    // remains at currentIndex until grounded evidence is accepted.
+    currentStep: matched >= 0 ? matched : currentIndex,
   }
 }
 
 export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
+  ensureProjectBoard(state) {
+    if (!state) return undefined
+    state.project_board = sanitizeProjectBoard(state.project_board, {
+      goalId: state.goal_id,
+      objective: state.objective,
+      status: state.status,
+      now: state.updated_at,
+    })
+    return state.project_board
+  }
+
+  updateProjectBoard(key, patch = {}) {
+    const state = key ? this.planByNpc.get(key) : undefined
+    if (!state) return undefined
+    const now = Date.now()
+    state.project_board = updateProjectBoard(this.ensureProjectBoard(state), patch, {
+      goalId: state.goal_id,
+      objective: state.objective,
+      status: state.status,
+      now,
+    })
+    state.revision = (state.revision ?? 0) + 1
+    state.updated_at = now
+    this.planByNpc.set(key, state)
+    return state.project_board
+  }
+
   retireCompletedPlan(key) {
     const state = key ? this.planByNpc.get(key) : undefined
     if (!state || state.status !== 'completed') return state
@@ -216,12 +236,16 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     if (!state) {
       return '[PLAN_STATE] No active durable goal. Completed goals are retired from the current task slot and remain only in bounded dialogue history. Do not resume or steer a completed goal merely because the human says continue; a new actionable instruction must start a new goal.'
     }
-    return super.planContext(key)
+    const plan = super.planContext(key)
+    const project = this.ensureProjectBoard(state)
+    return `${plan}\n[PROJECT_STATE] Durable long-horizon hierarchy. Future milestones are tentative; the current Task Board remains the execution contract.\n${JSON.stringify(project)}`
   }
 
   currentPlan(key) {
     this.retireCompletedPlan(key)
-    return super.currentPlan(key)
+    const state = super.currentPlan(key)
+    this.ensureProjectBoard(state)
+    return state
   }
 
   recordPlan(key, requestInfo, plan, options = {}) {
@@ -229,46 +253,26 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
     // still contain one from a previous runtime version, so retire it before a
     // new request can accidentally inherit its goal_id/objective.
     this.retireCompletedPlan(key)
-    return super.recordPlan(key, requestInfo, plan, options)
+    const result = super.recordPlan(key, requestInfo, plan, options)
+    if (result?.state) this.ensureProjectBoard(result.state)
+    return result
+  }
+
+  applyOutcomeAuthority(key, candidate, options = {}) {
+    const result = super.applyOutcomeAuthority(key, candidate, options)
+    if (result?.state) this.ensureProjectBoard(result.state)
+    return result
+  }
+
+  restore(snapshot) {
+    super.restore(snapshot)
+    for (const state of this.planByNpc.values()) this.ensureProjectBoard(state)
   }
 
   reconcileTaskBoard(key, previousBoard, plan, stateResult, options = {}) {
     const truthState = options.previousState ?? stateResult?.state
-    if (stateHasUnverifiedTransferIntent(truthState) && attemptedLaterCanonicalStep(previousBoard, plan)) {
-      const currentIndex = Number.isSafeInteger(previousBoard?.active_index) ? previousBoard.active_index : 0
-      const canonical = Array.isArray(previousBoard?.steps)
-        ? previousBoard.steps.map(step => String(step?.description ?? '')).filter(Boolean)
-        : []
-      const now = Date.now()
-      const frozen = {
-        ...truthState,
-        status: 'blocked',
-        task_board: setTaskBoardStatus(previousBoard, 'blocked', {
-          blocker: truthState?.blocker || 'unverified_transfer_step',
-          now,
-        }),
-        plan: canonical,
-        current_step: currentIndex,
-        blocker: truthState?.blocker || 'unverified_transfer_step',
-        revision: (truthState?.revision ?? 0) + 1,
-        updated_at: now,
-      }
-      this.planByNpc.set(key, frozen)
-      return {
-        ...(stateResult ?? {}),
-        state: frozen,
-        blockedByHarness: true,
-        changed: true,
-        blocker: frozen.blocker,
-      }
-    }
-
     const guarded = canonicalContinuationPlan(previousBoard, plan, { ...options, previousState: truthState })
     const result = super.reconcileTaskBoard(key, previousBoard, guarded, stateResult, options)
-    // Return the completed state to the caller for the final response/receipt,
-    // but clear it from the current durable slot before UI sync and persistence.
-    // Conversation memory still retains the user/assistant exchange for follow-up
-    // references without making the finished goal steerable.
     if (result?.state?.status === 'completed') this.planByNpc.delete(key)
     return result
   }
@@ -280,14 +284,13 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
 
     if (evidence?.kind === 'operation_error_receipt' && stateHasUnverifiedTransferIntent(state)) {
       const reason = transferFailureReason(evidence)
-      state.status = 'blocked'
-      state.blocker = `transfer_failed:${reason}`
-      state.pause_reason = ''
-      state.task_board = setTaskBoardStatus(boardAfterReceipt, 'blocked', { blocker: state.blocker, now: Date.now() })
-      state.revision += 1
-      state.updated_at = Date.now()
-      this.planByNpc.set(key, state)
-      return state.task_board
+      return this.applyOutcomeAuthority(key, {
+        kind: 'world_blocked',
+        source: 'autorio',
+        reason_code: `transfer_failed:${reason}`,
+        candidate_blocker: `transfer_failed:${reason}`,
+        evidence: [evidence],
+      }).state?.task_board ?? boardAfterReceipt
     }
 
     if (state.status !== 'active' || boardAfterReceipt.status !== 'active') return boardAfterReceipt
@@ -318,38 +321,12 @@ export class CanonicalTaskBoardMemory extends NpcDialogueMemory {
       this.planByNpc.set(key, current)
     }
     const verifiedBoard = this.ensureTaskBoard(current)
-    if (!current || !verifiedBoard || verifiedBoard.status !== 'active' || verifiedBoard.steps.length === 0) return verifiedBoard
+    if (!current || !verifiedBoard || verifiedBoard.status !== 'active') return verifiedBoard
 
-    const currentIndex = Number.isSafeInteger(verifiedBoard.active_index) ? verifiedBoard.active_index : 0
-    if (currentIndex >= verifiedBoard.steps.length - 1) {
-      // Keep final goal completion conservative. The deterministic evidence is
-      // attached to the last step, but the existing completion continuation is
-      // still responsible for closing the whole user goal. This prevents a
-      // provider continuation from reopening an already-completed durable goal.
-      return verifiedBoard
-    }
-
-    const canonical = verifiedBoard.steps.map(step => String(step?.description ?? '')).filter(Boolean)
-    const nextIndex = currentIndex + 1
-    const stateResult = super.reconcileTaskBoard(key, verifiedBoard, {
-      plan: canonical,
-      currentStep: nextIndex,
-    }, {
-      state: current,
-      blockedByHarness: false,
-      changed: true,
-    }, { allowReplan: false })
-    const next = stateResult?.state
-    if (!next) return verifiedBoard
-    next.status = 'active'
-    next.blocker = ''
-    next.pause_reason = ''
-    next.plan = canonical
-    next.current_step = nextIndex
-    next.revision += 1
-    next.updated_at = Date.now()
-    this.planByNpc.set(key, next)
-    return next.task_board
+    // Strict operation completion is grounded evidence, not semantic step
+    // completion authority. The Runtime Completion Gate decides whether this
+    // proof is sufficient for the active canonical step.
+    return verifiedBoard
   }
 
   terminatePlan(key) {

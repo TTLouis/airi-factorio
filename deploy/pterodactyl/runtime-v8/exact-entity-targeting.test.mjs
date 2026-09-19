@@ -49,17 +49,22 @@ class ExactTargetRcon {
     }
   }
 
-  completedStatus(batchId, taskTypes) {
+  completedStatus(batchId, taskTypes, basicResult = undefined) {
     this.operationStatus = {
       task_state: 'idle',
       queue_empty: true,
       queue_length: 0,
+      actor: {
+        actor_id: 18,
+        position: { x: 0, y: 0 },
+      },
       last_completed_batch: {
         batch_id: batchId,
         task_count: taskTypes.length,
         task_types: taskTypes,
         tick: 200 + batchId,
       },
+      ...(basicResult ? { basic_operation: { last_result: basicResult } } : {}),
     }
   }
 
@@ -113,6 +118,80 @@ test('same-goal live observed exact id is executable', async () => {
   assert.equal(result.operations[0].name, 'mine_entity_exact')
   assert.equal(result.operations[0].args.unit_number, 289)
   assert.equal(rcon.mutations.length, 1)
+})
+
+test('placement completion receipt binds the created entity for an immediate exact follow-up without re-observation', async () => {
+  const rcon = new ExactTargetRcon()
+  rcon.preflightByUnit.set(77, {
+    ok: true,
+    operation: 'supply_entity',
+    field: 'unit_number',
+    identity: 77,
+  })
+
+  const canonicalPlan = ['Place a furnace', 'Load the placed furnace']
+  let calls = 0
+  const agent = new NpcAgentLoop({
+    rcon,
+    memory: new NpcDialogueMemory(),
+    systemPrompt: 'placement receipt exact identity handoff test',
+    provider: async (messages, context) => {
+      calls++
+      assert.equal(context.allowTools, true)
+      if (calls === 1) {
+        return planMessage([{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 3, y: 0 } }], {
+          plan: canonicalPlan,
+          currentStep: 0,
+        })
+      }
+
+      const text = messages.map(message => String(message.content ?? '')).join('\n')
+      assert.match(text, /placed_unit_number["']?\s*:\s*77/i)
+      return planMessage([{
+        name: 'supply_entity',
+        args: {
+          unit_number: 77,
+          items: [
+            { item_name: 'iron-ore', count: 5 },
+            { item_name: 'coal', count: 1 },
+          ],
+        },
+      }], {
+        plan: canonicalPlan,
+        currentStep: 1,
+      })
+    },
+  })
+
+  const placed = await agent.request('place a furnace and load it', { sender: 'tester' })
+  assert.equal(placed.operations[0].name, 'place_entity')
+  assert.equal(rcon.mutations.length, 1)
+
+  rcon.completedStatus(1, ['placing'], {
+    operation_id: 1,
+    type: 'placing',
+    accepted: true,
+    completed: true,
+    code: 'completed',
+    tick: 201,
+    actor_id: 18,
+    force_index: 1,
+    entity_name: 'stone-furnace',
+    requested_position: { x: 3, y: 0 },
+    placed_unit_number: 77,
+    placed_entity_type: 'furnace',
+    placed_position: { x: 3, y: 0 },
+    placed_surface_index: 1,
+    placed_direction: 0,
+  })
+  const follow = await agent.completed()
+
+  assert.equal(calls, 2)
+  assert.equal(follow.operations[0].name, 'supply_entity')
+  assert.equal(follow.operations[0].args.unit_number, 77)
+  assert.equal(rcon.mutations.length, 2)
+  assert.match(rcon.mutations[1], /supply_entity',77/)
+  assert.equal(rcon.commands.some(command => command.includes('get_nearby_entities')), false)
 })
 
 test('old task unit id cannot leak into a new human request', async () => {

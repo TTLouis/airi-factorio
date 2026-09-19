@@ -65,6 +65,41 @@ function planMessage({ chatMessage = 'Working.', plan = [], currentStep = 0, ope
   return { content: JSON.stringify({ chatMessage, plan, currentStep, operations }) }
 }
 
+function completionAndContinueDecision(state) {
+  if (state?.contract === 'step_completion_contract') {
+    return {
+      model: 'jev-test',
+      provider: 'TypeSafe',
+      answers: {
+        contract: {
+          type: 'choice',
+          choice: 'candidate_1',
+          confidence: 0.99,
+          probabilities: { candidate_1: 0.99, semantic_unknown: 0.01 },
+        },
+        compound_step: { type: 'noul', noul: 0.01 },
+      },
+      usage: { input_tokens: 10, output_tokens: 2, cost: 0 },
+    }
+  }
+  if (state?.reason === 'post_step_planner_gate') {
+    return {
+      model: 'jev-test',
+      provider: 'TypeSafe',
+      answers: {
+        route: {
+          type: 'choice',
+          choice: 'continue_current',
+          confidence: 0.99,
+          probabilities: { continue_current: 0.99 },
+        },
+      },
+      usage: { input_tokens: 10, output_tokens: 2, cost: 0 },
+    }
+  }
+  throw new Error('unexpected decision contract')
+}
+
 class RejectingTransferRcon extends FakeRcon {
   constructor() {
     super()
@@ -188,41 +223,43 @@ test('durable plan survives a new agent instance and empty actions cannot preten
   assert.equal(started.taskBoard.active_step_id, 'step_1')
   assert.equal(first.active, true)
 
-  const stopped = await first.completed()
-  assert.match(stopped.chatMessage, /^\[Plan blocked\]/)
-  assert.equal(stopped.goalStatus, 'blocked')
-  assert.equal(stopped.taskBoard.active_step_id, 'step_2')
-  assert.equal(stopped.taskBoard.completed_count, 1)
-  assert.equal(first.active, false)
+  await assert.rejects(
+    first.completed(),
+    /provider_action_omission_repair_failed/i,
+  )
+  const interrupted = first.memory.currentPlan('npc:airi')
+  assert.equal(interrupted.status, 'active')
+  assert.equal(interrupted.admission_status, 'action_omission_repair')
+  assert.equal(interrupted.task_board.active_step_id, 'step_1')
+  assert.equal(interrupted.task_board.completed_count, 0)
+  assert.equal(first.active, true)
 
   const saved = JSON.parse(await fsp.readFile(stateFile, 'utf8'))
-  assert.equal(saved.plans[0].state.status, 'blocked')
-  assert.equal(saved.plans[0].state.blocker, 'action_omission_after_repair')
-  assert.equal(saved.plans[0].state.current_step, 1)
+  assert.equal(saved.plans[0].state.status, 'active')
+  assert.equal(saved.plans[0].state.admission_status, 'action_omission_repair')
+  assert.notEqual(saved.plans[0].state.blocker, 'action_omission_after_repair')
+  assert.equal(saved.plans[0].state.current_step, 0)
   assert.equal(saved.plans[0].state.task_board.total_steps, 2)
-  assert.equal(saved.plans[0].state.task_board.completed_count, 1)
+  assert.equal(saved.plans[0].state.task_board.completed_count, 0)
   assert.equal(saved.plans[0].state.task_board.evidence.some(item => item.ref === 'batch_7'), true)
-  assert.equal(saved.plans[0].state.task_board.evidence.at(-1).kind, 'action_omission')
 
-  let observed
   const second = new NpcAgentLoop({
     rcon: new FakeRcon(),
-    provider: async messages => {
-      observed = messages
-      return planMessage({ chatMessage: 'The saved plan is still available.', plan: [], operations: [] })
+    provider: async () => {
+      throw new Error('durable restart inspection should not need a planner call')
     },
     systemPrompt: 'NPC test prompt',
     memory: new CanonicalTaskBoardMemory(),
     stateFile,
     traceFile: null,
   })
-  await second.request('what were you doing?', { sender: 'TTLouis' })
+  await second.loadPersistentState()
 
-  const context = observed.map(message => message.content ?? '').join('\n')
+  const context = second.memory.planContext('npc:airi')
   assert.match(context, /\[PLAN_STATE\]/)
   assert.match(context, /task_board/)
   assert.match(context, /prepare the furnace/)
-  assert.match(context, /action_omission_after_repair/)
+  assert.match(context, /action_omission_repair/)
   assert.match(context, /Load the furnace/)
 })
 
@@ -233,19 +270,19 @@ test('canonical task board prevents model plan-length drift from resetting visib
       chatMessage: 'Starting.',
       plan: canonical,
       currentStep: 0,
-      operations: [{ name: 'wait', args: { ticks: 1 } }],
+      operations: [{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } }],
     }),
     planMessage({
       chatMessage: 'Continuing the same step.',
       plan: ['Observe area', 'Extra thought', 'Mine ore', 'Place machine', 'Load machine', 'Verify output', 'Another thought'],
       currentStep: 0,
-      operations: [{ name: 'wait', args: { ticks: 1 } }],
+      operations: [{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } }],
     }),
     planMessage({
       chatMessage: 'Advancing to construction.',
       plan: canonical,
       currentStep: 2,
-      operations: [{ name: 'wait', args: { ticks: 1 } }],
+      operations: [{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } }],
     }),
   ]
   const agent = new NpcAgentLoop({
@@ -267,9 +304,10 @@ test('canonical task board prevents model plan-length drift from resetting visib
   assert.equal(second.taskBoard.revision >= first.taskBoard.revision, true)
 
   const third = await agent.completed()
-  assert.match(third.chatMessage, /^\[Plan 3\/5\] Place machine/)
-  assert.equal(third.taskBoard.completed_count, 2)
-  assert.equal(third.taskBoard.active_step_id, 'step_3')
+  assert.match(third.chatMessage, /^\[Plan 1\/5\] Observe area/)
+  assert.equal(third.taskBoard.completed_count, 0)
+  assert.equal(third.taskBoard.active_step_id, 'step_1')
+  assert.equal(third.taskBoard.proposed_focus_step_id, 'step_3')
 })
 
 test('Autorio errors feed the detailed task receipt back into the active goal for replanning', async () => {
@@ -490,8 +528,9 @@ test('healthy persistent runtime and explicit truthful blocker do not trigger om
   })
   const blocked = await blockedAgent.request('use that capability', { sender: 'TTLouis' })
   assert.equal(blockerCalls, 1)
-  assert.equal(blocked.goalStatus, 'blocked')
-  assert.equal(blocked.taskBoard.blocker, 'provider_reported_blocker')
+  assert.equal(blocked.goalStatus, 'paused')
+  assert.equal(blocked.taskBoard.blocker, '')
+  assert.match(blocked.chatMessage, /recoverable provider failure/i)
   assert.match(blocked.chatMessage, /required capability is unavailable/)
   assert.equal(blockedAgent.rcon.mutations.length, 0)
 })
@@ -542,7 +581,7 @@ test('completed observation followed by prose-only intent gets exactly one cheap
   assert.match(repairContext, /no executable operation was submitted/)
 })
 
-test('repeated prose-only omission blocks once with a specific reason and never invents a mutation', async () => {
+test('repeated prose-only omission fails upward without inventing a durable world blocker', async () => {
   let calls = 0
   const rcon = new ActionOmissionRcon()
   const agent = new NpcAgentLoop({
@@ -561,15 +600,55 @@ test('repeated prose-only omission blocks once with a specific reason and never 
     traceFile: null,
   })
 
-  const result = await agent.request('take the items', { sender: 'TTLouis' })
+  await assert.rejects(
+    agent.request('take the items', { sender: 'TTLouis' }),
+    /provider_action_omission_repair_failed/i,
+  )
   assert.equal(calls, 2)
-  assert.equal(result.goalStatus, 'blocked')
-  assert.equal(result.taskBoard.blocker, 'action_omission_after_repair')
-  assert.match(result.chatMessage, /bounded act-or-block repair returned no executable operation/i)
   assert.equal(rcon.mutations.length, 0)
   const state = agent.memory.currentPlan('npc:airi')
+  assert.equal(state.status, 'active')
+  assert.equal(state.admission_status, 'action_omission_repair')
+  assert.notEqual(state.blocker, 'action_omission_after_repair')
+  assert.notEqual(state.task_board.blocker, 'action_omission_after_repair')
   assert.equal(state.plan[0], 'Take items')
   assert.equal(state.current_step, 0)
+})
+
+test('invalid provider JSON during action-omission repair fails upward without a durable world blocker', async () => {
+  let calls = 0
+  const rcon = new ActionOmissionRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      calls++
+      if (calls === 1) {
+        return planMessage({
+          chatMessage: 'I will verify the result next.',
+          plan: ['Verify the result'],
+          currentStep: 0,
+          operations: [],
+        })
+      }
+      return { content: 'this is not valid JSON' }
+    },
+    systemPrompt: 'Invalid omission repair JSON test',
+    stateFile: null,
+    traceFile: null,
+  })
+
+  await assert.rejects(
+    agent.request('verify the result', { sender: 'TTLouis' }),
+    /Invalid provider content JSON/i,
+  )
+
+  assert.equal(calls, 5)
+  assert.equal(rcon.mutations.length, 0)
+  const state = agent.memory.currentPlan('npc:airi')
+  assert.equal(state.status, 'active')
+  assert.equal(state.admission_status, 'action_omission_repair')
+  assert.notEqual(state.blocker, 'action_omission_after_repair')
+  assert.notEqual(state.task_board.blocker, 'action_omission_after_repair')
 })
 
 test('one genuinely missing mutable fact gets one targeted observation, then action is required', async () => {
@@ -635,19 +714,25 @@ test('repair cannot loop on a duplicate or second observation', async () => {
     traceFile: null,
   })
 
-  const result = await agent.request('use the chest', { sender: 'TTLouis' })
+  await assert.rejects(
+    agent.request('use the chest', { sender: 'TTLouis' }),
+    /provider_action_omission_repair_failed/i,
+  )
   assert.equal(calls, 3)
   assert.equal(rcon.observationCalls, 1)
-  assert.equal(result.goalStatus, 'blocked')
-  assert.equal(result.taskBoard.blocker, 'action_omission_after_repair')
+  const state = agent.memory.currentPlan('npc:airi')
+  assert.equal(state.status, 'active')
+  assert.notEqual(state.task_board.blocker, 'action_omission_after_repair')
   assert.equal(rcon.mutations.length, 0)
 })
 
 test('omission repair preserves goal id, verified prefix, and active canonical step', async () => {
   let calls = 0
   const rcon = new ActionOmissionRcon()
+  const memory = new CanonicalTaskBoardMemory()
   const agent = new NpcAgentLoop({
     rcon,
+    memory,
     provider: async () => {
       calls++
       if (calls === 1) {
@@ -680,7 +765,23 @@ test('omission repair preserves goal id, verified prefix, and active canonical s
 
   const first = await agent.request('set up two steps', { sender: 'TTLouis' })
   const goalId = first.goalId
-  const continued = await agent.completed()
+  const proof = {
+    kind: 'deterministic_verification',
+    ref: 'fixture_verified_step_1',
+    summary: 'Fixture proof for the already-verified first canonical step.',
+  }
+  memory.recordBoardEvidence?.('npc:airi', proof)
+  const reduced = memory.applyOutcomeAuthority?.('npc:airi', {
+    kind: 'verified_complete',
+    source: 'deterministic_runtime',
+    reason_code: 'fixture_verified_prefix',
+    evidence: [proof],
+    metadata: { scope: 'step' },
+  })
+  assert.equal(reduced?.decision?.accepted, true)
+  assert.equal(memory.currentPlan('npc:airi').task_board.completed_count, 1)
+
+  const continued = await agent.request('continue setup', { sender: 'TTLouis' })
   assert.equal(calls, 3)
   assert.equal(continued.goalId, goalId)
   assert.equal(continued.taskBoard.completed_count, 1)
@@ -755,7 +856,9 @@ test('interrupted omission recovery uses a compact capsule instead of replaying 
   assert.match(context, /historical unit_number values are non-executable/)
   assert.match(context, /remaining_steps/)
   assert.equal(resumed.goalId, goalId)
-  assert.equal(resumed.goalStatus, 'blocked')
+  assert.equal(resumed.goalStatus, 'paused')
+  assert.equal(resumed.taskBoard.blocker, '')
+  assert.match(resumed.chatMessage, /recoverable provider failure/i)
   assert.match(resumed.chatMessage, /required live capability is still unavailable/)
   assert.equal(rcon.mutations.length, 0)
 })
@@ -770,7 +873,7 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
     provider: async (_messages, options) => {
       calls++
       optionsSeen.push(options)
-      if (calls <= 5) return toolMessage(`preplan-observe-${calls}`, 15 + calls)
+      if (calls <= 4) return toolMessage(`preplan-observe-${calls}`, 15 + calls)
       return planMessage({
         chatMessage: '',
         plan: [],
@@ -783,15 +886,20 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
     traceFile: null,
   })
 
-  const result = await agent.request('inspect the chest and take the needed plates', { sender: 'TTLouis' })
-  assert.equal(calls, 6)
-  assert.equal(rcon.observationCalls, 5)
+  await assert.rejects(
+    agent.request('inspect the chest and take the needed plates', { sender: 'TTLouis' }),
+    /provider_action_omission_repair_failed/i,
+  )
+  assert.equal(calls, 5)
+  assert.equal(rcon.observationCalls, 4)
   assert.equal(optionsSeen.at(-1).allowTools, false)
   assert.equal(optionsSeen.at(-1).recoveryAttempt, 1)
   assert.deepEqual(optionsSeen.at(-1).requestBodyPatch, { max_tokens: 700 })
-  assert.equal(result.goalStatus, 'blocked')
-  assert.equal(result.taskBoard.blocker, 'action_omission_after_repair')
-  assert.equal(result.taskBoard.steps[0].description, 'inspect the chest and take the needed plates')
+  const state = agent.memory.currentPlan('npc:airi')
+  if (state) {
+    assert.equal(state.status, 'active')
+    assert.notEqual(state.task_board.blocker, 'action_omission_after_repair')
+  }
   assert.equal(rcon.mutations.length, 0)
 })
 
@@ -799,56 +907,73 @@ test('pre-plan observation decision pressure ends in one bounded act-or-block de
 test('verified completion can close before a trailing control-only Stop step', async () => {
   let calls = 0
   const rcon = new ActionOmissionRcon()
-  const plan = ['Perform the requested work', 'Verify the result', 'Stop']
+  const plan = ['Place the requested furnace', 'Stop']
   const agent = new NpcAgentLoop({
     rcon,
     provider: async () => {
       calls++
-      if (calls === 1) {
-        return planMessage({
-          chatMessage: 'Performing the requested work.',
-          plan,
-          currentStep: 0,
-          operations: [{ name: 'wait', args: { ticks: 1 } }],
-        })
-      }
-      if (calls === 2) {
-        return planMessage({
-          chatMessage: 'The work is done; moving to verification.',
-          plan,
-          currentStep: 1,
-          operations: [{ name: 'wait', args: { ticks: 1 } }],
-        })
-      }
-      if (calls === 3) return toolMessage('final-verification')
       return planMessage({
-        chatMessage: 'The requested result is verified. Nothing further needs execution.',
-        plan: [],
+        chatMessage: 'Placing the requested furnace.',
+        plan,
         currentStep: 0,
-        operations: [],
+        operations: [{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 5 } }],
       })
     },
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
     systemPrompt: 'Trailing control-only completion regression test',
     memory: new CanonicalTaskBoardMemory(),
     stateFile: null,
     traceFile: null,
   })
 
-  const started = await agent.request('do the work, verify it, then stop', { sender: 'TTLouis' })
+  const started = await agent.request('place the furnace, then stop', { sender: 'TTLouis' })
   assert.equal(started.operations.length, 1)
-  assert.equal(started.taskBoard.active_index, 0)
-
-  const verifying = await agent.completed()
-  assert.equal(verifying.operations.length, 1)
-  assert.equal(verifying.taskBoard.active_index, 1)
-  assert.equal(verifying.taskBoard.steps[2].description, 'Stop')
+  assert.equal(started.taskBoard.total_steps, 1)
+  assert.equal(started.taskBoard.steps.some(step => step.description === 'Stop'), false)
 
   const finished = await agent.completed()
-  assert.equal(calls, 4)
+  assert.equal(calls, 1)
   assert.equal(finished.goalStatus, 'completed')
   assert.equal(finished.operations.length, 0)
   assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
-  assert.equal(rcon.mutations.length, 2)
+  assert.equal(rcon.mutations.length, 1)
+})
+
+test('verified completion can close before a trailing Report completion control-only step', async () => {
+  let calls = 0
+  const rcon = new ActionOmissionRcon()
+  const plan = ['Place the requested furnace', 'Report completion']
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => {
+      calls++
+      return planMessage({
+        chatMessage: 'Placing the requested furnace.',
+        plan,
+        currentStep: 0,
+        operations: [{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 5 } }],
+      })
+    },
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
+    systemPrompt: 'Trailing report-completion regression test',
+    memory: new CanonicalTaskBoardMemory(),
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const started = await agent.request('place the furnace, then report completion', { sender: 'TTLouis' })
+  assert.equal(started.operations.length, 1)
+  assert.equal(started.taskBoard.total_steps, 1)
+  assert.equal(started.taskBoard.steps.some(step => step.description === 'Report completion'), false)
+
+  const finished = await agent.completed()
+  assert.equal(calls, 1)
+  assert.equal(finished.goalStatus, 'completed')
+  assert.equal(finished.operations.length, 0)
+  assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
+  assert.equal(rcon.mutations.length, 1)
 })
 
 test('verified final completion is not mistaken for an action omission', async () => {
@@ -874,6 +999,8 @@ test('verified final completion is not mistaken for an action omission', async (
       })
     },
     systemPrompt: 'Verified final completion omission test',
+    interactionDecisionProvider: completionAndContinueDecision,
+    decisionTraceFile: null,
     memory: new CanonicalTaskBoardMemory(),
     stateFile: null,
     traceFile: null,
@@ -882,7 +1009,7 @@ test('verified final completion is not mistaken for an action omission', async (
   const started = await agent.request('place one furnace', { sender: 'TTLouis' })
   assert.equal(started.operations[0].name, 'place_entity')
   const finished = await agent.completed()
-  assert.equal(calls, 2)
+  assert.equal(calls, 1)
   assert.equal(finished.goalStatus, 'completed')
   assert.equal(finished.operations.length, 0)
   assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
