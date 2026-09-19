@@ -663,3 +663,61 @@ test('durable hierarchy split resumes transactionally after an interrupted plann
   assert.equal(state.project_board.current_milestone.title, 'Establish bounded starter production')
   assert.equal(state.task_board.steps[0].description, 'continue the updated production goal')
 })
+
+
+test('initial hierarchy split is durable before the first planner call succeeds', async () => {
+  const memory = new CanonicalTaskBoardMemory()
+  const rcon = new RouterRcon({ running: false })
+  const interactionProvider = async () => ({
+    content: JSON.stringify({ intent: 'new_goal', queue_conflict: false, reply: '' }),
+  })
+  const interactionDecisionProvider = async (_state, questions) => {
+    const intentProbabilities = Object.fromEntries(Object.keys(questions.intent.criteria).map(key => [key, key === 'new_goal' ? 0.95 : 0.01]))
+    const granularityProbabilities = Object.fromEntries(Object.keys(questions.granularity.criteria).map(key => [key, key === 'split' ? 0.95 : 0.01]))
+    const reasoningProbabilities = Object.fromEntries(Object.keys(questions.reasoning_budget.criteria).map(key => [key, key === 'strategic' ? 0.95 : 0.01]))
+    const horizonProbabilities = Object.fromEntries(Object.keys(questions.planning_horizon.criteria).map(key => [key, key === 'strategic' ? 0.95 : 0.01]))
+    return {
+      model: 'jev-latest',
+      provider: 'TypeSafe',
+      answers: {
+        intent: { type: 'choice', choice: 'new_goal', probabilities: intentProbabilities, confidence: 0.95 },
+        queue_conflict: { type: 'noul', noul: 0.01 },
+        granularity: { type: 'choice', choice: 'split', probabilities: granularityProbabilities, confidence: 0.95 },
+        reasoning_budget: { type: 'choice', choice: 'strategic', probabilities: reasoningProbabilities, confidence: 0.9 },
+        planning_horizon: { type: 'choice', choice: 'strategic', probabilities: horizonProbabilities, confidence: 0.9 },
+        observation_budget: {
+          type: 'score',
+          score: 3,
+          legend: Object.fromEntries(questions.observation_budget.criteria.map((label, index) => [String(index), label])),
+          probabilities: Object.fromEntries(questions.observation_budget.criteria.map((_label, index) => [String(index), index === 3 ? 0.9 : 0.0125])),
+          confidence: 0.9,
+        },
+      },
+    }
+  }
+  const agent = new NpcAgentLoop({
+    rcon,
+    memory,
+    systemPrompt: 'initial hierarchy durability regression',
+    npcId: 'airi',
+    provider: async () => { throw new Error('synthetic first planner failure') },
+    interactionProvider,
+    interactionDecisionProvider,
+    traceFile: null,
+    decisionTraceFile: null,
+    stateFile: null,
+  })
+
+  await assert.rejects(
+    agent.request('至少完成一个科研瓶的全自动化', { sender: 'tester' }),
+    /synthetic first planner failure/,
+  )
+
+  const state = memory.currentPlan('npc:airi')
+  assert.equal(state.status, 'active')
+  assert.equal(state.objective, '至少完成一个科研瓶的全自动化')
+  assert.equal(state.hierarchy_split_pending.kind, 'split_project_goal')
+  assert.equal(state.hierarchy_split_pending.reasoning_budget, 'strategic')
+  assert.equal(state.hierarchy_split_pending.observation_budget, 3)
+  assert.equal(state.task_board.steps.length, 0)
+})
