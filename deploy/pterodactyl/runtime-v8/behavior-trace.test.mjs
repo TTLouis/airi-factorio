@@ -131,7 +131,6 @@ test('behavior trace correlates request through verification, records usage, and
   const replies = [
     toolMessage(),
     planMessage([{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 4 } }]),
-    planMessage([], 'Verified complete.'),
   ]
   let budgetCount = 0
   const agent = new NpcAgentLoop({
@@ -171,7 +170,7 @@ test('behavior trace correlates request through verification, records usage, and
   assert.match(raw, /operation_id\\?":9/)
 
   const responses = rows.filter(row => row.event === 'provider.response')
-  assert.equal(responses.length, 3)
+  assert.equal(responses.length, 2)
   assert.deepEqual(responses[0].data.usage, {
     input_units: 100,
     cached_input_units: 80,
@@ -184,12 +183,12 @@ test('behavior trace correlates request through verification, records usage, and
     .reduce((total, row) => total + row.data.output_chars, 0)
   const completed = rows.find(row => row.event === 'request.completed')
   assert.deepEqual(completed.data.usage, {
-    provider_calls: 3,
-    input_units: 300,
-    cached_input_units: 240,
-    cache_miss_input_units: 60,
-    output_units: 60,
-    total_units: 360,
+    provider_calls: 2,
+    input_units: 200,
+    cached_input_units: 160,
+    cache_miss_input_units: 40,
+    output_units: 40,
+    total_units: 240,
     tool_calls: 1,
     duplicate_tool_calls: 0,
     tool_result_chars: toolResultChars,
@@ -200,9 +199,22 @@ test('behavior trace correlates request through verification, records usage, and
 test('duplicate completion receipts do not spend another provider call, while a new batch still does', async () => {
   const rcon = new FakeRcon()
   const replies = [
-    planMessage([{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 4 } }]),
-    planMessage([{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 6, y: 4 } }], 'Continue.'),
-    planMessage([], 'Verified complete.'),
+    {
+      content: JSON.stringify({
+        chatMessage: 'Place the first furnace.',
+        plan: ['Place first furnace', 'Place second furnace'],
+        currentStep: 0,
+        operations: [{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 4, y: 4 } }],
+      }),
+    },
+    {
+      content: JSON.stringify({
+        chatMessage: 'Place the second furnace.',
+        plan: ['Place first furnace', 'Place second furnace'],
+        currentStep: 1,
+        operations: [{ name: 'place_entity', args: { entity_name: 'stone-furnace', x: 6, y: 4 } }],
+      }),
+    },
   ]
   let providerCalls = 0
   const activity = []
@@ -231,8 +243,9 @@ test('duplicate completion receipts do not spend another provider call, while a 
   assert.ok(activity.some(entry => entry.event === 'factorio.event_coalesced' && entry.data.kind === 'completion'))
 
   rcon.batchId = 2
-  await agent.completed()
-  assert.equal(providerCalls, 3)
+  const closed = await agent.completed()
+  assert.equal(providerCalls, 2)
+  assert.equal(closed.goalStatus, 'completed')
   assert.equal(agent.active, false)
 })
 

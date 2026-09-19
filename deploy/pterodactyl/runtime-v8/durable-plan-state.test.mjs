@@ -235,19 +235,19 @@ test('canonical task board prevents model plan-length drift from resetting visib
       chatMessage: 'Starting.',
       plan: canonical,
       currentStep: 0,
-      operations: [{ name: 'wait', args: { ticks: 1 } }],
+      operations: [{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } }],
     }),
     planMessage({
       chatMessage: 'Continuing the same step.',
       plan: ['Observe area', 'Extra thought', 'Mine ore', 'Place machine', 'Load machine', 'Verify output', 'Another thought'],
       currentStep: 0,
-      operations: [{ name: 'wait', args: { ticks: 1 } }],
+      operations: [{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } }],
     }),
     planMessage({
       chatMessage: 'Advancing to construction.',
       plan: canonical,
       currentStep: 2,
-      operations: [{ name: 'wait', args: { ticks: 1 } }],
+      operations: [{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } }],
     }),
   ]
   const agent = new NpcAgentLoop({
@@ -895,10 +895,11 @@ test('verified completion can close before a trailing control-only Stop step', a
   const verifying = await agent.completed()
   assert.equal(verifying.operations.length, 1)
   assert.equal(verifying.taskBoard.active_index, 1)
-  assert.equal(verifying.taskBoard.steps[2].description, 'Stop')
+  assert.equal(verifying.taskBoard.total_steps, 2)
+  assert.equal(verifying.taskBoard.steps.some(step => step.description === 'Stop'), false)
 
   const finished = await agent.completed()
-  assert.equal(calls, 4)
+  assert.equal(calls, 2)
   assert.equal(finished.goalStatus, 'completed')
   assert.equal(finished.operations.length, 0)
   assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
@@ -948,10 +949,11 @@ test('verified completion can close before a trailing Report completion control-
   const verifying = await agent.completed()
   assert.equal(verifying.operations.length, 1)
   assert.equal(verifying.taskBoard.active_index, 1)
-  assert.equal(verifying.taskBoard.steps[2].description, 'Report completion')
+  assert.equal(verifying.taskBoard.total_steps, 2)
+  assert.equal(verifying.taskBoard.steps.some(step => step.description === 'Report completion'), false)
 
   const finished = await agent.completed()
-  assert.equal(calls, 4)
+  assert.equal(calls, 2)
   assert.equal(finished.goalStatus, 'completed')
   assert.equal(finished.operations.length, 0)
   assert.equal(agent.memory.currentPlan('npc:airi'), undefined)
@@ -989,7 +991,7 @@ test('verified final completion is not mistaken for an action omission', async (
   const started = await agent.request('place one furnace', { sender: 'TTLouis' })
   assert.equal(started.operations[0].name, 'place_entity')
   const finished = await agent.completed()
-  assert.equal(calls, 2)
+  assert.equal(calls, 1)
   assert.equal(finished.goalStatus, 'completed')
   assert.equal(finished.operations.length, 0)
   assert.equal(agent.memory.currentPlan('npc:airi'), undefined)

@@ -82,13 +82,13 @@ test('ordinary continuation cannot shrink a canonical five-step board to three s
   assert.deepEqual(guarded.plan, board().steps.map(step => step.description))
 })
 
-test('ordinary continuation may advance only to a step already on the canonical board', () => {
+test('ordinary provider continuation cannot advance the canonical board without authority', () => {
   const guarded = canonicalContinuationPlan(board(), {
     plan: ['Mine stone', 'Build power'],
     currentStep: 1,
   })
   assert.equal(guarded.plan.length, 5)
-  assert.equal(guarded.currentStep, 3)
+  assert.equal(guarded.currentStep, 2)
 })
 
 test('explicit failure replan is still allowed to replace the remaining suffix', () => {

@@ -500,7 +500,7 @@ export class NpcDialogueMemory extends BaseNpcDialogueMemory {
 
     if (decision.durable_status === 'blocked') {
       state.status = 'blocked'
-      state.admission_status = undefined
+      if (state.admission_status !== 'admission_failed') state.admission_status = undefined
       state.blocker = cleanMemoryText(decision.blocker || candidate?.candidate_blocker || decision.reason_code, 500)
       state.pause_reason = ''
       state.persistent_runtime = undefined
