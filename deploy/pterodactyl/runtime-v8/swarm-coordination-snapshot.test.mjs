@@ -13,8 +13,11 @@ function fixture(limit = 2) {
     limit,
     counts: {
       missions: 5,
+      incompleteMissions: 4,
       objectives: 4,
+      incompleteObjectives: 2,
       projects: 3,
+      incompleteProjects: 1,
       work: 8,
       requests: 2,
       claims: 1,
