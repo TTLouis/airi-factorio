@@ -75,6 +75,10 @@ test('parses valid decisions and clamps confidence and observation budget', () =
   assert.deepEqual(parseDecisionEnvelope(response), {
     routing: 'wake_planner',
     routing_confidence: 0.82,
+    granularity: 'keep',
+    granularity_confidence: 0,
+    development: 'vertical',
+    development_confidence: 1,
     reasoning_budget: 'deep',
     reasoning_confidence: 0.71,
     planning_horizon: 'subgoal',
@@ -98,6 +102,10 @@ test('uses conservative fallbacks for invalid Jev output', () => {
   assert.deepEqual(parseDecisionEnvelope(response), {
     routing: 'wake_planner',
     routing_confidence: 0,
+    granularity: 'keep',
+    granularity_confidence: 0,
+    development: 'maintain',
+    development_confidence: 0,
     reasoning_budget: 'normal',
     reasoning_confidence: 0,
     planning_horizon: 'checkpoint',
