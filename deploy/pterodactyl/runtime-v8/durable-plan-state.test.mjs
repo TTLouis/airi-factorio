@@ -1162,3 +1162,38 @@ test('runtime rejects unsupported planner checkpoint semantics instead of trusti
     }),
   }), /runtime-supported semantic completion contract/i)
 })
+
+
+test('tool-native submitPlan lets assistant content stay natural language on the normal path', async () => {
+  const rcon = new FakeRcon()
+  const agent = new NpcAgentLoop({
+    rcon,
+    provider: async () => ({
+      content: 'I am mining one iron ore now.',
+      tool_calls: [{
+        id: 'submit-plan-1',
+        type: 'function',
+        function: {
+          name: 'submitPlan',
+          arguments: JSON.stringify({
+            plan: ['Mine one iron ore'],
+            currentStep: 0,
+            operations: [{ name: 'mine_entity', args: { entity_name: 'iron-ore', count: 1 } }],
+          }),
+        },
+      }],
+    }),
+    systemPrompt: 'tool-native planner control test',
+    memory: new CanonicalTaskBoardMemory(),
+    stateFile: null,
+    traceFile: null,
+  })
+
+  const result = await agent.request('mine one iron ore', { sender: 'TTLouis' })
+
+  assert.match(result.chatMessage, /I am mining one iron ore now/)
+  assert.deepEqual(result.plan, ['Mine one iron ore'])
+  assert.equal(result.operations[0].name, 'mine_entity')
+  assert.equal(rcon.mutations.length, 1)
+  assert.equal(agent.memory.currentPlan('npc:airi').conversation.at(-1).assistant, 'I am mining one iron ore now.')
+})
