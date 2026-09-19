@@ -320,9 +320,7 @@ export class NpcAgentLoop {
     this.duplicateToolRounds = 0
     this.observationRecoveryRounds = 0
     this.observationOnlyRounds = 0
-    this.observationDecisionPressure = false
-    this.observationDecisionPressureRemaining = 0
-    this.observationDecisionForced = false
+    this.resetObservationDecisionState()
     this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
     this.planCategoryRetries = 0
@@ -413,6 +411,12 @@ export class NpcAgentLoop {
     return this.runGuarded()
   }
 
+  resetObservationDecisionState() {
+    this.observationDecisionPressure = false
+    this.observationDecisionPressureRemaining = 0
+    this.observationDecisionForced = false
+  }
+
   observationDecisionPressureBudget() {
     return 1
   }
@@ -456,9 +460,7 @@ export class NpcAgentLoop {
     this.duplicateToolRounds = 0
     this.observationRecoveryRounds = 0
     this.observationOnlyRounds = 0
-    this.observationDecisionPressure = false
-    this.observationDecisionPressureRemaining = 0
-    this.observationDecisionForced = false
+    this.resetObservationDecisionState()
     this.finiteNoOperationPressureUsed = false
     this.toolValidationRetries = 0
     this.planCategoryRetries = 0
