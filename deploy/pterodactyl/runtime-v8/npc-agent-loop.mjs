@@ -4275,7 +4275,7 @@ export class NpcAgentLoop extends BaseNpcAgentLoop {
         completionEvidence,
       })
       stateResult = this.memory.reconcileTaskBoard?.(this.requestInfo.memoryKey, previousBoard, durablePlan, stateResult, {
-        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason),
+        allowReplan: ['failure', 'reanchor_plan'].includes(this.planUpdateReason) || triggerSource === 'hierarchy_split',
         previousState,
       }) ?? stateResult
       const projectProposalAllowed = Boolean(plan.project)
