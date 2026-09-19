@@ -7,6 +7,7 @@ import {
   observeSwarmWaitCondition,
   pollSwarmConditionWait,
   sanitizeSwarmWaitCondition,
+  summarizeSwarmConditionWait,
 } from './swarm-condition-wait.mjs'
 
 test('only bounded exact swarm record status waits are admitted', () => {
@@ -179,4 +180,25 @@ test('project wait understands swarm Project completion, not Strategic Project B
 
   assert.equal(result.satisfied, true)
   assert.equal(result.status, 'complete')
+})
+
+
+test('read-only wait projection observes without consuming checks', () => {
+  const wait = makeSwarmConditionWait({
+    kind: 'request_status',
+    record_id: 'request-1',
+  }, {
+    registeredTick: 100,
+    maxChecks: 4,
+  })
+  const before = structuredClone(wait)
+
+  const summary = summarizeSwarmConditionWait(wait, {
+    requests: [{ id: 'request-1', status: 'open', revision: 2 }],
+  })
+
+  assert.equal(summary.checks, 0)
+  assert.equal(summary.observation.satisfied, false)
+  assert.equal(summary.observation.progressing, true)
+  assert.deepEqual(wait, before)
 })
