@@ -273,3 +273,18 @@ test('decision provider rejects an answer outside the declared choice contract',
     /unknown choice/,
   )
 })
+
+
+test('hierarchy observation budget uses the provider-supported score schema', async () => {
+  const { decisionEnvelopeQuestions } = await import('./jev-decision-taxonomy.mjs')
+  const config = decisionProviderConfiguration({ TYPESAFE_API_KEY: KEY })
+  const questions = decisionEnvelopeQuestions()
+  assert.equal(questions.observation_budget.type, 'score')
+  assert.equal(questions.observation_budget.criteria.length, 9)
+  const normalized = normalizeDecisionProviderRequest(
+    config,
+    { goal: 'Reach Automation', boundary: 'planning' },
+    questions,
+  )
+  assert.equal(normalized.body.questions.observation_budget.type, 'score')
+})
