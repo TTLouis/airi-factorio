@@ -18,6 +18,7 @@ export class SwarmProjectJevShadowService {
     this.providerOptions = typeof providerOptions === 'function' ? providerOptions : () => providerOptions
     this.inFlight = null
     this.pendingReasons = new Set()
+    this.pendingSnapshot = undefined
     this.sequence = 0
     this.lastCompleted = undefined
   }
@@ -26,16 +27,19 @@ export class SwarmProjectJevShadowService {
     return String(reason ?? 'unspecified').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160) || 'unspecified'
   }
 
-  async runCycle(reasons) {
+  async runCycle(reasons, snapshot) {
     const sequence = ++this.sequence
     try {
-      const result = await this.controller.observe({
+      const options = {
         strategicBoard: this.strategicBoard(),
         conditionWait: this.conditionWait(),
         outcome: this.outcome(),
         recovery: this.recovery(),
         providerOptions: this.providerOptions(),
-      })
+      }
+      const result = snapshot && typeof this.controller.observeSnapshot === 'function'
+        ? await this.controller.observeSnapshot(snapshot, options)
+        : await this.controller.observe(options)
       return {
         ...result,
         trigger_sequence: sequence,
@@ -66,15 +70,20 @@ export class SwarmProjectJevShadowService {
     let completed
     while (this.pendingReasons.size > 0) {
       const reasons = [...this.pendingReasons]
+      const snapshot = this.pendingSnapshot
       this.pendingReasons.clear()
-      completed = await this.runCycle(reasons)
+      this.pendingSnapshot = undefined
+      completed = await this.runCycle(reasons, snapshot)
       this.lastCompleted = structuredClone(completed)
     }
     return completed
   }
 
-  trigger(reason = 'unspecified') {
+  trigger(reason = 'unspecified', { snapshot } = {}) {
     this.pendingReasons.add(this.normalizeReason(reason))
+    if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) {
+      this.pendingSnapshot = structuredClone(snapshot)
+    }
     if (this.inFlight) return this.inFlight
 
     const promise = Promise.resolve()
