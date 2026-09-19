@@ -18,12 +18,17 @@ test('shadow controller exposes Jev envelope questions without action authority'
 
 test('builds a bounded swarm snapshot for Jev instead of raw coordination state', () => {
   const context = buildSwarmJevShadowContext({
-    project: {
-      id: 'project-1',
+    strategicBoard: {
+      goal_id: 'goal-blue-science',
       title: 'Automate blue science',
       status: 'active',
       current_milestone: { title: 'Establish oil processing' },
       development_direction: 'vertical',
+    },
+    project: {
+      id: 'swarm-project-implementation',
+      missionId: 'mission-1',
+      status: 'executing',
     },
     missions: Array.from({ length: 20 }, (_, index) => ({ id: `m-${index}`, status: 'active', title: `mission ${index}` })),
     requests: [{ id: 'r-1', status: 'open', kind: 'material_request' }],
@@ -35,7 +40,9 @@ test('builds a bounded swarm snapshot for Jev instead of raw coordination state'
   })
 
   assert.equal(context.schema, 'swarm_jev_shadow_v1')
-  assert.equal(context.project.milestone, 'Establish oil processing')
+  assert.equal(context.strategic_project_board.current_milestone.title, 'Establish oil processing')
+  assert.equal(context.strategic_project_board.goal_id, 'goal-blue-science')
+  assert.equal(Object.hasOwn(context, 'project'), false)
   assert.equal(context.missions.length, 12)
   assert.equal(context.counts.missions, 20)
   assert.equal(context.runtime.healthy, true)
@@ -70,4 +77,18 @@ test('invalid Jev output keeps conservative planner wake defaults even in shadow
   assert.equal(parsed.decision.reasoning_budget, 'normal')
   assert.equal(parsed.decision.planning_horizon, 'checkpoint')
   assert.equal(parsed.decision.observation_budget, 0)
+})
+
+
+test('swarm Project records are never interpreted as the strategic Project Board', () => {
+  const context = buildSwarmJevShadowContext({
+    project: {
+      id: 'project-1',
+      missionId: 'mission-1',
+      objectiveId: 'objective-1',
+      status: 'executing',
+    },
+  })
+  assert.equal(context.strategic_project_board, undefined)
+  assert.equal(Object.hasOwn(context, 'project'), false)
 })
